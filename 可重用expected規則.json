@@ -2,23 +2,7 @@
   "schema_version": "1.0",
   "rules": [
     {
-      "rule_id": "USER-EXPECTED-588b80c217f63f9eb42b",
-      "enabled": true,
-      "phrase": "OK繃",
-      "target_char": "繃",
-      "target_index": 2,
-      "expected_set": [
-        "ㄅㄥ"
-      ],
-      "evidence": "我",
-      "context_contains": "",
-      "scope": "same_phrase_position",
-      "source": "人工核准可重用 expected 規則",
-      "note": "",
-      "approved_at": "2026-08-26T15:46:59"
-    },
-    {
-      "rule_id": "USER-EXPECTED-128f0fc50dbcd826e6e7",
+      "rule_id": "USER-EXPECTED-8e23e6643db8887ccabf",
       "enabled": true,
       "phrase": "額頭",
       "target_char": "頭",
@@ -31,7 +15,39 @@
       "scope": "same_phrase_position",
       "source": "人工核准可重用 expected 規則",
       "note": "",
-      "approved_at": "2026-08-26T15:47:44"
+      "approved_at": "2026-08-25T13:49:46"
+    },
+    {
+      "rule_id": "USER-EXPECTED-04c50c1c3bf9f7d609b1",
+      "enabled": true,
+      "phrase": "OK繃",
+      "target_char": "繃",
+      "target_index": 2,
+      "expected_set": [
+        "ㄅㄥ"
+      ],
+      "evidence": "簡編本",
+      "context_contains": "",
+      "scope": "same_phrase_position",
+      "source": "人工核准可重用 expected 規則",
+      "note": "",
+      "approved_at": "2026-08-25T13:54:44"
+    },
+    {
+      "rule_id": "USER-EXPECTED-6b8ac667a7d5fdb257db",
+      "enabled": true,
+      "phrase": "一會兒",
+      "target_char": "兒",
+      "target_index": 2,
+      "expected_set": [
+        "ㄦ"
+      ],
+      "evidence": "簡編本",
+      "context_contains": "",
+      "scope": "same_phrase_position",
+      "source": "人工核准可重用 expected 規則",
+      "note": "",
+      "approved_at": "2026-08-25T14:20:35"
     }
   ]
 }
