@@ -216,3 +216,38 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ===== zhuyin-proofreader local files =====
+
+# Runtime cache / temporary files
+cache/
+caches/
+temp/
+tmp/
+logs/
+*.log
+
+# Generated output
+output/
+outputs/
+result/
+results/
+reports/
+
+# PDF教材不納入版本控制
+*.pdf
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Local secrets / machine-specific settings
+.env
+.env.*
+config.local.yaml
+config.local.yml
+
+# Windows
+Thumbs.db
+Desktop.ini
