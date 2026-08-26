@@ -1,4 +1,5 @@
 ﻿v5.6.2（2026-08-26）－現有專案完成狀態修正版
+- 修復 production runtime root 的 14 個資產 SHA mismatch：確認所有 CSV 自 v5.6.1 匯入後內容從未改變，差異只來自 Git 將已核准 CRLF bytes 無聲正規化為 LF；恢復原 manifest 所指向的 CRLF bytes，並以 `.gitattributes` 凍結 manifest-protected CSV，未重算或放寬任何 SHA、schema、actual/expected chain。
 - 新增「修復／更新報告」：沿用同一 session、人工/GPT 判定與 actual 工作簿；actual 證據相容時直接 reuse，只重建受影響的 expected 候選、回歸門檻與報告。
 - 修正三上來源限定規則把所有「轉動」高優先判為ㄓㄨㄢˋ，導致強制回歸 M25-ZHUAN-DONG 失敗；依既有人工回標與公司規範改回「轉動」ㄓㄨㄢˇ。
 - 歷史 occurrence regression 新增 applicability_mode 與 source_pdf_sha256。未綁定 exact 舊來源的 15 筆三上案例保留為 reference_only／NOT_APPLICABLE，不再以舊頁碼阻擋其他版本完成；真正 hard_gate 案例仍須執行並全數通過。
