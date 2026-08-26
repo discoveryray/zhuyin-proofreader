@@ -175,6 +175,14 @@ class ReportIntegrityTests(unittest.TestCase):
                 self.assertTrue(all(len(states) == 1 for states in state_memberships.values()))
                 self.assertIn("集合對帳", technical.sheetnames)
                 self.assertIn("Occurrence Ledger", technical.sheetnames)
+                self.assertIn("歷史回歸稽核", technical.sheetnames)
+                historical_headers = [
+                    str(value or "")
+                    for value in next(technical["歷史回歸稽核"].iter_rows(values_only=True))
+                ]
+                self.assertIn("適用性狀態", historical_headers)
+                self.assertIn("計入完成門檻", historical_headers)
+                self.assertIn("定位命中數", historical_headers)
             finally:
                 technical.close()
 

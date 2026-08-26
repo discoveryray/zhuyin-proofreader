@@ -1,5 +1,5 @@
 {
-  "schema_version": "2.6.1",
+  "schema_version": "2.6.2",
   "tool_version": "5.6.2",
   "policy": "思考模式 2.5；runtime 不得自動更新 SHA-256",
   "assets": [
@@ -179,13 +179,15 @@
       "chain": "expected",
       "path": "pronunciation_regressions.csv",
       "kind": "csv",
-      "sha256": "b874278df7f8cb879ab65d2b5f67acc9844c2bbf68179861920de4f7481f6e0c",
+      "sha256": "819cff7bd221637eb5d511df6021a609275586d56b52df68aa40f8a368af5836",
       "required_columns": [
         "case_id",
         "pdf_contains",
         "page",
         "phrase",
         "target_char",
+        "target_occurrence_index",
+        "locator_context",
         "actual_reading",
         "expected_reading",
         "status",

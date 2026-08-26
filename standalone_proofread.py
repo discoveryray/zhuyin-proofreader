@@ -1738,30 +1738,53 @@ def _actual_source_ids(actual: Path) -> tuple[set[str], int, int, dict[str, dict
     return {str(row["occurrence_id"]) for row in all_rows}, len(actual_rows), len(excluded_rows), source_by_id
 
 
+def _regression_gate_flag(row: Mapping[str, Any]) -> bool:
+    raw = str(row.get("計入完成門檻") or "").strip().upper()
+    if raw:
+        if raw not in {"Y", "N"}:
+            raise ValueError(f"歷史回歸計入完成門檻欄位無效：{row.get('案例ID')} / {raw}")
+        return raw == "Y"
+    # Compatibility for in-memory legacy fixtures and pre-v5.6.2 rows. New
+    # candidate workbooks require the explicit field.
+    mode = str(row.get("適用性模式") or "hard_gate").strip().lower()
+    return mode != "reference_only" and str(row.get("回歸結果") or "") != "NOT_APPLICABLE"
+
+
 def _candidate_regression_report(candidate: Path) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     mandatory_cases = load_mandatory_cases(Path(__file__).with_name("mandatory_regression_cases.csv"))
     mandatory_rows = workbook_rows(candidate, "強制回歸測試", ["case_id", "result"])
     mandatory_results = [{str(key): value for key, value in row.items()} for row in mandatory_rows]
     mandatory = validate_regression_execution(mandatory_cases, mandatory_results)
 
-    pdf_rows = workbook_rows(candidate, "回歸測試", ["案例ID", "回歸結果"])
+    pdf_rows = workbook_rows(candidate, "回歸測試", [
+        "案例ID", "適用性模式", "適用性狀態", "計入完成門檻", "定位命中數", "回歸結果",
+    ])
     ids = [str(row.get("案例ID") or "").strip() for row in pdf_rows]
     duplicate_ids = [key for key, count in Counter(ids).items() if key and count > 1]
-    applicable_ids = {
+    gating_rows = [row for row in pdf_rows if _regression_gate_flag(row)]
+    reference_rows = [row for row in pdf_rows if str(row.get("適用性模式") or "").strip().lower() == "reference_only"]
+    required_ids = {
         str(row.get("案例ID") or "").strip()
-        for row in pdf_rows
-        if str(row.get("回歸結果") or "") != "NOT_APPLICABLE" and str(row.get("案例ID") or "").strip()
+        for row in gating_rows
+        if str(row.get("案例ID") or "").strip()
     }
+    executed = [row for row in gating_rows if str(row.get("回歸結果") or "") in {"PASS", "FAIL"}]
+    failed = [row for row in gating_rows if str(row.get("回歸結果") or "") == "FAIL"]
+    not_executed = [row for row in gating_rows if str(row.get("回歸結果") or "") == "NOT_EXECUTED"]
     pdf_report = {
-        "ok": not duplicate_ids and all(row.get("回歸結果") != "FAIL" for row in pdf_rows),
-        "required": len(applicable_ids),
-        "executed": sum(1 for row in pdf_rows if row.get("回歸結果") in {"PASS", "FAIL"}),
-        "passed": sum(1 for row in pdf_rows if row.get("回歸結果") == "PASS"),
-        "failed": sum(1 for row in pdf_rows if row.get("回歸結果") == "FAIL"),
-        "not_executed": sum(1 for row in pdf_rows if row.get("回歸結果") == "NOT_EXECUTED"),
+        "ok": not duplicate_ids and not failed,
+        "required": len(required_ids),
+        "executed": len(executed),
+        "passed": sum(1 for row in gating_rows if row.get("回歸結果") == "PASS"),
+        "failed": len(failed),
+        "not_executed": len(not_executed),
         "not_applicable": sum(1 for row in pdf_rows if row.get("回歸結果") == "NOT_APPLICABLE"),
         "duplicate_case_id": len(duplicate_ids),
         "duplicate_case_ids": duplicate_ids,
+        "reference_audit_matched": sum(1 for row in reference_rows if row.get("回歸結果") in {"PASS", "FAIL"}),
+        "reference_audit_passed": sum(1 for row in reference_rows if row.get("回歸結果") == "PASS"),
+        "reference_audit_failed": sum(1 for row in reference_rows if row.get("回歸結果") == "FAIL"),
+        "reference_audit_not_found": sum(1 for row in reference_rows if row.get("回歸結果") == "NOT_APPLICABLE"),
     }
     return mandatory, pdf_report, mandatory_results, pdf_rows
 
@@ -1772,10 +1795,10 @@ def _aggregate_pdf_regression_rows(per_pdf_rows: list[tuple[str, list[dict[str, 
     Each candidate workbook intentionally carries the same applicable historical
     definitions so that a missing occurrence in one split remains auditable. At
     whole-book level a case is required once, not once per split. Exactly one
-    split must execute each case; the remaining split-local copies may be
-    NOT_EXECUTED. A source-mismatched/reference-only copy is NOT_APPLICABLE and
-    does not enter the completion denominator. Historical truth and source
-    applicability fields must be identical across copies.
+    split must execute each gating case; the remaining split-local copies may be
+    NOT_EXECUTED. Reference-only copies are aggregated as non-gating audit
+    results, including matched PASS/FAIL. Historical truth and locator
+    definitions must be identical across copies.
     """
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     blank_case_rows: list[dict[str, Any]] = []
@@ -1793,11 +1816,12 @@ def _aggregate_pdf_regression_rows(per_pdf_rows: list[tuple[str, list[dict[str, 
         raise ValueError(f"歷史回歸含空白案例ID：{len(blank_case_rows)} 筆")
 
     signature_fields = (
-        "課本頁", "完整詞語", "字元", "目標在詞內序號", "真值實際注音", "真值預期注音",
+        "課本頁", "完整詞語", "字元", "目標在詞內序號", "定位上下文", "真值實際注音", "真值預期注音",
         "真值結論", "適用性模式", "來源PDF SHA-256", "來源", "備註",
     )
     definition_conflicts: list[str] = []
     duplicate_execution_case_ids: list[str] = []
+    duplicate_reference_case_ids: list[str] = []
     result_rows: list[dict[str, Any]] = []
     for case_id, copies in sorted(grouped.items()):
         signatures = {
@@ -1807,29 +1831,61 @@ def _aggregate_pdf_regression_rows(per_pdf_rows: list[tuple[str, list[dict[str, 
         if len(signatures) != 1:
             definition_conflicts.append(case_id)
             continue
-        applicable_copies = [row for row in copies if str(row.get("回歸結果") or "") != "NOT_APPLICABLE"]
-        executed = [row for row in applicable_copies if str(row.get("回歸結果") or "") in {"PASS", "FAIL"}]
-        if not applicable_copies:
-            result = "NOT_APPLICABLE"
-            note = str(copies[0].get("執行說明") or "此歷史案例不適用於現版來源")
-            executed_pdf = ""
-        elif len(executed) > 1:
-            duplicate_execution_case_ids.append(case_id)
-            result = "FAIL"
-            note = "同一歷史回歸案例在多個 PDF 分檔被實際執行：" + ", ".join(row["pdf_name"] for row in executed)
-            executed_pdf = "|".join(row["pdf_name"] for row in executed)
-        elif len(executed) == 1:
-            result = str(executed[0].get("回歸結果") or "")
-            note = str(executed[0].get("執行說明") or "")
-            executed_pdf = executed[0]["pdf_name"]
-        else:
-            result = "NOT_EXECUTED"
-            note = "全冊所有 PDF 分檔均未實際定位／執行此歷史回歸案例"
-            executed_pdf = ""
         base = copies[0]
+        mode = str(base.get("適用性模式") or "hard_gate").strip().lower()
+        if mode == "reference_only":
+            executed = [row for row in copies if str(row.get("回歸結果") or "") in {"PASS", "FAIL"}]
+            gate_flag = "N"
+            if len(executed) > 1:
+                duplicate_reference_case_ids.append(case_id)
+                result = "FAIL"
+                state = "REFERENCE_DUPLICATE_MATCH"
+                note = "reference-only 在多個 PDF 分檔重現；identity ambiguity：" + ", ".join(row["pdf_name"] for row in executed)
+                executed_pdf = "|".join(row["pdf_name"] for row in executed)
+            elif len(executed) == 1:
+                result = str(executed[0].get("回歸結果") or "")
+                state = str(executed[0].get("適用性狀態") or "REFERENCE_MATCHED")
+                note = str(executed[0].get("執行說明") or "")
+                executed_pdf = executed[0]["pdf_name"]
+            else:
+                result = "NOT_APPLICABLE"
+                state = "REFERENCE_NOT_FOUND"
+                note = "reference not found：全冊所有 PDF 分檔均未定位此歷史 occurrence"
+                executed_pdf = ""
+        else:
+            gating_copies = [
+                row for row in copies
+                if _regression_gate_flag(row)
+            ]
+            executed = [row for row in gating_copies if str(row.get("回歸結果") or "") in {"PASS", "FAIL"}]
+            gate_flag = "Y" if gating_copies else "N"
+            if not gating_copies:
+                result = "NOT_APPLICABLE"
+                state = "SOURCE_NOT_APPLICABLE"
+                note = str(copies[0].get("執行說明") or "此歷史案例不適用於現版來源")
+                executed_pdf = ""
+            elif len(executed) > 1:
+                duplicate_execution_case_ids.append(case_id)
+                result = "FAIL"
+                state = "DUPLICATE_EXECUTION"
+                note = "同一歷史回歸案例在多個 PDF 分檔被實際執行：" + ", ".join(row["pdf_name"] for row in executed)
+                executed_pdf = "|".join(row["pdf_name"] for row in executed)
+            elif len(executed) == 1:
+                result = str(executed[0].get("回歸結果") or "")
+                state = str(executed[0].get("適用性狀態") or "GATE_EXECUTED")
+                note = str(executed[0].get("執行說明") or "")
+                executed_pdf = executed[0]["pdf_name"]
+            else:
+                result = "NOT_EXECUTED"
+                state = "GATE_NOT_EXECUTED"
+                note = "全冊所有 PDF 分檔均未實際定位／執行此歷史回歸案例"
+                executed_pdf = ""
         result_rows.append({
             "案例ID": case_id,
             **{field: base.get(field, "") for field in signature_fields},
+            "適用性狀態": state,
+            "計入完成門檻": gate_flag,
+            "定位命中數": sum(int(row.get("定位命中數") or 0) for row in executed),
             "回歸結果": result,
             "執行PDF": executed_pdf,
             "執行說明": note,
@@ -1839,11 +1895,13 @@ def _aggregate_pdf_regression_rows(per_pdf_rows: list[tuple[str, list[dict[str, 
     if definition_conflicts:
         raise ValueError("歷史回歸案例定義在 PDF 分檔間不一致：" + ", ".join(definition_conflicts[:20]))
 
-    required = sum(1 for row in result_rows if row["回歸結果"] != "NOT_APPLICABLE")
-    executed_count = sum(1 for row in result_rows if row["回歸結果"] in {"PASS", "FAIL"})
-    passed = sum(1 for row in result_rows if row["回歸結果"] == "PASS")
-    failed = sum(1 for row in result_rows if row["回歸結果"] == "FAIL")
-    not_executed = sum(1 for row in result_rows if row["回歸結果"] == "NOT_EXECUTED")
+    gate_rows = [row for row in result_rows if row["計入完成門檻"] == "Y"]
+    reference_rows = [row for row in result_rows if str(row.get("適用性模式") or "").lower() == "reference_only"]
+    required = len(gate_rows)
+    executed_count = sum(1 for row in gate_rows if row["回歸結果"] in {"PASS", "FAIL"})
+    passed = sum(1 for row in gate_rows if row["回歸結果"] == "PASS")
+    failed = sum(1 for row in gate_rows if row["回歸結果"] == "FAIL")
+    not_executed = sum(1 for row in gate_rows if row["回歸結果"] == "NOT_EXECUTED")
     not_applicable = sum(1 for row in result_rows if row["回歸結果"] == "NOT_APPLICABLE")
     duplicate_count = len(duplicate_execution_case_ids)
     return {
@@ -1856,9 +1914,16 @@ def _aggregate_pdf_regression_rows(per_pdf_rows: list[tuple[str, list[dict[str, 
         "not_applicable": not_applicable,
         "duplicate_case_id": duplicate_count,
         "duplicate_execution_case_ids": duplicate_execution_case_ids,
-        "required_case_ids": sorted(row["案例ID"] for row in result_rows if row["回歸結果"] != "NOT_APPLICABLE"),
+        "reference_duplicate_case_id": len(duplicate_reference_case_ids),
+        "duplicate_reference_case_ids": duplicate_reference_case_ids,
+        "reference_audit_total": len(reference_rows),
+        "reference_audit_matched": sum(1 for row in reference_rows if row["回歸結果"] in {"PASS", "FAIL"}),
+        "reference_audit_passed": sum(1 for row in reference_rows if row["回歸結果"] == "PASS"),
+        "reference_audit_failed": sum(1 for row in reference_rows if row["回歸結果"] == "FAIL"),
+        "reference_audit_not_found": sum(1 for row in reference_rows if row["回歸結果"] == "NOT_APPLICABLE"),
+        "required_case_ids": sorted(row["案例ID"] for row in gate_rows),
         "not_applicable_case_ids": sorted(row["案例ID"] for row in result_rows if row["回歸結果"] == "NOT_APPLICABLE"),
-        "executed_case_ids": sorted(row["案例ID"] for row in result_rows if row["回歸結果"] in {"PASS", "FAIL"}),
+        "executed_case_ids": sorted(row["案例ID"] for row in gate_rows if row["回歸結果"] in {"PASS", "FAIL"}),
         "results": result_rows,
     }
 
@@ -2684,9 +2749,17 @@ def generate_report(output_dir: Path, manifest: dict[str, Any], db: dict[str, An
         ("mandatory regression passed", (manifest.get("mandatory_regression") or {}).get("passed", 0)),
         ("mandatory regression failed", (manifest.get("mandatory_regression") or {}).get("failed", 0)),
         ("mandatory regression not executed", (manifest.get("mandatory_regression") or {}).get("not_executed", 0)),
+        ("PDF occurrence regression required", (manifest.get("pdf_regression") or {}).get("required", 0)),
+        ("PDF occurrence regression executed", (manifest.get("pdf_regression") or {}).get("executed", 0)),
+        ("PDF occurrence regression passed", (manifest.get("pdf_regression") or {}).get("passed", 0)),
         ("PDF occurrence regression failed", (manifest.get("pdf_regression") or {}).get("failed", 0)),
         ("PDF occurrence regression not executed", (manifest.get("pdf_regression") or {}).get("not_executed", 0)),
         ("PDF occurrence regression not applicable", (manifest.get("pdf_regression") or {}).get("not_applicable", 0)),
+        ("reference-only audit total", (manifest.get("pdf_regression") or {}).get("reference_audit_total", 0)),
+        ("reference-only audit matched", (manifest.get("pdf_regression") or {}).get("reference_audit_matched", 0)),
+        ("reference-only audit passed", (manifest.get("pdf_regression") or {}).get("reference_audit_passed", 0)),
+        ("reference-only audit failed (non-gating)", (manifest.get("pdf_regression") or {}).get("reference_audit_failed", 0)),
+        ("reference-only audit not found", (manifest.get("pdf_regression") or {}).get("reference_audit_not_found", 0)),
         ("集合對帳", "PASS" if reconciliation.ok else "FAIL"),
         ("失敗硬門檻", "｜".join(gate.get("failed_gates") or [])),
         ("完成判定", "只有 actual 100%、expected 100%、所有非終態/錯誤/衝突為 0、mandatory 與適用 PDF regression 全部實際執行且 0 失敗、全量集合對帳成立，才可 PROOFREAD_COMPLETE。"),
@@ -2774,6 +2847,16 @@ def generate_report(output_dir: Path, manifest: dict[str, Any], db: dict[str, An
     wm.append(["指標", "結果"])
     for key in ("ok", "required", "executed", "passed", "failed", "not_executed", "duplicate_case_id"):
         wm.append([key, (manifest.get("mandatory_regression") or {}).get(key)])
+
+    wh = wb.create_sheet("歷史回歸稽核")
+    historical_columns = [
+        "案例ID", "適用性模式", "適用性狀態", "計入完成門檻", "回歸結果", "定位命中數",
+        "執行PDF", "課本頁", "完整詞語", "字元", "目標在詞內序號", "定位上下文",
+        "來源PDF SHA-256", "真值實際注音", "真值預期注音", "真值結論", "執行說明", "來源", "備註",
+    ]
+    wh.append(historical_columns)
+    for row in (manifest.get("pdf_regression") or {}).get("results", []):
+        wh.append([row.get(column, "") for column in historical_columns])
 
     wi = wb.create_sheet("執行資訊")
     wi.append(["項目", "內容"])
