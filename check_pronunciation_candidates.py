@@ -1660,8 +1660,29 @@ def _build_candidate_ledger(actual_source_rows, classifications):
     return ledger
 
 
-def analyze(actual_xlsx: Path, dict_path: Path, rules_path: Path, out_xlsx: Path, pdf_path: Path | None = None, regressions_path: Path | None = None, char_overrides_path: Path | None = None, context_overrides_path: Path | None = None, dynamic_evidence_root: Path | None = None):
-    root = Path(__file__).resolve().parent
+def analyze(
+    actual_xlsx: Path,
+    dict_path: Path,
+    rules_path: Path,
+    out_xlsx: Path,
+    pdf_path: Path | None = None,
+    regressions_path: Path | None = None,
+    char_overrides_path: Path | None = None,
+    context_overrides_path: Path | None = None,
+    dynamic_evidence_root: Path | None = None,
+    *,
+    runtime_root: Path | None = None,
+):
+    root = Path(runtime_root or Path(__file__).resolve().parent).resolve()
+    runtime_dict = root / DEFAULT_DICT.name
+    runtime_rules = root / DEFAULT_RULES.name
+    runtime_regressions = root / DEFAULT_REGRESSIONS.name
+    runtime_char_overrides = root / DEFAULT_CHAR_OVERRIDES.name
+    runtime_context_overrides = root / DEFAULT_CONTEXT_OVERRIDES.name
+    runtime_concise_dict = root / DEFAULT_CONCISE_DICT.name
+    runtime_handbook_constraints = root / DEFAULT_HANDBOOK_CONSTRAINTS.name
+    runtime_handbook_rules = root / DEFAULT_HANDBOOK_RULES.name
+    runtime_mandatory_regressions = root / DEFAULT_MANDATORY_REGRESSIONS.name
     source_validation = validate_asset_manifest(root)
     if not source_validation.get("ok"):
         raise ValueError("PIPELINE_BLOCKED：核心資料來源驗證失敗：" + "；".join(source_validation.get("errors") or []))
@@ -1672,11 +1693,11 @@ def analyze(actual_xlsx: Path, dict_path: Path, rules_path: Path, out_xlsx: Path
         source_files=EXPECTED_RESOLVER_SOURCE_FILES,
     )
     expected_paths = {
-        "dict": (Path(dict_path).resolve(), DEFAULT_DICT.resolve()),
-        "rules": (Path(rules_path).resolve(), DEFAULT_RULES.resolve()),
-        "regressions": (Path(regressions_path or DEFAULT_REGRESSIONS).resolve(), DEFAULT_REGRESSIONS.resolve()),
-        "char_overrides": (Path(char_overrides_path or DEFAULT_CHAR_OVERRIDES).resolve(), DEFAULT_CHAR_OVERRIDES.resolve()),
-        "context_overrides": (Path(context_overrides_path or DEFAULT_CONTEXT_OVERRIDES).resolve(), DEFAULT_CONTEXT_OVERRIDES.resolve()),
+        "dict": (Path(dict_path).resolve(), runtime_dict),
+        "rules": (Path(rules_path).resolve(), runtime_rules),
+        "regressions": (Path(regressions_path or runtime_regressions).resolve(), runtime_regressions),
+        "char_overrides": (Path(char_overrides_path or runtime_char_overrides).resolve(), runtime_char_overrides),
+        "context_overrides": (Path(context_overrides_path or runtime_context_overrides).resolve(), runtime_context_overrides),
     }
     unmanifested = [name for name, (actual_path, required_path) in expected_paths.items() if actual_path != required_path]
     if unmanifested:
@@ -1684,10 +1705,10 @@ def analyze(actual_xlsx: Path, dict_path: Path, rules_path: Path, out_xlsx: Path
     if not pdf_path or not Path(pdf_path).exists():
         raise ValueError("PIPELINE_BLOCKED：候選分析需要現版 PDF 與 SHA-256，不得只憑舊 workbook")
     dictionary = load_dictionary(dict_path)
-    concise_dictionary = load_concise_dictionary(DEFAULT_CONCISE_DICT)
-    handbook_constraints = load_handbook_constraints(DEFAULT_HANDBOOK_CONSTRAINTS)
+    concise_dictionary = load_concise_dictionary(runtime_concise_dict)
+    handbook_constraints = load_handbook_constraints(runtime_handbook_constraints)
     dictionary = apply_handbook_constraints(dictionary, handbook_constraints)
-    handbook_rules = load_rules(DEFAULT_HANDBOOK_RULES, pdf_path.stem if pdf_path else "") if DEFAULT_HANDBOOK_RULES.exists() else []
+    handbook_rules = load_rules(runtime_handbook_rules, pdf_path.stem if pdf_path else "") if runtime_handbook_rules.exists() else []
     # A handbook exact/context rule must still be checked even when the lower
     # project dictionary has no row for its target character. Create a neutral
     # placeholder only to enter the comparison pipeline; the handbook rule,
@@ -1700,7 +1721,7 @@ def analyze(actual_xlsx: Path, dict_path: Path, rules_path: Path, out_xlsx: Path
     rules = load_rules(rules_path, pdf_path.stem if pdf_path else "")
     line_index = build_pdf_line_index(pdf_path) if pdf_path and pdf_path.exists() else {}
     char_overrides = load_character_overrides(char_overrides_path, pdf_path)
-    context_overrides_path = context_overrides_path or DEFAULT_CONTEXT_OVERRIDES
+    context_overrides_path = context_overrides_path or runtime_context_overrides
     context_overrides = load_context_overrides(context_overrides_path, pdf_path)
 
     wb_in = load_workbook(actual_xlsx, data_only=True, read_only=True)
@@ -2382,7 +2403,7 @@ def analyze(actual_xlsx: Path, dict_path: Path, rules_path: Path, out_xlsx: Path
 
     # Source-independent v2.5 mandatory suite. The existing resolver closure is
     # invoked unchanged; failures remain red and are never patched by actual.
-    mandatory_cases = load_mandatory_cases(DEFAULT_MANDATORY_REGRESSIONS)
+    mandatory_cases = load_mandatory_cases(runtime_mandatory_regressions)
     mandatory_results = run_mandatory_regressions(
         mandatory_cases,
         lambda target_char, context, target_index: decide_expected(

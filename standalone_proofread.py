@@ -1963,7 +1963,9 @@ def collect_manifest(
     *,
     actual_fingerprints: Mapping[str, Mapping[str, Any]],
     source_validation: Mapping[str, Any],
+    runtime_root: Path | None = None,
 ) -> dict[str, Any]:
+    root = Path(runtime_root or Path(__file__).resolve().parent).resolve()
     manifest = {
         "version": VERSION,
         "session_schema_version": SESSION_SCHEMA_VERSION,
@@ -1980,14 +1982,14 @@ def collect_manifest(
         "reconciliation": {},
     }
     expected_chain_fingerprint = compute_expected_asset_fingerprint(
-        Path(__file__).resolve().parent,
+        root,
         source_validation,
         resolver_version=EXPECTED_RESOLVER_VERSION,
         source_files=EXPECTED_RESOLVER_SOURCE_FILES,
     )
     manifest["expected_asset_fingerprint"] = expected_chain_fingerprint["fingerprint"]
     manifest["expected_asset_fingerprint_components"] = expected_chain_fingerprint["components"]
-    reusable_rules = load_reusable_expected_rules()
+    reusable_rules = load_reusable_expected_rules(root / REUSABLE_EXPECTED_RULES.name)
     manifest["reusable_expected_rules"] = reusable_rules
     manifest["reusable_expected_rules_sha256"] = reusable_rules_sha256(reusable_rules)
     all_actual_ids: set[str] = set()
@@ -2227,6 +2229,24 @@ def _apply_review_event(entry: dict[str, Any], event: Mapping[str, Any]) -> dict
         if not expected_set or not evidence or not context:
             raise InvalidTransitionError("expected 必須提供讀音、獨立來源證據與詞語／語境／位置證據")
 
+        current_expected = list(normalize_expected_set(entry.get("expected_set")))
+        if (
+            action == "補建expected證據"
+            and infer_expected_status(entry) == "RESOLVED"
+            and current_expected != expected_set
+        ):
+            # ``補建`` fills an unresolved expected lane; it is not an override.
+            # When a newer resolver now supplies a different independent truth,
+            # retain the durable event for audit but never overwrite that truth.
+            # The current mechanically-derived state remains authoritative and,
+            # when it is still a difference, naturally stays fail-closed.
+            out = dict(entry)
+            out["review_event_replay_status"] = "INVALIDATED_EXPECTED_DRIFT"
+            out["review_event_replay_note"] = (
+                f"舊補建 expected={expected_set}；現版 resolver expected={current_expected}"
+            )
+            return out
+
         state = str(entry.get("state") or "")
         if state in {"EXCLUDED_NONINDEPENDENT_LAYER", "EXCLUDED_OUT_OF_SCOPE"}:
             out = dict(entry)
@@ -2263,8 +2283,24 @@ def _apply_review_event(entry: dict[str, Any], event: Mapping[str, Any]) -> dict
         # so the confirmation event must carry enough independent expected evidence
         # to reconstruct that intermediate DIFFERENCE state from the frozen manifest.
         working = dict(entry)
+        event_expected = list(normalize_expected_set(event.get("expected_set")))
+        current_expected = list(normalize_expected_set(working.get("expected_set")))
+        if (
+            infer_expected_status(working) == "RESOLVED"
+            and event_expected
+            and current_expected != event_expected
+        ):
+            # A six-gate conclusion is bound to the expected truth reviewed at
+            # that time.  Rebuilding candidates with a different independent
+            # expected truth invalidates only the terminal conclusion; it must
+            # not resurrect the embedded historical expected evidence.
+            working["review_event_replay_status"] = "INVALIDATED_EXPECTED_DRIFT"
+            working["review_event_replay_note"] = (
+                f"舊確認 expected={event_expected}；現版 resolver expected={current_expected}"
+            )
+            return working
         if working.get("state") != "DIFFERENCE_PENDING_CONFIRMATION":
-            expected_set = list(normalize_expected_set(event.get("expected_set")))
+            expected_set = event_expected
             evidence = str(event.get("expected_evidence") or "").strip()
             context = str(event.get("context_evidence") or working.get("context_evidence") or working.get("char") or "").strip()
             if expected_set and evidence and context:
@@ -2661,7 +2697,13 @@ def _friendly_issue(entry: Mapping[str, Any]) -> tuple[str, str]:
         return friendly_state(state), "這是程式／資料完整性問題，先修復後再繼續校對。"
     return friendly_state(state), "保留待處理。"
 
-def generate_report(output_dir: Path, manifest: dict[str, Any], db: dict[str, Any]) -> Path:
+def generate_report(
+    output_dir: Path,
+    manifest: dict[str, Any],
+    db: dict[str, Any],
+    *,
+    runtime_root: Path | None = None,
+) -> Path:
     """Render mutually-exclusive ledger views and the v2.5 completion gate."""
     validate_manifest_integrity(manifest)
     validate_output_artifact_hashes(manifest)
@@ -2673,7 +2715,7 @@ def generate_report(output_dir: Path, manifest: dict[str, Any], db: dict[str, An
     ):
         raise ValueError("SESSION_SCHEMA_INCOMPATIBLE：session/workbook/review ID 資料布局無法直接沿用")
 
-    root = Path(__file__).resolve().parent
+    root = Path(runtime_root or Path(__file__).resolve().parent).resolve()
     source_validation = validate_asset_manifest(root)
     if not source_validation.get("ok"):
         write_pipeline_blocked(output_dir, source_validation, "SOURCE_INVALID_DURING_REPORT")
@@ -2964,7 +3006,10 @@ def generate_report(output_dir: Path, manifest: dict[str, Any], db: dict[str, An
             expected_text = " | ".join(normalize_expected_set(event.get("expected_set")))
             evidence_text = str(event.get("expected_evidence") or event.get("source") or "")
         elif action == "確認現版差異":
-            label = "確認教材錯誤"
+            if entry.get("review_event_replay_status") == "INVALIDATED_EXPECTED_DRIFT":
+                label = "舊確認已失效（expected 已變更）"
+            else:
+                label = "確認教材錯誤"
             expected_text = " | ".join(entry.get("expected_set") or [])
             evidence_text = str(entry.get("expected_evidence") or event.get("source") or "")
         elif action == "確認非校對範圍":
@@ -2977,7 +3022,12 @@ def generate_report(output_dir: Path, manifest: dict[str, Any], db: dict[str, An
             evidence_text = str(event.get("source") or "")
         ur.append([
             "人工判定", entry.get("pdf_name", ""), entry.get("printed_page", ""), _entry_phrase(entry), entry.get("char", ""),
-            expected_text, evidence_text, "僅此位置", str(event.get("note") or event.get("resolution_reason") or ""),
+            expected_text, evidence_text, "僅此位置", str(
+                entry.get("review_event_replay_note")
+                or event.get("note")
+                or event.get("resolution_reason")
+                or ""
+            ),
         ])
 
     for sheet in user_wb.worksheets:
@@ -3288,13 +3338,14 @@ def run_pipeline_pdfs(
     *,
     session_id_override: str | None = None,
     defer_excel_reports: bool = False,
+    runtime_root: Path | None = None,
 ) -> Path:
     output_dir.mkdir(parents=True,exist_ok=True)
     actual_dir=output_dir/"01_實際注音"; cand_dir=output_dir/"02_候選報告"
     actual_dir.mkdir(exist_ok=True); cand_dir.mkdir(exist_ok=True)
 
     pdfs = [Path(pdf).resolve() for pdf in pdfs]
-    root=Path(__file__).resolve().parent
+    root=Path(runtime_root or Path(__file__).resolve().parent).resolve()
     dynamic_actual_root = initialize_project_actual_evidence(output_dir, root)
     source_validation = validate_asset_manifest(root)
     if not source_validation.get("ok"):
@@ -3337,6 +3388,7 @@ def run_pipeline_pdfs(
                 pdfs, actual_dir, cand_dir,
                 actual_fingerprints=actual_fingerprints,
                 source_validation=source_validation,
+                runtime_root=root,
             )
             print("  前次輸出驗證通過：略過 actual 重解碼與 candidate 重建。", flush=True)
         except Exception as recovery_exc:
@@ -3369,11 +3421,11 @@ def run_pipeline_pdfs(
                     print(f"  [{i}/{len(pdfs)}] PDF 與 actual 證據資產相容，reuse：{pdf.name}",flush=True)
                     continue
                 print(f"  [{i}/{len(pdfs)}] actual cache 不相容，重新解碼：{pdf.name}",flush=True)
-                decode(pdf, actual, DEFAULT_MAP, DEFAULT_GROUPS, DEFAULT_CFF_MAP,
-                       DEFAULT_XREF_OVERRIDES, DEFAULT_TRANSFORMS, DEFAULT_FINGERPRINTS,
-                       DEFAULT_OUTLINE_SIGNATURES, DEFAULT_MAPPING_CORRECTIONS,
-                       DEFAULT_SYMBOL_TEMPLATES, dynamic_actual_root / OCCURRENCE_OVERRIDE_FILE,
-                       DEFAULT_STRUCTURAL_EXCLUSIONS, DEFAULT_CFF_CONSENSUS,
+                decode(pdf, actual, root / DEFAULT_MAP.name, root / DEFAULT_GROUPS.name, root / DEFAULT_CFF_MAP.name,
+                       root / DEFAULT_XREF_OVERRIDES.name, root / DEFAULT_TRANSFORMS.name, root / DEFAULT_FINGERPRINTS.name,
+                       root / DEFAULT_OUTLINE_SIGNATURES.name, root / DEFAULT_MAPPING_CORRECTIONS.name,
+                       root / DEFAULT_SYMBOL_TEMPLATES.name, dynamic_actual_root / OCCURRENCE_OVERRIDE_FILE,
+                       root / DEFAULT_STRUCTURAL_EXCLUSIONS.name, root / DEFAULT_CFF_CONSENSUS.name,
                        fingerprint, dynamic_actual_root)
                 # A brand-new/legacy workbook may have required a conservative
                 # global-fallback fingerprint before its exact glyph dependencies
@@ -3423,7 +3475,18 @@ def run_pipeline_pdfs(
                     print(f"  [{i}/{len(pdfs)}] actual 未變且 expected 證據資產相同，reuse：{pdf.name}",flush=True)
                     continue
                 print(f"  [{i}/{len(pdfs)}] 重新建立候選：{pdf.name}",flush=True)
-                analyze(actual,Path(DEFAULT_DICT),Path(DEFAULT_RULES),cand,pdf,Path(DEFAULT_REGRESSIONS),Path(DEFAULT_CHAR_OVERRIDES),Path(DEFAULT_CONTEXT_OVERRIDES),dynamic_actual_root)
+                analyze(
+                    actual,
+                    root / DEFAULT_DICT.name,
+                    root / DEFAULT_RULES.name,
+                    cand,
+                    pdf,
+                    root / DEFAULT_REGRESSIONS.name,
+                    root / DEFAULT_CHAR_OVERRIDES.name,
+                    root / DEFAULT_CONTEXT_OVERRIDES.name,
+                    dynamic_actual_root,
+                    runtime_root=root,
+                )
 
             _write_pipeline_progress(output_dir, "3/3", "[3/3] 建立 occurrence ledger、全量對帳與 completion gate")
             print("[3/3] 建立 occurrence ledger、全量對帳與 completion gate",flush=True)
@@ -3431,6 +3494,7 @@ def run_pipeline_pdfs(
                 pdfs, actual_dir, cand_dir,
                 actual_fingerprints=actual_fingerprints,
                 source_validation=source_validation,
+                runtime_root=root,
             )
         else:
             manifest = resume_manifest
@@ -3471,7 +3535,7 @@ def run_pipeline_pdfs(
             })
             gpt_report = None
         else:
-            report=generate_report(output_dir,manifest,db)
+            report=generate_report(output_dir,manifest,db,runtime_root=root)
             gpt_report = export_pending_for_gpt(output_dir) if pending else None
         if gate["status"] == PROOFREAD_COMPLETE:
             print(f"全冊注音校對完成。\n報告：{report}",flush=True)
@@ -3586,7 +3650,7 @@ def regenerate_report(output_dir: Path) -> Path:
     return generate_report(output_dir,manifest,db)
 
 
-def repair_project_state(output_dir: Path) -> Path:
+def repair_project_state(output_dir: Path, *, runtime_root: Path | None = None) -> Path:
     """Rebuild expected candidates and completion state without forcing actual decode.
 
     This is the supported v5.6.2 upgrade path for an existing sealed project.
@@ -3605,16 +3669,25 @@ def repair_project_state(output_dir: Path) -> Path:
         or not review_id_schema_compatible(old_manifest.get("review_id_schema_version"), REVIEW_ID_SCHEMA_VERSION)
     ):
         raise ValueError("SESSION_SCHEMA_INCOMPATIBLE：現有專案無法安全修復，需明確轉接器")
+    # Validate durable decisions before candidate workbooks can be replaced.
+    # The generic loader may quarantine unmistakably legacy data for normal UI
+    # startup, but repair must never erase/bypass an incompatible decision DB or
+    # leave the old manifest pointing at a newly rewritten candidate workbook.
+    decision_path = output_dir / "人工判定資料庫.json"
+    if decision_path.exists():
+        existing_db = normalize_db(json_load_strict(decision_path))
+        materialize_ledger(old_manifest, existing_db)
     pdfs = _resolve_session_pdfs(output_dir, old_manifest)
     print(
         "[專案修復] 沿用相同 PDF 與既有人工判定；actual 證據相容時直接 reuse，只重建受影響的 expected 候選與完成門檻。",
         flush=True,
     )
-    return run_pipeline_pdfs(
-        pdfs,
-        output_dir,
-        session_id_override=str(old_manifest.get("session_id") or "") or None,
-    )
+    pipeline_kwargs: dict[str, Any] = {
+        "session_id_override": str(old_manifest.get("session_id") or "") or None,
+    }
+    if runtime_root is not None:
+        pipeline_kwargs["runtime_root"] = Path(runtime_root)
+    return run_pipeline_pdfs(pdfs, output_dir, **pipeline_kwargs)
 
 
 def resolve_existing_project_dir(path: Path) -> Path:
