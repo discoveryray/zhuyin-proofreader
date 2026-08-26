@@ -1,6 +1,6 @@
 {
-  "schema_version": "2.6.0",
-  "tool_version": "5.6.1",
+  "schema_version": "2.6.1",
+  "tool_version": "5.6.2",
   "policy": "思考模式 2.5；runtime 不得自動更新 SHA-256",
   "assets": [
     {
@@ -80,7 +80,7 @@
       "chain": "expected",
       "path": "pronunciation_lexical_rules.csv",
       "kind": "csv",
-      "sha256": "ed6fd7dc05cf49c9ab78fb6853656f71fb547837bb0e7c57e8cf5f7c88a9d9f1",
+      "sha256": "78d747d4f3b659b3eae62e3bd36d4466bc498ebcd4e0c033b6927c109c651227",
       "required_columns": [
         "rule_id",
         "priority",
@@ -179,7 +179,7 @@
       "chain": "expected",
       "path": "pronunciation_regressions.csv",
       "kind": "csv",
-      "sha256": "96a4d63e5f0c7dbbd943cafed21993d83a14a1f87dd425018acf999f4cc5a729",
+      "sha256": "b874278df7f8cb879ab65d2b5f67acc9844c2bbf68179861920de4f7481f6e0c",
       "required_columns": [
         "case_id",
         "pdf_contains",
@@ -190,7 +190,9 @@
         "expected_reading",
         "status",
         "source",
-        "note"
+        "note",
+        "applicability_mode",
+        "source_pdf_sha256"
       ],
       "min_rows": 150,
       "expected_rows": 166,

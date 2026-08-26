@@ -783,8 +783,8 @@ def candidate_payload_sha256(
         "actual_expected", "actual_matched_phrase", "failure_reason", "note",
     )
     pdf_fields = (
-        "案例ID", "課本頁", "完整詞語", "字元", "真值實際注音", "真值預期注音", "真值結論",
-        "回歸結果", "執行說明", "來源", "備註",
+        "案例ID", "課本頁", "完整詞語", "字元", "目標在詞內序號", "真值實際注音", "真值預期注音", "真值結論",
+        "適用性模式", "來源PDF SHA-256", "回歸結果", "執行說明", "來源", "備註",
     )
 
     canonical_ledger = []

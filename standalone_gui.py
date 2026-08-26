@@ -10,7 +10,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-VERSION = "5.6.1"
+VERSION = "5.6.2"
 
 
 STATUS_TEXT = {
@@ -64,6 +64,9 @@ def project_status_text(folder: Path) -> str:
             pending = sum(int(v or 0) for k, v in state_counts.items() if k not in terminal)
             if pending:
                 text += f"；待處理 {pending} 筆"
+            failed_gates = [str(value) for value in (gate.get("failed_gates") or []) if str(value).strip()]
+            if status == "PROCESSING_FINISHED" and failed_gates:
+                text += "；未通過門檻：" + "、".join(failed_gates)
 
             # A runtime failure can happen before the sealed session manifest is
             # written.  Surface that state instead of incorrectly calling the
@@ -129,7 +132,7 @@ class App:
         tk.Label(header, text="教材注音校對", font=("Microsoft JhengHei UI", 14, "bold")).pack(anchor="w")
         tk.Label(
             header,
-            text="選擇 PDF／整冊資料夾後開始新校對；已有工作資料夾時直接『繼續校對』。技術檢查仍在後台完整執行。",
+            text="選擇 PDF／整冊資料夾後開始新校對；舊版既有專案可按『修復／更新報告』直接接續，不會強制重解碼 actual。",
             fg="#555555", justify="left",
         ).pack(anchor="w", pady=(3, 0))
 
@@ -156,7 +159,7 @@ class App:
         self.runbtn = tk.Button(buttons, text="開始新校對", height=2, width=16, command=self.run)
         self.runbtn.pack(side="left")
         tk.Button(buttons, text="繼續校對", height=2, width=16, command=self.review).pack(side="left", padx=6)
-        tk.Button(buttons, text="更新報告", height=2, width=14, command=self.report).pack(side="left", padx=6)
+        tk.Button(buttons, text="修復／更新報告", height=2, width=16, command=self.report).pack(side="left", padx=6)
         tk.Button(buttons, text="查看報告", height=2, width=14, command=self.open_user_report).pack(side="left", padx=6)
 
         more = tk.Menubutton(buttons, text="更多…", width=12, height=2, relief="raised")
@@ -295,7 +298,7 @@ class App:
         if not out:
             messagebox.showerror("缺少專案資料夾", "請先選擇校對專案資料夾。")
             return
-        self.start(self.proof_cmd(["--report-only", "-o", out]))
+        self.start(self.proof_cmd(["--repair-project", "-o", out]))
 
     def export_gpt(self):
         out = self.output.get().strip()

@@ -50,7 +50,7 @@ from cross_version_compat import fingerprint_compatible, schema_compatible
 from actual_review import actual_workbook_dynamic_dependencies
 
 PROGRAM = "注音校對候選比較器"
-VERSION = "5.6.1"
+VERSION = "5.6.2"
 EXPECTED_RESOLVER_SOURCE_FILES = [
     "check_pronunciation_candidates.py",
     "pronunciation_rule_engine.py",
@@ -130,6 +130,34 @@ def evaluate_historical_regression(rec: dict | None, rg: dict) -> tuple[str, str
         return "FAIL", f"歷史錯誤控制未被安全處理：現版 actual={current_actual} expected={sorted(current_expected)}"
 
     return "FAIL", f"未知歷史回歸狀態：{status}"
+
+
+def historical_regression_applicability(rg: Mapping[str, Any], current_pdf_sha256: str) -> tuple[bool, str]:
+    """Return whether a historical occurrence regression belongs to this PDF.
+
+    Filename substrings are useful for routing a case to a textbook family, but
+    they are not a stable source-version identity. v5.6.2 therefore supports
+    two explicit safeguards: ``reference_only`` keeps an unbound legacy case in
+    the audit sheet without blocking another edition, while
+    ``source_pdf_sha256`` binds a hard-gate case to exact PDF bytes.
+
+    Existing rows remain ``hard_gate`` by default. Neither field contains or
+    derives pronunciation truth.
+    """
+    mode = str(rg.get("applicability_mode") or "hard_gate").strip().lower()
+    if mode not in {"hard_gate", "reference_only"}:
+        raise ValueError(f"歷史回歸 applicability_mode 無效：{rg.get('case_id')} / {mode}")
+    if mode == "reference_only":
+        return False, "舊版來源未綁定 exact PDF；保留為參考案例，不列入現版完成門檻"
+
+    bound_hash = str(rg.get("source_pdf_sha256") or "").strip().lower()
+    current_hash = str(current_pdf_sha256 or "").strip().lower()
+    if bound_hash:
+        if not re.fullmatch(r"[0-9a-f]{64}", bound_hash):
+            raise ValueError(f"歷史回歸 source_pdf_sha256 格式無效：{rg.get('case_id')}")
+        if bound_hash != current_hash:
+            return False, "來源 PDF SHA-256 不同；此歷史座標不適用於現版 PDF"
+    return True, ""
 
 
 def _regression_target_relative_offset(rg: dict) -> int | None:
@@ -2208,8 +2236,13 @@ def analyze(actual_xlsx: Path, dict_path: Path, rules_path: Path, out_xlsx: Path
     for rg in regression_defs:
         cid = rg.get("case_id") or ""
         page = str(rg.get("page") or "").strip()
-        potentials = [rec for rec in all_occurrence_results if historical_regression_potential_match(rec, rg)]
-        if page and page not in current_printed_pages:
+        applicable, applicability_note = historical_regression_applicability(rg, pdf_sha256)
+        potentials = [rec for rec in all_occurrence_results if historical_regression_potential_match(rec, rg)] if applicable else []
+        if not applicable:
+            regression_result = "NOT_APPLICABLE"
+            execution_note = applicability_note
+            potential = None
+        elif page and page not in current_printed_pages:
             regression_result = "NOT_EXECUTED"
             execution_note = "目前分檔未包含此課本頁；由全冊聚合器跨 PDF 對帳"
             potential = None
@@ -2259,6 +2292,8 @@ def analyze(actual_xlsx: Path, dict_path: Path, rules_path: Path, out_xlsx: Path
             "字元": rg.get("target_char", ""), "目標在詞內序號": rg.get("target_occurrence_index", ""),
             "真值實際注音": rg.get("actual_reading", ""),
             "真值預期注音": rg.get("expected_reading", ""), "真值結論": (rg.get("status") or "確認錯誤").strip(),
+            "適用性模式": (rg.get("applicability_mode") or "hard_gate").strip(),
+            "來源PDF SHA-256": (rg.get("source_pdf_sha256") or "").strip(),
             "回歸結果": regression_result,
             "執行說明": execution_note,
             "來源": rg.get("source", ""), "備註": rg.get("note", "")
@@ -2268,8 +2303,9 @@ def analyze(actual_xlsx: Path, dict_path: Path, rules_path: Path, out_xlsx: Path
     stats["confirmed_correct"] = len(confirmed_correct_controls)
     stats["regression_fail"] = sum(1 for r in regression_rows if r["回歸結果"] == "FAIL")
     stats["regression_not_executed"] = sum(1 for r in regression_rows if r["回歸結果"] == "NOT_EXECUTED")
-    stats["regression_required"] = len(regression_rows)
-    stats["regression_executed"] = len(regression_rows) - stats["regression_not_executed"]
+    stats["regression_not_applicable"] = sum(1 for r in regression_rows if r["回歸結果"] == "NOT_APPLICABLE")
+    stats["regression_required"] = len(regression_rows) - stats["regression_not_applicable"]
+    stats["regression_executed"] = sum(1 for r in regression_rows if r["回歸結果"] in {"PASS", "FAIL"})
     single_mismatches = [r for r in remaining_mismatches if r.get("預期注音依據", "").startswith("專案一字多音字典")]
     lexical_mismatches = [r for r in remaining_mismatches if not r.get("預期注音依據", "").startswith("專案一字多音字典")]
 
@@ -2432,6 +2468,7 @@ def analyze(actual_xlsx: Path, dict_path: Path, rules_path: Path, out_xlsx: Path
         ("人工確認正確回歸", stats["confirmed_correct"]),
         ("回歸測試失敗", stats["regression_fail"]),
         ("回歸測試未執行", stats["regression_not_executed"]),
+        ("回歸測試不適用現版來源", stats["regression_not_applicable"]),
         ("回歸測試要求數", stats["regression_required"]),
         ("回歸測試實際執行數", stats["regression_executed"]),
         ("強制回歸要求數", stats["mandatory_regression_required"]),
@@ -2599,7 +2636,7 @@ def analyze(actual_xlsx: Path, dict_path: Path, rules_path: Path, out_xlsx: Path
         desc = f"{r.mode}｜{r.target_char}｜{r.phrase or '(預設)'}｜{r.expected_reading}｜{r.source}" if r else ""
         ws_rule_summary.append([rid, count, desc])
 
-    reg_cols=["案例ID","課本頁","完整詞語","字元","目標在詞內序號","真值實際注音","真值預期注音","真值結論","回歸結果","執行說明","來源","備註"]
+    reg_cols=["案例ID","課本頁","完整詞語","字元","目標在詞內序號","真值實際注音","真值預期注音","真值結論","適用性模式","來源PDF SHA-256","回歸結果","執行說明","來源","備註"]
     ws_regression.append(reg_cols)
     append_dict(ws_regression, reg_cols, regression_rows)
 

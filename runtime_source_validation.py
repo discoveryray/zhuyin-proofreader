@@ -16,10 +16,10 @@ from occurrence_ledger import LEDGER_SCHEMA_VERSION, canonical_bopomofo
 from actual_review import dynamic_actual_hashes
 
 
-ASSET_MANIFEST_SCHEMA_VERSION = "2.6.0"
+ASSET_MANIFEST_SCHEMA_VERSION = "2.6.1"
 ACTUAL_FINGERPRINT_SCHEMA_VERSION = "2.9.0"
 EXPECTED_FINGERPRINT_SCHEMA_VERSION = "2.7.0"
-TOOL_VERSION = "5.6.1"
+TOOL_VERSION = "5.6.2"
 REQUIRED_ASSET_CHAINS = {
     "moe_concise_dictionary": "expected",
     "project_polyphonic_dictionary": "expected",

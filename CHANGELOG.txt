@@ -1,4 +1,13 @@
-﻿v5.6.1（2026-08-24）－零適用歷史回歸完成門檻修正
+﻿v5.6.2（2026-08-26）－現有專案完成狀態修正版
+- 新增「修復／更新報告」：沿用同一 session、人工/GPT 判定與 actual 工作簿；actual 證據相容時直接 reuse，只重建受影響的 expected 候選、回歸門檻與報告。
+- 修正三上來源限定規則把所有「轉動」高優先判為ㄓㄨㄢˋ，導致強制回歸 M25-ZHUAN-DONG 失敗；依既有人工回標與公司規範改回「轉動」ㄓㄨㄢˇ。
+- 歷史 occurrence regression 新增 applicability_mode 與 source_pdf_sha256。未綁定 exact 舊來源的 15 筆三上案例保留為 reference_only／NOT_APPLICABLE，不再以舊頁碼阻擋其他版本完成；真正 hard_gate 案例仍須執行並全數通過。
+- 「輸出 actual 待判定給 GPT」遇到 0 筆時改為正常訊息並以代碼 0 結束，不再拋出 traceback。
+- expected／差異判定檔匯入訊息不再從舊 manifest 顯示可能過期的 actual 待處理數；完成狀態統一以本次報告與 pipeline_status.json 為準。
+- GUI 在待處理為 0 但仍未完成時，會直接顯示未通過的硬門檻，避免只看到「校對尚未完成」而無原因。
+- actual／expected 雙證據鏈仍完全分離；本版不以 actual 反推 expected，也不降低 mandatory regression、集合對帳或完成門檻。
+
+v5.6.1（2026-08-24）－零適用歷史回歸完成門檻修正
 - 修正全冊沒有任何適用 PDF occurrence regression（required=0, executed=0）時，regression gate 被誤判失敗的問題。
 - PDF occurrence regression 改為「所有實際 required 案例均執行完成且無 FAIL／NOT_EXECUTED／重複執行」即通過；0 個適用案例視為中性通過。
 - mandatory regression 仍維持原有硬門檻，必須完整執行並全數通過；本修正不放寬既有真實回歸案例。

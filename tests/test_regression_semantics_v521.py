@@ -93,6 +93,20 @@ class WholeBookRegressionAggregationTests(unittest.TestCase):
         self.assertEqual(report["executed"], 0)
         self.assertEqual(report["not_executed"], 1)
 
+    def test_reference_only_case_is_audited_but_not_required(self):
+        row = self._row("NOT_APPLICABLE")
+        row["適用性模式"] = "reference_only"
+        report = _aggregate_pdf_regression_rows([
+            ("a.pdf", [row]),
+            ("b.pdf", [dict(row)]),
+        ])
+        self.assertTrue(report["ok"])
+        self.assertEqual(report["required"], 0)
+        self.assertEqual(report["executed"], 0)
+        self.assertEqual(report["not_executed"], 0)
+        self.assertEqual(report["not_applicable"], 1)
+        self.assertEqual(report["not_applicable_case_ids"], ["CONF-TEST"])
+
     def test_multiple_executions_are_fail_closed(self):
         report = _aggregate_pdf_regression_rows([
             ("a.pdf", [self._row("PASS")]),

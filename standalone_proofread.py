@@ -100,7 +100,7 @@ from actual_review import (
 )
 
 PROGRAM = "注音校對工具－單機端到端控制器"
-VERSION = "5.6.1"
+VERSION = "5.6.2"
 # Tool release number is not a cache/session boundary. Compatibility is decided
 # by schema family, durable review IDs, PDF bytes and evidence assets.
 COMPATIBLE_SESSION_VERSIONS = None
@@ -118,6 +118,9 @@ DECISIONS = {"補建expected證據", "解決expected證據", "確認現版差異
 GPT_DECISION_BUNDLE_SCHEMA_VERSION = "1.1"
 PROJECT_EVIDENCE_DIR = "_專案證據"
 PROJECT_ACTUAL_EVIDENCE_DIR = "actual"
+NO_ACTUAL_PENDING_MESSAGE = (
+    "目前沒有 ACTUAL_DECODE_ERROR／ACTUAL_UNRESOLVED 可匯出；actual 待判定為 0，無須建立 GPT 判定包。"
+)
 
 
 def project_actual_evidence_root(output_dir: Path) -> Path:
@@ -1744,13 +1747,19 @@ def _candidate_regression_report(candidate: Path) -> tuple[dict[str, Any], dict[
     pdf_rows = workbook_rows(candidate, "回歸測試", ["案例ID", "回歸結果"])
     ids = [str(row.get("案例ID") or "").strip() for row in pdf_rows]
     duplicate_ids = [key for key, count in Counter(ids).items() if key and count > 1]
+    applicable_ids = {
+        str(row.get("案例ID") or "").strip()
+        for row in pdf_rows
+        if str(row.get("回歸結果") or "") != "NOT_APPLICABLE" and str(row.get("案例ID") or "").strip()
+    }
     pdf_report = {
-        "ok": not duplicate_ids and all(row.get("回歸結果") == "PASS" for row in pdf_rows),
-        "required": len({value for value in ids if value}),
+        "ok": not duplicate_ids and all(row.get("回歸結果") != "FAIL" for row in pdf_rows),
+        "required": len(applicable_ids),
         "executed": sum(1 for row in pdf_rows if row.get("回歸結果") in {"PASS", "FAIL"}),
         "passed": sum(1 for row in pdf_rows if row.get("回歸結果") == "PASS"),
         "failed": sum(1 for row in pdf_rows if row.get("回歸結果") == "FAIL"),
         "not_executed": sum(1 for row in pdf_rows if row.get("回歸結果") == "NOT_EXECUTED"),
+        "not_applicable": sum(1 for row in pdf_rows if row.get("回歸結果") == "NOT_APPLICABLE"),
         "duplicate_case_id": len(duplicate_ids),
         "duplicate_case_ids": duplicate_ids,
     }
@@ -1764,7 +1773,9 @@ def _aggregate_pdf_regression_rows(per_pdf_rows: list[tuple[str, list[dict[str, 
     definitions so that a missing occurrence in one split remains auditable. At
     whole-book level a case is required once, not once per split. Exactly one
     split must execute each case; the remaining split-local copies may be
-    NOT_EXECUTED. Historical truth fields must be identical across copies.
+    NOT_EXECUTED. A source-mismatched/reference-only copy is NOT_APPLICABLE and
+    does not enter the completion denominator. Historical truth and source
+    applicability fields must be identical across copies.
     """
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     blank_case_rows: list[dict[str, Any]] = []
@@ -1783,7 +1794,7 @@ def _aggregate_pdf_regression_rows(per_pdf_rows: list[tuple[str, list[dict[str, 
 
     signature_fields = (
         "課本頁", "完整詞語", "字元", "目標在詞內序號", "真值實際注音", "真值預期注音",
-        "真值結論", "來源", "備註",
+        "真值結論", "適用性模式", "來源PDF SHA-256", "來源", "備註",
     )
     definition_conflicts: list[str] = []
     duplicate_execution_case_ids: list[str] = []
@@ -1796,8 +1807,13 @@ def _aggregate_pdf_regression_rows(per_pdf_rows: list[tuple[str, list[dict[str, 
         if len(signatures) != 1:
             definition_conflicts.append(case_id)
             continue
-        executed = [row for row in copies if str(row.get("回歸結果") or "") in {"PASS", "FAIL"}]
-        if len(executed) > 1:
+        applicable_copies = [row for row in copies if str(row.get("回歸結果") or "") != "NOT_APPLICABLE"]
+        executed = [row for row in applicable_copies if str(row.get("回歸結果") or "") in {"PASS", "FAIL"}]
+        if not applicable_copies:
+            result = "NOT_APPLICABLE"
+            note = str(copies[0].get("執行說明") or "此歷史案例不適用於現版來源")
+            executed_pdf = ""
+        elif len(executed) > 1:
             duplicate_execution_case_ids.append(case_id)
             result = "FAIL"
             note = "同一歷史回歸案例在多個 PDF 分檔被實際執行：" + ", ".join(row["pdf_name"] for row in executed)
@@ -1823,11 +1839,12 @@ def _aggregate_pdf_regression_rows(per_pdf_rows: list[tuple[str, list[dict[str, 
     if definition_conflicts:
         raise ValueError("歷史回歸案例定義在 PDF 分檔間不一致：" + ", ".join(definition_conflicts[:20]))
 
-    required = len(grouped)
+    required = sum(1 for row in result_rows if row["回歸結果"] != "NOT_APPLICABLE")
     executed_count = sum(1 for row in result_rows if row["回歸結果"] in {"PASS", "FAIL"})
     passed = sum(1 for row in result_rows if row["回歸結果"] == "PASS")
     failed = sum(1 for row in result_rows if row["回歸結果"] == "FAIL")
     not_executed = sum(1 for row in result_rows if row["回歸結果"] == "NOT_EXECUTED")
+    not_applicable = sum(1 for row in result_rows if row["回歸結果"] == "NOT_APPLICABLE")
     duplicate_count = len(duplicate_execution_case_ids)
     return {
         "ok": executed_count == required and failed == 0 and not_executed == 0 and duplicate_count == 0,
@@ -1836,9 +1853,11 @@ def _aggregate_pdf_regression_rows(per_pdf_rows: list[tuple[str, list[dict[str, 
         "passed": passed,
         "failed": failed,
         "not_executed": not_executed,
+        "not_applicable": not_applicable,
         "duplicate_case_id": duplicate_count,
         "duplicate_execution_case_ids": duplicate_execution_case_ids,
-        "required_case_ids": sorted(grouped),
+        "required_case_ids": sorted(row["案例ID"] for row in result_rows if row["回歸結果"] != "NOT_APPLICABLE"),
+        "not_applicable_case_ids": sorted(row["案例ID"] for row in result_rows if row["回歸結果"] == "NOT_APPLICABLE"),
         "executed_case_ids": sorted(row["案例ID"] for row in result_rows if row["回歸結果"] in {"PASS", "FAIL"}),
         "results": result_rows,
     }
@@ -2062,6 +2081,7 @@ def collect_manifest(
         "passed": int(first_mandatory.get("passed", 0)) + int(combined_pdf.get("passed", 0)),
         "failed": int(first_mandatory.get("failed", 0)) + int(combined_pdf.get("failed", 0)),
         "not_executed": int(first_mandatory.get("not_executed", 0)) + int(combined_pdf.get("not_executed", 0)),
+        "not_applicable": int(combined_pdf.get("not_applicable", 0)),
         "duplicate_case_id": int(first_mandatory.get("duplicate_case_id", 0)) + int(combined_pdf.get("duplicate_case_id", 0)),
     }
     return seal_manifest(manifest)
@@ -2666,6 +2686,7 @@ def generate_report(output_dir: Path, manifest: dict[str, Any], db: dict[str, An
         ("mandatory regression not executed", (manifest.get("mandatory_regression") or {}).get("not_executed", 0)),
         ("PDF occurrence regression failed", (manifest.get("pdf_regression") or {}).get("failed", 0)),
         ("PDF occurrence regression not executed", (manifest.get("pdf_regression") or {}).get("not_executed", 0)),
+        ("PDF occurrence regression not applicable", (manifest.get("pdf_regression") or {}).get("not_applicable", 0)),
         ("集合對帳", "PASS" if reconciliation.ok else "FAIL"),
         ("失敗硬門檻", "｜".join(gate.get("failed_gates") or [])),
         ("完成判定", "只有 actual 100%、expected 100%、所有非終態/錯誤/衝突為 0、mandatory 與適用 PDF regression 全部實際執行且 0 失敗、全量集合對帳成立，才可 PROOFREAD_COMPLETE。"),
@@ -2959,7 +2980,7 @@ def _resolve_session_pdfs(output_dir: Path, manifest: Mapping[str, Any]) -> list
     return resolved
 
 
-def export_actual_pending_for_gpt(output_dir: Path) -> Path:
+def export_actual_pending_for_gpt(output_dir: Path) -> Path | None:
     output_dir = Path(output_dir)
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
@@ -2973,7 +2994,7 @@ def export_actual_pending_for_gpt(output_dir: Path) -> Path:
     ledger = materialize_ledger(manifest, db)
     groups = build_actual_review_groups(ledger)
     if not groups:
-        raise ValueError("目前沒有 ACTUAL_DECODE_ERROR／ACTUAL_UNRESOLVED 可匯出。若是人工發現誤讀，請在人工校對畫面按『實際注音辨識有誤』。")
+        return None
     return export_actual_review_package(
         output_dir,
         ledger,
@@ -3482,6 +3503,37 @@ def regenerate_report(output_dir: Path) -> Path:
     return generate_report(output_dir,manifest,db)
 
 
+def repair_project_state(output_dir: Path) -> Path:
+    """Rebuild expected candidates and completion state without forcing actual decode.
+
+    This is the supported v5.6.2 upgrade path for an existing sealed project.
+    ``run_pipeline_pdfs`` reuses each actual workbook when the exact PDF bytes,
+    approved actual assets, and project-owned actual evidence are unchanged. A
+    changed expected rule/regression asset rebuilds only candidate workbooks,
+    then replays durable manual decisions and regenerates the completion gate.
+    """
+    output_dir = resolve_existing_project_dir(Path(output_dir))
+    old_manifest = json_load_strict(output_dir / "校對工作階段.json")
+    validate_manifest_integrity(old_manifest)
+    validate_output_artifact_hashes(old_manifest)
+    if (
+        not schema_compatible(old_manifest.get("session_schema_version"), SESSION_SCHEMA_VERSION)
+        or not schema_compatible(old_manifest.get("ledger_schema_version"), LEDGER_SCHEMA_VERSION)
+        or not review_id_schema_compatible(old_manifest.get("review_id_schema_version"), REVIEW_ID_SCHEMA_VERSION)
+    ):
+        raise ValueError("SESSION_SCHEMA_INCOMPATIBLE：現有專案無法安全修復，需明確轉接器")
+    pdfs = _resolve_session_pdfs(output_dir, old_manifest)
+    print(
+        "[專案修復] 沿用相同 PDF 與既有人工判定；actual 證據相容時直接 reuse，只重建受影響的 expected 候選與完成門檻。",
+        flush=True,
+    )
+    return run_pipeline_pdfs(
+        pdfs,
+        output_dir,
+        session_id_override=str(old_manifest.get("session_id") or "") or None,
+    )
+
+
 def resolve_existing_project_dir(path: Path) -> Path:
     """Resolve a project folder conservatively for management/import operations.
 
@@ -3523,6 +3575,7 @@ def main():
     ap.add_argument("input",nargs="?",help="PDF 或含 PDF 的資料夾")
     ap.add_argument("-o","--output-dir")
     ap.add_argument("--report-only",action="store_true",help="只依既有工作階段與判定重新產生最終報告")
+    ap.add_argument("--repair-project",action="store_true",help="沿用 actual 與人工判定，重建受影響候選、回歸門檻及報告")
     ap.add_argument("--export-gpt",action="store_true",help="輸出 expected／差異 GPT 證據表")
     ap.add_argument("--import-gpt",help="匯入 expected／差異 GPT 證據表 xlsx")
     ap.add_argument("--import-gpt-auto", nargs="+", help="自動辨識並匯入 GPT xlsx 或單檔 GPT 判定包 zip；多檔時自動先判定包／actual 後 expected")
@@ -3530,14 +3583,18 @@ def main():
     ap.add_argument("--import-actual-gpt",help="匯入 GPT 已填寫的 actual待判定_給GPT.xlsx，驗證後自動重新解碼")
     ap.add_argument("--refresh-actual",action="store_true",help="依目前 user actual 證據重新解碼現有工作階段")
     args=ap.parse_args()
-    if args.report_only or args.export_gpt or args.import_gpt or args.import_gpt_auto or args.export_actual_gpt or args.import_actual_gpt or args.refresh_actual:
+    if args.report_only or args.repair_project or args.export_gpt or args.import_gpt or args.import_gpt_auto or args.export_actual_gpt or args.import_actual_gpt or args.refresh_actual:
         if not args.output_dir: raise SystemExit("此操作需要 -o 輸出資料夾")
         requested_outdir = Path(args.output_dir)
         outdir = resolve_existing_project_dir(requested_outdir)
         if outdir != requested_outdir:
             print(f"[專案路徑修正] {requested_outdir} -> {outdir}", flush=True)
+        if args.repair_project:
+            print(repair_project_state(outdir)); return 0
         if args.export_actual_gpt:
-            print(export_actual_pending_for_gpt(outdir)); return 0
+            package = export_actual_pending_for_gpt(outdir)
+            print(package if package is not None else NO_ACTUAL_PENDING_MESSAGE)
+            return 0
         if args.import_gpt_auto:
             planned = plan_gpt_auto_imports(args.import_gpt_auto)
             if not planned:
@@ -3562,12 +3619,11 @@ def main():
                     )
                 else:
                     n, skipped, report = import_gpt_decisions(outdir, import_path)
-                    counts = current_pending_state_counts(outdir)
-                    actual_left = counts.get("ACTUAL_DECODE_ERROR", 0) + counts.get("ACTUAL_UNRESOLVED", 0)
-                    extra = f"；目前仍有 actual 待處理 {actual_left} 筆" if actual_left else ""
                     print(
                         f"自動辨識：{import_path.name} = expected／差異 GPT 證據檔。"
-                        f"匯入 {n} 筆，略過 {skipped} 筆未操作列{extra}。\n{report}",
+                        f"匯入 {n} 筆，略過 {skipped} 筆未操作列。\n{report}\n"
+                        "完成狀態請以本次產生的報告／pipeline_status.json 為準；"
+                        "若剛升級規則，請按「修復／更新報告」。",
                         flush=True,
                     )
             return 0
