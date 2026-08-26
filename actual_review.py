@@ -1,0 +1,1214 @@
+from __future__ import annotations
+
+import csv
+import hashlib
+import json
+import shutil
+import zipfile
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Iterable, Mapping, Sequence
+
+import fitz
+from openpyxl import Workbook, load_workbook
+from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.utils import get_column_letter
+from openpyxl.worksheet.datavalidation import DataValidation
+
+from occurrence_ledger import canonical_bopomofo
+from cff_zhuyin_decoder import cff_full_annotation_signature
+from cross_version_compat import review_id_schema_compatible, schema_compatible
+
+ACTUAL_REVIEW_SCHEMA_VERSION = "1.0"
+ACTUAL_PENDING_STATES = frozenset({"ACTUAL_DECODE_ERROR", "ACTUAL_UNRESOLVED"})
+USER_GLYF_FILE = "user_verified_glyf_fingerprints.csv"
+USER_CFF_FILE = "user_verified_cff_glyph_fingerprints.csv"
+OCCURRENCE_OVERRIDE_FILE = "manual_actual_occurrence_overrides.csv"
+GLYPH_CONFLICT_FILE = "glyph_truth_conflicts.csv"
+GLYPH_PROVENANCE_FILE = "glyph_truth_provenance.csv"
+STATIC_TTF_FINGERPRINT_FILE = "ttf_verified_glyf_fingerprints.csv"
+
+USER_GLYF_HEADERS = [
+    "glyph_sha256", "bopomofo", "verification_level", "source_count",
+    "source_examples", "updated_at", "notes",
+]
+USER_CFF_HEADERS = [
+    "style_group", "glyph_sha256", "full_signature", "bopomofo", "verification_level",
+    "source_count", "source_examples", "updated_at", "notes",
+]
+OVERRIDE_HEADERS = [
+    "pdf_contains", "pdf_excludes", "page", "target_char", "stable_key",
+    "x0", "y0", "actual_reading", "source", "note",
+]
+GLYPH_CONFLICT_HEADERS = [
+    "kind", "style_group", "glyph_sha256", "status", "readings",
+    "source_occurrence_ids", "updated_at", "notes",
+]
+GLYPH_PROVENANCE_HEADERS = [
+    "event_id", "kind", "style_group", "glyph_sha256", "bopomofo",
+    "event_type", "occurrence_ids", "source", "created_at", "note",
+]
+
+
+def _text(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def _canon(value: Any) -> str:
+    return canonical_bopomofo(value)
+
+
+def _hash_payload(payload: Mapping[str, Any]) -> str:
+    raw = json.dumps(dict(payload), ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _style_sheet(ws) -> None:
+    ws.sheet_view.showGridLines = False
+    ws.freeze_panes = "A2"
+    if ws.max_row:
+        fill = PatternFill("solid", fgColor="1F4E78")
+        font = Font(color="FFFFFF", bold=True)
+        for cell in ws[1]:
+            cell.fill = fill
+            cell.font = font
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+        ws.auto_filter.ref = ws.dimensions
+    for col in range(1, ws.max_column + 1):
+        max_len = 0
+        for row in range(1, min(ws.max_row, 120) + 1):
+            value = ws.cell(row, col).value
+            max_len = max(max_len, len(str(value or "")))
+        ws.column_dimensions[get_column_letter(col)].width = min(max(10, max_len + 2), 48)
+
+
+def _read_csv(path: Path, headers: Sequence[str]) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    with path.open("r", encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        actual_headers = [str(x or "") for x in (reader.fieldnames or [])]
+        if actual_headers != list(headers):
+            raise ValueError(f"{path.name} 欄位格式不符，禁止自動覆寫")
+        return [{h: _text(row.get(h)) for h in headers} for row in reader]
+
+
+def _write_csv(path: Path, headers: Sequence[str], rows: Iterable[Mapping[str, Any]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    with tmp.open("w", encoding="utf-8-sig", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=list(headers))
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({h: row.get(h, "") for h in headers})
+    tmp.replace(path)
+
+
+
+KNOWN_BAD_LEGACY_OVERRIDE = {
+    "pdf_contains": "15_國小健體3下課本_單元5第2課_(學)",
+    "page": "122",
+    "target_char": "那",
+    "stable_key": "CFF:DFKaiChuIn-Md-BPMF-BF#1311",
+    "x0": "142.01",
+    "y0": "76.595",
+    "actual_reading": "ㄋㄚˋ",
+}
+
+
+def _migrate_v540_known_bad_override(root: Path) -> bool:
+    """Remove one v5.3.1 patch that was later disproved by direct PDF glyph review.
+
+    The migration is intentionally exact and source-scoped.  It does not infer
+    any replacement actual.  Once removed, the normal CFF glyph decoder
+    independently reconstructs the printed reading from the PDF.
+    """
+    path = Path(root) / OCCURRENCE_OVERRIDE_FILE
+    if not path.exists():
+        return False
+    rows = _read_csv(path, OVERRIDE_HEADERS)
+    kept = []
+    removed = False
+    for row in rows:
+        exact = all(_text(row.get(k)) == v for k, v in KNOWN_BAD_LEGACY_OVERRIDE.items() if k != "actual_reading")
+        source = _text(row.get("source"))
+        reading = _canon(row.get("actual_reading"))
+        generated_by_bad_patch = "2026-08-20" in source and ("GPT" in source or "原頁回標" in source)
+        if exact and reading == KNOWN_BAD_LEGACY_OVERRIDE["actual_reading"] and generated_by_bad_patch:
+            removed = True
+            continue
+        kept.append(row)
+    if removed:
+        _write_csv(path, OVERRIDE_HEADERS, kept)
+    return removed
+
+def ensure_user_evidence_files(root: Path) -> None:
+    root = Path(root)
+    _migrate_v540_known_bad_override(root)
+    for name, headers in (
+        (USER_GLYF_FILE, USER_GLYF_HEADERS),
+        (USER_CFF_FILE, USER_CFF_HEADERS),
+        (GLYPH_CONFLICT_FILE, GLYPH_CONFLICT_HEADERS),
+        (GLYPH_PROVENANCE_FILE, GLYPH_PROVENANCE_HEADERS),
+    ):
+        path = root / name
+        if not path.exists():
+            _write_csv(path, headers, [])
+
+
+def validate_dynamic_actual_evidence(root: Path) -> dict[str, Any]:
+    root = Path(root)
+    ensure_user_evidence_files(root)
+    result = {"ok": True, "errors": [], "hashes": {}}
+    specs = [
+        (OCCURRENCE_OVERRIDE_FILE, OVERRIDE_HEADERS),
+        (USER_GLYF_FILE, USER_GLYF_HEADERS),
+        (USER_CFF_FILE, USER_CFF_HEADERS),
+        (GLYPH_CONFLICT_FILE, GLYPH_CONFLICT_HEADERS),
+    ]
+    for name, headers in specs:
+        path = root / name
+        try:
+            if name == OCCURRENCE_OVERRIDE_FILE and not path.exists():
+                # A fresh installation may legitimately have no occurrence
+                # overrides yet.  Absence is a stable empty dynamic evidence
+                # state and is still fingerprinted distinctly from a real file.
+                result["hashes"][name] = "ABSENT"
+                continue
+            rows = _read_csv(path, headers)
+            for idx, row in enumerate(rows, 2):
+                reading_col = "actual_reading" if name == OCCURRENCE_OVERRIDE_FILE else "bopomofo"
+                reading = _canon(row.get(reading_col))
+                if row.get(reading_col) and not reading:
+                    raise ValueError(f"row {idx} {reading_col} 不是合法單一注音")
+                if name == USER_GLYF_FILE and row.get("verification_level") == "VERIFIED_EXACT_GLYPH":
+                    if not row.get("glyph_sha256") or len(row.get("glyph_sha256", "")) != 64:
+                        raise ValueError(f"row {idx} glyph_sha256 無效")
+                if name == USER_CFF_FILE and row.get("verification_level") == "VERIFIED_EXACT_GLYPH":
+                    sha = _text(row.get("glyph_sha256")).lower()
+                    if not row.get("style_group") or len(sha) != 64 or any(ch not in "0123456789abcdef" for ch in sha):
+                        raise ValueError(f"row {idx} CFF exact full-glyph SHA-256 key 不完整")
+                if name == GLYPH_CONFLICT_FILE:
+                    sha = _text(row.get("glyph_sha256")).lower()
+                    kind = _text(row.get("kind"))
+                    if kind not in {"TTF_GLYF_SHA256", "CFF_GLYPH_SHA256"}:
+                        raise ValueError(f"row {idx} kind 無效")
+                    if len(sha) != 64 or any(ch not in "0123456789abcdef" for ch in sha):
+                        raise ValueError(f"row {idx} glyph_sha256 無效")
+                    if _text(row.get("status")) != "GLYPH_TRUTH_CONFLICT":
+                        raise ValueError(f"row {idx} status 必須為 GLYPH_TRUTH_CONFLICT")
+                    readings = [_canon(x) for x in _text(row.get("readings")).split("|") if _text(x)]
+                    if len(set(filter(None, readings))) < 2:
+                        raise ValueError(f"row {idx} conflict 至少需要兩個互斥讀音")
+            result["hashes"][name] = _sha256_file(path)
+        except Exception as exc:
+            result["ok"] = False
+            result["errors"].append(f"{name}：{exc}")
+    return result
+
+
+def _subset_sha256(rows: Sequence[Mapping[str, Any]], headers: Sequence[str]) -> str:
+    payload = [
+        {h: _text(row.get(h)) for h in headers}
+        for row in rows
+    ]
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _override_applies_to_pdf(row: Mapping[str, Any], pdf_path: Path) -> bool:
+    stem = Path(pdf_path).stem
+    scope = _text(row.get("pdf_contains"))
+    if scope and scope not in stem:
+        return False
+    excludes = _text(row.get("pdf_excludes"))
+    if excludes:
+        parts = [x.strip() for x in excludes.replace(";", "|").replace(",", "|").split("|") if x.strip()]
+        if any(part in stem for part in parts):
+            return False
+    return True
+
+
+def actual_workbook_dynamic_dependencies(path: Path) -> dict[str, Any] | None:
+    """Read exact-glyph dependencies already observed in one actual workbook.
+
+    This is intentionally a lightweight cache-inspection step, not a decoder.
+    It lets a new user-verified glyph invalidate only PDFs that actually contain
+    that exact glyph.  Older workbooks without the v5.4 evidence columns return
+    None, which safely falls back to hashing the complete dynamic truth files.
+    """
+    path = Path(path)
+    if not path.exists():
+        return None
+    try:
+        wb = load_workbook(path, read_only=True, data_only=True)
+        try:
+            if "實際注音" not in wb.sheetnames:
+                return None
+            ws = wb["實際注音"]
+            iterator = ws.iter_rows(values_only=True)
+            headers = [str(v or "") for v in next(iterator)]
+            idx = {name: i for i, name in enumerate(headers)}
+            ttf_col = idx.get("TTF字形SHA256")
+            cff_col = idx.get("CFF整字字形SHA256")
+            style_col = idx.get("CFF樣式群組")
+            if ttf_col is None and cff_col is None:
+                return None
+            ttf: set[str] = set()
+            cff: set[tuple[str, str]] = set()
+            for row in iterator:
+                if ttf_col is not None and ttf_col < len(row):
+                    sha = _text(row[ttf_col]).lower()
+                    if len(sha) == 64 and all(ch in "0123456789abcdef" for ch in sha):
+                        ttf.add(sha)
+                if cff_col is not None and cff_col < len(row):
+                    sha = _text(row[cff_col]).lower()
+                    style = _text(row[style_col]) if style_col is not None and style_col < len(row) else ""
+                    if style and len(sha) == 64 and all(ch in "0123456789abcdef" for ch in sha):
+                        cff.add((style, sha))
+            return {
+                "ttf_glyph_sha256": sorted(ttf),
+                "cff_glyph_keys": [list(item) for item in sorted(cff)],
+            }
+        finally:
+            wb.close()
+    except Exception:
+        return None
+
+
+def dynamic_actual_hashes(
+    root: Path,
+    *,
+    pdf_path: Path | None = None,
+    dependencies: Mapping[str, Any] | None = None,
+) -> dict[str, str]:
+    """Hash dynamic actual evidence, optionally scoped to one PDF's dependencies.
+
+    Global validation is always performed first.  With a PDF and dependency
+    roster, occurrence overrides are filtered by PDF scope and learned exact
+    glyph truths are filtered by hashes actually present in that PDF.  This
+    preserves fail-closed fingerprints while avoiding whole-project cache
+    invalidation after an unrelated correction.
+    """
+    report = validate_dynamic_actual_evidence(root)
+    if not report.get("ok"):
+        raise ValueError("動態 actual 證據檔驗證失敗：" + "；".join(report.get("errors") or []))
+    if pdf_path is None:
+        return dict(sorted((report.get("hashes") or {}).items()))
+
+    root = Path(root)
+    pdf_path = Path(pdf_path)
+    override_rows = _read_csv(root / OCCURRENCE_OVERRIDE_FILE, OVERRIDE_HEADERS) if (root / OCCURRENCE_OVERRIDE_FILE).exists() else []
+    override_rows = [row for row in override_rows if _override_applies_to_pdf(row, pdf_path)]
+
+    glyf_rows = _read_csv(root / USER_GLYF_FILE, USER_GLYF_HEADERS)
+    cff_rows = _read_csv(root / USER_CFF_FILE, USER_CFF_HEADERS)
+    conflict_rows = _read_csv(root / GLYPH_CONFLICT_FILE, GLYPH_CONFLICT_HEADERS)
+    mode = "global_fallback"
+    if dependencies is not None:
+        mode = "per_pdf_exact_dependency_v1"
+        ttf_keys = {_text(x).lower() for x in (dependencies.get("ttf_glyph_sha256") or []) if _text(x)}
+        cff_keys = {
+            (_text(item[0]), _text(item[1]).lower())
+            for item in (dependencies.get("cff_glyph_keys") or [])
+            if isinstance(item, (list, tuple)) and len(item) >= 2
+        }
+        glyf_rows = [row for row in glyf_rows if _text(row.get("glyph_sha256")).lower() in ttf_keys]
+        cff_rows = [
+            row for row in cff_rows
+            if (_text(row.get("style_group")), _text(row.get("glyph_sha256")).lower()) in cff_keys
+        ]
+        conflict_rows = [
+            row for row in conflict_rows
+            if (
+                (_text(row.get("kind")) == "TTF_GLYF_SHA256" and _text(row.get("glyph_sha256")).lower() in ttf_keys)
+                or (
+                    _text(row.get("kind")) == "CFF_GLYPH_SHA256"
+                    and (_text(row.get("style_group")), _text(row.get("glyph_sha256")).lower()) in cff_keys
+                )
+            )
+        ]
+
+    return {
+        "scope_mode": hashlib.sha256(mode.encode("utf-8")).hexdigest(),
+        OCCURRENCE_OVERRIDE_FILE: _subset_sha256(override_rows, OVERRIDE_HEADERS),
+        USER_GLYF_FILE: _subset_sha256(glyf_rows, USER_GLYF_HEADERS),
+        USER_CFF_FILE: _subset_sha256(cff_rows, USER_CFF_HEADERS),
+        GLYPH_CONFLICT_FILE: _subset_sha256(conflict_rows, GLYPH_CONFLICT_HEADERS),
+    }
+
+
+def _sha256_file(path: Path) -> str:
+    h = hashlib.sha256()
+    with Path(path).open("rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _source(entry: Mapping[str, Any]) -> Mapping[str, Any]:
+    return entry.get("source_record") or entry.get("row") or {}
+
+
+def _cff_full_signature(source: Mapping[str, Any]) -> str:
+    existing = _text(source.get("CFF完整注音簽名"))
+    if existing:
+        return existing
+    style = _text(source.get("CFF樣式群組"))
+    body = _text(source.get("CFF符號簽名"))
+    tone = _text(source.get("CFF聲調簽名"))
+    neutral = _text(source.get("CFF輕聲簽名"))
+    if not style or not body:
+        return ""
+    return cff_full_annotation_signature(style, body.split(";"), tone, neutral)
+
+
+def actual_group_identity(entry: Mapping[str, Any]) -> dict[str, str]:
+    source = _source(entry)
+    sha = _text(source.get("TTF字形SHA256")).lower()
+    if len(sha) == 64 and all(ch in "0123456789abcdef" for ch in sha):
+        return {"kind": "TTF_GLYF_SHA256", "exact_key": sha, "style_group": "", "full_signature": ""}
+    cff_glyph_sha = _text(source.get("CFF整字字形SHA256")).lower()
+    if len(cff_glyph_sha) == 64 and all(ch in "0123456789abcdef" for ch in cff_glyph_sha):
+        return {
+            "kind": "CFF_GLYPH_SHA256",
+            "exact_key": cff_glyph_sha,
+            "style_group": _text(source.get("CFF樣式群組")),
+            "full_signature": _cff_full_signature(source),
+        }
+    # Older workbooks may carry only an annotation signature.  That signature
+    # is audit evidence, not a reusable learning key: different complete CFF
+    # glyphs can share annotation components.  Keep them occurrence-specific
+    # until a current decoder supplies the complete-glyph SHA-256.
+    stable = _text(entry.get("stable_key") or source.get("穩定注音鍵"))
+    if stable:
+        return {"kind": "SESSION_STABLE_KEY", "exact_key": _text(entry.get("occurrence_id") or stable), "style_group": "", "full_signature": _cff_full_signature(source)}
+    return {"kind": "OCCURRENCE_ONLY", "exact_key": _text(entry.get("occurrence_id")), "style_group": "", "full_signature": ""}
+
+
+def build_actual_review_groups(entries: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """Build GPT/manual actual groups from pending seeds, expanded to all exact peers.
+
+    A verified exact glyph may already occur in non-pending rows of the current
+    project.  Expanding each pending seed to every same exact identity ensures
+    promotion writes occurrence-scoped overrides for all currently affected
+    PDFs, so per-PDF fingerprints can safely invalidate only true dependants.
+    """
+    all_grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    pending_keys: set[tuple[str, str]] = set()
+    for raw in entries:
+        entry = dict(raw)
+        ident = actual_group_identity(entry)
+        key = (ident["kind"], ident["exact_key"])
+        all_grouped.setdefault(key, []).append(entry)
+        if _text(raw.get("state")) in ACTUAL_PENDING_STATES:
+            pending_keys.add(key)
+    result = []
+    for kind, exact_key in sorted(pending_keys):
+        members = all_grouped.get((kind, exact_key), [])
+        if not members:
+            continue
+        members.sort(key=lambda e: (_text(e.get("pdf_name")), int(e.get("physical_page") or 0), float(e.get("y0") or 0), float(e.get("x0") or 0)))
+        ident = actual_group_identity(members[0])
+        group_id = "agr_" + _hash_payload({"kind": kind, "exact_key": exact_key})[:24]
+        snapshot = _hash_payload({
+            "group_id": group_id,
+            "kind": kind,
+            "exact_key": exact_key,
+            "members": [
+                {
+                    "occurrence_id": e.get("occurrence_id"),
+                    "review_id": e.get("review_id"),
+                    "state": e.get("state"),
+                    "actual": e.get("actual"),
+                    "actual_evidence": e.get("actual_evidence"),
+                }
+                for e in members
+            ],
+        })
+        result.append({
+            "group_id": group_id,
+            "group_snapshot": snapshot,
+            "kind": kind,
+            "exact_key": exact_key,
+            "style_group": ident.get("style_group", ""),
+            "full_signature": ident.get("full_signature", ""),
+            "members": members,
+            "occurrence_count": len(members),
+        })
+    result.sort(key=lambda g: (_text(g["members"][0].get("pdf_name")), int(g["members"][0].get("physical_page") or 0), _text(g["group_id"])))
+    return result
+
+
+
+def build_actual_group_for_entry(entries: Sequence[Mapping[str, Any]], target: Mapping[str, Any]) -> dict[str, Any]:
+    """Build one review group for a user-flagged actual misread.
+
+    Unlike the automatic pending queue, this may start from any ledger state.
+    Exact TTF/CFF identities are grouped so two independent page examples can
+    promote reusable truth; otherwise the correction remains occurrence-only.
+    """
+    ident = actual_group_identity(target)
+    kind, exact_key = ident["kind"], ident["exact_key"]
+    members = [dict(e) for e in entries if actual_group_identity(e).get("kind") == kind and actual_group_identity(e).get("exact_key") == exact_key]
+    if not members:
+        members = [dict(target)]
+    members.sort(key=lambda e: (_text(e.get("pdf_name")), int(e.get("physical_page") or 0), float(e.get("y0") or 0), float(e.get("x0") or 0)))
+    group_id = "agr_" + _hash_payload({"kind": kind, "exact_key": exact_key})[:24]
+    snapshot = _hash_payload({
+        "group_id": group_id,
+        "kind": kind,
+        "exact_key": exact_key,
+        "members": [
+            {"occurrence_id": e.get("occurrence_id"), "review_id": e.get("review_id"), "state": e.get("state"), "actual": e.get("actual")}
+            for e in members
+        ],
+    })
+    return {
+        "group_id": group_id, "group_snapshot": snapshot, "kind": kind, "exact_key": exact_key,
+        "style_group": ident.get("style_group", ""), "full_signature": ident.get("full_signature", ""),
+        "members": members, "occurrence_count": len(members),
+    }
+
+def _resolve_pdf_path(entry: Mapping[str, Any], output_dir: Path | None = None) -> Path:
+    stored = Path(_text(entry.get("pdf")))
+    if stored.exists():
+        return stored
+    name = _text(entry.get("pdf_name"))
+    if output_dir and name:
+        candidates = []
+        for base in [Path(output_dir).parent, Path(output_dir)]:
+            direct = base / name
+            if direct.exists():
+                candidates.append(direct)
+            try:
+                candidates.extend(p for p in base.rglob(name) if p.is_file())
+            except Exception:
+                pass
+        unique = []
+        seen = set()
+        for p in candidates:
+            rp = str(p.resolve())
+            if rp not in seen:
+                seen.add(rp); unique.append(p)
+        if len(unique) == 1:
+            return unique[0]
+    raise FileNotFoundError(f"找不到現版 PDF：{name or stored}")
+
+
+def render_occurrence_png(entry: Mapping[str, Any], output_path: Path, *, context: bool = False, output_dir: Path | None = None) -> Path:
+    pdf = _resolve_pdf_path(entry, output_dir)
+    page_number = int(entry.get("physical_page") or 0) - 1
+    if page_number < 0:
+        raise ValueError("缺少實體頁碼")
+    x0, y0, x1, y1 = [float(entry.get(k) or 0) for k in ("x0", "y0", "x1", "y1")]
+    if x1 <= x0 or y1 <= y0:
+        raise ValueError("缺少可用 bbox")
+    doc = fitz.open(pdf)
+    try:
+        page = doc[page_number]
+        if context:
+            px, py, scale = 95, 60, 3.0
+        else:
+            px, py, scale = 16, 14, 7.0
+        clip = fitz.Rect(max(0, x0-px), max(0, y0-py), min(page.rect.width, x1+px), min(page.rect.height, y1+py))
+        pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), clip=clip, alpha=False)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        pix.save(str(output_path))
+    finally:
+        doc.close()
+    return output_path
+
+
+def render_annotation_only_png(entry: Mapping[str, Any], output_path: Path, *, output_dir: Path | None = None) -> Path:
+    """Render only the right-side Bopomofo region of one annotated glyph.
+
+    The GPT actual-review path deliberately minimizes Chinese semantic context.
+    The crop is visual evidence only; if a font layout falls outside this
+    right-side convention the package still includes the whole-glyph tight crop
+    as a second visual reference, never expected/dictionary data.
+    """
+    pdf = _resolve_pdf_path(entry, output_dir)
+    page_number = int(entry.get("physical_page") or 0) - 1
+    if page_number < 0:
+        raise ValueError("缺少實體頁碼")
+    x0, y0, x1, y1 = [float(entry.get(k) or 0) for k in ("x0", "y0", "x1", "y1")]
+    if x1 <= x0 or y1 <= y0:
+        raise ValueError("缺少可用 bbox")
+    width = x1 - x0
+    # In the supported textbook fonts, Bopomofo occupies the right ~45% of the
+    # annotated glyph advance.  Keep a small overlap so the first symbol is not
+    # clipped, but omit most of the Han character to reduce semantic priming.
+    ax0 = x0 + width * 0.50
+    pad_x, pad_y, scale = max(1.5, width * 0.04), 3.0, 10.0
+    doc = fitz.open(pdf)
+    try:
+        page = doc[page_number]
+        clip = fitz.Rect(max(0, ax0-pad_x), max(0, y0-pad_y), min(page.rect.width, x1+pad_x), min(page.rect.height, y1+pad_y))
+        pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), clip=clip, alpha=False)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        pix.save(str(output_path))
+    finally:
+        doc.close()
+    return output_path
+
+
+def export_actual_review_package(
+    output_dir: Path,
+    ledger: Sequence[Mapping[str, Any]],
+    *,
+    version: str,
+    session_id: str,
+    session_schema_version: str,
+    workbook_schema_version: str,
+    review_id_schema_version: str,
+) -> Path:
+    output_dir = Path(output_dir)
+    groups = build_actual_review_groups(ledger)
+    package_dir = output_dir / "actual待判定_GPT包"
+    images_dir = package_dir / "images"
+    if package_dir.exists():
+        shutil.rmtree(package_dir)
+    images_dir.mkdir(parents=True, exist_ok=True)
+
+    wb = Workbook()
+    guide = wb.active
+    guide.title = "使用說明"
+    instructions = [
+        ("用途", "只判定 PDF 原頁實際可見注音 actual；不得使用 expected、字典、中文字讀音常識反推。"),
+        ("判定方式", "先看 annotation-only 圖直接讀注音；同組有2筆以上時，VERIFIED 必須同時查看樣本B。兩張不一致就填 UNRESOLVED。whole-glyph 圖僅用於確認裁切位置，不得用中文字讀音反推。"),
+        ("聲調", "輕聲點、二三四聲都必須直接從圖片確認。聲調前後位置可等價輸入，程式會 canonicalize。"),
+        ("匯入安全", "匯入採交易驗證；group/session/snapshot 不一致、非法注音、未勾樣本等任何錯誤會整批拒絕。"),
+        ("expected 隔離", "本包不輸出 expected 欄位，也不允許匯入修改 expected。"),
+        ("待判定 unique groups", len(groups)),
+        ("待判定 occurrences", sum(g["occurrence_count"] for g in groups)),
+    ]
+    guide.append(["項目", "說明"])
+    for row in instructions:
+        guide.append(row)
+
+    meta = wb.create_sheet("匯入中繼資料")
+    meta.append(["項目", "內容"])
+    for row in [
+        ("version", version),
+        ("session_id", session_id),
+        ("session_schema_version", session_schema_version),
+        ("workbook_schema_version", workbook_schema_version),
+        ("review_id_schema_version", review_id_schema_version),
+        ("actual_review_schema_version", ACTUAL_REVIEW_SCHEMA_VERSION),
+        ("exported_group_count", len(groups)),
+    ]:
+        meta.append(row)
+
+    ws = wb.create_sheet("actual待判定")
+    headers = [
+        "編號", "group_id", "group_snapshot", "group_kind", "exact_key", "occurrence_count",
+        "sample_a_image", "sample_b_image", "sample_a_occurrence_id", "sample_b_occurrence_id",
+        "sample_a_pdf", "sample_a_page", "sample_b_pdf", "sample_b_page",
+        "current_actual", "actual_evidence", "decision", "actual_reading", "confidence",
+        "sample_a_checked", "sample_b_checked", "note",
+    ]
+    ws.append(headers)
+
+    for index, group in enumerate(groups, 1):
+        members = group["members"]
+        a = members[0]
+        b = members[1] if len(members) > 1 else None
+        image_names = []
+        for label, entry in (("a", a), ("b", b)):
+            if entry is None:
+                image_names.append("")
+                continue
+            annotation = images_dir / f"{group['group_id']}_{label}_annotation.png"
+            tight = images_dir / f"{group['group_id']}_{label}_whole_glyph.png"
+            render_annotation_only_png(entry, annotation, output_dir=output_dir)
+            render_occurrence_png(entry, tight, context=False, output_dir=output_dir)
+            image_names.append(f"images/{annotation.name} | images/{tight.name}")
+        ws.append([
+            index, group["group_id"], group["group_snapshot"], group["kind"], group["exact_key"], group["occurrence_count"],
+            image_names[0], image_names[1], a.get("occurrence_id", ""), b.get("occurrence_id", "") if b else "",
+            a.get("pdf_name", ""), a.get("printed_page", ""),
+            b.get("pdf_name", "") if b else "", b.get("printed_page", "") if b else "",
+            a.get("actual", "") or "", a.get("actual_evidence", "") or "", "", "", "", "", "", "",
+        ])
+
+    decision_col = headers.index("decision") + 1
+    confidence_col = headers.index("confidence") + 1
+    a_checked_col = headers.index("sample_a_checked") + 1
+    b_checked_col = headers.index("sample_b_checked") + 1
+    for col, values in [
+        (decision_col, '"VERIFIED,UNRESOLVED"'),
+        (confidence_col, '"高,中,低"'),
+        (a_checked_col, '"Y,N"'),
+        (b_checked_col, '"Y,N"'),
+    ]:
+        dv = DataValidation(type="list", formula1=values, allow_blank=True)
+        ws.add_data_validation(dv)
+        if ws.max_row >= 2:
+            letter = get_column_letter(col)
+            dv.add(f"{letter}2:{letter}{ws.max_row}")
+
+    meta.sheet_state = "hidden"
+    for col_name in ("group_snapshot", "exact_key", "sample_a_occurrence_id", "sample_b_occurrence_id"):
+        ws.column_dimensions[get_column_letter(headers.index(col_name) + 1)].hidden = True
+    for sheet in wb.worksheets:
+        _style_sheet(sheet)
+    xlsx = package_dir / "actual待判定_給GPT.xlsx"
+    wb.save(xlsx)
+
+    zip_path = output_dir / "actual待判定_GPT包.zip"
+    if zip_path.exists():
+        zip_path.unlink()
+    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for path in package_dir.rglob("*"):
+            if path.is_file():
+                zf.write(path, path.relative_to(package_dir))
+    return zip_path
+
+
+def _load_sheet_rows(path: Path, sheet: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    wb = load_workbook(path, read_only=True, data_only=True)
+    try:
+        if "匯入中繼資料" not in wb.sheetnames or sheet not in wb.sheetnames:
+            raise ValueError("actual GPT 報表缺少必要工作表")
+        meta_ws = wb["匯入中繼資料"]
+        meta = {}
+        for row in meta_ws.iter_rows(values_only=True):
+            if row and row[0] not in (None, "", "項目"):
+                meta[_text(row[0])] = row[1] if len(row) > 1 else ""
+        ws = wb[sheet]
+        iterator = ws.iter_rows(values_only=True)
+        try:
+            headers = [_text(x) for x in next(iterator)]
+        except StopIteration:
+            headers = []
+        if len(headers) != len(set(headers)) or any(not h for h in headers):
+            raise ValueError("actual GPT 報表 header 無效或重複")
+        rows = [{headers[i]: row[i] if i < len(row) else None for i in range(len(headers))} for row in iterator]
+        return meta, rows
+    finally:
+        wb.close()
+
+
+def load_glyph_truth_quarantine(root: Path) -> dict[str, set[Any]]:
+    """Return exact glyph identities that are forbidden from global reuse.
+
+    Quarantine is behavioral evidence: the exact SHA has contradictory direct
+    visual readings.  It blocks reusable SHA bridging but never invents an
+    occurrence reading.
+    """
+    root = Path(root)
+    ensure_user_evidence_files(root)
+    rows = _read_csv(root / GLYPH_CONFLICT_FILE, GLYPH_CONFLICT_HEADERS)
+    ttf: set[str] = set()
+    cff: set[tuple[str, str]] = set()
+    for row in rows:
+        if _text(row.get("status")) != "GLYPH_TRUTH_CONFLICT":
+            continue
+        sha = _text(row.get("glyph_sha256")).lower()
+        if _text(row.get("kind")) == "TTF_GLYF_SHA256":
+            ttf.add(sha)
+        elif _text(row.get("kind")) == "CFF_GLYPH_SHA256":
+            cff.add((_text(row.get("style_group")), sha))
+    return {"ttf": ttf, "cff": cff}
+
+
+def _learning_location(root: Path, group: Mapping[str, Any]):
+    kind = _text(group.get("kind"))
+    exact_key = _text(group.get("exact_key")).lower()
+    if kind == "TTF_GLYF_SHA256":
+        return Path(root) / USER_GLYF_FILE, USER_GLYF_HEADERS, ("glyph_sha256",), {"glyph_sha256": exact_key}
+    if kind == "CFF_GLYPH_SHA256":
+        return (
+            Path(root) / USER_CFF_FILE,
+            USER_CFF_HEADERS,
+            ("style_group", "glyph_sha256"),
+            {
+                "style_group": _text(group.get("style_group")),
+                "glyph_sha256": exact_key,
+                "full_signature": _text(group.get("full_signature")),
+            },
+        )
+    return None
+
+
+def _current_learning_record(root: Path, group: Mapping[str, Any]) -> dict[str, str] | None:
+    info = _learning_location(root, group)
+    if not info:
+        return None
+    path, headers, key_fields, base = info
+    key = tuple(base.get(k, "") for k in key_fields)
+    for row in _read_csv(path, headers):
+        if tuple(row.get(k, "") for k in key_fields) == key:
+            return row
+    return None
+
+
+def _static_ttf_reading(group: Mapping[str, Any]) -> str:
+    if _text(group.get("kind")) != "TTF_GLYF_SHA256":
+        return ""
+    sha = _text(group.get("exact_key")).lower()
+    path = Path(__file__).resolve().parent / STATIC_TTF_FINGERPRINT_FILE
+    if not path.exists():
+        return ""
+    with path.open("r", encoding="utf-8-sig", newline="") as fh:
+        for row in csv.DictReader(fh):
+            if _text(row.get("glyph_sha256")).lower() == sha:
+                return _canon(row.get("bopomofo"))
+    return ""
+
+
+def _append_provenance_event(
+    root: Path,
+    group: Mapping[str, Any],
+    reading: str,
+    event_type: str,
+    occurrence_ids: Sequence[str],
+    *,
+    source: str,
+    note: str = "",
+) -> None:
+    path = Path(root) / GLYPH_PROVENANCE_FILE
+    rows = _read_csv(path, GLYPH_PROVENANCE_HEADERS)
+    ids = sorted({_text(x) for x in occurrence_ids if _text(x)})
+    payload = {
+        "kind": _text(group.get("kind")),
+        "style_group": _text(group.get("style_group")),
+        "glyph_sha256": _text(group.get("exact_key")).lower(),
+        "bopomofo": _canon(reading),
+        "event_type": _text(event_type),
+        "occurrence_ids": "|".join(ids),
+        "source": _text(source),
+        "note": _text(note),
+    }
+    event_id = "gpe_" + _hash_payload(payload)[:24]
+    if any(_text(row.get("event_id")) == event_id for row in rows):
+        return
+    rows.append({
+        "event_id": event_id,
+        **payload,
+        "created_at": datetime.now().isoformat(timespec="seconds"),
+    })
+    rows.sort(key=lambda r: (_text(r.get("created_at")), _text(r.get("event_id"))))
+    _write_csv(path, GLYPH_PROVENANCE_HEADERS, rows)
+
+
+def _upsert_conflict(
+    root: Path,
+    group: Mapping[str, Any],
+    readings: Sequence[str],
+    occurrence_ids: Sequence[str],
+    *,
+    note: str = "",
+) -> None:
+    path = Path(root) / GLYPH_CONFLICT_FILE
+    rows = _read_csv(path, GLYPH_CONFLICT_HEADERS)
+    kind = _text(group.get("kind"))
+    style = _text(group.get("style_group"))
+    sha = _text(group.get("exact_key")).lower()
+    key = (kind, style, sha)
+    existing = next((row for row in rows if (_text(row.get("kind")), _text(row.get("style_group")), _text(row.get("glyph_sha256")).lower()) == key), None)
+    all_readings = {_canon(x) for x in readings if _canon(x)}
+    all_ids = {_text(x) for x in occurrence_ids if _text(x)}
+    if existing:
+        all_readings.update(_canon(x) for x in _text(existing.get("readings")).split("|") if _canon(x))
+        all_ids.update(_text(x) for x in _text(existing.get("source_occurrence_ids")).split("|") if _text(x))
+    if len(all_readings) < 2:
+        raise ValueError("GLYPH_TRUTH_CONFLICT 必須保留至少兩個互斥讀音")
+    new_row = {
+        "kind": kind,
+        "style_group": style,
+        "glyph_sha256": sha,
+        "status": "GLYPH_TRUTH_CONFLICT",
+        "readings": "|".join(sorted(all_readings)),
+        "source_occurrence_ids": "|".join(sorted(all_ids)),
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "notes": _text(note),
+    }
+    if existing:
+        comparable_old = {k: _text(existing.get(k)) for k in GLYPH_CONFLICT_HEADERS if k != "updated_at"}
+        comparable_new = {k: _text(new_row.get(k)) for k in GLYPH_CONFLICT_HEADERS if k != "updated_at"}
+        if comparable_old == comparable_new:
+            return
+        existing.update(new_row)
+    else:
+        rows.append(new_row)
+    rows.sort(key=lambda r: (_text(r.get("kind")), _text(r.get("style_group")), _text(r.get("glyph_sha256"))))
+    _write_csv(path, GLYPH_CONFLICT_HEADERS, rows)
+
+
+def _demote_learning_record_to_conflict(root: Path, group: Mapping[str, Any], conflict_note: str) -> None:
+    info = _learning_location(root, group)
+    if not info:
+        return
+    path, headers, key_fields, base = info
+    rows = _read_csv(path, headers)
+    key = tuple(base.get(k, "") for k in key_fields)
+    changed = False
+    for row in rows:
+        if tuple(row.get(k, "") for k in key_fields) != key:
+            continue
+        if _text(row.get("verification_level")) != "QUARANTINED_CONFLICT":
+            row["verification_level"] = "QUARANTINED_CONFLICT"
+            row["updated_at"] = datetime.now().isoformat(timespec="seconds")
+            row["notes"] = (_text(row.get("notes")) + "；" + _text(conflict_note)).strip("；")
+            changed = True
+    if changed:
+        _write_csv(path, headers, rows)
+
+
+def _override_key_from_entry(entry: Mapping[str, Any]) -> tuple[str, ...]:
+    return (
+        Path(_text(entry.get("pdf_name"))).stem,
+        "",
+        _text(entry.get("printed_page") or entry.get("physical_page")),
+        _text(entry.get("char")),
+        _text(entry.get("stable_key") or _source(entry).get("穩定注音鍵")),
+        _text(entry.get("x0")),
+        _text(entry.get("y0")),
+    )
+
+
+def _remove_unverified_group_overrides(
+    root: Path,
+    members: Sequence[Mapping[str, Any]],
+    preserve_occurrence_ids: set[str],
+) -> list[str]:
+    """Remove propagated local overrides after an exact-glyph conflict.
+
+    Only occurrence IDs that were themselves direct visual examples are kept.
+    This prevents an earlier two-sample global promotion from leaving every
+    peer occurrence pinned to the contaminated reading.
+    """
+    path = Path(root) / OCCURRENCE_OVERRIDE_FILE
+    if not path.exists():
+        return []
+    rows = _read_csv(path, OVERRIDE_HEADERS)
+    member_by_key = {_override_key_from_entry(entry): _text(entry.get("occurrence_id")) for entry in members}
+    kept = []
+    removed_ids = []
+    for row in rows:
+        key = tuple(row.get(h, "") for h in ("pdf_contains", "pdf_excludes", "page", "target_char", "stable_key", "x0", "y0"))
+        oid = member_by_key.get(key)
+        if oid and oid not in preserve_occurrence_ids:
+            removed_ids.append(oid)
+            continue
+        kept.append(row)
+    if len(kept) != len(rows):
+        _write_csv(path, OVERRIDE_HEADERS, kept)
+    return sorted(set(removed_ids))
+
+
+def _append_or_update_overrides(root: Path, entries: Sequence[Mapping[str, Any]], reading: str, *, source: str, note: str) -> None:
+    path = Path(root) / OCCURRENCE_OVERRIDE_FILE
+    rows = _read_csv(path, OVERRIDE_HEADERS)
+    by_key = {
+        tuple(row[h] for h in ("pdf_contains", "pdf_excludes", "page", "target_char", "stable_key", "x0", "y0")): row
+        for row in rows
+    }
+    for entry in entries:
+        pdf_name = Path(_text(entry.get("pdf_name"))).stem
+        key_values = {
+            "pdf_contains": pdf_name,
+            "pdf_excludes": "",
+            "page": _text(entry.get("printed_page") or entry.get("physical_page")),
+            "target_char": _text(entry.get("char")),
+            "stable_key": _text(entry.get("stable_key") or _source(entry).get("穩定注音鍵")),
+            "x0": _text(entry.get("x0")),
+            "y0": _text(entry.get("y0")),
+        }
+        key = tuple(key_values[h] for h in ("pdf_contains", "pdf_excludes", "page", "target_char", "stable_key", "x0", "y0"))
+        new_row = {**key_values, "actual_reading": reading, "source": source, "note": note}
+        old = by_key.get(key)
+        if old and _canon(old.get("actual_reading")) not in {"", reading}:
+            # This function is called only after explicit visual verification.
+            # Replacing a stale occurrence override is therefore allowed, but
+            # the superseded value remains in the audit note instead of being
+            # silently forgotten.
+            old_reading = _canon(old.get("actual_reading")) or _text(old.get("actual_reading"))
+            audit = f"覆寫舊 occurrence actual={old_reading}；舊來源={_text(old.get('source'))}"
+            new_row["note"] = (note + "；" + audit).strip("；")
+        by_key[key] = new_row
+    ordered = sorted(by_key.values(), key=lambda r: (r["pdf_contains"], r["page"], r["target_char"], r["stable_key"], r["y0"], r["x0"]))
+    _write_csv(path, OVERRIDE_HEADERS, ordered)
+
+
+def _update_learning_file(root: Path, group: Mapping[str, Any], reading: str, verified_entries: Sequence[Mapping[str, Any]], note: str) -> dict[str, Any]:
+    kind = _text(group.get("kind"))
+    exact_key = _text(group.get("exact_key")).lower()
+    info = _learning_location(root, group)
+    if not info or not exact_key:
+        return {"learning_level": "OCCURRENCE_ONLY", "conflict": False, "old_verified_ids": set(), "known_readings": set()}
+    path, headers, key_fields, base = info
+    rows = _read_csv(path, headers)
+    key = tuple(base.get(k, "") for k in key_fields)
+    existing = next((row for row in rows if tuple(row.get(k, "") for k in key_fields) == key), None)
+    examples = {_text(x.get("occurrence_id")) for x in verified_entries if _text(x.get("occurrence_id"))}
+    old_verified_ids = set()
+    known_readings = set()
+    if existing:
+        old_reading = _canon(existing.get("bopomofo"))
+        if old_reading:
+            known_readings.add(old_reading)
+        old_verified_ids.update(filter(None, (_text(x) for x in _text(existing.get("source_examples")).split("|"))))
+    static_reading = _static_ttf_reading(group)
+    if static_reading:
+        known_readings.add(static_reading)
+    quarantine = load_glyph_truth_quarantine(root)
+    already_quarantined = (
+        (kind == "TTF_GLYF_SHA256" and exact_key in quarantine["ttf"])
+        or (kind == "CFF_GLYPH_SHA256" and (_text(group.get("style_group")), exact_key) in quarantine["cff"])
+    )
+    conflicting = {r for r in known_readings if r and r != reading}
+    if conflicting or already_quarantined:
+        all_readings = set(known_readings) | {reading}
+        # If the row was already quarantined, the registry itself may contain
+        # the second reading even when the demoted learning row carries only one.
+        conflict_rows = _read_csv(Path(root) / GLYPH_CONFLICT_FILE, GLYPH_CONFLICT_HEADERS)
+        for crow in conflict_rows:
+            same = _text(crow.get("kind")) == kind and _text(crow.get("glyph_sha256")).lower() == exact_key
+            if kind == "CFF_GLYPH_SHA256":
+                same = same and _text(crow.get("style_group")) == _text(group.get("style_group"))
+            if same:
+                all_readings.update(_canon(x) for x in _text(crow.get("readings")).split("|") if _canon(x))
+                old_verified_ids.update(filter(None, (_text(x) for x in _text(crow.get("source_occurrence_ids")).split("|"))))
+        conflict_note = (
+            f"exact glyph 出現互斥視覺讀音：{','.join(sorted(all_readings))}；"
+            "已停止全域 reusable truth，保留 occurrence-local 證據"
+        )
+        _upsert_conflict(root, group, sorted(all_readings), sorted(old_verified_ids | examples), note=(note + "；" + conflict_note).strip("；"))
+        _demote_learning_record_to_conflict(root, group, conflict_note)
+        _append_provenance_event(root, group, reading, "GLYPH_TRUTH_CONFLICT", sorted(examples), source="visual actual review", note=note or conflict_note)
+        return {
+            "learning_level": "GLYPH_TRUTH_CONFLICT",
+            "conflict": True,
+            "old_verified_ids": old_verified_ids,
+            "known_readings": all_readings,
+        }
+
+    examples.update(old_verified_ids)
+    source_count = len(examples)
+    level = "VERIFIED_EXACT_GLYPH" if source_count >= 2 else "USER_VERIFIED_SINGLE"
+    new_row = {
+        **base,
+        "bopomofo": reading,
+        "verification_level": level,
+        "source_count": str(source_count),
+        "source_examples": "|".join(sorted(examples)),
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "notes": note,
+    }
+    if existing:
+        existing.update(new_row)
+    else:
+        rows.append(new_row)
+    rows.sort(key=lambda r: tuple(r.get(k, "") for k in key_fields))
+    _write_csv(path, headers, rows)
+    _append_provenance_event(root, group, reading, "PROMOTED" if level == "VERIFIED_EXACT_GLYPH" else "SINGLE_VISUAL_EVIDENCE", sorted(examples), source="visual actual review", note=note)
+    return {"learning_level": level, "conflict": False, "old_verified_ids": old_verified_ids, "known_readings": {reading}}
+
+
+def apply_verified_actual_group(
+    root: Path,
+    group: Mapping[str, Any],
+    reading: str,
+    *,
+    checked_occurrence_ids: Sequence[str] | None = None,
+    source: str,
+    note: str = "",
+) -> dict[str, Any]:
+    """Apply direct visual actual evidence without coupling it to global learning.
+
+    v5.5.1 rule: occurrence-local truth is authoritative for the checked printed
+    positions even when reusable exact-glyph promotion conflicts.  A promotion
+    conflict quarantines the SHA and reopens unverified peers instead of rolling
+    back the local correction.
+    """
+    root = Path(root)
+    ensure_user_evidence_files(root)
+    reading = _canon(reading)
+    if not reading:
+        raise ValueError("實際注音不是合法單一注音")
+    members = list(group.get("members") or [])
+    checked = set(checked_occurrence_ids or [])
+    if not checked:
+        checked = {_text(members[0].get("occurrence_id"))} if members else set()
+    verified_entries = [m for m in members if _text(m.get("occurrence_id")) in checked]
+    if not verified_entries:
+        raise ValueError("沒有任何已核對 occurrence")
+
+    learning = _update_learning_file(root, group, reading, verified_entries, note)
+    conflict = bool(learning.get("conflict"))
+    verified_ids = {_text(e.get("occurrence_id")) for e in verified_entries if _text(e.get("occurrence_id"))}
+    if conflict:
+        preserve_ids = set(learning.get("old_verified_ids") or set()) | verified_ids
+        removed_ids = _remove_unverified_group_overrides(root, members, preserve_ids)
+        target_entries = verified_entries
+        propagate_all = False
+    else:
+        removed_ids = []
+        propagate_all = len(members) <= 1 or len(verified_entries) >= 2
+        target_entries = members if propagate_all else verified_entries
+
+    # Local visual correction is committed regardless of reusable promotion.
+    _append_or_update_overrides(root, target_entries, reading, source=source, note=note)
+    _append_provenance_event(
+        root, group, reading, "OCCURRENCE_OVERRIDE",
+        [_text(e.get("occurrence_id")) for e in target_entries], source=source, note=note,
+    )
+    affected = sorted({_text(e.get("occurrence_id")) for e in members if _text(e.get("occurrence_id"))} if conflict else {_text(e.get("occurrence_id")) for e in target_entries if _text(e.get("occurrence_id"))})
+    return {
+        "reading": reading,
+        "target_occurrence_ids": [_text(e.get("occurrence_id")) for e in target_entries],
+        "affected_occurrence_ids": affected,
+        "verified_occurrence_ids": sorted(verified_ids),
+        "learning_level": learning.get("learning_level", "OCCURRENCE_ONLY"),
+        "propagated_to_group": propagate_all,
+        "glyph_truth_conflict": conflict,
+        "quarantined": conflict,
+        "quarantine_key": _text(group.get("exact_key")) if conflict else "",
+        "reopened_occurrence_ids": removed_ids,
+        "known_conflicting_readings": sorted(learning.get("known_readings") or []),
+    }
+
+
+def import_actual_review_workbook(
+    root: Path,
+    xlsx: Path,
+    groups: Sequence[Mapping[str, Any]],
+    *,
+    expected_metadata: Mapping[str, Any],
+) -> dict[str, Any]:
+    meta, rows = _load_sheet_rows(Path(xlsx), "actual待判定")
+    required_meta = dict(expected_metadata)
+    required_meta["actual_review_schema_version"] = ACTUAL_REVIEW_SCHEMA_VERSION
+    mismatched = {}
+    for key, required in required_meta.items():
+        observed = meta.get(key)
+        if key == "version":
+            # Application release is audit-only from v5.6 onward.
+            continue
+        if key in {"session_schema_version", "workbook_schema_version"}:
+            if not schema_compatible(observed, required):
+                mismatched[key] = (required, observed)
+            continue
+        if key == "review_id_schema_version":
+            if not review_id_schema_compatible(observed, required):
+                mismatched[key] = (required, observed)
+            continue
+        if str(observed) != str(required):
+            mismatched[key] = (required, observed)
+    if mismatched:
+        raise ValueError(f"actual GPT workbook session/schema 不相容：{mismatched}")
+    required_columns = {
+        "group_id", "group_snapshot", "decision", "actual_reading", "confidence",
+        "sample_a_checked", "sample_b_checked", "note",
+    }
+    if rows:
+        missing = sorted(required_columns - set(rows[0]))
+        if missing:
+            raise ValueError(f"actual GPT workbook 缺少欄位：{missing}")
+    by_id = {g["group_id"]: g for g in groups}
+    seen = set()
+    staged = []
+    errors = []
+    for row_no, row in enumerate(rows, 2):
+        gid = _text(row.get("group_id"))
+        decision = _text(row.get("decision")).upper()
+        if not gid and not decision:
+            continue
+        if gid in seen:
+            errors.append(f"row {row_no}: group_id 重複 {gid}")
+            continue
+        seen.add(gid)
+        group = by_id.get(gid)
+        if not group:
+            errors.append(f"row {row_no}: unknown group_id {gid}")
+            continue
+        if _text(row.get("group_snapshot")) != _text(group.get("group_snapshot")):
+            errors.append(f"row {row_no}: stale/modified group snapshot")
+            continue
+        if decision not in {"", "VERIFIED", "UNRESOLVED"}:
+            errors.append(f"row {row_no}: decision 必須是 VERIFIED/UNRESOLVED")
+            continue
+        if decision != "VERIFIED":
+            continue
+        reading = _canon(row.get("actual_reading"))
+        if not reading:
+            errors.append(f"row {row_no}: VERIFIED 缺少合法 actual_reading")
+            continue
+        a_ok = _text(row.get("sample_a_checked")).upper() == "Y"
+        b_ok = _text(row.get("sample_b_checked")).upper() == "Y"
+        if not a_ok:
+            errors.append(f"row {row_no}: VERIFIED 必須 sample_a_checked=Y")
+        if int(group.get("occurrence_count") or 0) >= 2 and not b_ok:
+            errors.append(f"row {row_no}: 同組多 occurrence 時 VERIFIED 必須 sample_b_checked=Y")
+        conf = _text(row.get("confidence"))
+        if conf not in {"高", "中"}:
+            errors.append(f"row {row_no}: VERIFIED confidence 只能是高/中")
+        checked_ids = [_text(group["members"][0].get("occurrence_id"))]
+        if len(group["members"]) > 1:
+            checked_ids.append(_text(group["members"][1].get("occurrence_id")))
+        staged.append((group, reading, checked_ids, _text(row.get("note"))))
+    if errors:
+        raise ValueError("actual GPT 匯入整批拒絕；未寫入任何一列：\n" + "\n".join(errors[:100]))
+
+    # v5.5.1: reusable glyph-truth conflicts are no longer batch-fatal.
+    # Occurrence-local visual corrections must still commit; the promotion layer
+    # will quarantine contradictory exact SHA evidence during apply.
+    ensure_user_evidence_files(root)
+
+    # Transactional write: if any late occurrence-level validation fails,
+    # restore all dynamic actual evidence files byte-for-byte.
+    dynamic_paths = [Path(root) / name for name in (OCCURRENCE_OVERRIDE_FILE, USER_GLYF_FILE, USER_CFF_FILE, GLYPH_CONFLICT_FILE, GLYPH_PROVENANCE_FILE)]
+    backups = {path: path.read_bytes() if path.exists() else None for path in dynamic_paths}
+    results = []
+    try:
+        for group, reading, ids, note in staged:
+            results.append(apply_verified_actual_group(
+                root, group, reading, checked_occurrence_ids=ids,
+                source="GPT actual 視覺證據匯入", note=note,
+            ))
+    except Exception:
+        for path, data in backups.items():
+            if data is None:
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
+            else:
+                path.write_bytes(data)
+        raise
+    return {"imported_groups": len(results), "results": results}
+
+
+def load_user_verified_glyf(path: Path) -> dict[str, dict[str, str]]:
+    rows = _read_csv(Path(path), USER_GLYF_HEADERS)
+    out = {}
+    for row in rows:
+        if row.get("verification_level") != "VERIFIED_EXACT_GLYPH":
+            continue
+        sha = _text(row.get("glyph_sha256")).lower()
+        bop = _canon(row.get("bopomofo"))
+        if sha and bop:
+            out[sha] = {"bopomofo": bop, "verification": row.get("verification_level", ""), "notes": row.get("notes", ""), "source_font": "USER-VERIFIED-GLYF", "source_gid": -1}
+    return out
+
+
+def load_user_verified_cff(path: Path) -> dict[tuple[str, str], dict[str, str]]:
+    rows = _read_csv(Path(path), USER_CFF_HEADERS)
+    out = {}
+    for row in rows:
+        if row.get("verification_level") != "VERIFIED_EXACT_GLYPH":
+            continue
+        style = _text(row.get("style_group"))
+        sha = _text(row.get("glyph_sha256")).lower()
+        bop = _canon(row.get("bopomofo"))
+        if style and len(sha) == 64 and bop:
+            out[(style, sha)] = {
+                "bopomofo": bop,
+                "verification": row.get("verification_level", ""),
+                "notes": row.get("notes", ""),
+                "full_signature": row.get("full_signature", ""),
+            }
+    return out

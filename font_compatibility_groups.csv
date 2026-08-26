@@ -1,0 +1,7 @@
+﻿group_id,font_regex,notes
+ZUINN_GRID_A,^YenRoundZuinn[0-9]*EG-(?:Lt|Md|Bd)$,圓體注音字型：v0.4/v0.6 測試顯示不同粗細與數字變體可共用注音元件ID語意；同ID衝突時程式會自動停用群組回退。
+ZUINN_GRID_A,^LinGothicZuinn[0-9]*EG-(?:Lt|Md|Bd)$,黑體注音字型：已觀察到與 YenRound 相同元件ID對應相同注音的案例；只在無衝突ID上回退。
+ZUINN_GRID_A,^ZhuYinNR[0-9]*EG-(?:Lt|Md|Bd)$,獨立注音字型：測試 PDF 中多個元件ID與 YenRound 對應一致；只在無衝突ID上回退。
+DFP_BIAOKAI,^DFPBiaoKai-W5-ZhuIn-BFW$,標楷注音複合字型：元件ID座標系與 ZUINN_GRID_A 不同，保持獨立群組。
+ZUINN_GRID_A,^StdKaiZuinn[0-9]*EG-(?:Lt|Md|Bd)$,標準楷體注音字型：四下盲測以相同元件ID直接比對既有 YenRound/LinGothic/ZhuYinNR 對照，86 個可交叉驗證 ID 全部單義且無衝突；僅在無衝突ID上回退。
+ZUINN_GRID_A,^ZhuYinEX[0-9]*EG-(?:Lt|Md|Bd)$,EX 注音字型：四下盲測 5 個新 ID 與既有 ZUINN_GRID_A 元件ID語意一致且無衝突；僅在無衝突ID上回退。

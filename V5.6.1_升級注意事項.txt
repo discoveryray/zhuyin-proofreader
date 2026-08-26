@@ -1,0 +1,7 @@
+注音校對工具 v5.6.1 升級注意事項
+
+1. 本版為 v5.6.0 的完成門檻修正，不需要重做 actual／expected／GPT 判定。
+2. 若某批教材沒有任何適用的 PDF occurrence regression，required=0、executed=0 現在會視為中性通過，不再阻擋全冊完成。
+3. mandatory regression 仍必須正常執行並全數通過；若存在實際 PDF occurrence regression，也仍必須全部執行且不得 FAIL、NOT_EXECUTED 或重複執行。
+4. 可直接用 v5.6.1 開啟 v5.6.0 同一校對專案；跨版本相容策略不變。
+5. 若專案其他 completion gate 已全部通過，只需重新執行/重新整理專案狀態，即可由 PROCESSING_FINISHED 正確轉為 PROOFREAD_COMPLETE。

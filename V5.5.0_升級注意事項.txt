@@ -1,0 +1,38 @@
+注音校對工具 v5.5.0 升級注意事項
+
+一、這不是 v5.4.1 熱修，而是資料模型升級
+v5.5.0 將每筆 occurrence 拆成兩條獨立證據鏈：
+- actual_status：PDF 實際注音是否已可靠辨識
+- expected_status：權威詞條／專案規則是否已可靠定音
+comparison_result 只在兩邊都 RESOLVED 時產生；state 只是由兩條證據鏈機械推導的工作流程狀態。
+
+二、expected 不再等待 actual
+即使 actual 因字形解碼失敗而未解，expected resolver 仍必須獨立執行並保存證據。修好 actual 後，不需要重新查一次已成立的 expected 證據。
+
+三、v5.4.x 工作階段不直接升級成 v5.5.0 完成狀態
+ledger/session/workbook schema 已升為 2.6.0。為避免把舊版複合 state 的不一致帶入新架構，建議以原始 PDF 在 v5.5.0 建立新的校對工作階段，不要把 v5.4.x 的校對工作階段.json 直接當成 v5.5.0 完成證據。
+
+四、人工 actual 證據改為「專案內保存」
+新位置：
+<校對專案資料夾>/_專案證據/actual/
+
+包含：
+- manual_actual_occurrence_overrides.csv
+- user_verified_glyf_fingerprints.csv
+- user_verified_cff_glyph_fingerprints.csv
+
+程式安裝資料夾不再是專案動態 actual 證據的唯一保存位置。第一次建立專案證據時，如安裝目錄存在舊資料，程式可作一次性 seed；之後以專案內資料為準。
+
+五、GPT expected 匯出只處理 expected lane
+純 actual 解碼問題且 expected 已確定者，不再重複出現在 expected GPT 工作簿。expected 匯入以 PDF／頁碼／字元／所在行／局部詞境與 expected source fingerprint 驗證，不再因 actual 重解碼就無條件 stale。
+
+六、GPT 判定包先預檢 expected，再修改 actual
+判定包若 expected 工作簿本身已無法安全套用，會在 actual 寫入前拒絕，避免先改 actual、後來 expected 失敗造成半套提交。
+
+七、完成門檻
+completion gate 直接統計 actual_status 與 expected_status，不再只看單一 state。actual 未解、expected 歧義、expected 衝突等可以同時被正確計入硬門檻。
+
+驗證：
+- pytest：130 passed, 2 skipped
+- runtime asset manifest：ok=True
+- 單 PDF smoke：345 occurrence；4 筆 actual 解碼失敗仍保留 RESOLVED expected，expected GPT 表未重複輸出這 4 筆純 actual 問題。

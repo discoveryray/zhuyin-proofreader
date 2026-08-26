@@ -1,0 +1,747 @@
+﻿style_group,signature,bopomofo_symbol,contact_sheet_row,occurrence_count,verification,notes
+BIAOKAI_W5,89b4133982cf1d976d242473bc9e9997deab5e40,ㄅ,1,49,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 1; machine hint ㄅ/ㄉ only for audit, not used as truth"
+BIAOKAI_W5,56d565efd24367cc2ad1c164cb176f0cf0f8d0f0,ㄅ,2,150,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 2; machine hint ㄅ/ㄉ only for audit, not used as truth"
+BIAOKAI_W5,4aa469226ff8904a03af00e77419676d4f848c47,ㄆ,3,50,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 3; machine hint ㄆ/ㄓ only for audit, not used as truth"
+BIAOKAI_W5,60851d513c2fc72c11d63cbe7b9969559bf339a3,ㄆ,4,19,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 4; machine hint ㄆ/ㄓ only for audit, not used as truth"
+BIAOKAI_W5,e79b897729be45999683c64462c6748d5652cf67,ㄇ,5,28,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 5; machine hint ㄇ/ㄖ only for audit, not used as truth"
+BIAOKAI_W5,2a3e578a01d7ae0f5106bafd9be6e50e2527c081,ㄇ,6,86,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 6; machine hint ㄇ/ㄖ only for audit, not used as truth"
+BIAOKAI_W5,d0375d3564ed6eaea5fb4ee53c8eccbb579eb8bc,ㄈ,7,115,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 7; machine hint ㄈ/ㄛ only for audit, not used as truth"
+BIAOKAI_W5,0566e6d82efa35e5cf678b7b3ffc09e6da532667,ㄉ,8,74,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 8; machine hint ㄉ/ㄌ only for audit, not used as truth"
+BIAOKAI_W5,5ff064036e0eb9418bd92d7ff650e5a29e76d988,ㄌ,9,101,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 9; machine hint ㄉ/ㄌ only for audit, not used as truth"
+BIAOKAI_W5,c18f8e689f7a8461b4632fcdd051ce0bf98b12cf,ㄌ,10,96,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 10; machine hint ㄉ/ㄌ only for audit, not used as truth"
+BIAOKAI_W5,7eeefe35ac710e1c5fec96b4ad11b84af37a56e8,ㄉ,11,149,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 11; machine hint ㄉ/ㄌ only for audit, not used as truth"
+BIAOKAI_W5,937da95872cdfaece66611ed2a8a585dfaf04735,ㄊ,12,80,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 12; machine hint ㄊ/ㄠ only for audit, not used as truth"
+BIAOKAI_W5,7c9546a344e05c2efec30e3efac973120e92c71d,ㄊ,13,70,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 13; machine hint ㄊ/ㄠ only for audit, not used as truth"
+BIAOKAI_W5,0c7f9f44a93ae993db00ea5fc77615d0c15ff27e,ㄋ,14,16,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 14; machine hint ㄋ/ㄎ only for audit, not used as truth"
+BIAOKAI_W5,c2061c00df25e76284d4678ae7e883b02ae79d40,ㄋ,15,60,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 15; machine hint ㄋ/ㄎ only for audit, not used as truth"
+BIAOKAI_W5,d3a0731b4b76e1149b17a1a2d996e051e371b013,ㄍ,16,106,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 16; machine hint ㄍ/ㄎ only for audit, not used as truth"
+BIAOKAI_W5,91420d860f1e2970fff29a7206512e4792d672c7,ㄍ,17,75,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 17; machine hint ㄍ/ㄎ only for audit, not used as truth"
+BIAOKAI_W5,c3ea6ee1c867cb9e87e6d32616cf4848e1a5ca91,ㄎ,18,65,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 18; machine hint ㄎ/ㄋ only for audit, not used as truth"
+BIAOKAI_W5,acf956905a54fc2c0f5b00f3f413315b2193e9d9,ㄎ,19,29,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 19; machine hint ㄎ/ㄋ only for audit, not used as truth"
+BIAOKAI_W5,acf2391ab5fdabb9c816f412c8d55e42d3c1adb3,ㄏ,20,73,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 20; machine hint ㄏ/ㄕ only for audit, not used as truth"
+BIAOKAI_W5,3f35cc28a9f4759a3305b9fcd58bc6ec0b66e6b8,ㄏ,21,79,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 21; machine hint ㄏ/ㄕ only for audit, not used as truth"
+BIAOKAI_W5,b0c2f5b9853fa643e9d253ce7fb36f6ec89ee3b1,ㄐ,22,103,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 22; machine hint ㄐ/ㄔ only for audit, not used as truth"
+BIAOKAI_W5,24bd6d308bf676e60e80f3bfab5ac2fc5a6c4014,ㄐ,23,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 23; machine hint ㄐ/ㄔ only for audit, not used as truth"
+BIAOKAI_W5,ca81fbb1af4c7e58268b853a2b317b37fa5404ee,ㄐ,24,235,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 24; machine hint ㄐ/ㄔ only for audit, not used as truth"
+BIAOKAI_W5,0ff22d6668cf48893fc82b419a870fe6fec876ad,ㄑ,25,57,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 25; machine hint ㄑ/ㄔ only for audit, not used as truth"
+BIAOKAI_W5,4c513e5ddcf9d6c6673e4ba0f4801074f4411d59,ㄑ,26,86,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 26; machine hint ㄑ/ㄔ only for audit, not used as truth"
+BIAOKAI_W5,e5caed3abe51a860e0faca4f81ca9b3e47ba014e,ㄒ,27,196,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 27; machine hint ㄒ/ㄚ only for audit, not used as truth"
+BIAOKAI_W5,225bd86c993bd8b36284492b143b9f242a981cb6,ㄒ,28,57,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 28; machine hint ㄒ/ㄚ only for audit, not used as truth"
+BIAOKAI_W5,a3ded9e884ddf891bb1cd5d41ce180ae8de9fbda,ㄓ,29,63,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 29; machine hint ㄓ/ㄠ only for audit, not used as truth"
+BIAOKAI_W5,20232b82126f4919c0522ea936ef0d9b668dcbb7,ㄓ,30,201,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 30; machine hint ㄓ/ㄠ only for audit, not used as truth"
+BIAOKAI_W5,bb9a0bd7a07549b43c9e8f43b60a43a6e4b0f149,ㄔ,31,114,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 31; machine hint ㄔ/ㄘ only for audit, not used as truth"
+BIAOKAI_W5,5bf9a6212e45e7e1c850401a9de0735b6a162352,ㄔ,32,27,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 32; machine hint ㄔ/ㄘ only for audit, not used as truth"
+BIAOKAI_W5,6429f962554b50384410d97aebd248144e0f1d76,ㄕ,33,99,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 33; machine hint ㄕ/ㄞ only for audit, not used as truth"
+BIAOKAI_W5,7d9e6d4367baa467f5ff162bcf47bbb4053d0206,ㄕ,34,18,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 34; machine hint ㄕ/ㄞ only for audit, not used as truth"
+BIAOKAI_W5,101c5ea70073f238750169709afe05e3408d261f,ㄕ,35,138,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 35; machine hint ㄕ/ㄞ only for audit, not used as truth"
+BIAOKAI_W5,3a0a65750b58e96d81dd7952e6f7e9d6a5d1c5d8,ㄖ,36,54,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 36; machine hint ㄕ/ㄖ only for audit, not used as truth"
+BIAOKAI_W5,7d998e4f41e124a4eaabcdfdcb6121529a57d218,ㄖ,37,11,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 37; machine hint ㄕ/ㄖ only for audit, not used as truth"
+BIAOKAI_W5,595eabbf973e2530f7e55043986f1a661d912d2a,ㄗ,38,25,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 38; machine hint ㄗ/ㄎ only for audit, not used as truth"
+BIAOKAI_W5,8fcf5abaf9adcafe9599799370206ab5d5d24fd4,ㄗ,39,66,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 39; machine hint ㄗ/ㄎ only for audit, not used as truth"
+BIAOKAI_W5,97baba8995ab2db080e5d93aa241c375326c5702,ㄗ,40,39,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 40; machine hint ㄗ/ㄎ only for audit, not used as truth"
+BIAOKAI_W5,d1f57f942b8fdfee1f64e3f7ca3bea9a72f3169c,ㄘ,41,11,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 41; machine hint ㄘ/ㄉ only for audit, not used as truth"
+BIAOKAI_W5,2d3302c884cc1d7940d60d356600f9d5e008cc86,ㄘ,42,50,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 42; machine hint ㄘ/ㄉ only for audit, not used as truth"
+BIAOKAI_W5,56856979770ed65c3f2707d01d20aff6fe965682,ㄘ,43,11,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 43; machine hint ㄘ/ㄉ only for audit, not used as truth"
+BIAOKAI_W5,6244775078b09cefd00a30bb5b1ba3526ac688b4,ㄙ,44,18,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 44; machine hint ㄙ/ㄥ only for audit, not used as truth"
+BIAOKAI_W5,2259c10a3da3c71ca2a40be0d6be09c858b6e0e8,ㄙ,45,42,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 45; machine hint ㄙ/ㄥ only for audit, not used as truth"
+BIAOKAI_W5,c6a101dadb8f2fdf19ac08b51cad50f0f6eec792,ㄚ,46,56,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 46; machine hint ㄚ/ㄢ only for audit, not used as truth"
+BIAOKAI_W5,99403f6a00594973521d61291bb224609bb90496,ㄚ,47,4,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 47; machine hint ㄚ/ㄢ only for audit, not used as truth"
+BIAOKAI_W5,211b0eb38cbe1311f1fd8cd35e1da70978663e03,ㄚ,48,128,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 48; machine hint ㄚ/ㄢ only for audit, not used as truth"
+BIAOKAI_W5,2b6c26c4ecfa63b716671a414fb7e90902d6f365,ㄛ,49,99,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 49; machine hint ㄛ/ㄞ only for audit, not used as truth"
+BIAOKAI_W5,a429848581a5185d457e5545a49389e39cad9a86,ㄛ,50,4,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 50; machine hint ㄛ/ㄞ only for audit, not used as truth"
+BIAOKAI_W5,21daf26f0b0776c99d0fdeb9c8542d9e9fa8b908,ㄛ,51,25,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 51; machine hint ㄛ/ㄞ only for audit, not used as truth"
+BIAOKAI_W5,b6d0b4f1a11f46694aef7428dc64722105448669,ㄜ,52,175,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 52; machine hint ㄜ/ㄡ only for audit, not used as truth"
+BIAOKAI_W5,79edaeefcb7cb72cb115513c78101dd28ea8a151,ㄜ,53,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 53; machine hint ㄜ/ㄡ only for audit, not used as truth"
+BIAOKAI_W5,07119e576c19c67828c8b236cd9205e2857fe9e4,ㄝ,54,22,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 54; machine hint ㄝ/ㄊ only for audit, not used as truth"
+BIAOKAI_W5,1f716a8890ac5426967ef9202c57f489da2cba60,ㄝ,55,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 55; machine hint ㄝ/ㄊ only for audit, not used as truth"
+BIAOKAI_W5,b52e08215daa93ae6505d6da2f5a6a8652743ea4,ㄝ,56,110,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 56; machine hint ㄝ/ㄊ only for audit, not used as truth"
+BIAOKAI_W5,6b50803070cc4e6d4c20cda518a9105dbb03ae77,ㄞ,57,8,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 57; machine hint ㄞ/ㄢ only for audit, not used as truth"
+BIAOKAI_W5,5e161a81303b4ee0517ba57f863e09ea70e8082d,ㄞ,58,5,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 58; machine hint ㄞ/ㄉ only for audit, not used as truth"
+BIAOKAI_W5,940b5378313948e13613f5da409cca79af3c7a32,ㄞ,59,137,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 59; machine hint ㄞ/ㄢ only for audit, not used as truth"
+BIAOKAI_W5,dc3addcca09385c106446e2cda9d4266005f6a60,ㄟ,60,121,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 60; machine hint ㄟ/ㄣ only for audit, not used as truth"
+BIAOKAI_W5,f5d877ee8b9f242652d3709d5389e7386a4a9d7a,ㄟ,61,72,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 61; machine hint ㄟ/ㄣ only for audit, not used as truth"
+BIAOKAI_W5,254faeae6564a52f6bbbe1fffc0849da00c92768,ㄠ,62,144,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 62; machine hint ㄠ/ㄆ only for audit, not used as truth"
+BIAOKAI_W5,7c31c7d39f82ccb957842defbfd10c6c6b4325df,ㄠ,63,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 63; machine hint ㄠ/ㄆ only for audit, not used as truth"
+BIAOKAI_W5,03ce1599c879b0162530f93d96f0b6129794020c,ㄠ,64,103,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 64; machine hint ㄠ/ㄆ only for audit, not used as truth"
+BIAOKAI_W5,aca586d03ddd5d3b194f77304aec6c772fab406d,ㄡ,65,37,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 65; machine hint ㄡ/ㄨ only for audit, not used as truth"
+BIAOKAI_W5,e4d1cdb75e39109d40a09245286b43eb79468bba,ㄡ,66,129,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 66; machine hint ㄡ/ㄨ only for audit, not used as truth"
+BIAOKAI_W5,6987779f66d6f9d82631b12c6ba9e8f12c227582,ㄢ,67,217,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 67; machine hint ㄢ/ㄎ only for audit, not used as truth"
+BIAOKAI_W5,a353f52e9427894530a026cfcc1e1cc97ff304d2,ㄢ,68,255,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 68; machine hint ㄢ/ㄎ only for audit, not used as truth"
+BIAOKAI_W5,28d71669fa5403a40101751bc237bce979820f32,ㄢ,69,8,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 69; machine hint ㄢ/ㄎ only for audit, not used as truth"
+BIAOKAI_W5,e1700a62b3df1c3cbb6bfa221ddd820228868baa,ㄣ,70,118,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 70; machine hint ㄣ/ㄢ only for audit, not used as truth"
+BIAOKAI_W5,8eb425348955b9c37a1e13589604e8573bb410ba,ㄣ,71,117,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 71; machine hint ㄣ/ㄢ only for audit, not used as truth"
+BIAOKAI_W5,4ed9d657951cdf9108b5e841703ed4856c09389c,ㄤ,72,108,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 72; machine hint ㄤ/ㄜ only for audit, not used as truth"
+BIAOKAI_W5,da73a3a8059de1c8ba23f28f8913bcc2e95b4f8f,ㄤ,73,141,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 73; machine hint ㄤ/ㄜ only for audit, not used as truth"
+BIAOKAI_W5,27887fdb5aba6a99945a76cf9785061ca54d1e01,ㄥ,74,268,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 74; machine hint ㄥ/ㄙ only for audit, not used as truth"
+BIAOKAI_W5,eb99134949468138c6c78cbc4ed23b19639cd417,ㄥ,75,135,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 75; machine hint ㄥ/ㄙ only for audit, not used as truth"
+BIAOKAI_W5,96066a28dc5917a4bd7db77f17a3d0b285d4dd3d,ㄦ,76,13,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 76; machine hint ㄦ/ㄤ only for audit, not used as truth"
+BIAOKAI_W5,b4e419151c1eb6774a7392a40e5245ccf1ed1fbb,ㄧ,77,263,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 77; machine hint ㄧ/ㄣ only for audit, not used as truth"
+BIAOKAI_W5,4edf0dc1d771f30bbba1c31d6ac138d88a066ded,ㄧ,78,909,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 78; machine hint ㄧ/ㄣ only for audit, not used as truth"
+BIAOKAI_W5,65e734eee844758c1e33b570e3facd98168b944f,ㄨ,79,271,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 79; machine hint ㄨ/ㄡ only for audit, not used as truth"
+BIAOKAI_W5,7b418aac096dc06350bdbf97b7efe373bee8f771,ㄨ,80,488,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 80; machine hint ㄨ/ㄡ only for audit, not used as truth"
+BIAOKAI_W5,1aec16e35f4eb85e813ad01febe04c1af891f635,ㄨ,81,105,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 81; machine hint ㄨ/ㄡ only for audit, not used as truth"
+BIAOKAI_W5,23184bfc517260cf5d7478d92301dab639d12123,ㄩ,82,85,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 82; machine hint ㄩ/ㄖ only for audit, not used as truth"
+BIAOKAI_W5,a78ee64f2403960e101e0d1fda2e98e7ec5ba2a3,ㄩ,83,53,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 83; machine hint ㄩ/ㄖ only for audit, not used as truth"
+BIAOKAI_W5,84a626496655e5ec94c16c4331dbaf287901b4df,ㄩ,84,118,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"biaokai contact row 84; machine hint ㄩ/ㄖ only for audit, not used as truth"
+YUAN_W3W5,1eb02b0689460f46c4a76babced5e97e9c0c1683,ㄅ,1,59,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 1; machine hint ㄅ/ㄉ only for audit, not used as truth"
+YUAN_W3W5,7519bcbfa27e0c71c9ca98b696c9a5fcdb527750,ㄅ,2,17,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 2; machine hint ㄅ/ㄉ only for audit, not used as truth"
+YUAN_W3W5,12dd7eadb742bf4a4fe4f4aa920152c5c904325b,ㄆ,3,16,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 3; machine hint ㄆ/ㄓ only for audit, not used as truth"
+YUAN_W3W5,08e77880f513baeeb1bea67749eceefcb5f31d57,ㄆ,4,13,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 4; machine hint ㄆ/ㄓ only for audit, not used as truth"
+YUAN_W3W5,d2a69bd3a19eb73fee2f788b85ca7e485e5e92c7,ㄇ,5,32,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 5; machine hint ㄇ/ㄖ only for audit, not used as truth"
+YUAN_W3W5,374e37abfaa051f1dc6a0e35e095c83e776bd38a,ㄇ,6,14,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 6; machine hint ㄇ/ㄖ only for audit, not used as truth"
+YUAN_W3W5,e681645fa28c3d97e9f640a0217244453085a520,ㄈ,7,49,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 7; machine hint ㄈ/ㄖ only for audit, not used as truth"
+YUAN_W3W5,d1521a6998e1d988424535dda8d0272782a5db4a,ㄉ,8,52,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 8; machine hint ㄉ/ㄌ only for audit, not used as truth"
+YUAN_W3W5,02f4f9314232dcfa84a8fa6f2a83678d4e93eb0c,ㄉ,9,31,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 9; machine hint ㄉ/ㄌ only for audit, not used as truth"
+YUAN_W3W5,455c1c3c9f079ffadf66333057217e160ab117cd,ㄝ,10,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 10; machine hint ㄉ/ㄌ only for audit, not used as truth"
+YUAN_W3W5,e4ce36df7221497ff6622bb3da6144b93e9995e0,ㄝ,11,12,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 11; machine hint ㄉ/ㄌ only for audit, not used as truth"
+YUAN_W3W5,cd46664f9a04397d5b4667f1a22c1eac17c1ccb4,ㄝ,12,41,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 12; machine hint ㄉ/ㄌ only for audit, not used as truth"
+YUAN_W3W5,5ae32017749f8af09cb2ed3e1e472c98b706272a,ㄍ,13,36,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 13; machine hint ㄊ/ㄍ only for audit, not used as truth"
+YUAN_W3W5,87fd4b6f498456276af85b78f60bf071dfc0d92b,ㄍ,14,31,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 14; machine hint ㄊ/ㄍ only for audit, not used as truth"
+YUAN_W3W5,9e1255048302b1dc8191806b0b400a8c6c1e5b0c,ㄊ,15,31,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 15; machine hint ㄊ/ㄜ only for audit, not used as truth"
+YUAN_W3W5,b5597b7285359ec734c222a92cca93337be4ca2a,ㄊ,16,30,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 16; machine hint ㄊ/ㄜ only for audit, not used as truth"
+YUAN_W3W5,31971591a8927e43a72e12fdcb46af9858e87976,ㄋ,17,7,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 17; machine hint ㄋ/ㄢ only for audit, not used as truth"
+YUAN_W3W5,3b049e50654325ffc8220b42614c8e72ce195175,ㄋ,18,17,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 18; machine hint ㄋ/ㄢ only for audit, not used as truth"
+YUAN_W3W5,8d22b75e9039d9980d63e2f38606bbe600ebc202,ㄌ,19,43,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 19; machine hint ㄌ/ㄉ only for audit, not used as truth"
+YUAN_W3W5,6e232af85b72dd9dc806555cfba02447db57118d,ㄌ,20,30,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 20; machine hint ㄌ/ㄉ only for audit, not used as truth"
+YUAN_W3W5,00bb9988dce0e82353cc389f05576e5cf2f7af3c,ㄎ,21,13,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 21; machine hint ㄎ/ㄢ only for audit, not used as truth"
+YUAN_W3W5,72248e59e65bacc7e7e242974e07eb1b86e9cc18,ㄎ,22,26,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 22; machine hint ㄎ/ㄢ only for audit, not used as truth"
+YUAN_W3W5,e683374138cbb3548d4c0c3798335e9e73e16828,ㄏ,23,30,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 23; machine hint ㄏ/ㄕ only for audit, not used as truth"
+YUAN_W3W5,1e27dcad3f9cfdd7c28ffbbd5609fc6187c2557c,ㄏ,24,24,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 24; machine hint ㄏ/ㄕ only for audit, not used as truth"
+YUAN_W3W5,41d0725171cc06725142c7bdaa06d75f30897c2a,ㄐ,25,24,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 25; machine hint ㄐ/ㄊ only for audit, not used as truth"
+YUAN_W3W5,4ccd0ad988ffe85bfb96481e5a8c73dac448d34b,ㄐ,26,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 26; machine hint ㄐ/ㄊ only for audit, not used as truth"
+YUAN_W3W5,c3b3708d432cf2c1d6b57e341cce63edb756f16b,ㄐ,27,72,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 27; machine hint ㄐ/ㄊ only for audit, not used as truth"
+YUAN_W3W5,0115ace9f09ab46657ea26e58360397cf650b65c,ㄑ,28,17,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 28; machine hint ㄑ/ㄔ only for audit, not used as truth"
+YUAN_W3W5,b9c89d00f3ee49382b4fc4468c20aa61989b8c5a,ㄑ,29,37,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 29; machine hint ㄑ/ㄔ only for audit, not used as truth"
+YUAN_W3W5,831d98107fe3a810079ac93bbb18547bacd4cb17,ㄒ,30,24,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 30; machine hint ㄒ/ㄚ only for audit, not used as truth"
+YUAN_W3W5,b364c96ddee0eeb8fb508cfa5b835c088b60963a,ㄒ,31,76,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 31; machine hint ㄒ/ㄚ only for audit, not used as truth"
+YUAN_W3W5,8f8fb05f3d24e38bccce6d96b9698e9ebfdecacf,ㄓ,32,20,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 32; machine hint ㄓ/ㄛ only for audit, not used as truth"
+YUAN_W3W5,072b441e9f91512c7738b7cab89cae3306c44c80,ㄓ,33,41,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 33; machine hint ㄓ/ㄛ only for audit, not used as truth"
+YUAN_W3W5,bab4bca5be0d5d49bbbb623e4e1acec537336a30,ㄓ,34,28,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 34; machine hint ㄓ/ㄛ only for audit, not used as truth"
+YUAN_W3W5,fe5db3ee17c4b521fcce7291b04e51f8c838413b,ㄔ,35,8,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 35; machine hint ㄔ/ㄡ only for audit, not used as truth"
+YUAN_W3W5,d26bad1e2142131fe56489fa1783ec1f84f58f91,ㄔ,36,50,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 36; machine hint ㄔ/ㄡ only for audit, not used as truth"
+YUAN_W3W5,e4ebd93f7123caae3113760db00455eb8d4423fd,ㄕ,37,88,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 37; machine hint ㄕ/ㄞ only for audit, not used as truth"
+YUAN_W3W5,dfd79ab88c0ac5cf73eb11208e81034a22fc40d2,ㄕ,38,15,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 38; machine hint ㄕ/ㄞ only for audit, not used as truth"
+YUAN_W3W5,6fa22eebe937570128b65da7bfcfbaf9ecf037fb,ㄖ,39,3,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 39; machine hint ㄖ/ㄓ only for audit, not used as truth"
+YUAN_W3W5,08c2259e5e700faed300e85b0e9e04977c17823d,ㄖ,40,22,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 40; machine hint ㄖ/ㄓ only for audit, not used as truth"
+YUAN_W3W5,8ae77cc42c911beae5ed5b397a284507f547eada,ㄗ,41,9,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 41; machine hint ㄗ/ㄕ only for audit, not used as truth"
+YUAN_W3W5,9e12e571c83ee019b8138a6d7f7287054e2fb83b,ㄗ,42,15,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 42; machine hint ㄗ/ㄕ only for audit, not used as truth"
+YUAN_W3W5,162ec450c12dccc0eb9a30fbfb96b2765ca77034,ㄗ,43,28,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 43; machine hint ㄗ/ㄕ only for audit, not used as truth"
+YUAN_W3W5,0063decf322ac308eafc7ecf90537fa6a3821a48,ㄘ,44,4,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 44; machine hint ㄘ/ㄢ only for audit, not used as truth"
+YUAN_W3W5,af6fe89f54fa335423c66ce45abc90ca7383881a,ㄘ,45,16,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 45; machine hint ㄘ/ㄢ only for audit, not used as truth"
+YUAN_W3W5,9bed24c55b97285450792bc86ced93302f9ef990,ㄘ,46,4,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 46; machine hint ㄘ/ㄢ only for audit, not used as truth"
+YUAN_W3W5,82085208ae9a5049f107d8df86e6fb25de445ff5,ㄙ,47,10,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 47; machine hint ㄙ/ㄥ only for audit, not used as truth"
+YUAN_W3W5,54df56f0e410e63eaae7b702c6ca9990a60c2259,ㄙ,48,8,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 48; machine hint ㄙ/ㄥ only for audit, not used as truth"
+YUAN_W3W5,2b4c3684d7288ed17f97db1988fd84ed71b097fb,ㄙ,49,3,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 49; machine hint ㄙ/ㄥ only for audit, not used as truth"
+YUAN_W3W5,11b7aab84f6446a2e169aaadff312e2b12dec5ff,ㄚ,50,22,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 50; machine hint ㄚ/ㄒ only for audit, not used as truth"
+YUAN_W3W5,87b1a27c9b30cce7f82e22f1e9d8d2acdf5cd0c7,ㄚ,51,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 51; machine hint ㄚ/ㄒ only for audit, not used as truth"
+YUAN_W3W5,ee98eff69f48cfb0058a1d9805653f0dc6a4dfd6,ㄚ,52,44,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 52; machine hint ㄚ/ㄒ only for audit, not used as truth"
+YUAN_W3W5,1862e03e0a425c75bb2157f001f9cda768be57bd,ㄛ,53,9,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 53; machine hint ㄛ/ㄈ only for audit, not used as truth"
+YUAN_W3W5,2c41240d327196a02a9468591ac829fa8d64e71f,ㄛ,54,36,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 54; machine hint ㄛ/ㄈ only for audit, not used as truth"
+YUAN_W3W5,78be94caa2341c41b389a35df58db410d48e1756,ㄤ,55,57,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 55; machine hint ㄛ/ㄤ only for audit, not used as truth"
+YUAN_W3W5,7b26dc326610fdc2bb79159acd1952d177ff9ecc,ㄤ,56,42,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 56; machine hint ㄛ/ㄤ only for audit, not used as truth"
+YUAN_W3W5,2b49cf91d5b32c615b4ae9e6b63c84d0ab3cda2c,ㄦ,57,3,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 57; machine hint ㄛ/ㄤ only for audit, not used as truth"
+YUAN_W3W5,0e40c53f522d0cb8d144ceeac003b23d8ce5cdd2,ㄜ,58,60,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 58; machine hint ㄜ/ㄛ only for audit, not used as truth"
+YUAN_W3W5,0c915da93b212429d68c9421fdba43eaf8caf15b,ㄜ,59,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 59; machine hint ㄜ/ㄛ only for audit, not used as truth"
+YUAN_W3W5,a5a84c0535215d4b6b01647e0ce6d5882fb91bc4,ㄞ,60,7,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 60; machine hint ㄞ/ㄌ only for audit, not used as truth"
+YUAN_W3W5,06a6f51185bca7aca6d8ab32fd6d7cb99fc8deab,ㄞ,61,53,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 61; machine hint ㄞ/ㄌ only for audit, not used as truth"
+YUAN_W3W5,1fda9adf8186f62d7fc6482e859ffa27e1e89a9e,ㄞ,62,3,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 62; machine hint ㄞ/ㄌ only for audit, not used as truth"
+YUAN_W3W5,379022b20b8b34b0cd23177e645114de08110efb,ㄟ,63,39,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 63; machine hint ㄟ/ㄢ only for audit, not used as truth"
+YUAN_W3W5,30476926937efacf3e415e36c02d2bec41d6f5f0,ㄟ,64,28,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 64; machine hint ㄟ/ㄢ only for audit, not used as truth"
+YUAN_W3W5,c879ad83539571d4c201c9722826c2f8e5e63642,ㄠ,65,31,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 65; machine hint ㄠ/ㄊ only for audit, not used as truth"
+YUAN_W3W5,95a875e713fc6795a2bb6a433e3dfaf02c162c76,ㄠ,66,49,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 66; machine hint ㄠ/ㄓ only for audit, not used as truth"
+YUAN_W3W5,015657e4b7a836406d86d785530ab5fc3ae9ab47,ㄡ,67,15,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 67; machine hint ㄡ/ㄨ only for audit, not used as truth"
+YUAN_W3W5,004bd8dc02c2132eb48d084728378e5d85659e4f,ㄡ,68,57,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 68; machine hint ㄡ/ㄨ only for audit, not used as truth"
+YUAN_W3W5,5e5937e9e041694f822c1721b1bf61d2c1eb060b,ㄢ,69,89,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 69; machine hint ㄢ/ㄞ only for audit, not used as truth"
+YUAN_W3W5,e058f5308d0533e598ddc331aeff6acc701bc87f,ㄢ,70,82,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 70; machine hint ㄢ/ㄞ only for audit, not used as truth"
+YUAN_W3W5,d27c05ae144bbb8a83d3fde089961a4670f62df6,ㄢ,71,4,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 71; machine hint ㄢ/ㄞ only for audit, not used as truth"
+YUAN_W3W5,7f528c3fa31556b23ad900738485888e0cd69423,ㄣ,72,42,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 72; machine hint ㄣ/ㄅ only for audit, not used as truth"
+YUAN_W3W5,22e55f1c6b55b881fc073cf828b9fab18139df10,ㄣ,73,53,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 73; machine hint ㄣ/ㄅ only for audit, not used as truth"
+YUAN_W3W5,331db30ff55f04ff8d7bb17d9e9fd31dc8773d24,ㄥ,74,58,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 74; machine hint ㄥ/ㄙ only for audit, not used as truth"
+YUAN_W3W5,f5e664cb8acb8988b4355e7003305cb9291118e5,ㄥ,75,117,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 75; machine hint ㄥ/ㄙ only for audit, not used as truth"
+YUAN_W3W5,01aafd6a33a8342be0b80262b21bc9560abb3538,ㄧ,76,445,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 76; machine hint ㄧ/ㄣ only for audit, not used as truth"
+YUAN_W3W5,3293bee0054531252eb40476a21dd8adfccf6254,ㄨ,77,96,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 77; machine hint ㄨ/ㄡ only for audit, not used as truth"
+YUAN_W3W5,1f852deff933781a2506bffc97bdbbf8b7c08e39,ㄨ,78,42,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 78; machine hint ㄨ/ㄡ only for audit, not used as truth"
+YUAN_W3W5,0113c5b3fd1edc37a99736230f61cbbed23984a2,ㄨ,79,187,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 79; machine hint ㄨ/ㄡ only for audit, not used as truth"
+YUAN_W3W5,0147e7ba0d2f1ff91156d03b71d00062d39cc7e7,ㄩ,80,64,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 80; machine hint ㄩ/ㄖ only for audit, not used as truth"
+YUAN_W3W5,bda109ceb581a561398e57c93c1986c467f1aacf,ㄩ,81,27,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw3 contact row 81; machine hint ㄩ/ㄖ only for audit, not used as truth"
+YUAN_W7,8fd016e8e7f05a7fa31e5b6fc6d8f17547a06ee6,ㄅ,1,10,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 1; machine hint ㄅ/ㄉ only for audit, not used as truth"
+YUAN_W7,b32444997e66691d679e1f7d9690a319a6526321,ㄅ,2,27,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 2; machine hint ㄅ/ㄉ only for audit, not used as truth"
+YUAN_W7,1a23d280d4d8bb6e7de44e7c6edc3947f9ba4047,ㄆ,3,15,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 3; machine hint ㄆ/ㄓ only for audit, not used as truth"
+YUAN_W7,a9ca5ea8e716d2c7e16ca92e26451864df07674e,ㄆ,4,5,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 4; machine hint ㄆ/ㄓ only for audit, not used as truth"
+YUAN_W7,674317f888efd32ad68ec36c60405331d0c3700b,ㄇ,5,10,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 5; machine hint ㄇ/ㄖ only for audit, not used as truth"
+YUAN_W7,b1303abaac452b8f4634c8d25c058706e5987a63,ㄇ,6,10,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 6; machine hint ㄇ/ㄖ only for audit, not used as truth"
+YUAN_W7,a5cf49195c951fa505302b7825b167667039a578,ㄈ,7,25,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 7; machine hint ㄈ/ㄖ only for audit, not used as truth"
+YUAN_W7,fda502fa517efa62f81a00a10ec6486e64302e3d,ㄉ,8,32,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 8; machine hint ㄉ/ㄌ only for audit, not used as truth"
+YUAN_W7,5df8da4dfb64aaebd6a7a6e61798a65a45eb5ebd,ㄉ,9,24,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 9; machine hint ㄉ/ㄌ only for audit, not used as truth"
+YUAN_W7,349f23bedc10f2dedd40a7726637c9b7cd747f31,ㄊ,10,20,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 10; machine hint ㄊ/ㄠ only for audit, not used as truth"
+YUAN_W7,b035d52ebf543a11a8d0e4619c724784fcfbba4a,ㄊ,11,15,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 11; machine hint ㄊ/ㄠ only for audit, not used as truth"
+YUAN_W7,35175d2777db8bb4edf094a252c0f4febbbffe90,ㄋ,12,8,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 12; machine hint ㄋ/ㄌ only for audit, not used as truth"
+YUAN_W7,9db517875cb7db7fa3a273791a767f907a236db9,ㄋ,13,10,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 13; machine hint ㄋ/ㄌ only for audit, not used as truth"
+YUAN_W7,f66f0d7f7229369bc33b5c7628dfffa4ca7996ab,ㄌ,14,23,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 14; machine hint ㄌ/ㄉ only for audit, not used as truth"
+YUAN_W7,1d76a617015dc3f94d266300aa0a0625e80e2bca,ㄌ,15,22,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 15; machine hint ㄌ/ㄉ only for audit, not used as truth"
+YUAN_W7,db537523500cc3250f550506b7de71753b62a8db,ㄍ,16,23,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 16; machine hint ㄍ/ㄝ only for audit, not used as truth"
+YUAN_W7,d091a3a96db223f12badcfafe08d05aff9912efc,ㄍ,17,19,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 17; machine hint ㄍ/ㄝ only for audit, not used as truth"
+YUAN_W7,dc29cb10db1571ba7a245cfe105ed3888803ed89,ㄎ,18,9,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 18; machine hint ㄎ/ㄢ only for audit, not used as truth"
+YUAN_W7,84d57c9f1bc2dcf03899ee5a38ac2fbd0fb988fb,ㄎ,19,5,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 19; machine hint ㄎ/ㄢ only for audit, not used as truth"
+YUAN_W7,8c6c9f22b3121cc7ee7ab70ef1c20095103792ab,ㄏ,20,16,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 20; machine hint ㄏ/ㄕ only for audit, not used as truth"
+YUAN_W7,fef878f468379964849a3f6df1923a02e8509525,ㄏ,21,14,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 21; machine hint ㄏ/ㄕ only for audit, not used as truth"
+YUAN_W7,2902fbaf7ba41af0d4e9f78604d7a74a944513b5,ㄐ,22,25,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 22; machine hint ㄐ/ㄍ only for audit, not used as truth"
+YUAN_W7,7b73674bc7713c7a3d0e2646cdf4a9aba0d198be,ㄐ,23,53,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 23; machine hint ㄐ/ㄍ only for audit, not used as truth"
+YUAN_W7,5c44aa7491e66b537d8f7138e425ac350c58929d,ㄑ,24,5,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 24; machine hint ㄑ/ㄔ only for audit, not used as truth"
+YUAN_W7,741f434ff40f58d321ca4fa9262bebf5d12dc14d,ㄑ,25,16,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 25; machine hint ㄑ/ㄔ only for audit, not used as truth"
+YUAN_W7,7c1310b8ea236b90e00a04b72feeaeeea42253fb,ㄒ,26,18,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 26; machine hint ㄒ/ㄚ only for audit, not used as truth"
+YUAN_W7,d159aeadf444b757179614069ce01d0a2ec47487,ㄒ,27,56,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 27; machine hint ㄒ/ㄚ only for audit, not used as truth"
+YUAN_W7,3328f09f52670a6ec16ed7b96b8dbe2a1bc3dea8,ㄓ,28,15,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 28; machine hint ㄓ/ㄤ only for audit, not used as truth"
+YUAN_W7,0443f4baf4fcbdddd8912fda19d510536b80f70e,ㄓ,29,39,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 29; machine hint ㄓ/ㄤ only for audit, not used as truth"
+YUAN_W7,405bc42da518b45f4ba1ac9a15d669589e6f293f,ㄔ,30,8,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 30; machine hint ㄔ/ㄞ only for audit, not used as truth"
+YUAN_W7,2717e2770d46f97aac9a9ab1e00b6b1002bf8f28,ㄔ,31,21,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 31; machine hint ㄔ/ㄞ only for audit, not used as truth"
+YUAN_W7,e86b4d5279513ec0c9a396c3191626505de2b325,ㄕ,32,7,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 32; machine hint ㄕ/ㄞ only for audit, not used as truth"
+YUAN_W7,7afd9a63b07fa2b60b7c276be2e8801dbc5ab59a,ㄕ,33,69,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 33; machine hint ㄕ/ㄞ only for audit, not used as truth"
+YUAN_W7,dbde40701ef5f9c3725897069958ece1ac6fb6af,ㄖ,34,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 34; machine hint ㄖ/ㄓ only for audit, not used as truth"
+YUAN_W7,c0430c7d438b3134dd08c035dee9a551f6faab06,ㄖ,35,11,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 35; machine hint ㄖ/ㄓ only for audit, not used as truth"
+YUAN_W7,619b76844ae5055583150e49ab4e6eccca4c5d38,ㄗ,36,10,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 36; machine hint ㄗ/ㄕ only for audit, not used as truth"
+YUAN_W7,ab7c88fcd11630e27996e015f7ca275fcc3902b8,ㄗ,37,24,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 37; machine hint ㄗ/ㄕ only for audit, not used as truth"
+YUAN_W7,48135ddfb0a46e9642951af3e3e1c2e317a96b73,ㄘ,38,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 38; machine hint ㄘ/ㄢ only for audit, not used as truth"
+YUAN_W7,559ad504def9be70360ad6f22e32e6fa35cb263e,ㄘ,39,6,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 39; machine hint ㄘ/ㄢ only for audit, not used as truth"
+YUAN_W7,33a921c4bb275608099ef1366fc0145051b7c083,ㄙ,40,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 40; machine hint ㄙ/ㄥ only for audit, not used as truth"
+YUAN_W7,1bb04f3a852d97eaf4b08ac2d458ed81cbc8269a,ㄙ,41,8,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 41; machine hint ㄙ/ㄥ only for audit, not used as truth"
+YUAN_W7,34dde782d8fce21f805593c57e748a2730da4240,ㄙ,42,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 42; machine hint ㄙ/ㄥ only for audit, not used as truth"
+YUAN_W7,94a3b4bba2343a3bb9ec111808af0bf19fd8298b,ㄚ,43,15,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 43; machine hint ㄚ/ㄒ only for audit, not used as truth"
+YUAN_W7,da305d62d35d795559de4de31dc75e50487f4098,ㄚ,44,18,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 44; machine hint ㄚ/ㄒ only for audit, not used as truth"
+YUAN_W7,eca522cf268132d3935f4263cd416e4e49b7005e,ㄛ,45,9,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 45; machine hint ㄛ/ㄞ only for audit, not used as truth"
+YUAN_W7,df142caff0a361224bdc5448b6a049f28fa5ec18,ㄛ,46,22,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 46; machine hint ㄛ/ㄞ only for audit, not used as truth"
+YUAN_W7,f06c2c008c4444e0d87053857b563f74a4fbedc1,ㄜ,47,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 47; machine hint ㄜ/ㄛ only for audit, not used as truth"
+YUAN_W7,cc0eb1db83d93922ae03c1e504edcbd7662e935a,ㄜ,48,37,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 48; machine hint ㄜ/ㄛ only for audit, not used as truth"
+YUAN_W7,7cbcecb07d64c9ba5963f6fe70d02de00d122fc8,ㄝ,49,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 49; machine hint ㄝ/ㄉ only for audit, not used as truth"
+YUAN_W7,4d24c76e2e9484ec44cf461a5224275c54430858,ㄝ,50,20,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 50; machine hint ㄝ/ㄉ only for audit, not used as truth"
+YUAN_W7,84921c67fa3c829b1b4cd57286afdfc68a2f882d,ㄞ,51,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 51; machine hint ㄞ/ㄡ only for audit, not used as truth"
+YUAN_W7,03321449996053507408a02b342e2db046c9457e,ㄞ,52,26,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 52; machine hint ㄞ/ㄡ only for audit, not used as truth"
+YUAN_W7,615d78e1515d8168104d7085c02f0b6088be0c60,ㄞ,53,3,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 53; machine hint ㄞ/ㄡ only for audit, not used as truth"
+YUAN_W7,469c5f31d9f4291ce251f72202d7827bb042a542,ㄟ,54,17,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 54; machine hint ㄟ/ㄢ only for audit, not used as truth"
+YUAN_W7,ebc69de8acc9d1c825eeb465f10e4b32d15452ae,ㄟ,55,21,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 55; machine hint ㄟ/ㄢ only for audit, not used as truth"
+YUAN_W7,87422b79014fd2a63e689dba4fe295de14926d69,ㄠ,56,33,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 56; machine hint ㄠ/ㄍ only for audit, not used as truth"
+YUAN_W7,1898c15492909fa9edabcd0e2d803e63388c2358,ㄠ,57,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 57; machine hint ㄠ/ㄍ only for audit, not used as truth"
+YUAN_W7,907295308f811d8a80e41a54a8ddf3eaa7dba2e3,ㄠ,58,28,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 58; machine hint ㄠ/ㄍ only for audit, not used as truth"
+YUAN_W7,4d840d18907048fadd197b3958d2df6059d75840,ㄡ,59,7,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 59; machine hint ㄡ/ㄨ only for audit, not used as truth"
+YUAN_W7,f6129334139d7fcba1e386acf39a575bed470be2,ㄡ,60,33,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 60; machine hint ㄡ/ㄨ only for audit, not used as truth"
+YUAN_W7,829e128990fabc7cb41a82bfccecbf6407ec46ca,ㄢ,61,65,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 61; machine hint ㄢ/ㄞ only for audit, not used as truth"
+YUAN_W7,786e19937fd0ed6d54eceeba20f4f0d985f94c9a,ㄢ,62,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 62; machine hint ㄢ/ㄞ only for audit, not used as truth"
+YUAN_W7,00054a2da1701df0f2595db17325a89d83080017,ㄢ,63,44,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 63; machine hint ㄢ/ㄞ only for audit, not used as truth"
+YUAN_W7,bad1f8c0c4f02302fb27ae1d6026299c7dc8b076,ㄣ,64,26,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 64; machine hint ㄣ/ㄅ only for audit, not used as truth"
+YUAN_W7,fed11a4ba3e01da10501d1aa83261fdf068ab227,ㄣ,65,35,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 65; machine hint ㄣ/ㄅ only for audit, not used as truth"
+YUAN_W7,e75550d2bd523f3975af71e200d85c2af0df90c2,ㄤ,66,27,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 66; machine hint ㄤ/ㄜ only for audit, not used as truth"
+YUAN_W7,09a56e1b0c7e7e6628d881aaa99a45e19cf3bae4,ㄤ,67,35,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 67; machine hint ㄤ/ㄜ only for audit, not used as truth"
+YUAN_W7,20145ce63d43df20d3ebc8db222bbdb679c3f047,ㄦ,68,3,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 68; machine hint ㄤ/ㄠ only for audit, not used as truth"
+YUAN_W7,b63e5dc395dc8f4dbee9871eb64be89b1fc15a38,ㄥ,69,39,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 69; machine hint ㄥ/ㄙ only for audit, not used as truth"
+YUAN_W7,43c87427c689c642fb120b8a10d488716b928f20,ㄥ,70,74,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 70; machine hint ㄥ/ㄙ only for audit, not used as truth"
+YUAN_W7,9c76695a10f99306adee1aec4b7f74b01389902c,ㄧ,71,308,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 71; machine hint ㄧ/ㄣ only for audit, not used as truth"
+YUAN_W7,113aa23c39de9d62ab587d0be09f6acc885944a8,ㄨ,72,139,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 72; machine hint ㄨ/ㄡ only for audit, not used as truth"
+YUAN_W7,51870f8a21240ef20abade8c1e754b276b9fac35,ㄨ,73,34,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 73; machine hint ㄨ/ㄡ only for audit, not used as truth"
+YUAN_W7,d563d81a798bf68adba9fd8acfb2423e88b48d5a,ㄩ,74,38,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 74; machine hint ㄩ/ㄖ only for audit, not used as truth"
+YUAN_W7,165249204211fff195b9ba2c5d6910617a9f9ebf,ㄩ,75,11,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"yuanw7 contact row 75; machine hint ㄩ/ㄖ only for audit, not used as truth"
+HEI_W5,b0939726e62a1eae1e9a3d0bca7be3ba7f25122f,ㄅ,1,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 1; machine hint ㄅ/ㄣ only for audit, not used as truth"
+HEI_W5,2ebac7da56cd928c5d2b8ee3f828e93e8e2d8b3d,ㄅ,2,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 2; machine hint ㄅ/ㄣ only for audit, not used as truth"
+HEI_W5,dc9e1578b5170d2db9f285e7afa36b992bcb436c,ㄉ,3,6,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 3; machine hint ㄅ/ㄠ only for audit, not used as truth"
+HEI_W5,18005bae9f9ebe8ecb9d3719bd7f0f63ad3b5541,ㄝ,4,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 4; machine hint ㄅ/ㄆ only for audit, not used as truth"
+HEI_W5,400172f28f17b972b01e181c89dc358fac57e05b,ㄉ,5,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 5; machine hint ㄅ/ㄠ only for audit, not used as truth"
+HEI_W5,1e0fbf780f0c719f4947bb590bde0337064f0a91,ㄇ,6,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 6; machine hint ㄇ/ㄩ only for audit, not used as truth"
+HEI_W5,9f588fc932651b7feb293858c3cb06b2c2909848,ㄋ,7,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 7; machine hint ㄋ/ㄢ only for audit, not used as truth"
+HEI_W5,94850e30644acbfae110d8fb3291647303090f3b,ㄟ,8,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 8; machine hint ㄋ/ㄢ only for audit, not used as truth"
+HEI_W5,058286f35fe38a10766f4d63b845644673476354,ㄏ,9,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 9; machine hint ㄏ/ㄕ only for audit, not used as truth"
+HEI_W5,fef839f9c4696e9336573090e75b9071a7483001,ㄏ,10,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 10; machine hint ㄏ/ㄕ only for audit, not used as truth"
+HEI_W5,bb1e378ec37d07166ffea52b384e4f9df8cdcb07,ㄐ,11,3,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 11; machine hint ㄐ/ㄆ only for audit, not used as truth"
+HEI_W5,385436ebeecb729f996de8d167869e42f62f20d8,ㄐ,12,7,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 12; machine hint ㄐ/ㄆ only for audit, not used as truth"
+HEI_W5,90c664833839db3cabf0038195df94efd1d49562,ㄍ,13,3,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 13; machine hint ㄐ/ㄠ only for audit, not used as truth"
+HEI_W5,f689d690ef6187aa2a87bf54cbd4cb4a84d2d84e,ㄍ,14,3,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 14; machine hint ㄐ/ㄠ only for audit, not used as truth"
+HEI_W5,27cca86ed8c8e42c5656a0adc7dfdf741ff9ecf7,ㄑ,15,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 15; machine hint ㄑ/ㄔ only for audit, not used as truth"
+HEI_W5,3d92b72020c0cd87455525f2305e3a9b28069a8e,ㄑ,16,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 16; machine hint ㄑ/ㄔ only for audit, not used as truth"
+HEI_W5,774736f4b56b6c797e5fccaaae2af240e417b7a6,ㄖ,17,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 17; machine hint ㄓ/ㄇ only for audit, not used as truth"
+HEI_W5,fb43622c0fbdaae1ab82ad6c5ea48598909e6d78,ㄌ,18,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 18; machine hint ㄓ/ㄠ only for audit, not used as truth"
+HEI_W5,878304cc3f2a17217ce76f68e585e87e0f07d399,ㄌ,19,6,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 19; machine hint ㄓ/ㄠ only for audit, not used as truth"
+HEI_W5,333068b013d4e461a12d3cb9d4b52e2580f6d328,ㄔ,20,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 20; machine hint ㄔ/ㄡ only for audit, not used as truth"
+HEI_W5,eeaa3eef0783f6ddb1783fc034a44aeff86fa23b,ㄕ,21,3,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 21; machine hint ㄕ/ㄗ only for audit, not used as truth"
+HEI_W5,74a064de01704ed82ab09c386b4f88cf725bd9b9,ㄕ,22,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 22; machine hint ㄕ/ㄗ only for audit, not used as truth"
+HEI_W5,b8f588ee1930795f0fa3c0e4ff02e90ac17ef282,ㄗ,23,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 23; machine hint ㄗ/ㄕ only for audit, not used as truth"
+HEI_W5,09a39cbc31c40658c30f0971ef5dee6b524e2ed5,ㄗ,24,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 24; machine hint ㄗ/ㄕ only for audit, not used as truth"
+HEI_W5,8b65ed0b5776b79994ed4b8438e7f4a64067e50f,ㄒ,25,6,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 25; machine hint ㄗ/ㄋ only for audit, not used as truth"
+HEI_W5,66c1c47555a2761cb40993abfd335278ffd0f6de,ㄚ,26,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 26; machine hint ㄗ/ㄢ only for audit, not used as truth"
+HEI_W5,a370fcc9c52766e041aa3c9092124addf29202db,ㄚ,27,3,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 27; machine hint ㄗ/ㄢ only for audit, not used as truth"
+HEI_W5,1b75486beb69c0edd44dc89b4a677723efa3d9bc,ㄥ,28,6,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 28; machine hint ㄙ/ㄠ only for audit, not used as truth"
+HEI_W5,96e57308de140f4efb5707d20359a0c62c1481d2,ㄥ,29,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 29; machine hint ㄙ/ㄠ only for audit, not used as truth"
+HEI_W5,a2f79f68e063e3f215a6f6d7308cb08aa22b292f,ㄠ,30,3,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 30; machine hint ㄠ/ㄓ only for audit, not used as truth"
+HEI_W5,14faa432a1a0e2a2f84acfe38668d95d3e8b670e,ㄠ,31,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 31; machine hint ㄠ/ㄓ only for audit, not used as truth"
+HEI_W5,709501fef1c999cc14abf161a69d98dfafcb7557,ㄊ,32,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 32; machine hint ㄠ/ㄙ only for audit, not used as truth"
+HEI_W5,605ca87ca4cad4ab2f432a6ad5f88ea5604ca019,ㄊ,33,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 33; machine hint ㄠ/ㄙ only for audit, not used as truth"
+HEI_W5,2a4ed317911644b941e298e2f9cb52801946bada,ㄤ,34,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 34; machine hint ㄠ/ㄓ only for audit, not used as truth"
+HEI_W5,a8b3bedaf1f964a5122d2bdeea5c59dc62217ab0,ㄤ,35,3,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 35; machine hint ㄠ/ㄓ only for audit, not used as truth"
+HEI_W5,7fc749b3a0e440ed837451a89f321d137f3a2516,ㄜ,36,3,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 36; machine hint ㄠ/ㄓ only for audit, not used as truth"
+HEI_W5,d9e6eb1d13405a0fe20ae7160edde83d221796a3,ㄢ,37,5,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 37; machine hint ㄢ/ㄋ only for audit, not used as truth"
+HEI_W5,52fb6443a606bae6a8c59f6e982ebaeb1dfb3c72,ㄢ,38,5,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 38; machine hint ㄢ/ㄋ only for audit, not used as truth"
+HEI_W5,f65b403fc32887afe2ab9ce7e6f90536ad8177fb,ㄘ,39,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 39; machine hint ㄢ/ㄅ only for audit, not used as truth"
+HEI_W5,1996a06dc3c8937e2252fe29935044773ea7e1a8,ㄞ,40,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 40; machine hint ㄢ/ㄓ only for audit, not used as truth"
+HEI_W5,6377eecade5d9ec3a6b3fb87314117a45f685864,ㄛ,41,4,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 41; machine hint ㄢ/ㄋ only for audit, not used as truth"
+HEI_W5,a500c4e54bd281b006b31e890e17f6e223ff93aa,ㄛ,42,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 42; machine hint ㄢ/ㄋ only for audit, not used as truth"
+HEI_W5,71a2441438529761b150591dfbf1901802963035,ㄣ,43,5,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 43; machine hint ㄣ/ㄅ only for audit, not used as truth"
+HEI_W5,56c6edce19cbaf3ed8961e6cfaf38457c06cb2e8,ㄧ,44,32,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 44; machine hint ㄧ/ㄣ only for audit, not used as truth"
+HEI_W5,196b7a40380c8962200265b091a8d98f4f67346e,ㄨ,45,11,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 45; machine hint ㄨ/ㄆ only for audit, not used as truth"
+HEI_W5,23763d31cdfde5e48e74fddcc750186b64f6d630,ㄨ,46,5,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 46; machine hint ㄨ/ㄆ only for audit, not used as truth"
+HEI_W5,4ff8787676c55995b1887212f3b53aa9991f6b18,ㄡ,47,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 47; machine hint ㄨ/ㄆ only for audit, not used as truth"
+HEI_W5,3123f2a3115531f99e373cd1616a14513662ade6,ㄡ,48,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 48; machine hint ㄨ/ㄆ only for audit, not used as truth"
+HEI_W5,66b3c121b6905e33e7b5cf3921fd02e94082ac42,ㄩ,49,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 49; machine hint ㄩ/ㄇ only for audit, not used as truth"
+HEI_W5,182c4c05a62c71c86f0a7c6eee03083e850127d2,ㄩ,50,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw5 contact row 50; machine hint ㄩ/ㄇ only for audit, not used as truth"
+HEI_W7,7a0db9b8b72e08d5c0f71b86a6ce21ea3e16afa0,ㄆ,1,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 1; machine hint ㄆ/ㄓ only for audit, not used as truth"
+HEI_W7,72dbd133f28ef1c1b2f03b2a8d59107ce54bafcf,ㄆ,2,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 2; machine hint ㄆ/ㄓ only for audit, not used as truth"
+HEI_W7,57943497d428c9356a054fbae3fedd6c1ec78276,ㄠ,3,5,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 3; machine hint ㄆ/ㄓ only for audit, not used as truth"
+HEI_W7,b731325353514479f4ffbebc2ca88cb0efb589e3,ㄠ,4,6,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 4; machine hint ㄆ/ㄓ only for audit, not used as truth"
+HEI_W7,dd688a5d92d9d7ce412e45627f9760af58909dd4,ㄦ,5,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 5; machine hint ㄆ/ㄐ only for audit, not used as truth"
+HEI_W7,8f1e3ee7eb09ab5374ed7bcb34b4ae45dfae7cc6,ㄇ,6,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 6; machine hint ㄇ/ㄖ only for audit, not used as truth"
+HEI_W7,797ba0d2f58381ea382e88d66b7e725fdfada839,ㄇ,7,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 7; machine hint ㄇ/ㄖ only for audit, not used as truth"
+HEI_W7,15f64e34cd37a4077c5911f552ab9bb5be3da885,ㄈ,8,8,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 8; machine hint ㄈ/ㄖ only for audit, not used as truth"
+HEI_W7,56520ae2ed724a00cf4fba0c4020ee5b3ebc8589,ㄉ,9,3,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 9; machine hint ㄉ/ㄌ only for audit, not used as truth"
+HEI_W7,87bc1fbc0dafdd85ea60fdf6245e2cfddb949d83,ㄉ,10,7,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 10; machine hint ㄉ/ㄌ only for audit, not used as truth"
+HEI_W7,71a23568506205cc7575f79466e316e62eca9a38,ㄅ,11,3,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 11; machine hint ㄉ/ㄌ only for audit, not used as truth"
+HEI_W7,ca76ef71bcd5dffbd1dde7df1e8580f8b42bbe51,ㄅ,12,5,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 12; machine hint ㄉ/ㄌ only for audit, not used as truth"
+HEI_W7,727be52f6e8135f21d5eed7bffeeef154845dfaf,ㄝ,13,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 13; machine hint ㄉ/ㄌ only for audit, not used as truth"
+HEI_W7,baaa689897112b46f03c5e36dc363702c82b5468,ㄝ,14,4,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 14; machine hint ㄉ/ㄌ only for audit, not used as truth"
+HEI_W7,4582da478408a08bd535fd8ae1196332851483e1,ㄌ,15,7,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 15; machine hint ㄌ/ㄉ only for audit, not used as truth"
+HEI_W7,1b4d6fb914a6cef7d34dca857c0cd969c27a182c,ㄌ,16,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 16; machine hint ㄌ/ㄉ only for audit, not used as truth"
+HEI_W7,ca40e919e25c9c700b13c660a915eda20e123029,ㄊ,17,6,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 17; machine hint ㄌ/ㄓ only for audit, not used as truth"
+HEI_W7,cc490a28b7205e2cc45173f5388c865f1e5cc111,ㄊ,18,3,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 18; machine hint ㄌ/ㄓ only for audit, not used as truth"
+HEI_W7,5d63e958a88caa5032118dcd959b2ea75bc1a84c,ㄞ,19,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 19; machine hint ㄌ/ㄢ only for audit, not used as truth"
+HEI_W7,5bd71c424ab6c5e27b622c2574cfcf504a7f4922,ㄞ,20,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 20; machine hint ㄌ/ㄢ only for audit, not used as truth"
+HEI_W7,74af65ce7cd2200b7dc4d8bd5892056799a8167c,ㄋ,21,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 21; machine hint ㄌ/ㄢ only for audit, not used as truth"
+HEI_W7,147c9a456baace4cfdcade77eef104aa30c32179,ㄋ,22,3,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 22; machine hint ㄌ/ㄢ only for audit, not used as truth"
+HEI_W7,f701b21f7eec7e3e4e35e9ece12d0e757e8481b4,ㄏ,23,4,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 23; machine hint ㄏ/ㄕ only for audit, not used as truth"
+HEI_W7,df7cac059a15d56906e94b6a2dfdfbbe85652f76,ㄏ,24,6,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 24; machine hint ㄏ/ㄕ only for audit, not used as truth"
+HEI_W7,f4b83e3680e1e0ee374a545956771cfb3966d7ab,ㄐ,25,5,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 25; machine hint ㄐ/ㄢ only for audit, not used as truth"
+HEI_W7,486de2eb5529fcc4d5f11b6be4aec155c8ee7124,ㄐ,26,4,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 26; machine hint ㄐ/ㄢ only for audit, not used as truth"
+HEI_W7,e3f4c7fd5b62c5bba0312da794fcde8384647871,ㄍ,27,3,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 27; machine hint ㄐ/ㄆ only for audit, not used as truth"
+HEI_W7,b079a379ab3a2661d59c818f88acb9f28f7990b8,ㄍ,28,3,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 28; machine hint ㄐ/ㄆ only for audit, not used as truth"
+HEI_W7,a1f1af8e928bc22c42814f5e447fdc61236e99ab,ㄑ,29,5,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 29; machine hint ㄑ/ㄔ only for audit, not used as truth"
+HEI_W7,bc34dbace19a25202c854cd746a01c389d6dd824,ㄑ,30,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 30; machine hint ㄑ/ㄔ only for audit, not used as truth"
+HEI_W7,1b1baf2c7be11a439fafb4ec9fc856e1fdbc9df8,ㄒ,31,16,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 31; machine hint ㄒ/ㄚ only for audit, not used as truth"
+HEI_W7,6e8395fd7e4c307a3107f6664adf0241ce021db7,ㄓ,32,4,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 32; machine hint ㄓ/ㄌ only for audit, not used as truth"
+HEI_W7,4312db8eb461665ea0207d69accf2938710e2a23,ㄓ,33,9,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 33; machine hint ㄓ/ㄌ only for audit, not used as truth"
+HEI_W7,d74af7fafbd4e9c813e4432b7011eb52532c9407,ㄤ,34,3,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 34; machine hint ㄓ/ㄌ only for audit, not used as truth"
+HEI_W7,23bf50b9bc4a51e8c63afc3c9f144bd6041a9dcd,ㄤ,35,5,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 35; machine hint ㄓ/ㄌ only for audit, not used as truth"
+HEI_W7,cf5659befe5edfbad33d3205a307c57bc1f14e0c,ㄔ,36,8,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 36; machine hint ㄔ/ㄌ only for audit, not used as truth"
+HEI_W7,54ff72ed50a557bd7bd1859097b216427588f5d3,ㄔ,37,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 37; machine hint ㄔ/ㄌ only for audit, not used as truth"
+HEI_W7,305f67255f5a3298432ca9e7cce3253f15cb8f2d,ㄕ,38,16,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 38; machine hint ㄕ/ㄏ only for audit, not used as truth"
+HEI_W7,cb0fbc8c5de266a2d8ff73c6f78a0dedad05520f,ㄗ,39,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 39; machine hint ㄕ/ㄢ only for audit, not used as truth"
+HEI_W7,c13eb5f0be251844d3c76de428fec5b1f384ddea,ㄗ,40,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 40; machine hint ㄕ/ㄢ only for audit, not used as truth"
+HEI_W7,f7a118a1c168a1c3339f0d1630c8f0ce595ef64d,ㄗ,41,4,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 41; machine hint ㄕ/ㄢ only for audit, not used as truth"
+HEI_W7,f85577c4c8ce508b177d72bc46add407ffc51f42,ㄖ,42,3,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 42; machine hint ㄖ/ㄓ only for audit, not used as truth"
+HEI_W7,fc3e071a7fa93741f2de56422ce5f64cae14d9e4,ㄙ,43,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 43; machine hint ㄙ/ㄓ only for audit, not used as truth"
+HEI_W7,01c1bb09f13cbae108c9ecca5fbb5db299c0c7c6,ㄙ,44,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 44; machine hint ㄙ/ㄓ only for audit, not used as truth"
+HEI_W7,fe93946c77d96ef97a27a6b60d4c9af43f1b66ce,ㄥ,45,5,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 45; machine hint ㄙ/ㄛ only for audit, not used as truth"
+HEI_W7,6334dbfd3f8a4293ddfa487ba59a4761f52f033a,ㄥ,46,15,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 46; machine hint ㄙ/ㄛ only for audit, not used as truth"
+HEI_W7,bdfabd40b30a68a8f2848ad8a4039749725e2157,ㄚ,47,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 47; machine hint ㄚ/ㄒ only for audit, not used as truth"
+HEI_W7,3b42a1c919ed9df6fbbaeb0edd371f65d6d986a0,ㄚ,48,11,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 48; machine hint ㄚ/ㄒ only for audit, not used as truth"
+HEI_W7,a9d035493da262fe049935ca199aa647f9208641,ㄛ,49,7,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 49; machine hint ㄛ/ㄖ only for audit, not used as truth"
+HEI_W7,e4c37f1b303b085885444d831cf141eab0626719,ㄛ,50,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 50; machine hint ㄛ/ㄖ only for audit, not used as truth"
+HEI_W7,33f542d7bd1e1b937d5fb6dfe0795b64e5745677,ㄜ,51,10,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 51; machine hint ㄛ/ㄌ only for audit, not used as truth"
+HEI_W7,81e6be584c093c6af8a62ae74ed61b1ed7b784f3,ㄢ,52,10,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 52; machine hint ㄢ/ㄐ only for audit, not used as truth"
+HEI_W7,05035a92c3ae874ca437ad38dfed150c035b47d3,ㄢ,53,11,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 53; machine hint ㄢ/ㄐ only for audit, not used as truth"
+HEI_W7,9e317695257df7fd57356f64d01d7e72d5eb3109,ㄎ,54,3,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 54; machine hint ㄢ/ㄛ only for audit, not used as truth"
+HEI_W7,1aa30460f88505b757672247938a84e35feed944,ㄎ,55,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 55; machine hint ㄢ/ㄛ only for audit, not used as truth"
+HEI_W7,d563c0a43c33a89f7d26cdd999fffa1922a92649,ㄘ,56,1,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 56; machine hint ㄢ/ㄉ only for audit, not used as truth"
+HEI_W7,0f8559d5f6a65d48d722cf6550d69c7d03f99b04,ㄟ,57,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 57; machine hint ㄢ/ㄆ only for audit, not used as truth"
+HEI_W7,9d499b93d7a8debfc32b29237ea7a4fbcdd254ae,ㄟ,58,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 58; machine hint ㄢ/ㄆ only for audit, not used as truth"
+HEI_W7,899437c4d0c8175a648021c15879d317270a6af0,ㄣ,59,5,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 59; machine hint ㄣ/ㄉ only for audit, not used as truth"
+HEI_W7,13f44ed9fdfc1271f162de6bf618c20a6ea7aa9f,ㄣ,60,12,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 60; machine hint ㄣ/ㄉ only for audit, not used as truth"
+HEI_W7,c2877c48ad557a1bd72ad66c2cc4ce07c5fee0ca,ㄧ,61,62,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 61; machine hint ㄧ/ㄣ only for audit, not used as truth"
+HEI_W7,02ddd963f639e5d313ebcd5e56ed771076da643d,ㄨ,62,15,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 62; machine hint ㄨ/ㄆ only for audit, not used as truth"
+HEI_W7,a087d2251d0a721caae0551e5b2866909f3fd168,ㄨ,63,33,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 63; machine hint ㄨ/ㄆ only for audit, not used as truth"
+HEI_W7,eb0735f1bda6643d9da4104102e84fdea2976f3f,ㄡ,64,9,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 64; machine hint ㄨ/ㄆ only for audit, not used as truth"
+HEI_W7,fedb3ae8677c72c7a875874fec7ca063d6f1b65b,ㄡ,65,2,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 65; machine hint ㄨ/ㄆ only for audit, not used as truth"
+HEI_W7,7a8923c13e53191ae0769aa02192a0eb81fb0c46,ㄩ,66,3,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 66; machine hint ㄩ/ㄖ only for audit, not used as truth"
+HEI_W7,9b8ee63cb9bb1d1a29dfa31cb6b0b40679302ab2,ㄩ,67,5,直接檢視 CFF 注音符號字形，對照 Unicode 注音符號參考表,"heiw7 contact row 67; machine hint ㄩ/ㄖ only for audit, not used as truth"
+YUAN_W3W5,11ea3d78df58f8688b67b8714f42f74d15f9cf3a,ㄛ,,,直接檢視 PDF 高倍率注音字形,v1.9 3下 P8等「呵」高倍率原頁字形直接確認
+YUAN_W3W5,3de7658dc7bf190de435ce29f67349414354ef49,ㄡ,,,直接檢視 PDF 高倍率注音字形,v1.9 3下 P25「偶」高倍率原頁字形直接確認
+YUAN_W3W5,796a674c22c53b2d8756fb83713ff66f7965c80d,ㄌ,,,直接檢視 PDF 高倍率注音字形,v1.9 3下 P20「囉」高倍率原頁字形直接確認
+YUAN_W3W5,d6f679ded4c91247bdbbd1edac9bd03cc06fd794,ㄛ,,,直接檢視 PDF 高倍率注音字形,v1.9 3下 P20「囉」高倍率原頁字形直接確認
+HEI_W7,1c09202a8fb725043f532c70bc1505d5f55090b3,ㄕ,,,直接檢視 PDF 高倍率注音字形,v1.9 3下 P116「甩」高倍率原頁字形直接確認
+BIAOKAI_W5,9bd50ab9d9ed97fe48d82137ed075a06b0100c74,ㄛ,85,,四下盲測：直接檢視 CFF 注音符號輪廓並與 Unicode 注音符號字形對照；未使用中文字語義反推,v2.6 新增；同一簽名在多個整字 glyph 的注音堆疊位置交叉核對。
+BIAOKAI_W5,1bde11092d8493363975405690086ddf7c2217f0,ㄡ,86,,四下盲測：直接檢視 CFF 注音符號輪廓並與 Unicode 注音符號字形對照；未使用中文字語義反推,v2.6 新增；同一簽名在多個整字 glyph 的注音堆疊位置交叉核對。
+BIAOKAI_W5,3df10d7cc6e32a0b1c3339a2ca809781c5f23e18,ㄉ,87,,四下盲測：直接檢視 CFF 注音符號輪廓並與 Unicode 注音符號字形對照；未使用中文字語義反推,v2.6 新增；同一簽名在多個整字 glyph 的注音堆疊位置交叉核對。
+BIAOKAI_W5,aab21a1000c11030fe74b7684aa829e0adda9cc3,ㄌ,88,,四下盲測：直接檢視 CFF 注音符號輪廓並與 Unicode 注音符號字形對照；未使用中文字語義反推,v2.6 新增；同一簽名在多個整字 glyph 的注音堆疊位置交叉核對。
+BIAOKAI_W5,d83bc4189fec701d94bf9427d54bd14dc166a8a3,ㄡ,89,,四下盲測：直接檢視 CFF 注音符號輪廓並與 Unicode 注音符號字形對照；未使用中文字語義反推,v2.6 新增；同一簽名在多個整字 glyph 的注音堆疊位置交叉核對。
+HEI_W5,a3cdc1595f4ed26c11e3d7cab4042bac88457491,ㄓ,90,,四下盲測：直接檢視 CFF 注音符號輪廓並與 Unicode 注音符號字形對照；未使用中文字語義反推,v2.6 新增；同一簽名在多個整字 glyph 的注音堆疊位置交叉核對。
+HEI_W5,fd7767095a0975599200c2beb3ecb7b0770fbc49,ㄟ,91,,四下盲測：直接檢視 CFF 注音符號輪廓並與 Unicode 注音符號字形對照；未使用中文字語義反推,v2.6 新增；同一簽名在多個整字 glyph 的注音堆疊位置交叉核對。
+HEI_W5,a47e6c71204dec864b25ed81d7d5d7f38f246e23,ㄈ,92,,四下盲測：直接檢視 CFF 注音符號輪廓並與 Unicode 注音符號字形對照；未使用中文字語義反推,v2.6 新增；同一簽名在多個整字 glyph 的注音堆疊位置交叉核對。
+HEI_W5,dde01eced43b66149acaf275f500f958cbf52cdc,ㄣ,93,,四下盲測：直接檢視 CFF 注音符號輪廓並與 Unicode 注音符號字形對照；未使用中文字語義反推,v2.6 新增；同一簽名在多個整字 glyph 的注音堆疊位置交叉核對。
+HEI_W5,1c0fed1fe4a82420ba1e7f453d96edab0d0a398a,ㄇ,94,,四下盲測：直接檢視 CFF 注音符號輪廓並與 Unicode 注音符號字形對照；未使用中文字語義反推,v2.6 新增；同一簽名在多個整字 glyph 的注音堆疊位置交叉核對。
+HEI_W5,a2acdccf36f8630e104d7cee60287568b68b7348,ㄔ,95,,四下盲測：直接檢視 CFF 注音符號輪廓並與 Unicode 注音符號字形對照；未使用中文字語義反推,v2.6 新增；同一簽名在多個整字 glyph 的注音堆疊位置交叉核對。
+HEI_W5,bd372b6ab1ece15e1f5081220ea90e52b2d82a2e,ㄓ,96,,四下盲測：直接檢視 CFF 注音符號輪廓並與 Unicode 注音符號字形對照；未使用中文字語義反推,v2.6 新增；同一簽名在多個整字 glyph 的注音堆疊位置交叉核對。
+HEI_W5,f18e8321fe5382f9bf5272a599f35ca27f0e8981,ㄎ,97,,四下盲測：直接檢視 CFF 注音符號輪廓並與 Unicode 注音符號字形對照；未使用中文字語義反推,v2.6 新增；同一簽名在多個整字 glyph 的注音堆疊位置交叉核對。
+HEI_W5,8ae05a6af8538a07450dc09787cb82636b360860,ㄙ,98,,四下盲測：直接檢視 CFF 注音符號輪廓並與 Unicode 注音符號字形對照；未使用中文字語義反推,v2.6 新增；同一簽名在多個整字 glyph 的注音堆疊位置交叉核對。
+HEI_W5,084b890294afaa70bd4fb168393f537285ecf869,ㄆ,99,,四下盲測：直接檢視 CFF 注音符號輪廓並與 Unicode 注音符號字形對照；未使用中文字語義反推,v2.6 新增；同一簽名在多個整字 glyph 的注音堆疊位置交叉核對。
+HEI_W5,c3a9026be33e555f5e4083112b3ae14485d51d94,ㄒ,100,,四下盲測：直接檢視 CFF 注音符號輪廓並與 Unicode 注音符號字形對照；未使用中文字語義反推,v2.6 新增；同一簽名在多個整字 glyph 的注音堆疊位置交叉核對。
+HEI_W5,0b87ae5f74e086efb5d53ca5fdacd2a1305d5dc8,ㄋ,101,,四下盲測：直接檢視 CFF 注音符號輪廓並與 Unicode 注音符號字形對照；未使用中文字語義反推,v2.6 新增；同一簽名在多個整字 glyph 的注音堆疊位置交叉核對。
+HEI_W5,c902b726eeb04607736af7754f7f9735dcb3fafc,ㄙ,102,,四下盲測：直接檢視 CFF 注音符號輪廓並與 Unicode 注音符號字形對照；未使用中文字語義反推,v2.6 新增；同一簽名在多個整字 glyph 的注音堆疊位置交叉核對。
+HEI_W5,fa05466b76922eb6da59a31e73de72675440b701,ㄆ,103,,四下盲測：直接檢視 CFF 注音符號輪廓並與 Unicode 注音符號字形對照；未使用中文字語義反推,v2.6 新增；同一簽名在多個整字 glyph 的注音堆疊位置交叉核對。
+HEI_W5,2d217ccf680833655b7e04dcd187785d7f19d26a,ㄘ,104,,四下盲測：直接檢視 CFF 注音符號輪廓並與 Unicode 注音符號字形對照；未使用中文字語義反推,v2.6 新增；同一簽名在多個整字 glyph 的注音堆疊位置交叉核對。
+HEI_W5,a67e4ca3cb065c1514d87f0a8718aba05b9737a5,ㄕ,105,,四下盲測：直接檢視 CFF 注音符號輪廓並與 Unicode 注音符號字形對照；未使用中文字語義反推,v2.6 新增；同一簽名在多個整字 glyph 的注音堆疊位置交叉核對。
+HEI_W5,03a2c3d0434e7f3fb30e9f4ba8b1e935ae32217f,ㄖ,106,,四下盲測：直接檢視 CFF 注音符號輪廓並與 Unicode 注音符號字形對照；未使用中文字語義反推,v2.6 新增；同一簽名在多個整字 glyph 的注音堆疊位置交叉核對。
+HEI_W5,45d12cd5a0599454afab5c76afe103797ac796c3,ㄝ,107,,四下盲測：直接檢視 CFF 注音符號輪廓並與 Unicode 注音符號字形對照；未使用中文字語義反推,v2.6 新增；同一簽名在多個整字 glyph 的注音堆疊位置交叉核對。
+HEI_W5,5c87b94cc2a58d38cf5a801dfd4e85899e9dbacd,ㄦ,108,,四下盲測：直接檢視 CFF 注音符號輪廓並與 Unicode 注音符號字形對照；未使用中文字語義反推,v2.6 新增；同一簽名在多個整字 glyph 的注音堆疊位置交叉核對。
+HEI_W5,838b0333cf0443078571cd6310444132883cfafb,ㄘ,109,,四下盲測：直接檢視 CFF 注音符號輪廓並與 Unicode 注音符號字形對照；未使用中文字語義反推,v2.6 新增；同一簽名在多個整字 glyph 的注音堆疊位置交叉核對。
+HEI_W5,9a4651a45978d143cb1cf39dead7e30c1d05eaa1,ㄢ,110,,四下盲測：直接檢視 CFF 注音符號輪廓並與 Unicode 注音符號字形對照；未使用中文字語義反推,v2.6 新增；同一簽名在多個整字 glyph 的注音堆疊位置交叉核對。
+BIAOKAI_W5,086834ec4610436b1e31bb5ddbc9a1444cf265bd,ㄧ,111,12,v3.4 盲測：跨冊輪廓距離僅用於產生候選；再直接檢視未知 CFF 注音符號字形並對照 Unicode 注音符號確認；執行期仍只接受 exact signature；未使用中文字、句境或字典預期音反推,"v3.4 blind-test contact index; offline nearest distance=0.479, margin=12.655; visual confirmed ㄧ; runtime exact-only"
+BIAOKAI_W5,2f24d49a2a961e0e7ca3de0a8c83be17c6ff4480,ㄉ,112,11,v3.4 盲測：跨冊輪廓距離僅用於產生候選；再直接檢視未知 CFF 注音符號字形並對照 Unicode 注音符號確認；執行期仍只接受 exact signature；未使用中文字、句境或字典預期音反推,"v3.4 blind-test contact index; offline nearest distance=0.458, margin=5.980; visual confirmed ㄉ; runtime exact-only"
+BIAOKAI_W5,62d3be466887d86f074e7c19fe553f62b0dc01e0,ㄨ,113,21,v3.4 盲測：跨冊輪廓距離僅用於產生候選；再直接檢視未知 CFF 注音符號字形並對照 Unicode 注音符號確認；執行期仍只接受 exact signature；未使用中文字、句境或字典預期音反推,"v3.4 blind-test contact index; offline nearest distance=0.570, margin=7.034; visual confirmed ㄨ; runtime exact-only"
+BIAOKAI_W5,6be309adf1b921bc6e0b397fc7852141f25a8aba,ㄜ,114,15,v3.4 盲測：跨冊輪廓距離僅用於產生候選；再直接檢視未知 CFF 注音符號字形並對照 Unicode 注音符號確認；執行期仍只接受 exact signature；未使用中文字、句境或字典預期音反推,"v3.4 blind-test contact index; offline nearest distance=0.297, margin=6.602; visual confirmed ㄜ; runtime exact-only"
+BIAOKAI_W5,8003f72c1db2adf7912bf4766928b85091a47cc6,ㄕ,115,6,v3.4 盲測：跨冊輪廓距離僅用於產生候選；再直接檢視未知 CFF 注音符號字形並對照 Unicode 注音符號確認；執行期仍只接受 exact signature；未使用中文字、句境或字典預期音反推,"v3.4 blind-test contact index; offline nearest distance=0.466, margin=7.637; visual confirmed ㄕ; runtime exact-only"
+BIAOKAI_W5,8185091b5e1d622dd60f285c8ce581045d3c4e86,ㄇ,116,4,v3.4 盲測：跨冊輪廓距離僅用於產生候選；再直接檢視未知 CFF 注音符號字形並對照 Unicode 注音符號確認；執行期仍只接受 exact signature；未使用中文字、句境或字典預期音反推,"v3.4 blind-test contact index; offline nearest distance=0.552, margin=8.024; visual confirmed ㄇ; runtime exact-only"
+BIAOKAI_W5,9030696b2a25b4ac43fc620c4298c31e0a58eb7a,ㄕ,117,4,v3.4 盲測：跨冊輪廓距離僅用於產生候選；再直接檢視未知 CFF 注音符號字形並對照 Unicode 注音符號確認；執行期仍只接受 exact signature；未使用中文字、句境或字典預期音反推,"v3.4 blind-test contact index; offline nearest distance=0.390, margin=7.704; visual confirmed ㄕ; runtime exact-only"
+BIAOKAI_W5,9cbd0207cf4d09de99a822d0ca32a391d1de7d43,ㄨ,118,13,v3.4 盲測：跨冊輪廓距離僅用於產生候選；再直接檢視未知 CFF 注音符號字形並對照 Unicode 注音符號確認；執行期仍只接受 exact signature；未使用中文字、句境或字典預期音反推,"v3.4 blind-test contact index; offline nearest distance=0.431, margin=7.105; visual confirmed ㄨ; runtime exact-only"
+BIAOKAI_W5,aa0e55976d5a2526e6816ea5024e32af64343dd1,ㄉ,119,4,v3.4 盲測：跨冊輪廓距離僅用於產生候選；再直接檢視未知 CFF 注音符號字形並對照 Unicode 注音符號確認；執行期仍只接受 exact signature；未使用中文字、句境或字典預期音反推,"v3.4 blind-test contact index; offline nearest distance=0.563, margin=5.848; visual confirmed ㄉ; runtime exact-only"
+BIAOKAI_W5,b174d2da2434520f4ef2d6fcb98d2f8c0577f19d,ㄇ,120,2,v3.4 盲測：跨冊輪廓距離僅用於產生候選；再直接檢視未知 CFF 注音符號字形並對照 Unicode 注音符號確認；執行期仍只接受 exact signature；未使用中文字、句境或字典預期音反推,"v3.4 blind-test contact index; offline nearest distance=0.663, margin=7.901; visual confirmed ㄇ; runtime exact-only"
+BIAOKAI_W5,df746fda8daea332a3c275d5ebd1ad83fd7216e7,ㄧ,121,25,v3.4 盲測：跨冊輪廓距離僅用於產生候選；再直接檢視未知 CFF 注音符號字形並對照 Unicode 注音符號確認；執行期仍只接受 exact signature；未使用中文字、句境或字典預期音反推,"v3.4 blind-test contact index; offline nearest distance=0.391, margin=12.646; visual confirmed ㄧ; runtime exact-only"
+HEI_W5,4006586f5ab3bc15fd4b1604a1661feac7b21d7d,ㄎ,122,2,v3.4 盲測：跨冊輪廓距離僅用於產生候選；再直接檢視未知 CFF 注音符號字形並對照 Unicode 注音符號確認；執行期仍只接受 exact signature；未使用中文字、句境或字典預期音反推,"v3.4 blind-test contact index; offline nearest distance=0.170, margin=4.630; visual confirmed ㄎ; runtime exact-only"
+HEI_W5,96ef452f0ee782b56e7b4e92c1b413b6d8d9aebf,ㄞ,123,2,v3.4 盲測：跨冊輪廓距離僅用於產生候選；再直接檢視未知 CFF 注音符號字形並對照 Unicode 注音符號確認；執行期仍只接受 exact signature；未使用中文字、句境或字典預期音反推,"v3.4 blind-test contact index; offline nearest distance=0.269, margin=5.393; visual confirmed ㄞ; runtime exact-only"
+BIAOKAI_W5,02984e7b1de269e0d1d095735ad659df47f04f95,ㄍ,124,1,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #1; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,10377ebc13a51673b00797cf618237df8c4cd26e,ㄈ,126,1,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #3; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,108b98ca5fbc8cb448eaa5b80f7b18c0953264f2,ㄟ,127,6,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #4; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,1328777d6883344fc512211f6be86f33931b922b,ㄤ,128,4,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #5; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,1bbd46f7be31909e99b5052d0a824ea458691401,ㄊ,129,2,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #6; offline distance/hint not used as truth; runtime exact-only; v3.5 audit correction contact #6
+BIAOKAI_W5,1f492dddf0c33c826bdf2cbd1c4a46ca591c1985,ㄞ,130,1,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #7; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,25b062b02950b8809cbc8f07bb37074cff2827cf,ㄐ,131,7,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #8; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,284ae0a9f9b2ff6557eac261900a97d7df743dc0,ㄢ,132,5,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #9; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,2bfc54efe61cde344ef726acc6182a5fa2a08295,ㄦ,133,2,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #10; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,2f63df1e4ab189aad08f1c078e0c78cc998b3f26,ㄣ,135,1,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #12; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,31195e2052b26286009ce5ac4beac2215c10a52a,ㄋ,136,5,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #13; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,34aa3627e939aa761d0eee40384f518d241e48b4,ㄢ,137,6,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #14; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,3912995a2f506162b0eaeb865f46347600657c46,ㄓ,138,1,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #15; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,3aee79cd61b3d5bdb39b2fd675224690fbbf84a3,ㄣ,139,5,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #16; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,3ffa348391eef5ade801ffbb053a4fa4774b170e,ㄔ,140,5,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #17; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,40d36885493c3e7a4e85c9d66506d5cd50bab23c,ㄑ,141,1,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #18; offline distance/hint not used as truth; runtime exact-only; v3.5 audit correction contact #18
+BIAOKAI_W5,40e6a5d09874b21db7b26f4599fa486f125c2831,ㄝ,142,2,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #19; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,48969b6f73f7e833e03bae389fe4d1f9473df4aa,ㄎ,143,3,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #20; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,4fceab8e5c1a120bc0a21b29295a29e7dffdd567,ㄠ,144,2,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #21; offline distance/hint not used as truth; runtime exact-only; v3.5 audit correction contact #21
+BIAOKAI_W5,50ab29d8a32f73b63cc70f77a2f7e646ca00c9c9,ㄛ,145,3,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #22; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,5505ad4793d11445b1d3eab7513a583d4bd3b16e,ㄠ,146,4,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #23; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,55bb2ae95f99a48171e65cba2553245ad933aa3e,ㄥ,147,6,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #24; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,57ad62ca5b8f8be65f5afe90634633cbfe4581b3,ㄞ,148,7,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #25; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,5da93b6fe5661916a0da39d8b0419668e98bc797,ㄚ,149,4,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #26; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,63cc98bde917b37da0ddc5f0e864a04ad835c8a8,ㄠ,151,1,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #28; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,74d457b0c43f32a3a729d2f932a5f980ad4e2ca2,ㄙ,153,2,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #30; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,7a2e65b53a5fac7f0f781406b25037adacefe618,ㄏ,154,2,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #31; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,7cb5355b7d8fdca35a87846a9608cb2b3a42859b,ㄤ,155,4,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #32; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,7e69cdceae0e129c1680a025b1ad0ed0e56d8e32,ㄚ,156,1,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #33; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,86ed5a2cb395b1ea8092bf40efc7c69591d81836,ㄍ,159,2,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #36; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,938f7dee9aa8fc3dd9e0d969764e208e06dc145b,ㄏ,161,3,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #38; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,940a2df90429b1837f5ec51cbcc51e0bacc222a8,ㄟ,162,6,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #39; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,9f5ad28da71c6d0e7434a1e17f33dac615f0206d,ㄌ,164,6,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #41; offline distance/hint not used as truth; runtime exact-only; v3.5 audit correction contact #41
+BIAOKAI_W5,a041d1848a71b1f60db6cdf7a166be4181d1e04e,ㄩ,165,2,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #42; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,a12589008d91368bacfca838f567663ed9d83f41,ㄡ,166,3,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #43; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,a1efe137649a3c508a662c60cc7ba67547d81045,ㄝ,167,1,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #44; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,a4023003c72d9c4cd3c1cab1c7a9024b2764835d,ㄊ,168,4,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #45; offline distance/hint not used as truth; runtime exact-only; v3.5 audit correction contact #45
+BIAOKAI_W5,a4de8aefe8553ee2e11515919dcdbb820c8352f3,ㄩ,169,4,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #46; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,a9a53466a8017c1270f0adad6ac99f0ebe8258cb,ㄥ,170,3,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #47; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,a9d1b76239faf11b04eaaaf8064284ba1e97c93a,ㄘ,171,2,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #48; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,ae42ace52303f89155e84170036e09c829e03e97,ㄓ,173,2,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #50; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,aedb29393793fa9037f7c3c91299a78bd3aa6534,ㄗ,174,1,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #51; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,b011a70baa8ad691ed8d4d1f89007587685b92d9,ㄓ,175,2,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #52; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,c1979187661e3756b580bab595c201a2e114e1ee,ㄡ,177,4,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #54; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,c30e65b874c98571277c2e38ff46359846bf534e,ㄅ,178,1,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #55; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,c4815050c41914a72b8e65d652aaa1ae5cdc3261,ㄒ,179,1,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #56; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,c9092d262c98f96810730d43d3180c54ceff76a0,ㄆ,180,5,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #57; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,c919d9248839fdfba145610e93904526788114b4,ㄛ,181,1,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #58; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,d0ef1cb36ca724393fc5ae2dbdc72e52df85ef75,ㄖ,182,2,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #59; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,d19bf4c5eb83fd33e9dc885f837a110875956bc5,ㄔ,183,2,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #60; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,d4aba4a420997ce159c13c911110311729566700,ㄣ,184,5,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #61; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,d700d460b815d9816a79c035a6589c0b5df006f8,ㄐ,185,5,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #62; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,df95caf088d6c2dca2d9943886fec47ae8e9ed79,ㄗ,187,3,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #64; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,e870e67b074ca3bf103886dfa0f575062039597f,ㄅ,188,6,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #65; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,ed113814d2ea92483614f1c4cda67f4451660740,ㄑ,189,5,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #66; offline distance/hint not used as truth; runtime exact-only; v3.5 audit correction contact #66
+BIAOKAI_W5,efbd9d3b5a46cf419a7f01f463997debcf356856,ㄌ,190,5,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #67; offline distance/hint not used as truth; runtime exact-only; v3.5 audit correction contact #67
+BIAOKAI_W5,f1dc57b47e071a6583bc09a8da5bbe9a16644295,ㄩ,191,5,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #68; offline distance/hint not used as truth; runtime exact-only; v3.5 audit correction contact #68
+BIAOKAI_W5,f277c4a8db6f4959fac3b60871b6a21f6db00962,ㄗ,192,2,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #69; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,f39c6520bae2f7ebdaee5d01fd2513cc87672d25,ㄎ,193,1,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #70; offline distance/hint not used as truth; runtime exact-only
+BIAOKAI_W5,fb215a708ada94458e8b7872d2b239b7413dd809,ㄔ,194,3,v3.5 盲測：直接檢視 isolated CFF 注音符號輪廓並對照注音符號參考表；不使用中文字、詞境或預期注音；執行期仍只接受 exact signature。,v3.5 isolated-glyph verification; original blind-test contact index #71; offline distance/hint not used as truth; runtime exact-only
+KAICHU_MD,04d00752b3b0e59f18b73cf136b0f389350338a1,ㄈ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,1f358b76c74eb8434b588ee5eb1f458b65261728,ㄤ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,54d4d21efe661f6e23eca810b6d8cf031622ddee,ㄒ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,0e48c9f6fc5db7e39ed97418ffe1518c7e5e9fdf,ㄩ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,8df8e53662713080d6e2caf1540074466370c2b1,ㄝ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,60951584214afdf518162eee6bcbd47948b44b15,ㄌ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,c4ad3b3a6cc79e1bdc16c6af79aeb903aa4b8143,ㄜ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,169adc3dc797d93261d010de4215d2b4f7855fc3,ㄗ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,42062a2501f58006f3ef50ea933962649a50cd3a,ㄡ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,17879f18684d177be0f3813886667798c792cbd0,ㄨ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,a7d6a5c10a7222c407daec257b23704db60f4722,ㄕ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,d1cb6599648497162179a97cd98634b4db4e5929,ㄨ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,df2c34eba6f345238f600f02ced67dc4b9c6af54,ㄣ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,0493f8803eed75824f715db7fc1520b8a12c6e74,ㄉ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,0432fcbe4c8009f4c3b6af943eae2d49f340ea1a,ㄠ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,78680f68b5033d543bae4ae5c3a05a7727d62a4c,ㄓ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,6b7a5380d0f5ce7cbf506feaeca72ee7e0f5aac7,ㄣ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,8320b416644e7f6fdcb33848e2a53b7255513b6c,ㄕ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,3292f87445f34b5f6db288a8a9e45a0f606a2b87,ㄨ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,00aff89d7a5ba7d2f4d32f5211361a7169521ffc,ㄉ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,b8f6c0623aab8feafa4afd24be07fea8dc0d4b27,ㄧ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,aa41780d1dcd11a373bcd6408fab464c25570449,ㄤ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,65a84c435df6a58b53ad24e9858a2cde3b33d185,ㄑ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,4c23273732851af8c2b25c2c32c028870f590457,ㄧ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,eda3302ac642592c9118fda3adcb308041ba0648,ㄚ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,17ea539d9a621f9c212904930a7b913ef1820241,ㄢ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,46c65b7b0d08c156cb691e989c54e313cca43264,ㄩ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,a7b4cb33a73b667627c6ebb7054af1d16043d879,ㄢ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,56c323fc64821742b9636b85e54e5cfc9269e503,ㄞ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,91dec3002dfe514d7754049ca0f35e06ad42aa74,ㄅ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,04274696750d7d92953231e0f35246934a116b96,ㄢ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,8b67697cb21aae128c5d36a664abff7c0c8aa89d,ㄟ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,a381c665503a5706d239c8ac99e69b7f17c26b21,ㄐ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,a3c41f981ce443d55cdcd0c1489520fcfbf4c877,ㄧ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,21631c701abb69797f4d2dbe669dc1efebda6388,ㄓ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,f8b5ce6e2a747dbbf34fcf24aec710210782feda,ㄎ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,6b959ff689765a42bcfa097a8ff5731c8092a4af,ㄢ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,48052b1e0905dde1e1e7c1c8488da22120db065f,ㄐ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,b9005cc500fbe53e72c7acdc46d8bf93f7635edc,ㄢ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,4014cc9bf31f7e19f4d85b81b783145757dab10d,ㄉ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,007751a43bb92f3ec50b657f53e098f2a50cf12c,ㄥ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,afff336de11dc835df44a682db0bbec33440614a,ㄇ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,7557e0875b8905469d68df0e3dd7956575b09a53,ㄨ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,ac583baa12dab4caee8d4d07dfc04dd934857b39,ㄍ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,246b920b014f372b0b4ccba732ee43062876de50,ㄨ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,a14d163c3174dc180a6621d6bb148479b3a72223,ㄍ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,197ce99cdef1d512225fc046794a9b5503e0603b,ㄠ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,41bd947ed0c13ed06e0035b9868eb6363df70823,ㄧ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,0dca9996fa4227ae13987de391e4370d42922fc8,ㄡ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,be8a490930e87e7f256a60eec0031d64a66c1c31,ㄏ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,611a3aa86e50e8cbf11a10c516c88c9b526525c6,ㄢ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,76afe69e083e21694e84d76e29f93029ed7e3672,ㄐ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,70e5632038c88a7432ad5e932e2977480abd49eb,ㄧ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,2db4a463be4a1796b2e05bebc6dbfadff3c8783a,ㄝ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,7eeab34065cef31ed3b32749c5a5283d7e54e819,ㄗ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,545f2ee418ddf8cce036d7d1db38389a94977bb1,ㄓ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,474fdbff741aebe66b93248564bf649302b5513f,ㄘ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,1ca8274da4bc228e6dd95e75a5fba253b7105eb6,ㄢ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,ab6678f4cf1b6c70d9650a373a608806826ee165,ㄥ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,9c9e37e15b98220160ffa2e24c2ee66473c40018,ㄧ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,3db8d53d6533e49d8dfb93de7b95fb67f94801ee,ㄟ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,f0d493ef039a7358432995ec20ee41682b79b854,ㄏ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,e04045ae244f67e1a77600d9e209caf4a33e458a,ㄜ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,2eac4bb60e499cef6cc12390984050e32bcceff1,ㄅ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,8a8f713de3b32c59b0bffc8cfa794b5d350402d5,ㄧ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,dfd1229eaa4ac95aea7f6cbb7d13345e3bb057ae,ㄋ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,792408ac5e6fa3dc5285774b8216f5380bee7cdb,ㄓ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,c399c190b11e8ab392a3dbbe2dbf4eb24e58d282,ㄣ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,530904275ae24025231d2911e070fbac8fa2e5f9,ㄇ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,2410b66d83d0267bd930b8e06dc57f11d4f5384a,ㄔ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,7d9faba9cf1f44118ad609763c6144e859a2599b,ㄤ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,6da686773fb2dd7fe20883c755822dcbd167ea68,ㄔ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,4867b1fac0305654aaed694181df85c9cd572037,ㄚ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,7023156ae51f7f441626779316887113dc8860d3,ㄆ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,9470802fe08af46110c0087087df246e62484f6f,ㄢ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,e3d4bc6083a881d283b9ab1ebb44c805293ae6b0,ㄋ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,e41aae06df9968ff3f1604b12d45be7fe06516eb,ㄅ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,934ec3397ce5c33742fa4ea7aed65b6f14ca8e87,ㄨ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,db771ae24db192a9a5d75cf19e2ccc97506710de,ㄢ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,cae692ee9d5674f61acee4adf941765df80f95c4,ㄠ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,ff48449e509c4f3743b1d1369d6e7221d26131d9,ㄜ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,c881aced746b68dd89783a30c8edf8c962285854,ㄩ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,5fb4b08f1350ab3c3c514d7c34b572144ddf24c0,ㄏ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,07acec71e96f382911783a862fbee65d47e73b56,ㄞ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,3520106b3e3418af7d9651b8cf146bd764ffb027,ㄣ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,e34c5e571a306cbd54d772b6bc55b93d3c55ef4e,ㄌ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,bb72addd497b0915fd4bbbbfcaf143c9b91e26c3,ㄧ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,9684fa523742866bc798fc5c56ef2ac2ac468994,ㄤ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,6b64d13af6e67b4d93917c5b44bfe9023fc1bf4d,ㄐ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,a8895471fef3f93f30e010be0a9aa71297b17a40,ㄧ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,df558e1c017034caf0794a2a3310c134520243e3,ㄙ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,e09001b1acd59cd51eec3c57991fd6b045ff96ab,ㄡ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,ee922323e334270dccfd29f33a297ef65da9cfd5,ㄨ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,e01fe4e32f29d0f1b972e54b454fa51d156d9dde,ㄊ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,cea5e119f0b4d4037269559930dee3d3d5cd8fad,ㄅ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,09afa626f73d00e5505be6cfc858c78152fb617f,ㄚ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,7545bc1df729a70cdc692aa704da75add18e2f32,ㄓ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,4a5d4610629a65b215d8d0c5ba6392a00104179a,ㄖ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,27e628beb492dafcc2578c155241ecdb52d5f071,ㄝ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,a00de69ff6d1c1bc31e2f5bb3470887559d4a002,ㄙ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,ce828ebdb5f01c496710d6adbbf576cdf31a40b8,ㄢ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,a8c570330efac209a3c862ca6b8749403274f861,ㄉ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,c606ff31321f45bfc4ae12b4ef9267145a508248,ㄛ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,64834f7f64f614b55f13d96e9402e717099394a4,ㄠ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,9633a533e4022b61feebf0592066c8d8554f4323,ㄏ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,f7cb4027eacb2d551862de83cd049b90da81f9b9,ㄡ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,3e0598b31e8ae78c72fccc4b8bf7575003d468f0,ㄣ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,3837c4732bebd7e2b435f81ecd1a2fbaa044c50f,ㄓ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,f8f0775202418d299a9ef080c53b89e537885565,ㄜ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,4667db561363a8b2eb6c0f3fe16462c0006df528,ㄍ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,7f49ada00a618ada39e83582cb169bab2db50fe0,ㄧ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,df74c533bc17ba01e74e2c012fe905cdf58aa0e2,ㄣ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,b45a32cb31f890a2cdee2560b46dd0bc2a821715,ㄒ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,f68eb0b028af0dfb733a63b9b98e65bca5a84d26,ㄒ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,9c6acd64e31eb37927131b430ff818860588962c,ㄢ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,4d561587e9a4a417ec6392eb8e7513e438b9ceca,ㄓ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,6c8b290e8d377af938e19ce6be08edc6c2037176,ㄧ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,6d30114f9a56d87d93c338ad3046f5666f5f2d01,ㄧ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,4faa3cd648e522aab8727827e41b489f53f2a6ad,ㄊ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,e3df2515fa5d5ba48b4aaec7225917d5a58dd23c,ㄚ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,8cce7ded813722ad0a05f067531641cfc4910593,ㄏ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,2de91553ea21fe48504ccb5871d43fed999e14c9,ㄆ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,9d21242f8858a8e96446a299d10f9a01e2ea541b,ㄟ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,6514b92651c6e9863a92ca11fbaeb8f0c9c1408b,ㄠ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,3812596a0b8f4551f41f0eb2fb497a8783d1c392,ㄟ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,45122a75e9a8b5f8a20e891d491eccec0ea560a4,ㄢ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,1c149830249564413733899201d8513c9ef4e553,ㄥ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,4f97b1aa74f86efab6b46ab2977a352c95055ef1,ㄗ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,4305e32144be8534be69ecfbc5454412c2e1180c,ㄨ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,f951cf8a7ebd28391a52de44bac8bbcd8535c684,ㄑ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,f273e364ebfc7c47c90c8932a1bf4c4356222fb1,ㄖ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,a588fcda3b490f229d5495fa195ef80de9d08386,ㄅ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,6167f0625df3db8f265fe001eb78bbb079f68a87,ㄤ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,b7fe3641473b4da409cf1397547d2c88d84efb22,ㄨ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,74b4074407a5f9caf21d6a4c18437344b587845c,ㄝ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,fd4b372dae2e1850f650b5c63538c87e75fe2719,ㄅ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,bd93ebe2ae01b784d0017da0c889b22b74e86ef9,ㄥ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,613fc6277ba62a7ddd82cf869fe7963b5666d611,ㄩ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,0a0a072b8d6f7da17cf7841024a57ca9ed69ddac,ㄎ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,81958c327f3ca99331672ad48693de9c2f8b5ee5,ㄣ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,ad7ed04ecb98323baa3b252d2c97b357a0c87895,ㄢ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,fa2f1e7fe9ae0374a907b2187615fdedf706f67e,ㄚ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,e713f46774a87221f707a8969e1d739a2541fa8e,ㄇ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,d643a865a079807aaf77627d2780d82c430eda8c,ㄚ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,a00932017b581747d3061e3658b5464d45bd5be4,ㄠ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,188a81f1ed421424865fe4c980ea4a1347ba5d9c,ㄆ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,831cc3350af42831de7c4f240cf5abac694951b7,ㄥ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,93c30156068ee15d19a37b2a24f609a3b8b371fc,ㄨ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,f747463d29ad065e79bc1cbc1647e06160376fff,ㄊ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,d8d5cf24b31772772011868b0f257de5635339dd,ㄡ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,6176cbce84def0307b55abc18908e503bbf62939,ㄧ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,269f25f6d1bac01ecd4a3a0cbe6ff037f5575989,ㄢ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,bf36ca6ed60fd0368d7799029c1f960eb4d92f36,ㄓ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,342deb766701eac33248f7c1222eec1a8fc97ea9,ㄟ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,55a2fa4a35a9adc12ef905fc275ce303c432ab0b,ㄅ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,7989682f801cbcb7a4e8877c631efacba995eb9c,ㄊ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,ada4e6a57238c4509e2150d8810ebb0e0da20cc9,ㄈ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,0d28df5fcd8fc0b29a755afcb196cc06558f5e8f,ㄣ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,0ee180368621f20102dc2f4886e3e054c4a1cdd3,ㄆ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,436309edad9b9c0799f457d4afaca3649b487392,ㄡ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,faefb0326199fca4dfe4b8b69bacb01836a99ac2,ㄥ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,be0a8aad02a9f4730a0262ed14fef3988c85a3cb,ㄧ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,83243e240e47c03d41805d28fd1d1af39d824f9d,ㄕ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,a456b26f127d8198641cb971eb3fd25419869a85,ㄕ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,27a50ebfa14cedde776f94cb6a60caea8c60f190,ㄧ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,688774703dc30434468d845471742b44794b00b0,ㄥ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,b6424cd620c5978e5240b3ce0d816d2e3c8ea469,ㄇ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,b04a382fb13f05290c9378d3a8cc5371fb6850f9,ㄤ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,7d443f3dc73038a982bbae5f9ea109f466ba89d2,ㄎ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,0ca123e9bee70900d983b97c0b3b9ddffbe3da8c,ㄢ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,d85c73c8309e8a28a18abc7c93a2c9a3619dcdcd,ㄨ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,f1465ad0670337dd6fe5537de40576c957f70183,ㄟ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,e243d7d8f8a3b4fe0b206350575db3b467c6599e,ㄇ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,4237f7debc9176efedb91fe70a229765cfae2d59,ㄥ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,36a8122be71367fde2a4efed8d5ea6c3273cfe79,ㄡ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,b846081467fba75e00f15a80d40a2d6e52e9e698,ㄘ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,7b963e708d277b791ee0542338b736ed0d3a65f8,ㄣ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,7a7543f3790224460f11581cfde1fa02d90c069a,ㄖ,,,v4.5 交叉家族CID共識＋原始CFF輪廓重新目視覆核,v4.3誤標為ㄇ；v4.5重新檢視右側首符號輪廓確認為ㄖ，且同GID在2個獨立已知樣式家族均一致為ㄖ。
+KAICHU_MD,43a769214512dc3d2be8699d458ad6fa85c0cfbc,ㄤ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,7653b0e4df44a0845381f6b8dcbc1dbef7df3658,ㄢ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,f5420634f8074c422c442d3f3f6070dac97c8861,ㄛ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,8a774d91f478043867047f98985736a13d507afc,ㄣ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,53b558d08b8b63d3d955d7d185f51fe342ed7d8b,ㄥ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,fbd1c25a718facc36fbea6281f7d977155127f47,ㄙ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,7baa53f5c8fd296fbc60c5b907c2e1eafbf209fc,ㄥ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,1d0d3e199a64a528febed9ce4bb6fe1177b981e9,ㄥ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,216d1522218761b5f2b78972b2670ecfddf6ff0d,ㄢ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,f228a41621b2213bec3105844ded6b23869d0ceb,ㄞ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,9ede3a8f6edb7e7727724f7302c35aa287eef48d,ㄚ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,99c0f9b94e1edf41f747c9aed18d3717f81add07,ㄣ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,0561fa2edba2a384f55e9c082f9676be04e6f60c,ㄟ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,07f63a8ed0c7fd57fb4d9a6638772d2251d4ec3e,ㄚ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,af943e1fc2c3bf19ddad21c2d04ffadb06fbb7e3,ㄣ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,cdd1037650ccda1ea52c76eac30e72bb81082c62,ㄧ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,1afe7ad1389115f212185ad666e29ea49849ba68,ㄢ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,f529ea0f4440efc3547ec3603a1def31ffa69e78,ㄠ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,e5a474f94ab94a69d3948943db87864b3d7185f8,ㄡ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,fbb8d9bf80007c5e2d69d76c73647474be3b279e,ㄓ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,ab02ff2e45c2484106134697384eb9fd4d4725ed,ㄌ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,f16d8867d1e9a20807809eb0ad632e4a23551251,ㄠ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,8204c4bdd3b31bf4817dadd6ff8c3a6bffbafe3c,ㄢ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,237faf5d0fb81f3f6ad03489c344cfd1d1636c38,ㄘ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,38463ead631aba3ec5117bd3720a43781988e7a3,ㄠ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,e1faf9f257581a70e806c9b679f45859be56b970,ㄞ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,a0972d96fa0d5e4c48328034718a9262151a9caa,ㄟ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,53f2d1b276e9145b50204fffaa30e9a8955a6bcc,ㄞ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,e146e5f1874fbf521396620534ae1eaebf792480,ㄧ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,d94501c89377e71f874f49583a79c7b8af439c63,ㄣ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,5c896bbb3551a4e2f543c3b6e63548eae23bb014,ㄥ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,359dc85aa697502fd4c0e5ccc92c31ce1656d013,ㄦ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,779e07a3af74e3d44f1c2a2015bd7a690bce8c07,ㄛ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,d2da34ef03110ffdf60d89b177145435d1ae6501,ㄤ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,ac3c7b14548ff2c56f5243a54c7a6af429e6c8da,ㄥ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,97002fe6c2f3ab29d9f89d08b8829623a5f1c944,ㄕ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,0cc7b2796dc47a0493ee3f0e7abced21e3e2bade,ㄚ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,814493dc2af701b762d1b3d3347db930c8b1bba7,ㄕ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,a7530f8b401b98c9714158c9a48ffc16154ae91d,ㄡ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,6614928fa366f70e4777a7ef8851e8f875941c6a,ㄕ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,261f5be072ec0c376de1015bfea754fa4a0d647b,ㄊ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,1406a7317929fdd44ff52ae049849cf5f7bf5788,ㄡ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,2946be78db971761174471abb3825d56589b60b1,ㄡ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,12e01366293acf87492c73f14363d54d9a8269c0,ㄓ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,d36f336c1a55692261da15988f0a58ebb60ad7ff,ㄠ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,21f4eac655a3aaa7fb9e8b2cd5dd16729a2c18b3,ㄗ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,2fc110d45a7dce731fb80e152fed1e07f42fd06d,ㄨ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,bbd891d53a6b4d44ae4013cdc7c98ded6d907068,ㄟ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,7ad9d1f535b2a2b4b32a7b3979e8aea1b4deb76d,ㄞ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,6e50e9b8100c3eaea691a5bb1587aa0dd8ff8015,ㄢ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,5f4d00ee875d8a733d95f4c404fbee13c6f89ffc,ㄞ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,bfbdad85f98a312b0625d1aa228117dc4169f619,ㄆ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,0de07f561ab316fed665971f41a605715e293009,ㄇ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,7c166048ab04eb60a805c9aaf940dfc63fd87f44,ㄩ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,b3403b13a896f3b7d0adb018310e9c8d1bceba97,ㄞ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,751d1c43f93ebec69a7c5261d0f56251eee30cf1,ㄢ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,1978a3c351dddea191643c6e08600cc0d74a5bab,ㄢ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,1c626c7239778fcd220eba28223507c7455e4ecf,ㄟ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,e540a432c3475f9d0b67362ca67ece77b9b251c6,ㄔ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,6c56cbb8ebc9d47c334f5a46ed0d181016cdb942,ㄇ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,46e6e8bf51e48c3ce9b711456e8d0948a742e275,ㄨ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,1c118b47330cdb286f2eda36d09d85f6ed216b9f,ㄆ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,a109097146846858f8af0ad0070e47904b94e444,ㄛ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,8b5edc9e0f74d263c3d050f8c5a36935e8d21c17,ㄟ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,d24ecddc0a71d4737770f8ba072f5e7e98468f4b,ㄡ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,0fcb0aeeacbcb916af37444034870d49a4566b9a,ㄗ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,d35875e89c29a2ee8b637b15e7efa3c7d6a2a3c4,ㄛ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,e1908072ce2b40eddb52bbeacb541b91c90af3e8,ㄣ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,5fdea0d676ff1fcdcab534571b45fea7b9b44774,ㄢ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,b9d9fe3cfb5ad2f9e4f29335592db276c117cf83,ㄟ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,d880e8cfee970fbf25011f1f6094c02f5b8b6787,ㄥ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,228b0d5b94191a0d6634a2c52b1de6153349cd25,ㄧ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,85d08c68de0bfb5b17c245b82edf4e1bd6e4a149,ㄚ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,86985733a7019cb63bf1311d68feab632f873ac2,ㄣ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,daa5bf5f0f6fa08ae70287190ef6f9d4568998a0,ㄣ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,6513ede5f8e458ac2e3ad626da39417b8b8bc200,ㄥ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,c7892bf2b4f2a1b95b05e2fa7bbac2ff4666814f,ㄥ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,9b7256abe7baaaa1f3fa9ddf4cc73e29bf216794,ㄓ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,5dd6e3227149ff99511e4e15160006487098d607,ㄚ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,c22d6340eedca9c6324f24d5a410a85f115c759d,ㄟ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,d95dbe98d41963f23b0c31529d8fad4c988789ae,ㄛ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,112433449fb31361e79a3f52be9a3c1ce041b485,ㄨ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,d3fa2edff80e9cc842a0a9793fbb21d32f573091,ㄠ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,bf0d77497f8a6ea60a2e5831b4fd370320cc7985,ㄦ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,02c283b546682ede2ec8950b11b5b31709da7210,ㄞ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,a7dc6ad6d18d1c22e65525c239d8bb9e9f7063ca,ㄦ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,ffb4f69d01cdf0a0286822be6f2ac9f8ea4c43dc,ㄣ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,abf63679b5b1b429ace3eb35029c66e2d5b51bf9,ㄡ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,73d747386e99b2e1ece930372ccfda36be377634,ㄥ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,cfb2579ee9cd43a10b0d3e374be080da4fe1f04b,ㄢ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,bc68e752ea1c0e5e43bd2f419e7100710b3ce44c,ㄢ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,ee4b1ee6def16a9ca58fc266a0571121561bc184,ㄢ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,c8177117e54f69e27f16ff26daaa8c06441125ca,ㄢ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,d601f645013db3c2d7f88faea5c3bdb1d7d93437,ㄡ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,b804cfaef71b07dbea1d50b0317e3c7eb9ee0256,ㄣ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,ef2439711b6958a4de238f837c2909bccdf69a3c,ㄙ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,7a3d8b2157441745cebd352efa393e19166ebe68,ㄠ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,0d708c09d04bb0750c52824cf3808a55280308dd,ㄏ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,ee3edf36762bff94741910fcfdc9c48afbe647b1,ㄆ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,fdbdf279c85388d150dd7062b84b6a1fde071abc,ㄛ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,a35d036684c2c722d7e3b78963d9b124acb93bd4,ㄊ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,bfd145d3c9108688d0f5658ecf041f25d890082a,ㄟ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,22031c365ddf47149bb9214440d47123add5a247,ㄍ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,18747f24b205f48eb7a2452ece744e056f3a6103,ㄨ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,1132a341d6183a150d11890f77f59269de6e370d,ㄥ,,,v4.3 CFF 新家族：Unicode 多字型候選＋逐格直接視覺核驗,康軒 DFKaiChuIn；僅以注音 glyph 形狀判定，不使用中文字/詞義/句境反填。0fcb... 經直接視覺核驗由候選ㄒ修正為ㄗ。
+KAICHU_MD,34189ab60c305b49054e8bb887d42bb18f4e41c5,ㄞ,,107,v4.3 CFF 補充直接視覺核驗,康軒 DFKaiChuIn；放大原始 PDF 注音 glyph 直接確認為ㄞ，不以中文字/詞義/句境作為真值。
+KAICHU_MD,4addea2442ce4a74deffe9cc24022dc082a011c8,ㄞ,,27,v4.3 CFF 補充直接視覺核驗,康軒 DFKaiChuIn；放大原始 PDF 注音 glyph 直接確認為ㄞ，不以中文字/詞義/句境作為真值。

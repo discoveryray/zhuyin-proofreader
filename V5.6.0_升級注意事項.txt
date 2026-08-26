@@ -1,0 +1,10 @@
+注音校對工具 v5.6.0 升級注意事項
+
+1. 本版不是一次性遷移版。直接用 v5.6.0 開啟原本 v5.5.0／v5.5.1 同 schema 專案即可。
+2. 不需要因工具版本號改變重新跑整本。程式會先檢查 PDF bytes、資料資產與專案動態 actual 證據；相同就直接 reuse。
+3. 同一專案的 session_id 會保留，舊版人工/GPT 判定事件不會因升版自動作廢。
+4. v5.5.1 已匯出的 expected/GPT 工作簿，只要同一 session、同一 review identity、expected 資產未改變，升到 v5.6.0 後仍可直接匯入。
+5. actual／expected 雙證據鏈原則不變：actual 不得由 expected 推回；expected 不得由 actual 選音。
+6. glyph truth conflict 仍採 v5.5.1 隔離方式；全域 glyph promotion 衝突不會阻止 occurrence-local actual 修正。
+7. 仍會阻擋真正的資料錯置：PDF bytes 不同、核心資料資產改變、occurrence/review ID 無法對應、檔案損毀、schema major/minor 真正不相容。
+8. 若只有程式版本／decoder-resolver source hash 不同，改為稽核警告，不再要求整批重跑。

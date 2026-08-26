@@ -1,0 +1,250 @@
+﻿v5.6.1（2026-08-24）－零適用歷史回歸完成門檻修正
+- 修正全冊沒有任何適用 PDF occurrence regression（required=0, executed=0）時，regression gate 被誤判失敗的問題。
+- PDF occurrence regression 改為「所有實際 required 案例均執行完成且無 FAIL／NOT_EXECUTED／重複執行」即通過；0 個適用案例視為中性通過。
+- mandatory regression 仍維持原有硬門檻，必須完整執行並全數通過；本修正不放寬既有真實回歸案例。
+- 不變更 actual／expected 判定結果、session identity、證據資產或跨版本相容策略；既有 v5.6.0 完成專案可直接重新計算 completion gate。
+
+v5.6.0（2026-08-24）－跨版本相容與證據資產導向 cache
+- 以 v5.5.1 雙證據鏈／glyph conflict 隔離架構為基準，不做一次性遷移版。
+- 工具版本號不再是 session/cache 硬性邊界；同一 schema family＋同一 review identity 可直接跨版本續用。
+- 同一校對專案升版後保留原 session_id；人工/GPT occurrence 事件、expected 補建與 actual occurrence 修正可繼續沿用。
+- actual fingerprint 改為 evidence-assets reuse key：PDF SHA-256、actual 核心資料資產、該 PDF 依賴的專案動態 actual 證據會使 cache 失效；decoder version 與 decoder source hash 僅留作稽核，不再單獨使整批失效。
+- expected fingerprint 同樣改為 evidence-assets reuse key：expected 核心資料資產變更才重建候選；resolver version/source hash 僅留作稽核。
+- 可語意辨識 v5.5.1 舊 fingerprint components；升級到 v5.6.0 時，不需因 fingerprint 算法改版重解碼／重建候選。
+- 升版時會保存相容的舊 expected fingerprint，讓先前已匯出的 GPT expected/差異工作簿仍可在同一 session 直接匯入。
+- runtime asset manifest 的 tool_version 差異改為 warning；真正資料布局不相容、PDF bytes 改變、核心資產 bytes 改變、occurrence/review identity 錯置仍維持阻擋。
+- schema policy：ledger/session/workbook 仍為 2.6.0、review_id 仍為 2.5.0；未來只有真正資料布局改變才升 schema major/minor。
+- 回歸測試：139 passed、2 skipped。
+- 跨版本 smoke：先用原版 v5.5.1 建立單 PDF 專案，再由 v5.6.0 直接續跑；actual 與 candidate 均 reuse、session_id 保持不變，舊 v5.5.1 expected GPT workbook 可通過 v5.6.0 dry-run 匯入。
+
+v5.5.1（2026-08-24）－occurrence-local actual／global glyph truth 解耦與衝突隔離
+- 以 v5.5.0 雙證據鏈架構為基準；ledger/session/workbook schema 維持 2.6.0，review_id schema 維持 2.5.0。
+- actual occurrence 視覺修正與 reusable exact-glyph promotion 拆開：global promotion 衝突不再阻止已直接覆核 occurrence 寫入。
+- 新增 glyph_truth_conflicts.csv；同一 TTF raw-glyf SHA 或 CFF full-glyph SHA 出現互斥直接視覺讀音時，建立 GLYPH_TRUTH_CONFLICT 並停止全域泛化。
+- 衝突 TTF SHA 會從內建／使用者 verified fingerprint、OOF donor、shape-auto donor 與 target bridge 全部隔離，不再作為跨字型 exact donor。
+- 舊 user_verified_* global truth 在衝突後改標 QUARANTINED_CONFLICT，保留舊值供稽核但 runtime 不再載入為 VERIFIED_EXACT_GLYPH。
+- 發生衝突時，自動撤回同 exact glyph 中沒有直接 visual source provenance 的 propagated occurrence overrides；保留舊／新直接覆核 occurrence，其他位置重新 decode／重新進 actual review。
+- 新增 glyph_truth_provenance.csv，記錄 SINGLE_VISUAL_EVIDENCE、PROMOTED、OCCURRENCE_OVERRIDE、GLYPH_TRUTH_CONFLICT 事件。
+- glyph conflict registry 納入 per-PDF dynamic actual fingerprint；只有實際含該 exact glyph 的 PDF cache 失效。actual fingerprint schema 升為 2.8.0。
+- v5.5.0 session 列入 patch-level 相容版本；既有雙證據鏈專案可由 v5.5.1 驗證並安全刷新，不需回退到 v5.4.x。
+- 測試：133 passed、2 skipped；runtime source validation ok=True；單 PDF smoke pipeline 完成並正確停在 9 筆非終態。
+
+v5.5.0（2026-08-21）－actual／expected 雙證據鏈架構版
+- ledger/session/workbook schema 升為 2.6；review_id identity schema 維持 2.5。
+- 每個 occurrence 新增 actual_status 與 expected_status；state 僅為工作流程投影，不再拿單一 state 代替兩條證據鏈。
+- expected resolver 即使 actual 缺失仍照常執行；actual gap 不再造成 expected 空白或 stale expected 回補。
+- handbook 多讀音允許集合直接建立 expected_set，不再根據 actual 是否落在集合外才建立 expected。
+- completion gate 直接檢查 actual/expected lane counts；actual decode error 不再遮住 expected conflict/ambiguous/unresolved。
+- expected 人工／GPT事件只更新 expected lane；actual 未決時可保留 expected 證據，actual 修復後自動做 MATCH/MISMATCH。
+- expected GPT 輸出改為 lane-specific：純 actual 問題且 expected 已完成者不再重複輸出。
+- expected GPT stale 驗證改綁 immutable printed target/context + expected_asset_fingerprint；不再綁 mutable actual/resolver output。
+- GPT bundle 新增 expected preflight，再提交 actual，之後才提交 expected。
+- 動態 actual evidence 改為專案級「_專案證據/actual」；程式升級或換資料夾不再遺失專案人工/GPT actual 證據。
+- 實測單 PDF smoke：345 occurrence 中 4 筆 actual decode error 同時保有 RESOLVED expected；expected GPT 表只輸出另外 5 筆真正 expected／差異工作，雙 lane 分流成立。
+- 測試：130 passed、2 skipped；runtime source_validation_ok=True。
+
+v5.4.1 熱修版3（2026-08-21）
+- GUI 的 GPT 匯入合併為「匯入 GPT 判定檔（自動辨識）」；依工作表結構判斷 expected／差異或 actual，不再要求使用者先判斷匯入入口。
+- CLI 新增 --import-gpt-auto；檔名可任意更名，但若同時含 expected 與 actual 核心工作表會 fail-closed 拒絕，避免兩條證據鏈混用。
+- GUI 子程序非 0 結束時明確顯示「操作失敗」；只有成功匯入後才由重新產生的 pipeline_status.json 更新目前專案待處理數。
+
+﻿v5.4.1（2026-08-21）－單 PDF 增量 actual 更新＋人工修正閉環修正版
+- actual 動態 fingerprint 改為「每 PDF 依賴範圍」計算：occurrence override 只影響符合該 PDF 的規則；TTF／CFF 使用者驗證真值只在該 PDF 實際依賴其 exact glyph key 時納入 fingerprint。無關 PDF 不再因任一 actual 證據檔改動而全部失效。
+- 新增既有 actual workbook 的動態依賴抽取與 fingerprint 重封：新解碼工作簿先產生，再依實際出現的 TTF raw-glyf SHA／CFF style+完整 glyph SHA 計算最終 scoped fingerprint，避免用全域動態證據污染所有 cache。
+- pipeline 在開始寫檔前凍結一份已驗證 baseline manifest；後續即使受影響工作簿被改寫，未受影響 PDF 仍可安全沿用原 cache，不會因 manifest 輸出 hash 已變而連鎖失效。
+- CFF 跨檔批次新增 write-only-workbooks：仍讀取全冊 actual workbook 建立跨檔證據，但只改寫真正受影響的工作簿；其餘 XLSX bytes 保持不變。
+- expected candidate 也可增量重用：該 PDF 的 actual 未重解且 expected fingerprint 未變時，沿用既有 candidate；只有受影響 PDF 重新建立候選。
+- 人工 actual／GPT actual 匯入後的互動更新預設採快速模式：完成 ledger、session、pending、completion gate 與狀態更新，但延後重建大型「最終報告／技術稽核／expected GPT 表」。完成一批修正後再按「更新 Excel 報告」一次即可。
+- 修正「實際注音辨識有誤」證據已保存、更新流程跑完，但同一待判定頁仍殘留的問題：occurrence override 現在可兼容實體頁／課本頁差異與極小 stable-key 漂移；仍必須 char＋座標精確落在同一 occurrence，不會放寬成跨位置規則。
+- 人工 actual 修正新增硬性 postcondition：重新解碼後必須在新 ledger 中找到同一 occurrence，且 canonical actual 必須等於使用者提交值；否則直接顯示「actual 修正失敗」，不得假裝更新成功。
+- GUI 在修正成功且該筆已結案時會明確自動前進；若 actual 已修正但因獨立 expected／差異問題仍留在待判定，會顯示目前 actual 與剩餘 state 的原因。
+- exact glyph 群組由「待判定 occurrence」作 seed，但會納入同一 exact glyph 的既有 PASS／其他 occurrence，確保升格成可重用真值時能找到所有真正受影響的 PDF。
+- 安全邊界不變：decoder 程式／靜態 actual 資產改動仍會使全部相關 PDF cache 失效；只有動態人工/GPT actual 證據採依賴範圍增量更新。
+- 測試：97 PASS、2 個需要桌面 display 的 GUI 視覺測試在 headless 環境 SKIP；另以康軒三下 P136「西」真實 PDF 做人工 actual 修正 smoke，提交ㄒㄧ˙後 canonical actual=˙ㄒㄧ、state=PASS，單 PDF 測試專案約 24.6 秒完成互動更新。
+
+v5.4.0（2026-08-20）－actual 雙軌自我學習版
+- 新增 actual_review.py：將 ACTUAL_DECODE_ERROR／ACTUAL_UNRESOLVED 依 exact glyph identity 分組，可由 GPT 批次或人工 GUI 兩種入口處理，最後共用同一 verified actual evidence。
+- 新增「輸出 actual 待判定給 GPT／匯入 GPT actual 判定結果」。actual GPT 包不輸出 expected／應標答案，並移除 target Han 字欄；優先輸出 annotation-only 圖，whole-glyph 圖僅供定位。
+- 新增「實際注音辨識有誤／待建立」人工 GUI。人工只建立 actual 證據；完成後動態 actual fingerprint 自動改變並重新解碼。
+- TTF 使用 raw glyf SHA-256 exact learning；單例 USER_VERIFIED_SINGLE，至少兩個獨立 occurrence 一致後才升格 VERIFIED_EXACT_GLYPH。
+- CFF 自我學習改用完整整字 outline SHA-256，不再用 CFF 注音 full-signature 作可重用人工/GPT truth key。不同漢字即使共享相同注音 component signature也不互相傳播 correction。
+- CFF actual workbook 新增「CFF整字字形SHA256」稽核欄位；舊 workbook 無此欄時維持 occurrence-specific，需重新解碼後才可安全升格。
+- user_verified_glyf_fingerprints.csv／user_verified_cff_glyph_fingerprints.csv 與 occurrence override 都納入動態 actual fingerprint；不再要求每次人工學習都手動改 runtime manifest。
+- 工作階段 PDF 可依檔名＋原 PDF SHA-256 重新定位，純移動資料夾不再等同內容變更；bytes 不同仍拒絕。
+- 正式納入 v5.3.1 r3：聲調前後置 canonicalization、「課本其實正確」只補 expected、教材錯誤六閘門完成後自動下一筆。
+- 修正先前康軒三下 P122「那」的錯誤 occurrence override：高解析 PDF 原頁實際為ㄋㄚˇ；v5.4.0 只移除精確匹配的舊錯誤 patch，不用 expected 反填 actual。該位置重新由 CFF PDF glyph 解碼。
+
+v5.3.1 雙修正 Hotfix r2
+- 修正前一版 Hotfix 的 GUI 回歸：使用者在「課本其實正確」補建 expected 後，若仍有 mismatch，不再自動跳入「確認教材錯誤」六閘門。
+- mismatch 會保留為待確認並顯示 canonical actual／expected；只有使用者在主畫面明確按「確認教材錯誤」才進六閘門。
+- expected 與 actual 相同時仍自動 PASS 並前進下一筆；actual／expected 獨立證據鏈與聲調前後置正規化規則不變。
+
+v5.3.1 Hotfix（2026-08-20）－聲調位置正規化＋差異確認流程
+- canonical_bopomofo 將同一聲調的前置／後置寫法視為相同讀音：輕聲統一為前置（˙ㄒㄧ），二／三／四聲統一為後置（ㄒㄧˊ／ㄒㄧˇ／ㄒㄧˋ）。
+- 僅接受零個或一個聲調，且聲調只能位於整個注音最前或最後；多重聲調、聲調夾在聲韻中間會 fail closed，不會被靜默修正。
+- 人工 expected 輸入即時套用同一 canonicalization；例如 ˙ㄒㄧ 與 ㄒㄧ˙ 會儲存／比較為同一讀音。
+- 修正「課本其實正確」補充 expected 後若 actual 仍不相等，畫面停在同一筆卻沒有下一步提示的問題；現在會自動開啟「確認教材錯誤」六閘門視窗。
+- 若補充 expected 後 actual 與 expected 相等，仍由機械比較產生 PASS，正常移至下一筆。
+- 為避免破壞既有 5.3.1 工作階段與已輸出的 GPT 證據表，本 hotfix 內部版本號維持 5.3.1。
+
+v5.3.1（思考模式 2.5）－人工確認介面可用性修正
+- 修正「選擇／補充正確讀音」視窗在 Windows 125%／150% 縮放或較低解析度下，確認／取消按鈕被內容擠出視窗而無法操作的問題。
+- 彈出視窗改為「固定底部操作列＋可捲動內容區」；視窗尺寸會依目前螢幕自動限制，不再假設固定 720×510／760×620 一定放得下。
+- 可重用規則詳細欄位預設收合，只有勾選「儲存為可重用規則」後才展開，降低一般校對時的畫面高度。
+- 六閘門確認視窗同步採固定底部操作列與可捲動內容區，避免同類高 DPI 問題。
+- 修正 RULE_CONFLICT、EXPECTED_AMBIGUOUS 等狀態顯示空白停用按鈕；沒有合法動作的按鈕現在直接隱藏。
+- 人工確認主視窗也改用螢幕安全尺寸，避免主視窗在較小螢幕超出可用範圍。
+- 本版只修 GUI 版面與操作可用性；actual decoder、expected resolver 判音、ledger、completion gate、來源驗證與回歸邏輯均未改動。
+
+v5.3.0（思考模式 2.5）－校對員介面與報告重整
+- 核心原則：保留 v5.2.2 的 actual decoder、expected resolver 判音內容、ledger schema、review_id schema、來源驗證、fingerprint、regression 與 completion gate；本版不藉由簡化 UI 降低治理門檻。
+- 人工確認介面改為校對員用語：預設只顯示頁碼、詞語／句境、目標字、現標、應標與原因；occurrence_id、review_id、內部 state 等技術資訊移至「更多…」。
+- 主要操作改為情境式按鈕：「確認教材錯誤／課本其實正確」、「選擇正確讀音」、「補充正確讀音」、「稍後處理」。不再讓使用者從五個技術按鈕猜狀態機操作。
+- 六閘門由六個連續彈窗改成單一確認視窗；六項仍全部必須通過。確認紀錄自動產生基本內容，人工只需必要時補充備註。
+- 新增 RULE_CONFLICT 與既有 DIFFERENCE_PENDING_CONFIRMATION 的人工 expected 證據解決入口。人工不能直接指定 PASS；必須輸入 expected、獨立來源與詞境後，由程式重新機械比較 actual／expected。
+- 「課本其實正確」不是直接覆寫結論；只是在有較高優先／較適用來源時重建 expected 證據，actual 保持不動。
+- 主畫面改為「開始新校對／繼續校對／更新報告／查看報告／更多…」，並顯示目前專案狀態；已有工作階段時重跑完整流程會先警告。
+- 主畫面的詳細執行紀錄改為預設隱藏，只保留一行處理進度；需要除錯時才從「更多…」展開。
+- 最終 Excel 拆成兩層：日常「注音校對_最終報告.xlsx」只保留校對摘要、修正清單、待確認、人工與公司規則；完整 Occurrence Ledger、state views、集合對帳、來源稽核、回歸與技術資訊移至「注音校對_技術稽核.xlsx」。
+- GPT 證據表的 session/review 機器欄位改為預設隱藏，仍保留交易式驗證；新增「解決expected證據」action。
+- 人工補充 expected 時可選擇升格為「相同完整詞＋相同目標位置」的可重用規則；規則不讀 actual、不建立單字通用音，並以工作階段 snapshot 固定，衝突時 fail closed 回到規則衝突。
+- v5.2.1／v5.2.2 同 schema 工作階段可原地升級，保留 session_id、occurrence_id、review_id 與人工事件。v5.2.2 frozen resolver／ledger source hashes 維持不變，因此單純介面／報告升級不要求重建 actual 或 expected candidate。
+- 測試：新增規則衝突人工解決、差異重新建立 expected 後才能 PASS、前台簡化報告／後台完整技術稽核等測試。
+
+v5.2.2（思考模式 2.5）－公司規範與同形詞語義 resolver 修正
+- 公司明示規範：『寶寶』第二字 expected=˙ㄅㄠ，以詞內位置規則建立；不讀取 actual，第一字不受影響。
+- 東西：僅在吃／哪些／什麼／買等可見物品義語境選 ˙ㄒㄧ；方位語境仍可選 ㄒㄧ；其餘維持衝突。
+- 好玩：僅在『好玩的…』或與『有趣』並列等可見有趣義語境選 ㄏㄠˇ。
+- 看看：第二字依簡編本義項與可見句法區分；獨立觀察／觀賞義選 ㄎㄢˋ，V+看看 的暫且試試義選 ˙ㄎㄢ。
+- P50『5不1沒有』仍無足夠獨立 expected 證據，維持 EXPECTED_AMBIGUOUS，不用 actual 反推。
+- 支援同 schema 的 v5.2.1 工作階段／人工六閘門事件原地升級至 v5.2.2；review_id/occurrence_id 不重算。
+- actual decoder 與 actual 資產未變；僅 expected fingerprint 更新。
+
+v5.2.1（思考模式 2.5）－真實整冊回歸聚合與 resolver 安全修正
+- 修正分冊 PDF 歷史回歸聚合：同一 case 在全冊只計一次；非所屬分檔的 NOT_EXECUTED 不再重複進全冊分母。
+- 歷史「確認錯誤」只驗證現版獨立結果：舊錯若已在現版修正為 expected，回歸應 PASS；不得要求舊錯 actual 持續存在。
+- 簡編本完整詞條先於專案單字例詞；新增一般化跨詞界競爭防護，無法證明詞界時棄權。
+- 「一」採現行 2.5 規則並保留明示序數／數字等固定例外；「不」維持既有保守策略：去聲前接受ㄅㄨˊ／ㄅㄨˋ集合，非去聲前ㄅㄨˋ，後字 expected 未決時 fail closed。
+- 新增簡編本完整詞「應當」正向規則，避免「應當作…」誤與「當作」形成跨界衝突。
+- 修正 mandatory 真值：簡編本「寶寶」為ㄅㄠˇ ㄅㄠˇ；非去聲「不」測試改用後字唯一的「不敢」。
+- 歷史回歸定位改為「詞條 span 必須涵蓋目前 target position」，可用 target_occurrence_index 區分同詞重複字；歷史 actual 不參與現版 expected。
+- controller 版本與 actual decoder 版本解耦；僅 expected/controller 修正不使未變的 actual decoder code fingerprint 失效。
+- 真實三下 P32「有效期限」經原頁視覺確認無可見注音，更新精確 structural exclusion 的現版 font_xref；P8「小寶寶」、P150「得1分」、P156「東西呢」等跨行文字只重建可見句境，不提供讀音答案。
+- 本版未修改 actual 字型／CFF 解碼分支；actual fingerprint 可與 5.2.0 共用，expected fingerprint 會更新。
+
+v5.2.0（思考模式 2.5）－治理層破壞性升版
+- 建立以 PDF SHA-256、實體頁、穩定字形鍵／font／glyph／注音元件、字元與正規化座標組成的 occurrence_id；正常 ID 不使用 Excel 列號，必要 fallback 會明示降級並偵測碰撞。
+- review_id 僅由 occurrence_id 與 schema 版本衍生，不再因分類、actual 或 expected 改變；所有工作簿與匯入流程先做 occurrence_id／review_id 唯一性檢查。
+- 新增唯一權威 Occurrence Ledger、互斥終態／非終態狀態機及全量集合對帳；任何漏列、重列、多重權威分類、摘要不符或 view 聯集不符都 fail closed。
+- PASS 只能由現版 actual ∈ expected_set 的機械比較產生；確認教材錯誤須現版 actual／expected 證據鏈完整、彼此獨立、位置與來源優先序已覆核，且六個確認閘門全數通過。
+- GPT／人工匯入改成 evidence transaction：整份報表先驗 schema、session、snapshot、ID、action 與全部狀態轉移；任一列有誤整批拒絕，不接受直接填「課本正確／教材錯誤／特殊略過」。
+- 核心 CSV／XLSX 資產改由固定 manifest 驗 schema、欄位、列數、重複鍵、注音 canonicalization、完整讀取筆數與 SHA-256；缺檔、改欄、損壞或 hash 不符時輸出 PIPELINE_BLOCKED，不得沿用舊報告宣稱完成。
+- actual 快取加入 PDF hash、decoder 版本與程式碼 hash、actual 資產 hash、CFF batch 演算法及 consensus hash；expected 資產不參與 actual fingerprint。
+- candidate 另有只涵蓋 expected 資產與 resolver 程式碼的 fingerprint；expected 更新只讓候選失效，不讓 actual cache 失效。未列入 manifest 的自訂 actual／expected 資產一律拒絕。
+- 新增 36 案例 mandatory regression。要求案例數與實際執行數都大於 0、ID 集合完全一致、0 NOT_EXECUTED、0 重複且 0 失敗，才能通過 completion gate。
+- 「處理結束」與「校對完成」正式分離：只有 actual／expected 100%、所有未決／衝突／解碼錯誤為 0、全量集合對帳及所有回歸均通過，才輸出 PROOFREAD_COMPLETE。
+- v5.1.5 session、workbook、review ID 與決策記憶不相容；舊決策只隔離到 legacy_orphan_decisions.json 供稽核，不會靜默遷移成現版終態。
+- 現版 session 加入完整 payload SHA-256；ledger、回歸統計或來源記錄被修改／截斷時，匯出、匯入、重產、快取與最終報告一律拒絕。
+- 本輪依核准範圍未改簡編本判定、詞界、單字 fallback、變體音、來源優先序與一／不規則。現行 frozen resolver 的 mandatory suite 為 36/36 已執行、28 PASS、8 FAIL，因此此過渡版本會正確顯示「處理結束；校對尚未完成」。
+
+v5.1.5 - 內建教育部《國語辭典簡編本》自動 expected
+- 內建《國語辭典簡編本》資料 dict_concised_2014_20260626.xlsx。
+- expected 建立新增「完整詞條最長精確命中」與「單字主音唯一」兩層；均不讀取 PDF actual。
+- 統一用字手冊／專案明示規則仍優先；一／不、量詞個等既有位置／變調規則保持優先。
+- 完整詞條同等特異但讀音衝突時棄權，不強選；已知跨詞界假命中（中的、比肩／比鄰、左傳球、背書包、轉成功）保留負向防護。
+- 三下 17,751 座標回歸：原 v5.1.4 的 8,569 個「未建立預期音」位置全部取得唯一 expected；未建立預期音 0；既有回歸失敗 0。
+
+v5.1.3（2026-08-17）
+- 依翰林3下 Codex 漏檢根因更新：禁止把「前版相同／前次判正確／注音外觀未變」當成本版正確證據。
+- 新增「未建立預期音」工作表與預期音資料覆蓋率；沒有候選不再等同通過。
+- 最終「完成」硬門檻改為：實際注音100%安全解碼＋預期音覆蓋缺口0＋待人工0＋解碼錯誤0＋回歸失敗0。
+- 歷史回歸不再救援現版多音未決項目；只有現版已獨立判出 actual/expected 一致或差異時，回歸才可驗證／升格。
+- 修正分冊回歸範圍：只測目前 PDF 實際存在的課本頁，避免同冊其他分檔案例被誤算 FAIL。
+- 修正「重新產生報告」快取問題：每次重產報告都重新讀取目前實際注音／候選工作簿，不能沿用舊工作階段的覆蓋率或回歸失敗統計。
+- 判定記憶安全化：未解碼、多音未決與規則衝突禁止自動沿用；只在現版差異候選且詞境、actual、expected、規則證據一致時才可自動套用。
+- 將已確認的常見 A一A（動一動、找一找、搖一搖、比一比、猜一猜、試一試、說一說、跳一跳、轉一轉）轉成一般現版完整詞語規則，避免依賴歷史回歸才能判讀。
+
+v5.1.2（2026-08-17）
+- 撤銷 v5.1.1 的 A一A「所有ㄧ聲調均可接受」例外。
+- 依使用者確認規則統一判定「一」變調：去聲字前標ㄧˊ；陰平、陽平、上聲字前標ㄧˋ。
+- A一A 與其他「一」字語境使用同一變調規則；不再因為是重疊形式而放寬。
+- 輕聲前未在本次使用者規則中定義，若無更高優先完整詞語規則則保留待判讀，不自行推定。
+- 更新 GPT 匯出說明與 62 筆歷史 A一A 回歸真值；其中「轉一轉」實際ㄧˊ依新規則改列錯誤，其餘依後字聲調重新判定。
+
+v5.1.1
+- 依公司政策更新 A一A 注音校對：A一A 中間「一」只要實際音節仍為ㄧ，不論聲調均不列教材錯字。
+- 新增公司政策例外層，僅此明確例外優先於《統一用字手冊》；其他注音規則仍以手冊為最高優先。
+- 移除 A一A 的「直接升格確認錯誤」機制；歷史 A一A 錯誤回歸改為公司政策確認正確控制。
+- 「一年級／一分鐘／一名／一人／一左一右」等非 A一A 語境不受影響。
+- 維持 v5.1 前流程：本機規則→人工確認或匯出 GPT Excel→匯回；不含 GPT API 自動判讀。
+
+注音校對工具變更紀錄
+
+v5.2（已撤回的研究分支，不包含於目前正式單機版）
+- 曾研究「本機程式＋OpenAI GPT API」殘餘候選自動判讀模式；保留人工確認及 Excel 匯出／匯入兩條既有流程。
+- 使用官方 OpenAI Responses API 與 JSON Schema 結構化輸出；預設模型 gpt-5.6，GUI 可自行修改模型名稱。
+- API 金鑰可在 GUI 本次輸入，或使用 OPENAI_API_KEY 環境變數；金鑰不寫入校對資料檔。
+- GPT API 僅接收候選文字證據，不自動上傳 PDF 或頁面影像；request 設定 store=false。
+- 新增安全門檻：只有高信心、非規則衝突、非未解碼且不需回看 PDF 的教材錯誤／課本正確／特殊略過，可自動接受。
+- 中低信心、規則衝突、疑似解碼問題全部保留人工確認；文字型 GPT 不得直接判定解碼錯誤。
+- 新增 AI判讀結果.json、最終報告 AI 欄位與「AI判讀稽核」工作表；人工介面可顯示 AI 建議、信心、建議注音及理由。
+- GPT API 自動接受只套用目前工作階段，不自動污染跨教材的使用者判定記憶。
+- 新增「清除 AI 自動判定」，可撤銷 GPT API 自動接受與 AI 稽核結果而不影響人工確認。
+
+v5.1
+- 將「統一用字手冊113.10.04.docx」的可安全機讀注音規則納入一般校對，並設為專案最高優先來源。
+- 新增固定資料檔「統一用字手冊_注音規則.csv」與「統一用字手冊_字音限制.csv」；本次由來源手冊產生 378 條完整詞語／詞境規則與 73 條單字讀音限制。
+- 新增手冊位置規則：爸爸、媽媽、爺爺、奶奶、哥哥、姐姐、弟弟、妹妹、叔叔、伯伯、舅舅、公公、婆婆及謝謝的第二音節輕聲，依同詞內字元位置判斷。
+- 手冊完整詞語／詞境規則先於所有既有規則；手冊單字讀音限制會過濾下層字典／詞語規則，不允許下層規則反向覆蓋。
+- 手冊自身若同一文字形式存在不同語義讀音，保留衝突並棄權，不以低優先規則硬選。
+- 加入 build_handbook_rules.py，可用新版手冊重新生成固定檔名規則資料。
+- DOCX 中僅由專用注音字型呈現、文字層未包含明確注音符號的少數項目不自動猜讀音。
+
+v5.0
+- 新增「審次注音差異檢查」模式，可比較上一審與本審 PDF／整冊資料夾。
+- 上一審與本審獨立解碼與 CFF 批次自舉，避免跨審互相提供解碼證據。
+- 頁面先依課本頁碼與中文字序列配對，頁內再做中文字序列對齊；配對過程不使用注音值。
+- 報告分成「最高風險_同字異音」「文字與注音皆變」「新增刪除注音字」「無法安全比較」「頁面配對稽核」。
+- 同字異音會額外顯示兩審 font、字型是否變更、上下文與位置，直接對應排版／注音子字型非預期切換風險。
+- 任一側未安全解碼即棄權，不把不確定案例硬判成審次差異。
+
+v4.9
+- 修正 PDF 文字層同基線片段順序錯亂：同一區塊內只依幾何 x 座標恢復閱讀順序，修正「小識知→小知識」與「說說一→說一說」等情況。
+- A一A 重疊動詞「一」在教育部直接規則成立時，自動升格為已確認錯誤，不再要求 GPT 重複判讀。
+- 新增「螳臂當車／當＝ㄉㄤˇ」完整詞規則。
+- 新增「一左＝ㄧˋ」「一右＝ㄧˊ」精確相鄰詞境規則；更正先前把「一右」誤判為教材錯誤的 GPT 判斷。
+- 依 115 國小健體 1 上原 PDF 直接字形覆核，新增 17 個 TTF exact raw-glyf SHA-256 指紋與 exact 正規化輪廓簽名，覆蓋原先 21 筆解碼漏失；不使用中文字、詞境或字典反填 observed。
+- 補「某些／某＝ㄇㄡˇ」「蛇拳／蛇＝ㄕㄜˊ」「球兒／兒＝ㄦ」精確詞境規則，讓上述解碼漏失修好後不會因多音字再次掉入 GPT 待判。
+- 新增 23 筆 A一A 正向回歸、2 筆「小知識」、1 筆「螳臂當車」、1 筆「一左」、1 筆「一右」、以及「某些／蛇拳／球兒」負向回歸。
+
+v4.8
+- 修正 Windows 圖形介面執行日誌的中文亂碼：所有子程序強制 UTF-8。
+- 內部資料檔改用固定檔名；發行包不再夾帶 v12/v13/... 等歷史重複資料。
+- 輸出工作簿與輸出資料夾改用固定檔名；新版本會覆寫同名結果，不再持續生成 _v4.x 檔。
+- 加入版本／PDF雜湊快取判定：只有同版本且 PDF 未變才續跑略過；程式升版後會重新計算並覆寫舊結果。
+- 加入『已確認判定記憶』：只在字元、完整所在行、局部詞境、實際注音、候選注音與可見性完全一致時自動沿用既有人工判定。
+- 納入康軒115國小健體3上已確認的 396 筆殘餘判定記憶；同教材重跑不必再逐筆判 396 筆。
+- 加入『輸出 GPT 候選報表』與『匯入 GPT 判定報表』。
+- 人工確認與 GPT 匯入的判定會寫入使用者判定記憶，日後完全相同詞境可自動套用。
+- 補上 fonttools 安裝需求。
+
+v5.1.4 - 未建立預期音補建流程
+- 「輸出 GPT 候選報表」新增「待補預期音」工作表，將未建立 expected 的覆蓋缺口正式送入後續流程。
+- GPT/人工只補建 expected 與依據；程式再以 PDF actual 與 expected 機械比較，避免語意答案反填 observed。
+- 補建 expected 只寫入目前工作階段，不自動提升成跨教材永久規則。
+- 人工確認介面新增「補建預期音」，未建立 expected 時不能直接按教材錯誤/課本正確。
+- 最終報告新增「已補建預期音」，預期音覆蓋率會依實際剩餘缺口動態更新。
+- GPT 報表保留既有「待判定候選」流程，同時支援舊格式報表匯入。
+
+v5.4.1 零 occurrence／專案狀態第二次熱修（2026-08-21）
+- 修正 collect_manifest 將合法摘要數值 0 以 `value or -1` 誤判成 -1，導致刀模等零 occurrence PDF 在 3/3 出現 `actual summary total: 0!=-1`；candidate 的兩個 0 摘要欄位同步修正。
+- 第一次分析若已完成 1/3 actual 與 2/3 candidate、但在建立工作階段前失敗，下一次會先嚴格驗證既有輸出；全部 fingerprint/hash/schema/payload/set reconciliation 通過才直接續跑 3/3，否則完整重跑。
+- pipeline_status.json 於 1/3、2/3、3/3 更新；僅供進度顯示，不取代封存工作階段與 completion gate。
+- GUI「目前專案」優先讀 pipeline_status；即使尚未產生校對工作階段.json，也能顯示處理中或 PIPELINE_BLOCKED，而非誤稱新專案。
+- GUI 每 0.5 秒自動刷新目前專案狀態。
+
+
+[Hotfix 5 - 2026-08-21]
+- GPT expected-only 匯入改用 action-scoped safe rebase；actual-only refresh 不再使 expected 判定表整批 stale。
+- actual 修正只撤銷依賴舊 actual 的最終差異確認，保留獨立 expected 證據。
+- GUI GPT 匯入支援多選並自動排序 actual -> expected；正常流程不再要求手動維護 occurrence override CSV。

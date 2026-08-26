@@ -1,0 +1,656 @@
+{
+  "schema_version": "2.6.0",
+  "tool_version": "5.6.1",
+  "policy": "思考模式 2.5；runtime 不得自動更新 SHA-256",
+  "assets": [
+    {
+      "name": "moe_concise_dictionary",
+      "chain": "expected",
+      "path": "《國語辭典簡編本》資料 dict_concised_2014_20260626.xlsx",
+      "kind": "xlsx",
+      "sha256": "a9a4fd7259180113bfae2e94110eae87ac4dcf0bfcc91a6437c3ad4773ab7865",
+      "required_columns": [
+        "字詞名",
+        "字詞號",
+        "多音排序",
+        "注音一式",
+        "變體類型 1:變 2:又音 3:語音 4:讀音",
+        "變體注音"
+      ],
+      "min_rows": 45000,
+      "expected_rows": 45130,
+      "unique_key": [
+        "字詞號"
+      ],
+      "duplicate_value_columns": [
+        "字詞名",
+        "注音一式"
+      ],
+      "bopomofo_columns": [
+        {
+          "column": "注音一式",
+          "mode": "syllable_sequence",
+          "allow_empty": true
+        },
+        {
+          "column": "變體注音",
+          "mode": "syllable_sequence",
+          "allow_empty": true
+        }
+      ]
+    },
+    {
+      "name": "project_polyphonic_dictionary",
+      "chain": "expected",
+      "path": "一字多音-字典檔.xlsx",
+      "kind": "xlsx",
+      "sheet": "Table 1",
+      "sha256": "446859517b9ee497a942e9d89c15587e72ee8eae1cf63c4160a4f5a142359f30",
+      "required_columns": [
+        "char",
+        "readings",
+        "examples",
+        "tags"
+      ],
+      "min_rows": 1600,
+      "expected_rows": 1682,
+      "unique_key": [
+        "char"
+      ],
+      "duplicate_value_columns": [
+        "readings",
+        "examples",
+        "tags"
+      ],
+      "allow_identical_duplicates": true,
+      "bopomofo_columns": [
+        {
+          "column": "readings",
+          "mode": "annotated_single",
+          "allow_empty": false,
+          "exempt_values": [
+            "單獨、數字前\"ㄧ\";輕、四聲前\"ㄧˊ\";一、二、三聲前\"ㄧˋ\"",
+            "ㄩㄢˇ;敬而遠之、「君子遠庖廚。」"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "pronunciation_lexical_rules",
+      "chain": "expected",
+      "path": "pronunciation_lexical_rules.csv",
+      "kind": "csv",
+      "sha256": "ed6fd7dc05cf49c9ab78fb6853656f71fb547837bb0e7c57e8cf5f7c88a9d9f1",
+      "required_columns": [
+        "rule_id",
+        "priority",
+        "mode",
+        "target_char",
+        "phrase",
+        "expected_reading",
+        "excluded_phrases",
+        "source",
+        "pdf_contains",
+        "evidence_level"
+      ],
+      "min_rows": 1700,
+      "expected_rows": 1736,
+      "unique_key": [
+        "rule_id"
+      ],
+      "duplicate_value_columns": [
+        "expected_reading",
+        "phrase",
+        "target_char"
+      ],
+      "bopomofo_columns": [
+        {
+          "column": "expected_reading",
+          "mode": "single",
+          "allow_empty": true
+        }
+      ]
+    },
+    {
+      "name": "handbook_pronunciation_rules",
+      "chain": "expected",
+      "path": "統一用字手冊_注音規則.csv",
+      "kind": "csv",
+      "sha256": "94ec5cf41da7551f1abdf63b4ff61bc29333635d54292a07f82cb06c0bde8015",
+      "required_columns": [
+        "rule_id",
+        "priority",
+        "mode",
+        "target_char",
+        "phrase",
+        "expected_reading",
+        "source",
+        "evidence_level"
+      ],
+      "min_rows": 350,
+      "expected_rows": 382,
+      "unique_key": [
+        "rule_id"
+      ],
+      "duplicate_value_columns": [
+        "expected_reading",
+        "phrase",
+        "target_char"
+      ],
+      "bopomofo_columns": [
+        {
+          "column": "expected_reading",
+          "mode": "single",
+          "allow_empty": true
+        }
+      ]
+    },
+    {
+      "name": "handbook_pronunciation_constraints",
+      "chain": "expected",
+      "path": "統一用字手冊_字音限制.csv",
+      "kind": "csv",
+      "sha256": "96778d9b85aacc51ccd73d859c503fdb358c5d3aac0d06adfb6997cdbd18876e",
+      "required_columns": [
+        "char",
+        "allowed_readings",
+        "source",
+        "source_section",
+        "note"
+      ],
+      "min_rows": 70,
+      "expected_rows": 73,
+      "unique_key": [
+        "char"
+      ],
+      "duplicate_value_columns": [
+        "allowed_readings"
+      ],
+      "bopomofo_columns": [
+        {
+          "column": "allowed_readings",
+          "mode": "single",
+          "allow_empty": false
+        }
+      ]
+    },
+    {
+      "name": "pdf_occurrence_regressions",
+      "chain": "expected",
+      "path": "pronunciation_regressions.csv",
+      "kind": "csv",
+      "sha256": "96a4d63e5f0c7dbbd943cafed21993d83a14a1f87dd425018acf999f4cc5a729",
+      "required_columns": [
+        "case_id",
+        "pdf_contains",
+        "page",
+        "phrase",
+        "target_char",
+        "actual_reading",
+        "expected_reading",
+        "status",
+        "source",
+        "note"
+      ],
+      "min_rows": 150,
+      "expected_rows": 166,
+      "unique_key": [
+        "case_id"
+      ],
+      "duplicate_value_columns": [
+        "actual_reading",
+        "expected_reading",
+        "status"
+      ],
+      "bopomofo_columns": [
+        {
+          "column": "actual_reading",
+          "mode": "single",
+          "allow_empty": false
+        },
+        {
+          "column": "expected_reading",
+          "mode": "single",
+          "allow_empty": false
+        }
+      ]
+    },
+    {
+      "name": "mandatory_regression_cases",
+      "chain": "expected",
+      "path": "mandatory_regression_cases.csv",
+      "kind": "csv",
+      "sha256": "25b25d812d6ad40e25d0891121f8203dec03a9c0e92b88eb6265d3e7a0068509",
+      "required_columns": [
+        "case_id",
+        "context",
+        "target_char",
+        "target_index",
+        "expected_resolution",
+        "expected_set",
+        "required_matched_phrase",
+        "forbidden_matched_phrase",
+        "control_type",
+        "note"
+      ],
+      "min_rows": 30,
+      "expected_rows": 36,
+      "unique_key": [
+        "case_id"
+      ],
+      "duplicate_value_columns": [
+        "context",
+        "target_char",
+        "target_index",
+        "expected_set"
+      ],
+      "bopomofo_columns": [
+        {
+          "column": "expected_set",
+          "mode": "single",
+          "allow_empty": true
+        }
+      ]
+    },
+    {
+      "name": "character_overrides",
+      "chain": "expected",
+      "path": "character_overrides.csv",
+      "kind": "csv",
+      "sha256": "605e27fed2dea54873421b1fd9cb9b870c4b5cff65031c62617e765a27becf6b",
+      "required_columns": [
+        "pdf_contains",
+        "physical_page",
+        "x0",
+        "y0",
+        "original_char",
+        "corrected_char",
+        "actual_reading",
+        "stable_key",
+        "source",
+        "note"
+      ],
+      "min_rows": 1,
+      "expected_rows": 2,
+      "unique_key": [
+        "pdf_contains",
+        "physical_page",
+        "x0",
+        "y0",
+        "original_char"
+      ],
+      "duplicate_value_columns": [
+        "corrected_char",
+        "actual_reading"
+      ]
+    },
+    {
+      "name": "source_context_overrides",
+      "chain": "expected",
+      "path": "source_context_overrides.csv",
+      "kind": "csv",
+      "sha256": "8ecde58da4d65c0352aef2daff4d2b1e40d895df17ada850a1a94113990256a0",
+      "required_columns": [
+        "pdf_contains",
+        "physical_page",
+        "target_char",
+        "x0",
+        "y0",
+        "context_text",
+        "target_index",
+        "source",
+        "note"
+      ],
+      "min_rows": 10,
+      "expected_rows": 15,
+      "unique_key": [
+        "pdf_contains",
+        "physical_page",
+        "target_char",
+        "x0",
+        "y0"
+      ],
+      "duplicate_value_columns": [
+        "context_text",
+        "target_index"
+      ]
+    },
+    {
+      "name": "zhuyin_component_map",
+      "chain": "actual",
+      "path": "zhuyin_component_map.csv",
+      "kind": "csv",
+      "sha256": "53a5369e96f60a552aeae6503b1b2584741bf3930facedf1f4d273048c90b291",
+      "required_columns": [
+        "font",
+        "zhuyin_component_id",
+        "bopomofo",
+        "verification",
+        "notes"
+      ],
+      "min_rows": 1300,
+      "expected_rows": 1384,
+      "unique_key": [
+        "font",
+        "zhuyin_component_id"
+      ],
+      "duplicate_value_columns": [
+        "bopomofo"
+      ],
+      "bopomofo_columns": [
+        {
+          "column": "bopomofo",
+          "mode": "single",
+          "allow_empty": false
+        }
+      ]
+    },
+    {
+      "name": "font_compatibility_groups",
+      "chain": "actual",
+      "path": "font_compatibility_groups.csv",
+      "kind": "csv",
+      "sha256": "e15300cd4ee0e23258c642c5fe749bb6163561729a608f180717b7317df55443",
+      "required_columns": [
+        "group_id",
+        "font_regex",
+        "notes"
+      ],
+      "min_rows": 5,
+      "expected_rows": 6,
+      "unique_key": [
+        "group_id",
+        "font_regex"
+      ],
+      "duplicate_value_columns": [
+        "notes"
+      ]
+    },
+    {
+      "name": "cff_bopomofo_symbol_map",
+      "chain": "actual",
+      "path": "cff_bopomofo_symbol_map.csv",
+      "kind": "csv",
+      "sha256": "c2db9748ec04ed5457f772539e4c4fbf7bf5008f4bc7a410795cbd5a2956efc5",
+      "required_columns": [
+        "style_group",
+        "signature",
+        "bopomofo_symbol",
+        "verification",
+        "notes"
+      ],
+      "min_rows": 700,
+      "expected_rows": 746,
+      "unique_key": [
+        "style_group",
+        "signature"
+      ],
+      "duplicate_value_columns": [
+        "bopomofo_symbol"
+      ],
+      "bopomofo_columns": [
+        {
+          "column": "bopomofo_symbol",
+          "mode": "single",
+          "allow_empty": false
+        }
+      ]
+    },
+    {
+      "name": "cff_crossfamily_cid_consensus",
+      "chain": "actual",
+      "path": "cff_crossfamily_cid_consensus.csv",
+      "kind": "csv",
+      "sha256": "9953988a45ea28b9e1214b1fa9c3e6d9e02e23f3c5562d8e39284f676cf35e33",
+      "required_columns": [
+        "reference_mode",
+        "variant",
+        "glyph_id",
+        "body",
+        "style_support_count",
+        "style_groups",
+        "conflict",
+        "conflict_detail"
+      ],
+      "min_rows": 2500,
+      "expected_rows": 2589,
+      "unique_key": [
+        "reference_mode",
+        "variant",
+        "glyph_id"
+      ],
+      "duplicate_value_columns": [
+        "body",
+        "conflict"
+      ]
+    },
+    {
+      "name": "ttf_xref_component_overrides",
+      "chain": "actual",
+      "path": "ttf_xref_component_overrides.csv",
+      "kind": "csv",
+      "sha256": "693b06d52f4314c980c4b06bc3a4484812d85c1d762413d97b295928db9a2151",
+      "required_columns": [
+        "pdf_contains",
+        "page",
+        "font_xref",
+        "font",
+        "zhuyin_component_id",
+        "bopomofo",
+        "verification",
+        "notes"
+      ],
+      "min_rows": 90,
+      "expected_rows": 100,
+      "unique_key": [
+        "pdf_contains",
+        "page",
+        "font_xref",
+        "font",
+        "zhuyin_component_id"
+      ],
+      "duplicate_value_columns": [
+        "bopomofo"
+      ],
+      "bopomofo_columns": [
+        {
+          "column": "bopomofo",
+          "mode": "single",
+          "allow_empty": false
+        }
+      ]
+    },
+    {
+      "name": "ttf_verified_component_transforms",
+      "chain": "actual",
+      "path": "ttf_verified_component_transforms.csv",
+      "kind": "csv",
+      "sha256": "1c4429794ee93ea720a610b66899d6a8734ea9ff685b1599bbff9d2dbf6ed08f",
+      "required_columns": [
+        "target_font",
+        "target_component_id",
+        "actual_zhuyin",
+        "source_font",
+        "source_component_id",
+        "target_glyph_sha256",
+        "confidence"
+      ],
+      "min_rows": 400,
+      "expected_rows": 455,
+      "unique_key": [
+        "target_font",
+        "target_component_id",
+        "target_glyph_sha256"
+      ],
+      "duplicate_value_columns": [
+        "actual_zhuyin"
+      ],
+      "bopomofo_columns": [
+        {
+          "column": "actual_zhuyin",
+          "mode": "single",
+          "allow_empty": false
+        }
+      ]
+    },
+    {
+      "name": "ttf_verified_glyf_fingerprints",
+      "chain": "actual",
+      "path": "ttf_verified_glyf_fingerprints.csv",
+      "kind": "csv",
+      "sha256": "1710cace49cc7f2d797b163c022701fd65d572e2d9e26fb8cc24f5014fedf526",
+      "required_columns": [
+        "glyph_sha256",
+        "bopomofo",
+        "source_font",
+        "source_gid",
+        "verification",
+        "notes"
+      ],
+      "min_rows": 200,
+      "expected_rows": 225,
+      "unique_key": [
+        "glyph_sha256"
+      ],
+      "duplicate_value_columns": [
+        "bopomofo"
+      ],
+      "bopomofo_columns": [
+        {
+          "column": "bopomofo",
+          "mode": "single",
+          "allow_empty": false
+        }
+      ]
+    },
+    {
+      "name": "ttf_verified_outline_signatures",
+      "chain": "actual",
+      "path": "ttf_verified_outline_signatures.csv",
+      "kind": "csv",
+      "sha256": "d00e60764d976fbd19934f20399d5fa9326cae12039fbd45a5f9973368a8f4a0",
+      "required_columns": [
+        "outline_signature",
+        "bopomofo",
+        "source_count",
+        "source_examples",
+        "verification",
+        "notes"
+      ],
+      "min_rows": 1500,
+      "expected_rows": 1563,
+      "unique_key": [
+        "outline_signature"
+      ],
+      "duplicate_value_columns": [
+        "bopomofo"
+      ],
+      "bopomofo_columns": [
+        {
+          "column": "bopomofo",
+          "mode": "single",
+          "allow_empty": false
+        }
+      ]
+    },
+    {
+      "name": "ttf_verified_mapping_corrections",
+      "chain": "actual",
+      "path": "ttf_verified_mapping_corrections.csv",
+      "kind": "csv",
+      "sha256": "e7176b983f027f18d1883026caa845191670b4a1bed640f7bb37d7c2c125040b",
+      "required_columns": [
+        "font",
+        "component_id",
+        "glyph_sha256",
+        "old_reading",
+        "new_reading",
+        "source_book",
+        "evidence",
+        "verification",
+        "notes"
+      ],
+      "min_rows": 5,
+      "expected_rows": 10,
+      "unique_key": [
+        "font",
+        "component_id",
+        "glyph_sha256"
+      ],
+      "duplicate_value_columns": [
+        "new_reading"
+      ],
+      "bopomofo_columns": [
+        {
+          "column": "new_reading",
+          "mode": "single",
+          "allow_empty": false
+        }
+      ]
+    },
+    {
+      "name": "ttf_verified_symbol_templates",
+      "chain": "actual",
+      "path": "ttf_verified_symbol_templates.csv",
+      "kind": "csv",
+      "sha256": "0c7949b01411615782bab1e61ebcbfc61e6aad13e238d6be5e33edd25c4ec5fa",
+      "required_columns": [
+        "template_type",
+        "outline_signature",
+        "label",
+        "support_keys",
+        "support_fonts",
+        "source_examples",
+        "validation",
+        "notes"
+      ],
+      "min_rows": 600,
+      "expected_rows": 633,
+      "unique_key": [
+        "template_type",
+        "outline_signature"
+      ],
+      "duplicate_value_columns": [
+        "label"
+      ]
+    },
+    {
+      "name": "structural_detection_exclusions",
+      "chain": "actual",
+      "path": "structural_detection_exclusions.csv",
+      "kind": "csv",
+      "sha256": "d9b685b83514d66aeb4626a714d22b7f14f48dd2149f5a63c30ac90168f94573",
+      "required_columns": [
+        "pdf_contains",
+        "physical_page",
+        "page",
+        "target_char",
+        "font_xref",
+        "font",
+        "glyph_id",
+        "zhuyin_component_id",
+        "x0",
+        "y0",
+        "source",
+        "note"
+      ],
+      "min_rows": 1,
+      "expected_rows": 2,
+      "unique_key": [
+        "pdf_contains",
+        "physical_page",
+        "target_char",
+        "font_xref",
+        "font",
+        "glyph_id",
+        "zhuyin_component_id",
+        "x0",
+        "y0"
+      ],
+      "duplicate_value_columns": [
+        "source",
+        "note"
+      ]
+    }
+  ]
+}

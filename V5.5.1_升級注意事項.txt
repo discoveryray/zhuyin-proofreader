@@ -1,0 +1,13 @@
+注音校對工具 v5.5.1 升級注意事項
+
+1. 本版以 v5.5.0「雙證據鏈架構版」為直接基準，不回到 v5.4.x 熱修線。
+2. ledger/session/workbook schema 仍為 2.6.0；v5.5.0 工作階段屬 patch-level 相容，可直接用 v5.5.1 繼續。
+3. actual fingerprint schema 升為 2.8.0。第一次以 v5.5.1 進入既有 v5.5.0 專案時，受新版 actual decoder／dynamic evidence 規則影響的 cache 會依 fail-closed 規則重新驗證。
+4. 新增 _專案證據/actual/glyph_truth_conflicts.csv 與 glyph_truth_provenance.csv。程式會自動建立，不需人工編輯。
+5. 同一 exact glyph 出現互斥 visual actual 時：
+   - 直接覆核 occurrence 仍保存修正；
+   - global reusable truth 進 GLYPH_TRUTH_CONFLICT；
+   - 該 SHA 停止作為跨 occurrence／跨字型 donor；
+   - 先前沒有直接 visual provenance、只是被 global promotion 帶入的 occurrence override 會撤回並重新解碼。
+6. 本版不使用 expected、詞義或字典去決定 actual；glyph conflict 的建立只來自互斥 visual actual evidence。
+7. v5.4.x 工作階段仍不是 v5.5.x terminal completion proof。若要把舊 v5.4.x actual 證據帶入 v5.5.x，應使用獨立 migration 流程，不要手工改 CSV。

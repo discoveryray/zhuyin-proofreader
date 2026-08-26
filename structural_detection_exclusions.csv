@@ -1,0 +1,3 @@
+﻿pdf_contains,physical_page,page,target_char,font_xref,font,glyph_id,zhuyin_component_id,x0,y0,source,note
+115國小健體3下課本,33,32,限,5187,DFKaiShu-SB-Estd-BF,2395,460,414.318,230.761,PDF原頁4x可見層＋isolated component 視覺核對（2026-08-15）,P32 圖中「有效期限」沒有可見注音；gid460 是漢字複合字形的右側部件，非注音。排除 shifted-component-only 假陽性，不計入注音分母。
+03-115國小健體3下課本-L02-三審,9,32,限,164,DFKaiShu-SB-Estd-BF,2395,460,414.318,230.761,PDF原頁180dpi可見層獨立視覺核對（2026-08-18）,P32 圖中包裝標示「有效期限」沒有任何可見注音；gid460 是漢字複合字形部件，非注音。依現版三審分檔 PDF 的 xref=164 更新精確結構排除；不計入注音校對分母。
