@@ -4,17 +4,22 @@ import json
 from typing import Any, Mapping
 
 
+# These epochs are semantic compatibility boundaries for result-affecting
+# algorithms.  They are not tool versions, source hashes, or release counters.
+# Bump only when the same inputs may produce different pronunciation results;
+# the initial value represents the existing v5.6.2 semantics.
+ACTUAL_DECODER_SEMANTICS_EPOCH = "1"
+EXPECTED_RESOLVER_SEMANTICS_EPOCH = "1"
+
+
 # These are cache-compatibility fields, not a list of every fingerprint
 # component.  Audit/provenance metadata (tool versions, source hashes, and
 # convenience aliases) must not become an accidental cache boundary.
-#
-# A future semantics epoch/profile must be added to the applicable tuple.  The
-# fallback then fails closed for old/missing/different values instead of
-# silently ignoring the new contract field.
 FINGERPRINT_COMPATIBILITY_REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
     "actual": (
         "fingerprint_schema_version",
         "reuse_policy",
+        "actual_decoder_semantics_epoch",
         "pdf_sha256",
         "actual_asset_hashes",
         "dynamic_actual_evidence_hashes",
@@ -22,8 +27,16 @@ FINGERPRINT_COMPATIBILITY_REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
     "expected": (
         "fingerprint_schema_version",
         "reuse_policy",
+        "expected_resolver_semantics_epoch",
         "expected_asset_hashes",
     ),
+}
+
+_FINGERPRINT_CONTRACT_NONEMPTY_TEXT_KEYS = {
+    "fingerprint_schema_version",
+    "reuse_policy",
+    "actual_decoder_semantics_epoch",
+    "expected_resolver_semantics_epoch",
 }
 
 
@@ -33,8 +46,39 @@ FINGERPRINT_COMPATIBILITY_REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
 # evidence_assets_v1 policy.  All other schema transitions fail closed unless
 # an equally explicit, tested adapter is added here.
 _FINGERPRINT_SCHEMA_ADAPTERS: dict[str, dict[tuple[str, str], Mapping[str, Any]]] = {
-    "actual": {("2.8.0", "2.9.0"): {"reuse_policy": "evidence_assets_v1"}},
-    "expected": {("2.6.0", "2.7.0"): {"reuse_policy": "evidence_assets_v1"}},
+    "actual": {
+        ("2.8.0", "2.9.0"): {
+            "reuse_policy": "evidence_assets_v1",
+            # Frozen adapter value: never follow a future current-epoch bump.
+            "actual_decoder_semantics_epoch": "1",
+        }
+    },
+    "expected": {
+        ("2.6.0", "2.7.0"): {
+            "reuse_policy": "evidence_assets_v1",
+            # Frozen adapter value: never follow a future current-epoch bump.
+            "expected_resolver_semantics_epoch": "1",
+        }
+    },
+}
+
+
+# Phase 0B1 v5.6.2 fingerprints used these exact schemas and reuse policy but
+# predated semantics epochs.  This finite allowlist maps only that known
+# contract to epoch 1.  Missing epochs in any other schema/policy fail closed.
+LEGACY_V562_SEMANTICS_EPOCH_ADAPTERS: dict[str, Mapping[str, str]] = {
+    "actual": {
+        "fingerprint_schema_version": "2.9.0",
+        "reuse_policy": "evidence_assets_v1",
+        "epoch_key": "actual_decoder_semantics_epoch",
+        "epoch_value": "1",
+    },
+    "expected": {
+        "fingerprint_schema_version": "2.7.0",
+        "reuse_policy": "evidence_assets_v1",
+        "epoch_key": "expected_resolver_semantics_epoch",
+        "epoch_value": "1",
+    },
 }
 
 
@@ -117,16 +161,26 @@ def _adapt_stored_fingerprint_contract(
     current_schema = _text(current.get("fingerprint_schema_version"))
     if not stored_schema or not current_schema:
         return None
-    if stored_schema == current_schema:
-        return dict(stored)
-
-    adapter = _FINGERPRINT_SCHEMA_ADAPTERS.get(chain, {}).get((stored_schema, current_schema))
-    if adapter is None:
-        return None
     adapted = dict(stored)
-    for key, value in adapter.items():
-        adapted.setdefault(key, value)
-    adapted["fingerprint_schema_version"] = current_schema
+    if stored_schema != current_schema:
+        adapter = _FINGERPRINT_SCHEMA_ADAPTERS.get(chain, {}).get((stored_schema, current_schema))
+        if adapter is None:
+            return None
+        for key, value in adapter.items():
+            adapted.setdefault(key, value)
+        adapted["fingerprint_schema_version"] = current_schema
+
+    legacy = LEGACY_V562_SEMANTICS_EPOCH_ADAPTERS.get(chain)
+    if legacy is not None:
+        epoch_key = legacy["epoch_key"]
+        if epoch_key not in adapted:
+            is_known_legacy = (
+                stored_schema == legacy["fingerprint_schema_version"]
+                and current_schema == legacy["fingerprint_schema_version"]
+                and _text(stored.get("reuse_policy")) == legacy["reuse_policy"]
+            )
+            if is_known_legacy:
+                adapted[epoch_key] = legacy["epoch_value"]
     return adapted
 
 
@@ -145,7 +199,7 @@ def _compatibility_contract_matches(
     for key in required_keys:
         if key not in adapted or key not in current:
             return False
-        if key in {"fingerprint_schema_version", "reuse_policy"} and (
+        if key in _FINGERPRINT_CONTRACT_NONEMPTY_TEXT_KEYS and (
             not _text(adapted[key]) or not _text(current[key])
         ):
             return False
@@ -167,8 +221,9 @@ def fingerprint_contract_components(components: Mapping[str, Any], *, chain: str
     if missing:
         raise ValueError(f"{chain} fingerprint compatibility contract missing fields: {missing}")
     selected = {key: components[key] for key in required_keys}
-    if not _text(selected.get("fingerprint_schema_version")) or not _text(selected.get("reuse_policy")):
-        raise ValueError(f"{chain} fingerprint compatibility schema/reuse policy must be explicit")
+    blank = [key for key in required_keys if key in _FINGERPRINT_CONTRACT_NONEMPTY_TEXT_KEYS and not _text(selected[key])]
+    if blank:
+        raise ValueError(f"{chain} fingerprint compatibility text fields must be explicit: {blank}")
     return selected
 
 
@@ -188,15 +243,17 @@ def fingerprint_compatible(
     evidence.  Unknown schema transitions and missing required fields fail
     closed; audit-only metadata remains non-blocking.
     """
-    stored_fp = _text(stored_fingerprint)
-    current_fp = _text(current_payload.get("fingerprint"))
-    if stored_fp and current_fp and stored_fp == current_fp:
-        return True
-
     old = parse_components(stored_components)
     new = parse_components(current_payload.get("components"))
     if not old or not new:
         return False
+
+    stored_fp = _text(stored_fingerprint)
+    current_fp = _text(current_payload.get("fingerprint"))
+    if stored_fp and current_fp and stored_fp == current_fp:
+        # Digest equality is only a fast positive after validating the complete
+        # semantic contract; it cannot bypass a missing or different epoch.
+        return _compatibility_contract_matches(old, new, chain=chain)
 
     return _compatibility_contract_matches(old, new, chain=chain)
 

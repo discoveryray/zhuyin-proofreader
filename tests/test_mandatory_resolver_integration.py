@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import sys
 import tempfile
 import unittest
@@ -122,6 +123,10 @@ class MandatoryResolverIntegrationTests(unittest.TestCase):
                 ("ledger_schema_version", LEDGER_SCHEMA_VERSION),
                 ("pdf_sha256", pdf_hash),
                 ("actual_asset_fingerprint", fingerprint["fingerprint"]),
+                (
+                    "actual_asset_fingerprint_components",
+                    json.dumps(fingerprint["components"], ensure_ascii=False, sort_keys=True),
+                ),
             ):
                 metadata_sheet.append([key, value])
             summary = workbook.create_sheet("摘要")

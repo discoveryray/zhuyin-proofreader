@@ -33,7 +33,7 @@ from occurrence_ledger import (  # noqa: E402
 )
 from runtime_regression_gate import run_mandatory_regressions, validate_regression_execution  # noqa: E402
 from runtime_source_validation import (  # noqa: E402
-    ASSET_MANIFEST_SCHEMA_VERSION, TOOL_VERSION,
+    ACTUAL_FINGERPRINT_SCHEMA_VERSION, ASSET_MANIFEST_SCHEMA_VERSION, TOOL_VERSION,
     compute_actual_asset_fingerprint,
     compute_expected_asset_fingerprint,
     validate_asset_manifest,
@@ -41,6 +41,7 @@ from runtime_source_validation import (  # noqa: E402
     validate_xlsx_schema,
     write_pipeline_blocked,
 )
+from cross_version_compat import ACTUAL_DECODER_SEMANTICS_EPOCH  # noqa: E402
 from export_zhuyin_readings import ACTUAL_DECODER_SOURCE_FILES as EXPORT_ACTUAL_SOURCE_FILES  # noqa: E402
 from standalone_proofread import (  # noqa: E402
     ACTUAL_DECODER_SOURCE_FILES as PIPELINE_ACTUAL_SOURCE_FILES,
@@ -478,9 +479,18 @@ class SourceAndFingerprintTests(unittest.TestCase):
             wb = Workbook(); ws = wb.active; ws.title = "v5.2中繼資料"; ws.append(["項目", "內容"])
             import hashlib
             pdf_hash = hashlib.sha256(b"current pdf").hexdigest()
+            components = {
+                "fingerprint_schema_version": ACTUAL_FINGERPRINT_SCHEMA_VERSION,
+                "reuse_policy": "evidence_assets_v1",
+                "actual_decoder_semantics_epoch": ACTUAL_DECODER_SEMANTICS_EPOCH,
+                "pdf_sha256": pdf_hash,
+                "actual_asset_hashes": {"map": "1" * 64},
+                "dynamic_actual_evidence_hashes": {"scope": "2" * 64},
+            }
             for item in [
                 ("workbook_schema_version", WORKBOOK_SCHEMA_VERSION), ("ledger_schema_version", LEDGER_SCHEMA_VERSION),
                 ("actual_asset_fingerprint", "fp1"), ("pdf_sha256", pdf_hash),
+                ("actual_asset_fingerprint_components", json.dumps(components, sort_keys=True)),
             ]:
                 ws.append(item)
             wb.save(actual)
@@ -493,15 +503,19 @@ class SourceAndFingerprintTests(unittest.TestCase):
                 }],
             }
             (root / "校對工作階段.json").write_text(json.dumps(seal_manifest(manifest)), encoding="utf-8")
-            self.assertTrue(output_is_reusable(root, pdf, actual, {"fingerprint": "fp1"}))
-            self.assertFalse(output_is_reusable(root, pdf, actual, {"fingerprint": "fp2"}))
+            self.assertTrue(output_is_reusable(root, pdf, actual, {"fingerprint": "fp1", "components": components}))
+            changed_components = deepcopy(components)
+            changed_components["actual_asset_hashes"] = {"map": "9" * 64}
+            self.assertFalse(
+                output_is_reusable(root, pdf, actual, {"fingerprint": "fp2", "components": changed_components})
+            )
 
             # A controller-only / expected-only patch must not invalidate the
             # actual artifact when schema and the independent actual fingerprint
             # are unchanged.
             manifest["version"] = CONTROLLER_VERSION
             (root / "校對工作階段.json").write_text(json.dumps(seal_manifest(manifest)), encoding="utf-8")
-            self.assertTrue(output_is_reusable(root, pdf, actual, {"fingerprint": "fp1"}))
+            self.assertTrue(output_is_reusable(root, pdf, actual, {"fingerprint": "fp1", "components": components}))
 
 
 class MandatoryRegressionTests(unittest.TestCase):
