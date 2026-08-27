@@ -4,6 +4,40 @@ import json
 from typing import Any, Mapping
 
 
+# These are cache-compatibility fields, not a list of every fingerprint
+# component.  Audit/provenance metadata (tool versions, source hashes, and
+# convenience aliases) must not become an accidental cache boundary.
+#
+# A future semantics epoch/profile must be added to the applicable tuple.  The
+# fallback then fails closed for old/missing/different values instead of
+# silently ignoring the new contract field.
+FINGERPRINT_COMPATIBILITY_REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
+    "actual": (
+        "fingerprint_schema_version",
+        "reuse_policy",
+        "pdf_sha256",
+        "actual_asset_hashes",
+        "dynamic_actual_evidence_hashes",
+    ),
+    "expected": (
+        "fingerprint_schema_version",
+        "reuse_policy",
+        "expected_asset_hashes",
+    ),
+}
+
+
+# v5.6 deliberately provided semantic reuse adapters for the immediately
+# preceding v5.5.1 fingerprints.  Those legacy components predate the explicit
+# reuse_policy component, but their construction is known to mean the current
+# evidence_assets_v1 policy.  All other schema transitions fail closed unless
+# an equally explicit, tested adapter is added here.
+_FINGERPRINT_SCHEMA_ADAPTERS: dict[str, dict[tuple[str, str], Mapping[str, Any]]] = {
+    "actual": {("2.8.0", "2.9.0"): {"reuse_policy": "evidence_assets_v1"}},
+    "expected": {("2.6.0", "2.7.0"): {"reuse_policy": "evidence_assets_v1"}},
+}
+
+
 def _text(value: Any) -> str:
     return str(value or "").strip()
 
@@ -60,6 +94,84 @@ def _same_mapping(left: Any, right: Any) -> bool:
     )
 
 
+def _same_contract_value(left: Any, right: Any) -> bool:
+    """Compare one declared contract value without coercing unlike types."""
+    if isinstance(left, Mapping) or isinstance(right, Mapping):
+        return _same_mapping(left, right)
+    try:
+        return json.dumps(left, ensure_ascii=False, sort_keys=True, separators=(",", ":")) == json.dumps(
+            right, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
+    except (TypeError, ValueError):
+        return left == right
+
+
+def _adapt_stored_fingerprint_contract(
+    stored: Mapping[str, Any],
+    current: Mapping[str, Any],
+    *,
+    chain: str,
+) -> dict[str, Any] | None:
+    """Return stored components expressed in the current schema contract."""
+    stored_schema = _text(stored.get("fingerprint_schema_version"))
+    current_schema = _text(current.get("fingerprint_schema_version"))
+    if not stored_schema or not current_schema:
+        return None
+    if stored_schema == current_schema:
+        return dict(stored)
+
+    adapter = _FINGERPRINT_SCHEMA_ADAPTERS.get(chain, {}).get((stored_schema, current_schema))
+    if adapter is None:
+        return None
+    adapted = dict(stored)
+    for key, value in adapter.items():
+        adapted.setdefault(key, value)
+    adapted["fingerprint_schema_version"] = current_schema
+    return adapted
+
+
+def _compatibility_contract_matches(
+    stored: Mapping[str, Any],
+    current: Mapping[str, Any],
+    *,
+    chain: str,
+) -> bool:
+    required_keys = FINGERPRINT_COMPATIBILITY_REQUIRED_KEYS.get(chain)
+    if required_keys is None:
+        raise ValueError(f"unknown fingerprint chain: {chain}")
+    adapted = _adapt_stored_fingerprint_contract(stored, current, chain=chain)
+    if adapted is None:
+        return False
+    for key in required_keys:
+        if key not in adapted or key not in current:
+            return False
+        if key in {"fingerprint_schema_version", "reuse_policy"} and (
+            not _text(adapted[key]) or not _text(current[key])
+        ):
+            return False
+        if not _same_contract_value(adapted[key], current[key]):
+            return False
+    return True
+
+
+def fingerprint_contract_components(components: Mapping[str, Any], *, chain: str) -> dict[str, Any]:
+    """Select the declared contract fields used to build a reuse fingerprint.
+
+    Fingerprint producers and the semantic fallback share the same registry so
+    a newly declared required key cannot be added to only one side by accident.
+    """
+    required_keys = FINGERPRINT_COMPATIBILITY_REQUIRED_KEYS.get(chain)
+    if required_keys is None:
+        raise ValueError(f"unknown fingerprint chain: {chain}")
+    missing = [key for key in required_keys if key not in components]
+    if missing:
+        raise ValueError(f"{chain} fingerprint compatibility contract missing fields: {missing}")
+    selected = {key: components[key] for key in required_keys}
+    if not _text(selected.get("fingerprint_schema_version")) or not _text(selected.get("reuse_policy")):
+        raise ValueError(f"{chain} fingerprint compatibility schema/reuse policy must be explicit")
+    return selected
+
+
 def fingerprint_compatible(
     stored_fingerprint: Any,
     stored_components: Any,
@@ -67,13 +179,14 @@ def fingerprint_compatible(
     *,
     chain: str,
 ) -> bool:
-    """Compare cache evidence semantically instead of by tool-version bytes.
+    """Compare the explicit cache-compatibility contract.
 
     v5.5.x fingerprints included resolver/decoder version and source-code hashes,
     so every small program release invalidated otherwise identical workbooks.
-    v5.6 keeps those values for audit, but reuse depends only on evidence that can
-    change the result for the PDF: source PDF, approved data assets and relevant
-    project dynamic actual evidence.
+    v5.6 keeps those values for audit.  Semantic fallback compares only the
+    declared chain-specific contract: schema, reuse policy, and result-affecting
+    evidence.  Unknown schema transitions and missing required fields fail
+    closed; audit-only metadata remains non-blocking.
     """
     stored_fp = _text(stored_fingerprint)
     current_fp = _text(current_payload.get("fingerprint"))
@@ -85,19 +198,7 @@ def fingerprint_compatible(
     if not old or not new:
         return False
 
-    if chain == "actual":
-        if _text(old.get("pdf_sha256")) != _text(new.get("pdf_sha256")):
-            return False
-        if not _same_mapping(old.get("actual_asset_hashes"), new.get("actual_asset_hashes")):
-            return False
-        if not _same_mapping(old.get("dynamic_actual_evidence_hashes"), new.get("dynamic_actual_evidence_hashes")):
-            return False
-        return True
-
-    if chain == "expected":
-        return _same_mapping(old.get("expected_asset_hashes"), new.get("expected_asset_hashes"))
-
-    raise ValueError(f"unknown fingerprint chain: {chain}")
+    return _compatibility_contract_matches(old, new, chain=chain)
 
 
 def metadata_compatibility_warnings(

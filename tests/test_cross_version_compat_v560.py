@@ -48,6 +48,7 @@ def test_v551_style_actual_components_are_semantically_compatible_with_v56_paylo
         "components": {
             **old,
             "fingerprint_schema_version": "2.9.0",
+            "reuse_policy": "evidence_assets_v1",
             "decoder_version": "5.6.0",
             "actual_decoder_source_hashes": {"decoder.py": "9" * 64},
         },
@@ -67,6 +68,7 @@ def test_v551_style_expected_components_are_semantically_compatible_with_v56_pay
         "components": {
             **old,
             "fingerprint_schema_version": "2.7.0",
+            "reuse_policy": "evidence_assets_v1",
             "resolver_version": "5.6.0",
             "expected_resolver_source_hashes": {"resolver.py": "9" * 64},
         },

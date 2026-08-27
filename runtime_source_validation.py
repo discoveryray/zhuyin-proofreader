@@ -14,6 +14,7 @@ from openpyxl import load_workbook
 
 from occurrence_ledger import LEDGER_SCHEMA_VERSION, canonical_bopomofo
 from actual_review import dynamic_actual_hashes
+from cross_version_compat import fingerprint_contract_components
 
 
 ASSET_MANIFEST_SCHEMA_VERSION = "2.6.2"
@@ -499,15 +500,11 @@ def compute_actual_asset_fingerprint(
         "reuse_policy": "evidence_assets_v1",
     }
     # v5.6: tool version and implementation source hashes remain auditable but
-    # no longer invalidate a cache by themselves.  Reuse is keyed to the exact
-    # PDF bytes, approved actual data assets and the project-scoped dynamic
-    # evidence relevant to this PDF.
-    reuse_components = {
-        "reuse_policy": "evidence_assets_v1",
-        "pdf_sha256": components["pdf_sha256"],
-        "actual_asset_hashes": components["actual_asset_hashes"],
-        "dynamic_actual_evidence_hashes": components["dynamic_actual_evidence_hashes"],
-    }
+    # no longer invalidate a cache by themselves.  Reuse is keyed to the
+    # explicit fingerprint schema/policy contract, exact PDF bytes, approved
+    # actual data assets and the project-scoped dynamic evidence relevant to
+    # this PDF.
+    reuse_components = fingerprint_contract_components(components, chain="actual")
     raw = json.dumps(reuse_components, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return {"fingerprint": hashlib.sha256(raw).hexdigest(), "components": components, "reuse_components": reuse_components}
 
@@ -577,12 +574,10 @@ def compute_expected_asset_fingerprint(
         "reuse_policy": "evidence_assets_v1",
     }
     # v5.6: resolver/tool updates are audit information, not automatic cache
-    # invalidators.  A candidate cache is rebuilt when expected data assets
-    # change; otherwise prior reviewed work remains reusable across releases.
-    reuse_components = {
-        "reuse_policy": "evidence_assets_v1",
-        "expected_asset_hashes": components["expected_asset_hashes"],
-    }
+    # invalidators.  A candidate cache is rebuilt when its explicit
+    # schema/policy contract or expected data assets change; otherwise prior
+    # reviewed work remains reusable across releases.
+    reuse_components = fingerprint_contract_components(components, chain="expected")
     raw = json.dumps(reuse_components, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return {"fingerprint": hashlib.sha256(raw).hexdigest(), "components": components, "reuse_components": reuse_components}
 
