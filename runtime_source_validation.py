@@ -14,7 +14,11 @@ from openpyxl import load_workbook
 
 from occurrence_ledger import LEDGER_SCHEMA_VERSION, canonical_bopomofo
 from actual_review import dynamic_actual_hashes
-from cross_version_compat import fingerprint_contract_components
+from cross_version_compat import (
+    ACTUAL_DECODER_SEMANTICS_EPOCH,
+    EXPECTED_RESOLVER_SEMANTICS_EPOCH,
+    fingerprint_contract_components,
+)
 
 
 ASSET_MANIFEST_SCHEMA_VERSION = "2.6.2"
@@ -488,6 +492,7 @@ def compute_actual_asset_fingerprint(
         raise SourceValidationError(f"動態 actual 證據驗證失敗：{exc}") from exc
     components = {
         "fingerprint_schema_version": ACTUAL_FINGERPRINT_SCHEMA_VERSION,
+        "actual_decoder_semantics_epoch": ACTUAL_DECODER_SEMANTICS_EPOCH,
         "pdf_sha256": sha256_file(pdf_path),
         "actual_ledger_schema_version": LEDGER_SCHEMA_VERSION,
         "decoder_version": decoder_version,
@@ -568,6 +573,7 @@ def compute_expected_asset_fingerprint(
         raise SourceValidationError("asset manifest 沒有已驗證的 expected 核心資產")
     components = {
         "fingerprint_schema_version": EXPECTED_FINGERPRINT_SCHEMA_VERSION,
+        "expected_resolver_semantics_epoch": EXPECTED_RESOLVER_SEMANTICS_EPOCH,
         "resolver_version": resolver_version,
         "expected_resolver_source_hashes": dict(sorted(source_hashes.items())),
         "expected_asset_hashes": dict(sorted(expected_assets.items())),

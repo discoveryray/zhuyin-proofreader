@@ -11,6 +11,7 @@ def actual_components(**updates):
     components = {
         "fingerprint_schema_version": "2.9.0",
         "reuse_policy": "evidence_assets_v1",
+        "actual_decoder_semantics_epoch": compat.ACTUAL_DECODER_SEMANTICS_EPOCH,
         "pdf_sha256": "a" * 64,
         "actual_asset_hashes": {"actual-map": "b" * 64},
         "dynamic_actual_evidence_hashes": {"scoped-glyphs": "c" * 64},
@@ -25,6 +26,7 @@ def expected_components(**updates):
     components = {
         "fingerprint_schema_version": "2.7.0",
         "reuse_policy": "evidence_assets_v1",
+        "expected_resolver_semantics_epoch": compat.EXPECTED_RESOLVER_SEMANTICS_EPOCH,
         "expected_asset_hashes": {"dictionary": "e" * 64},
         "resolver_version": "5.6.2",
         "expected_resolver_source_hashes": {"resolver.py": "f" * 64},
@@ -42,8 +44,11 @@ def compatible(old, new, *, chain, stored_fingerprint="stored", current_fingerpr
     )
 
 
-def test_exact_fingerprint_equality_keeps_fast_path():
-    assert compat.fingerprint_compatible("same", {}, {"fingerprint": "same", "components": {}}, chain="actual")
+def test_exact_fingerprint_equality_fast_path_still_validates_contract():
+    assert compatible(actual_components(), actual_components(), chain="actual", stored_fingerprint="same", current_fingerprint="same")
+    assert not compat.fingerprint_compatible(
+        "same", {}, {"fingerprint": "same", "components": {}}, chain="actual"
+    )
 
 
 def test_reuse_policy_mismatch_fails_closed_for_both_chains():
@@ -133,26 +138,29 @@ def test_future_declared_contract_key_cannot_be_silently_ignored():
         assert not compatible(actual_components(), actual_components(), chain="actual")
 
 
-def test_reuse_fingerprint_payload_contains_schema_and_policy_but_not_audit_metadata():
+def test_reuse_fingerprint_payload_contains_schema_policy_and_epoch_but_not_audit_metadata():
     actual = compat.fingerprint_contract_components(actual_components(), chain="actual")
     assert actual["fingerprint_schema_version"] == "2.9.0"
     assert actual["reuse_policy"] == "evidence_assets_v1"
+    assert actual["actual_decoder_semantics_epoch"] == "1"
     assert "decoder_version" not in actual
     assert "actual_decoder_source_hashes" not in actual
 
     expected = compat.fingerprint_contract_components(expected_components(), chain="expected")
     assert expected["fingerprint_schema_version"] == "2.7.0"
     assert expected["reuse_policy"] == "evidence_assets_v1"
+    assert expected["expected_resolver_semantics_epoch"] == "1"
     assert "resolver_version" not in expected
     assert "expected_resolver_source_hashes" not in expected
 
 
-def test_v562_components_and_legacy_future_missing_fields_remain_compatible():
+def test_phase0b1_transitional_actual_components_and_future_audit_fields_remain_compatible():
     stored = actual_components(
         decoder_version="5.6.0",
         actual_decoder_source_hashes={"decoder.py": "1" * 64},
         presentation_only_excel_sha256="1" * 64,
     )
+    stored.pop("actual_decoder_semantics_epoch")
     current = actual_components(
         decoder_version="5.6.2",
         actual_decoder_source_hashes={"decoder.py": "2" * 64},
@@ -162,6 +170,7 @@ def test_v562_components_and_legacy_future_missing_fields_remain_compatible():
     old_reuse_components = {
         key: stored[key]
         for key in (
+            "fingerprint_schema_version",
             "reuse_policy",
             "pdf_sha256",
             "actual_asset_hashes",
@@ -205,6 +214,10 @@ def test_missing_required_contract_fields_fail_closed():
     current_missing = actual_components()
     current_missing.pop("reuse_policy")
     assert not compatible(actual_components(), current_missing, chain="actual")
+
+    current_missing_epoch = actual_components()
+    current_missing_epoch.pop("actual_decoder_semantics_epoch")
+    assert not compatible(actual_components(), current_missing_epoch, chain="actual")
 
 
 def test_presentation_only_metadata_is_not_a_semantic_cache_key():

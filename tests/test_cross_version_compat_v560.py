@@ -1,7 +1,12 @@
 import json
 from pathlib import Path
 
-from cross_version_compat import fingerprint_compatible, schema_compatible
+from cross_version_compat import (
+    ACTUAL_DECODER_SEMANTICS_EPOCH,
+    EXPECTED_RESOLVER_SEMANTICS_EPOCH,
+    fingerprint_compatible,
+    schema_compatible,
+)
 from runtime_source_validation import compute_actual_asset_fingerprint, compute_expected_asset_fingerprint
 
 
@@ -49,6 +54,7 @@ def test_v551_style_actual_components_are_semantically_compatible_with_v56_paylo
             **old,
             "fingerprint_schema_version": "2.9.0",
             "reuse_policy": "evidence_assets_v1",
+            "actual_decoder_semantics_epoch": ACTUAL_DECODER_SEMANTICS_EPOCH,
             "decoder_version": "5.6.0",
             "actual_decoder_source_hashes": {"decoder.py": "9" * 64},
         },
@@ -69,6 +75,7 @@ def test_v551_style_expected_components_are_semantically_compatible_with_v56_pay
             **old,
             "fingerprint_schema_version": "2.7.0",
             "reuse_policy": "evidence_assets_v1",
+            "expected_resolver_semantics_epoch": EXPECTED_RESOLVER_SEMANTICS_EPOCH,
             "resolver_version": "5.6.0",
             "expected_resolver_source_hashes": {"resolver.py": "9" * 64},
         },
