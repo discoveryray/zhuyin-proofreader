@@ -154,7 +154,7 @@ def test_reuse_fingerprint_payload_contains_schema_policy_and_epoch_but_not_audi
     assert "expected_resolver_source_hashes" not in expected
 
 
-def test_v562_components_and_legacy_future_missing_fields_remain_compatible():
+def test_phase0b1_transitional_actual_components_and_future_audit_fields_remain_compatible():
     stored = actual_components(
         decoder_version="5.6.0",
         actual_decoder_source_hashes={"decoder.py": "1" * 64},

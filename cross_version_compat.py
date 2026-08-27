@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from typing import Any, Mapping
 
@@ -63,22 +64,66 @@ _FINGERPRINT_SCHEMA_ADAPTERS: dict[str, dict[tuple[str, str], Mapping[str, Any]]
 }
 
 
-# Phase 0B1 v5.6.2 fingerprints used these exact schemas and reuse policy but
-# predated semantics epochs.  This finite allowlist maps only that known
-# contract to epoch 1.  Missing epochs in any other schema/policy fail closed.
-LEGACY_V562_SEMANTICS_EPOCH_ADAPTERS: dict[str, Mapping[str, str]] = {
-    "actual": {
-        "fingerprint_schema_version": "2.9.0",
-        "reuse_policy": "evidence_assets_v1",
-        "epoch_key": "actual_decoder_semantics_epoch",
-        "epoch_value": "1",
-    },
-    "expected": {
-        "fingerprint_schema_version": "2.7.0",
-        "reuse_policy": "evidence_assets_v1",
-        "epoch_key": "expected_resolver_semantics_epoch",
-        "epoch_value": "1",
-    },
+# Missing-epoch compatibility is limited to fingerprints whose stored digest
+# proves that they were produced by one of these known historical algorithms.
+# The released v5.6.2 reuse digests did not include fingerprint_schema_version;
+# the short-lived Phase 0B1 format did.  Keep the profiles separately named so
+# neither can become a broad schema/policy-based fallback.
+LEGACY_FINGERPRINT_PROFILES: dict[str, tuple[Mapping[str, Any], ...]] = {
+    "actual": (
+        {
+            "profile_name": "released_v5.6.2",
+            "fingerprint_schema_version": "2.9.0",
+            "reuse_policy": "evidence_assets_v1",
+            "epoch_key": "actual_decoder_semantics_epoch",
+            "epoch_value": "1",
+            "digest_keys": (
+                "reuse_policy",
+                "pdf_sha256",
+                "actual_asset_hashes",
+                "dynamic_actual_evidence_hashes",
+            ),
+        },
+        {
+            "profile_name": "phase0b1_transitional",
+            "fingerprint_schema_version": "2.9.0",
+            "reuse_policy": "evidence_assets_v1",
+            "epoch_key": "actual_decoder_semantics_epoch",
+            "epoch_value": "1",
+            "digest_keys": (
+                "fingerprint_schema_version",
+                "reuse_policy",
+                "pdf_sha256",
+                "actual_asset_hashes",
+                "dynamic_actual_evidence_hashes",
+            ),
+        },
+    ),
+    "expected": (
+        {
+            "profile_name": "released_v5.6.2",
+            "fingerprint_schema_version": "2.7.0",
+            "reuse_policy": "evidence_assets_v1",
+            "epoch_key": "expected_resolver_semantics_epoch",
+            "epoch_value": "1",
+            "digest_keys": (
+                "reuse_policy",
+                "expected_asset_hashes",
+            ),
+        },
+        {
+            "profile_name": "phase0b1_transitional",
+            "fingerprint_schema_version": "2.7.0",
+            "reuse_policy": "evidence_assets_v1",
+            "epoch_key": "expected_resolver_semantics_epoch",
+            "epoch_value": "1",
+            "digest_keys": (
+                "fingerprint_schema_version",
+                "reuse_policy",
+                "expected_asset_hashes",
+            ),
+        },
+    ),
 }
 
 
@@ -150,7 +195,32 @@ def _same_contract_value(left: Any, right: Any) -> bool:
         return left == right
 
 
+def _legacy_profile_digest_matches(
+    stored_fingerprint: Any,
+    stored: Mapping[str, Any],
+    profile: Mapping[str, Any],
+) -> bool:
+    """Verify one stored digest against its frozen historical field list."""
+    digest_keys = profile.get("digest_keys")
+    if not isinstance(digest_keys, tuple) or not digest_keys:
+        return False
+    if any(key not in stored for key in digest_keys):
+        return False
+    try:
+        reuse_components = {key: stored[key] for key in digest_keys}
+        canonical = json.dumps(
+            reuse_components,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    except (TypeError, ValueError):
+        return False
+    return _text(stored_fingerprint) == hashlib.sha256(canonical).hexdigest()
+
+
 def _adapt_stored_fingerprint_contract(
+    stored_fingerprint: Any,
     stored: Mapping[str, Any],
     current: Mapping[str, Any],
     *,
@@ -170,21 +240,24 @@ def _adapt_stored_fingerprint_contract(
             adapted.setdefault(key, value)
         adapted["fingerprint_schema_version"] = current_schema
 
-    legacy = LEGACY_V562_SEMANTICS_EPOCH_ADAPTERS.get(chain)
-    if legacy is not None:
-        epoch_key = legacy["epoch_key"]
-        if epoch_key not in adapted:
-            is_known_legacy = (
-                stored_schema == legacy["fingerprint_schema_version"]
-                and current_schema == legacy["fingerprint_schema_version"]
-                and _text(stored.get("reuse_policy")) == legacy["reuse_policy"]
-            )
-            if is_known_legacy:
-                adapted[epoch_key] = legacy["epoch_value"]
+    for profile in LEGACY_FINGERPRINT_PROFILES.get(chain, ()):
+        epoch_key = profile["epoch_key"]
+        if epoch_key in adapted:
+            continue
+        is_known_legacy = (
+            stored_schema == profile["fingerprint_schema_version"]
+            and current_schema == profile["fingerprint_schema_version"]
+            and _text(stored.get("reuse_policy")) == profile["reuse_policy"]
+            and _legacy_profile_digest_matches(stored_fingerprint, stored, profile)
+        )
+        if is_known_legacy:
+            adapted[epoch_key] = profile["epoch_value"]
+            break
     return adapted
 
 
 def _compatibility_contract_matches(
+    stored_fingerprint: Any,
     stored: Mapping[str, Any],
     current: Mapping[str, Any],
     *,
@@ -193,7 +266,7 @@ def _compatibility_contract_matches(
     required_keys = FINGERPRINT_COMPATIBILITY_REQUIRED_KEYS.get(chain)
     if required_keys is None:
         raise ValueError(f"unknown fingerprint chain: {chain}")
-    adapted = _adapt_stored_fingerprint_contract(stored, current, chain=chain)
+    adapted = _adapt_stored_fingerprint_contract(stored_fingerprint, stored, current, chain=chain)
     if adapted is None:
         return False
     for key in required_keys:
@@ -253,9 +326,9 @@ def fingerprint_compatible(
     if stored_fp and current_fp and stored_fp == current_fp:
         # Digest equality is only a fast positive after validating the complete
         # semantic contract; it cannot bypass a missing or different epoch.
-        return _compatibility_contract_matches(old, new, chain=chain)
+        return _compatibility_contract_matches(stored_fp, old, new, chain=chain)
 
-    return _compatibility_contract_matches(old, new, chain=chain)
+    return _compatibility_contract_matches(stored_fp, old, new, chain=chain)
 
 
 def metadata_compatibility_warnings(
