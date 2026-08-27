@@ -43,3 +43,4 @@ executed_count == required and failed == 0 and not_executed == 0 and duplicate_c
 - Full suite：141 passed, 2 skipped。
 - Runtime asset manifest：20 assets，`ok=True`，0 errors，0 warnings。
 - Completion smoke：mandatory regression 36/36 PASS + PDF occurrence regression 0/0 applicable → combined regression gate `ok=True` → `PROOFREAD_COMPLETE`，0 failed gates。
+

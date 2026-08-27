@@ -30,7 +30,7 @@ from export_pdf_text_diagnostics import (
 )
 
 PROGRAM = "PDF 實際注音解碼器"
-VERSION = "5.6.1"
+VERSION = "5.6.2"
 DEFAULT_MAP = Path(__file__).with_name("zhuyin_component_map.csv")
 DEFAULT_GROUPS = Path(__file__).with_name("font_compatibility_groups.csv")
 DEFAULT_CFF_MAP = Path(__file__).with_name("cff_bopomofo_symbol_map.csv")

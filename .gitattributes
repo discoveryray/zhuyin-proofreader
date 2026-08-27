@@ -1,0 +1,20 @@
+# runtime_asset_manifest.json pins raw bytes.  Keep every manifest-protected
+# CSV out of Git's platform-dependent line-ending conversion.
+/pronunciation_lexical_rules.csv -text whitespace=cr-at-eol
+/統一用字手冊_注音規則.csv -text whitespace=cr-at-eol
+/統一用字手冊_字音限制.csv -text whitespace=cr-at-eol
+/pronunciation_regressions.csv -text whitespace=cr-at-eol
+/mandatory_regression_cases.csv -text whitespace=cr-at-eol
+/character_overrides.csv -text whitespace=cr-at-eol
+/source_context_overrides.csv -text whitespace=cr-at-eol
+/zhuyin_component_map.csv -text whitespace=cr-at-eol
+/font_compatibility_groups.csv -text whitespace=cr-at-eol
+/cff_bopomofo_symbol_map.csv -text whitespace=cr-at-eol
+/cff_crossfamily_cid_consensus.csv -text whitespace=cr-at-eol
+/ttf_xref_component_overrides.csv -text whitespace=cr-at-eol
+/ttf_verified_component_transforms.csv -text whitespace=cr-at-eol
+/ttf_verified_glyf_fingerprints.csv -text whitespace=cr-at-eol
+/ttf_verified_outline_signatures.csv -text whitespace=cr-at-eol
+/ttf_verified_mapping_corrections.csv -text whitespace=cr-at-eol
+/ttf_verified_symbol_templates.csv -text whitespace=cr-at-eol
+/structural_detection_exclusions.csv -text whitespace=cr-at-eol

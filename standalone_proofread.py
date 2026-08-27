@@ -100,7 +100,7 @@ from actual_review import (
 )
 
 PROGRAM = "注音校對工具－單機端到端控制器"
-VERSION = "5.6.1"
+VERSION = "5.6.2"
 # Tool release number is not a cache/session boundary. Compatibility is decided
 # by schema family, durable review IDs, PDF bytes and evidence assets.
 COMPATIBLE_SESSION_VERSIONS = None
@@ -118,6 +118,9 @@ DECISIONS = {"補建expected證據", "解決expected證據", "確認現版差異
 GPT_DECISION_BUNDLE_SCHEMA_VERSION = "1.1"
 PROJECT_EVIDENCE_DIR = "_專案證據"
 PROJECT_ACTUAL_EVIDENCE_DIR = "actual"
+NO_ACTUAL_PENDING_MESSAGE = (
+    "目前沒有 ACTUAL_DECODE_ERROR／ACTUAL_UNRESOLVED 可匯出；actual 待判定為 0，無須建立 GPT 判定包。"
+)
 
 
 def project_actual_evidence_root(output_dir: Path) -> Path:
@@ -1735,24 +1738,53 @@ def _actual_source_ids(actual: Path) -> tuple[set[str], int, int, dict[str, dict
     return {str(row["occurrence_id"]) for row in all_rows}, len(actual_rows), len(excluded_rows), source_by_id
 
 
+def _regression_gate_flag(row: Mapping[str, Any]) -> bool:
+    raw = str(row.get("計入完成門檻") or "").strip().upper()
+    if raw:
+        if raw not in {"Y", "N"}:
+            raise ValueError(f"歷史回歸計入完成門檻欄位無效：{row.get('案例ID')} / {raw}")
+        return raw == "Y"
+    # Compatibility for in-memory legacy fixtures and pre-v5.6.2 rows. New
+    # candidate workbooks require the explicit field.
+    mode = str(row.get("適用性模式") or "hard_gate").strip().lower()
+    return mode != "reference_only" and str(row.get("回歸結果") or "") != "NOT_APPLICABLE"
+
+
 def _candidate_regression_report(candidate: Path) -> tuple[dict[str, Any], dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     mandatory_cases = load_mandatory_cases(Path(__file__).with_name("mandatory_regression_cases.csv"))
     mandatory_rows = workbook_rows(candidate, "強制回歸測試", ["case_id", "result"])
     mandatory_results = [{str(key): value for key, value in row.items()} for row in mandatory_rows]
     mandatory = validate_regression_execution(mandatory_cases, mandatory_results)
 
-    pdf_rows = workbook_rows(candidate, "回歸測試", ["案例ID", "回歸結果"])
+    pdf_rows = workbook_rows(candidate, "回歸測試", [
+        "案例ID", "適用性模式", "適用性狀態", "計入完成門檻", "定位命中數", "回歸結果",
+    ])
     ids = [str(row.get("案例ID") or "").strip() for row in pdf_rows]
     duplicate_ids = [key for key, count in Counter(ids).items() if key and count > 1]
+    gating_rows = [row for row in pdf_rows if _regression_gate_flag(row)]
+    reference_rows = [row for row in pdf_rows if str(row.get("適用性模式") or "").strip().lower() == "reference_only"]
+    required_ids = {
+        str(row.get("案例ID") or "").strip()
+        for row in gating_rows
+        if str(row.get("案例ID") or "").strip()
+    }
+    executed = [row for row in gating_rows if str(row.get("回歸結果") or "") in {"PASS", "FAIL"}]
+    failed = [row for row in gating_rows if str(row.get("回歸結果") or "") == "FAIL"]
+    not_executed = [row for row in gating_rows if str(row.get("回歸結果") or "") == "NOT_EXECUTED"]
     pdf_report = {
-        "ok": not duplicate_ids and all(row.get("回歸結果") == "PASS" for row in pdf_rows),
-        "required": len({value for value in ids if value}),
-        "executed": sum(1 for row in pdf_rows if row.get("回歸結果") in {"PASS", "FAIL"}),
-        "passed": sum(1 for row in pdf_rows if row.get("回歸結果") == "PASS"),
-        "failed": sum(1 for row in pdf_rows if row.get("回歸結果") == "FAIL"),
-        "not_executed": sum(1 for row in pdf_rows if row.get("回歸結果") == "NOT_EXECUTED"),
+        "ok": not duplicate_ids and not failed,
+        "required": len(required_ids),
+        "executed": len(executed),
+        "passed": sum(1 for row in gating_rows if row.get("回歸結果") == "PASS"),
+        "failed": len(failed),
+        "not_executed": len(not_executed),
+        "not_applicable": sum(1 for row in pdf_rows if row.get("回歸結果") == "NOT_APPLICABLE"),
         "duplicate_case_id": len(duplicate_ids),
         "duplicate_case_ids": duplicate_ids,
+        "reference_audit_matched": sum(1 for row in reference_rows if row.get("回歸結果") in {"PASS", "FAIL"}),
+        "reference_audit_passed": sum(1 for row in reference_rows if row.get("回歸結果") == "PASS"),
+        "reference_audit_failed": sum(1 for row in reference_rows if row.get("回歸結果") == "FAIL"),
+        "reference_audit_not_found": sum(1 for row in reference_rows if row.get("回歸結果") == "NOT_APPLICABLE"),
     }
     return mandatory, pdf_report, mandatory_results, pdf_rows
 
@@ -1763,8 +1795,10 @@ def _aggregate_pdf_regression_rows(per_pdf_rows: list[tuple[str, list[dict[str, 
     Each candidate workbook intentionally carries the same applicable historical
     definitions so that a missing occurrence in one split remains auditable. At
     whole-book level a case is required once, not once per split. Exactly one
-    split must execute each case; the remaining split-local copies may be
-    NOT_EXECUTED. Historical truth fields must be identical across copies.
+    split must execute each gating case; the remaining split-local copies may be
+    NOT_EXECUTED. Reference-only copies are aggregated as non-gating audit
+    results, including matched PASS/FAIL. Historical truth and locator
+    definitions must be identical across copies.
     """
     grouped: dict[str, list[dict[str, Any]]] = defaultdict(list)
     blank_case_rows: list[dict[str, Any]] = []
@@ -1782,11 +1816,12 @@ def _aggregate_pdf_regression_rows(per_pdf_rows: list[tuple[str, list[dict[str, 
         raise ValueError(f"歷史回歸含空白案例ID：{len(blank_case_rows)} 筆")
 
     signature_fields = (
-        "課本頁", "完整詞語", "字元", "目標在詞內序號", "真值實際注音", "真值預期注音",
-        "真值結論", "來源", "備註",
+        "課本頁", "完整詞語", "字元", "目標在詞內序號", "定位上下文", "真值實際注音", "真值預期注音",
+        "真值結論", "適用性模式", "來源PDF SHA-256", "來源", "備註",
     )
     definition_conflicts: list[str] = []
     duplicate_execution_case_ids: list[str] = []
+    duplicate_reference_case_ids: list[str] = []
     result_rows: list[dict[str, Any]] = []
     for case_id, copies in sorted(grouped.items()):
         signatures = {
@@ -1796,24 +1831,61 @@ def _aggregate_pdf_regression_rows(per_pdf_rows: list[tuple[str, list[dict[str, 
         if len(signatures) != 1:
             definition_conflicts.append(case_id)
             continue
-        executed = [row for row in copies if str(row.get("回歸結果") or "") in {"PASS", "FAIL"}]
-        if len(executed) > 1:
-            duplicate_execution_case_ids.append(case_id)
-            result = "FAIL"
-            note = "同一歷史回歸案例在多個 PDF 分檔被實際執行：" + ", ".join(row["pdf_name"] for row in executed)
-            executed_pdf = "|".join(row["pdf_name"] for row in executed)
-        elif len(executed) == 1:
-            result = str(executed[0].get("回歸結果") or "")
-            note = str(executed[0].get("執行說明") or "")
-            executed_pdf = executed[0]["pdf_name"]
-        else:
-            result = "NOT_EXECUTED"
-            note = "全冊所有 PDF 分檔均未實際定位／執行此歷史回歸案例"
-            executed_pdf = ""
         base = copies[0]
+        mode = str(base.get("適用性模式") or "hard_gate").strip().lower()
+        if mode == "reference_only":
+            executed = [row for row in copies if str(row.get("回歸結果") or "") in {"PASS", "FAIL"}]
+            gate_flag = "N"
+            if len(executed) > 1:
+                duplicate_reference_case_ids.append(case_id)
+                result = "FAIL"
+                state = "REFERENCE_DUPLICATE_MATCH"
+                note = "reference-only 在多個 PDF 分檔重現；identity ambiguity：" + ", ".join(row["pdf_name"] for row in executed)
+                executed_pdf = "|".join(row["pdf_name"] for row in executed)
+            elif len(executed) == 1:
+                result = str(executed[0].get("回歸結果") or "")
+                state = str(executed[0].get("適用性狀態") or "REFERENCE_MATCHED")
+                note = str(executed[0].get("執行說明") or "")
+                executed_pdf = executed[0]["pdf_name"]
+            else:
+                result = "NOT_APPLICABLE"
+                state = "REFERENCE_NOT_FOUND"
+                note = "reference not found：全冊所有 PDF 分檔均未定位此歷史 occurrence"
+                executed_pdf = ""
+        else:
+            gating_copies = [
+                row for row in copies
+                if _regression_gate_flag(row)
+            ]
+            executed = [row for row in gating_copies if str(row.get("回歸結果") or "") in {"PASS", "FAIL"}]
+            gate_flag = "Y" if gating_copies else "N"
+            if not gating_copies:
+                result = "NOT_APPLICABLE"
+                state = "SOURCE_NOT_APPLICABLE"
+                note = str(copies[0].get("執行說明") or "此歷史案例不適用於現版來源")
+                executed_pdf = ""
+            elif len(executed) > 1:
+                duplicate_execution_case_ids.append(case_id)
+                result = "FAIL"
+                state = "DUPLICATE_EXECUTION"
+                note = "同一歷史回歸案例在多個 PDF 分檔被實際執行：" + ", ".join(row["pdf_name"] for row in executed)
+                executed_pdf = "|".join(row["pdf_name"] for row in executed)
+            elif len(executed) == 1:
+                result = str(executed[0].get("回歸結果") or "")
+                state = str(executed[0].get("適用性狀態") or "GATE_EXECUTED")
+                note = str(executed[0].get("執行說明") or "")
+                executed_pdf = executed[0]["pdf_name"]
+            else:
+                result = "NOT_EXECUTED"
+                state = "GATE_NOT_EXECUTED"
+                note = "全冊所有 PDF 分檔均未實際定位／執行此歷史回歸案例"
+                executed_pdf = ""
         result_rows.append({
             "案例ID": case_id,
             **{field: base.get(field, "") for field in signature_fields},
+            "適用性狀態": state,
+            "計入完成門檻": gate_flag,
+            "定位命中數": sum(int(row.get("定位命中數") or 0) for row in executed),
             "回歸結果": result,
             "執行PDF": executed_pdf,
             "執行說明": note,
@@ -1823,11 +1895,14 @@ def _aggregate_pdf_regression_rows(per_pdf_rows: list[tuple[str, list[dict[str, 
     if definition_conflicts:
         raise ValueError("歷史回歸案例定義在 PDF 分檔間不一致：" + ", ".join(definition_conflicts[:20]))
 
-    required = len(grouped)
-    executed_count = sum(1 for row in result_rows if row["回歸結果"] in {"PASS", "FAIL"})
-    passed = sum(1 for row in result_rows if row["回歸結果"] == "PASS")
-    failed = sum(1 for row in result_rows if row["回歸結果"] == "FAIL")
-    not_executed = sum(1 for row in result_rows if row["回歸結果"] == "NOT_EXECUTED")
+    gate_rows = [row for row in result_rows if row["計入完成門檻"] == "Y"]
+    reference_rows = [row for row in result_rows if str(row.get("適用性模式") or "").lower() == "reference_only"]
+    required = len(gate_rows)
+    executed_count = sum(1 for row in gate_rows if row["回歸結果"] in {"PASS", "FAIL"})
+    passed = sum(1 for row in gate_rows if row["回歸結果"] == "PASS")
+    failed = sum(1 for row in gate_rows if row["回歸結果"] == "FAIL")
+    not_executed = sum(1 for row in gate_rows if row["回歸結果"] == "NOT_EXECUTED")
+    not_applicable = sum(1 for row in result_rows if row["回歸結果"] == "NOT_APPLICABLE")
     duplicate_count = len(duplicate_execution_case_ids)
     return {
         "ok": executed_count == required and failed == 0 and not_executed == 0 and duplicate_count == 0,
@@ -1836,10 +1911,19 @@ def _aggregate_pdf_regression_rows(per_pdf_rows: list[tuple[str, list[dict[str, 
         "passed": passed,
         "failed": failed,
         "not_executed": not_executed,
+        "not_applicable": not_applicable,
         "duplicate_case_id": duplicate_count,
         "duplicate_execution_case_ids": duplicate_execution_case_ids,
-        "required_case_ids": sorted(grouped),
-        "executed_case_ids": sorted(row["案例ID"] for row in result_rows if row["回歸結果"] in {"PASS", "FAIL"}),
+        "reference_duplicate_case_id": len(duplicate_reference_case_ids),
+        "duplicate_reference_case_ids": duplicate_reference_case_ids,
+        "reference_audit_total": len(reference_rows),
+        "reference_audit_matched": sum(1 for row in reference_rows if row["回歸結果"] in {"PASS", "FAIL"}),
+        "reference_audit_passed": sum(1 for row in reference_rows if row["回歸結果"] == "PASS"),
+        "reference_audit_failed": sum(1 for row in reference_rows if row["回歸結果"] == "FAIL"),
+        "reference_audit_not_found": sum(1 for row in reference_rows if row["回歸結果"] == "NOT_APPLICABLE"),
+        "required_case_ids": sorted(row["案例ID"] for row in gate_rows),
+        "not_applicable_case_ids": sorted(row["案例ID"] for row in result_rows if row["回歸結果"] == "NOT_APPLICABLE"),
+        "executed_case_ids": sorted(row["案例ID"] for row in gate_rows if row["回歸結果"] in {"PASS", "FAIL"}),
         "results": result_rows,
     }
 
@@ -1879,7 +1963,9 @@ def collect_manifest(
     *,
     actual_fingerprints: Mapping[str, Mapping[str, Any]],
     source_validation: Mapping[str, Any],
+    runtime_root: Path | None = None,
 ) -> dict[str, Any]:
+    root = Path(runtime_root or Path(__file__).resolve().parent).resolve()
     manifest = {
         "version": VERSION,
         "session_schema_version": SESSION_SCHEMA_VERSION,
@@ -1896,14 +1982,14 @@ def collect_manifest(
         "reconciliation": {},
     }
     expected_chain_fingerprint = compute_expected_asset_fingerprint(
-        Path(__file__).resolve().parent,
+        root,
         source_validation,
         resolver_version=EXPECTED_RESOLVER_VERSION,
         source_files=EXPECTED_RESOLVER_SOURCE_FILES,
     )
     manifest["expected_asset_fingerprint"] = expected_chain_fingerprint["fingerprint"]
     manifest["expected_asset_fingerprint_components"] = expected_chain_fingerprint["components"]
-    reusable_rules = load_reusable_expected_rules()
+    reusable_rules = load_reusable_expected_rules(root / REUSABLE_EXPECTED_RULES.name)
     manifest["reusable_expected_rules"] = reusable_rules
     manifest["reusable_expected_rules_sha256"] = reusable_rules_sha256(reusable_rules)
     all_actual_ids: set[str] = set()
@@ -2062,6 +2148,7 @@ def collect_manifest(
         "passed": int(first_mandatory.get("passed", 0)) + int(combined_pdf.get("passed", 0)),
         "failed": int(first_mandatory.get("failed", 0)) + int(combined_pdf.get("failed", 0)),
         "not_executed": int(first_mandatory.get("not_executed", 0)) + int(combined_pdf.get("not_executed", 0)),
+        "not_applicable": int(combined_pdf.get("not_applicable", 0)),
         "duplicate_case_id": int(first_mandatory.get("duplicate_case_id", 0)) + int(combined_pdf.get("duplicate_case_id", 0)),
     }
     return seal_manifest(manifest)
@@ -2142,6 +2229,24 @@ def _apply_review_event(entry: dict[str, Any], event: Mapping[str, Any]) -> dict
         if not expected_set or not evidence or not context:
             raise InvalidTransitionError("expected 必須提供讀音、獨立來源證據與詞語／語境／位置證據")
 
+        current_expected = list(normalize_expected_set(entry.get("expected_set")))
+        if (
+            action == "補建expected證據"
+            and infer_expected_status(entry) == "RESOLVED"
+            and current_expected != expected_set
+        ):
+            # ``補建`` fills an unresolved expected lane; it is not an override.
+            # When a newer resolver now supplies a different independent truth,
+            # retain the durable event for audit but never overwrite that truth.
+            # The current mechanically-derived state remains authoritative and,
+            # when it is still a difference, naturally stays fail-closed.
+            out = dict(entry)
+            out["review_event_replay_status"] = "INVALIDATED_EXPECTED_DRIFT"
+            out["review_event_replay_note"] = (
+                f"舊補建 expected={expected_set}；現版 resolver expected={current_expected}"
+            )
+            return out
+
         state = str(entry.get("state") or "")
         if state in {"EXCLUDED_NONINDEPENDENT_LAYER", "EXCLUDED_OUT_OF_SCOPE"}:
             out = dict(entry)
@@ -2178,8 +2283,24 @@ def _apply_review_event(entry: dict[str, Any], event: Mapping[str, Any]) -> dict
         # so the confirmation event must carry enough independent expected evidence
         # to reconstruct that intermediate DIFFERENCE state from the frozen manifest.
         working = dict(entry)
+        event_expected = list(normalize_expected_set(event.get("expected_set")))
+        current_expected = list(normalize_expected_set(working.get("expected_set")))
+        if (
+            infer_expected_status(working) == "RESOLVED"
+            and event_expected
+            and current_expected != event_expected
+        ):
+            # A six-gate conclusion is bound to the expected truth reviewed at
+            # that time.  Rebuilding candidates with a different independent
+            # expected truth invalidates only the terminal conclusion; it must
+            # not resurrect the embedded historical expected evidence.
+            working["review_event_replay_status"] = "INVALIDATED_EXPECTED_DRIFT"
+            working["review_event_replay_note"] = (
+                f"舊確認 expected={event_expected}；現版 resolver expected={current_expected}"
+            )
+            return working
         if working.get("state") != "DIFFERENCE_PENDING_CONFIRMATION":
-            expected_set = list(normalize_expected_set(event.get("expected_set")))
+            expected_set = event_expected
             evidence = str(event.get("expected_evidence") or "").strip()
             context = str(event.get("context_evidence") or working.get("context_evidence") or working.get("char") or "").strip()
             if expected_set and evidence and context:
@@ -2576,7 +2697,13 @@ def _friendly_issue(entry: Mapping[str, Any]) -> tuple[str, str]:
         return friendly_state(state), "這是程式／資料完整性問題，先修復後再繼續校對。"
     return friendly_state(state), "保留待處理。"
 
-def generate_report(output_dir: Path, manifest: dict[str, Any], db: dict[str, Any]) -> Path:
+def generate_report(
+    output_dir: Path,
+    manifest: dict[str, Any],
+    db: dict[str, Any],
+    *,
+    runtime_root: Path | None = None,
+) -> Path:
     """Render mutually-exclusive ledger views and the v2.5 completion gate."""
     validate_manifest_integrity(manifest)
     validate_output_artifact_hashes(manifest)
@@ -2588,7 +2715,7 @@ def generate_report(output_dir: Path, manifest: dict[str, Any], db: dict[str, An
     ):
         raise ValueError("SESSION_SCHEMA_INCOMPATIBLE：session/workbook/review ID 資料布局無法直接沿用")
 
-    root = Path(__file__).resolve().parent
+    root = Path(runtime_root or Path(__file__).resolve().parent).resolve()
     source_validation = validate_asset_manifest(root)
     if not source_validation.get("ok"):
         write_pipeline_blocked(output_dir, source_validation, "SOURCE_INVALID_DURING_REPORT")
@@ -2664,8 +2791,17 @@ def generate_report(output_dir: Path, manifest: dict[str, Any], db: dict[str, An
         ("mandatory regression passed", (manifest.get("mandatory_regression") or {}).get("passed", 0)),
         ("mandatory regression failed", (manifest.get("mandatory_regression") or {}).get("failed", 0)),
         ("mandatory regression not executed", (manifest.get("mandatory_regression") or {}).get("not_executed", 0)),
+        ("PDF occurrence regression required", (manifest.get("pdf_regression") or {}).get("required", 0)),
+        ("PDF occurrence regression executed", (manifest.get("pdf_regression") or {}).get("executed", 0)),
+        ("PDF occurrence regression passed", (manifest.get("pdf_regression") or {}).get("passed", 0)),
         ("PDF occurrence regression failed", (manifest.get("pdf_regression") or {}).get("failed", 0)),
         ("PDF occurrence regression not executed", (manifest.get("pdf_regression") or {}).get("not_executed", 0)),
+        ("PDF occurrence regression not applicable", (manifest.get("pdf_regression") or {}).get("not_applicable", 0)),
+        ("reference-only audit total", (manifest.get("pdf_regression") or {}).get("reference_audit_total", 0)),
+        ("reference-only audit matched", (manifest.get("pdf_regression") or {}).get("reference_audit_matched", 0)),
+        ("reference-only audit passed", (manifest.get("pdf_regression") or {}).get("reference_audit_passed", 0)),
+        ("reference-only audit failed (non-gating)", (manifest.get("pdf_regression") or {}).get("reference_audit_failed", 0)),
+        ("reference-only audit not found", (manifest.get("pdf_regression") or {}).get("reference_audit_not_found", 0)),
         ("集合對帳", "PASS" if reconciliation.ok else "FAIL"),
         ("失敗硬門檻", "｜".join(gate.get("failed_gates") or [])),
         ("完成判定", "只有 actual 100%、expected 100%、所有非終態/錯誤/衝突為 0、mandatory 與適用 PDF regression 全部實際執行且 0 失敗、全量集合對帳成立，才可 PROOFREAD_COMPLETE。"),
@@ -2753,6 +2889,16 @@ def generate_report(output_dir: Path, manifest: dict[str, Any], db: dict[str, An
     wm.append(["指標", "結果"])
     for key in ("ok", "required", "executed", "passed", "failed", "not_executed", "duplicate_case_id"):
         wm.append([key, (manifest.get("mandatory_regression") or {}).get(key)])
+
+    wh = wb.create_sheet("歷史回歸稽核")
+    historical_columns = [
+        "案例ID", "適用性模式", "適用性狀態", "計入完成門檻", "回歸結果", "定位命中數",
+        "執行PDF", "課本頁", "完整詞語", "字元", "目標在詞內序號", "定位上下文",
+        "來源PDF SHA-256", "真值實際注音", "真值預期注音", "真值結論", "執行說明", "來源", "備註",
+    ]
+    wh.append(historical_columns)
+    for row in (manifest.get("pdf_regression") or {}).get("results", []):
+        wh.append([row.get(column, "") for column in historical_columns])
 
     wi = wb.create_sheet("執行資訊")
     wi.append(["項目", "內容"])
@@ -2860,7 +3006,10 @@ def generate_report(output_dir: Path, manifest: dict[str, Any], db: dict[str, An
             expected_text = " | ".join(normalize_expected_set(event.get("expected_set")))
             evidence_text = str(event.get("expected_evidence") or event.get("source") or "")
         elif action == "確認現版差異":
-            label = "確認教材錯誤"
+            if entry.get("review_event_replay_status") == "INVALIDATED_EXPECTED_DRIFT":
+                label = "舊確認已失效（expected 已變更）"
+            else:
+                label = "確認教材錯誤"
             expected_text = " | ".join(entry.get("expected_set") or [])
             evidence_text = str(entry.get("expected_evidence") or event.get("source") or "")
         elif action == "確認非校對範圍":
@@ -2873,7 +3022,12 @@ def generate_report(output_dir: Path, manifest: dict[str, Any], db: dict[str, An
             evidence_text = str(event.get("source") or "")
         ur.append([
             "人工判定", entry.get("pdf_name", ""), entry.get("printed_page", ""), _entry_phrase(entry), entry.get("char", ""),
-            expected_text, evidence_text, "僅此位置", str(event.get("note") or event.get("resolution_reason") or ""),
+            expected_text, evidence_text, "僅此位置", str(
+                entry.get("review_event_replay_note")
+                or event.get("note")
+                or event.get("resolution_reason")
+                or ""
+            ),
         ])
 
     for sheet in user_wb.worksheets:
@@ -2959,7 +3113,7 @@ def _resolve_session_pdfs(output_dir: Path, manifest: Mapping[str, Any]) -> list
     return resolved
 
 
-def export_actual_pending_for_gpt(output_dir: Path) -> Path:
+def export_actual_pending_for_gpt(output_dir: Path) -> Path | None:
     output_dir = Path(output_dir)
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
@@ -2973,7 +3127,7 @@ def export_actual_pending_for_gpt(output_dir: Path) -> Path:
     ledger = materialize_ledger(manifest, db)
     groups = build_actual_review_groups(ledger)
     if not groups:
-        raise ValueError("目前沒有 ACTUAL_DECODE_ERROR／ACTUAL_UNRESOLVED 可匯出。若是人工發現誤讀，請在人工校對畫面按『實際注音辨識有誤』。")
+        return None
     return export_actual_review_package(
         output_dir,
         ledger,
@@ -3184,13 +3338,14 @@ def run_pipeline_pdfs(
     *,
     session_id_override: str | None = None,
     defer_excel_reports: bool = False,
+    runtime_root: Path | None = None,
 ) -> Path:
     output_dir.mkdir(parents=True,exist_ok=True)
     actual_dir=output_dir/"01_實際注音"; cand_dir=output_dir/"02_候選報告"
     actual_dir.mkdir(exist_ok=True); cand_dir.mkdir(exist_ok=True)
 
     pdfs = [Path(pdf).resolve() for pdf in pdfs]
-    root=Path(__file__).resolve().parent
+    root=Path(runtime_root or Path(__file__).resolve().parent).resolve()
     dynamic_actual_root = initialize_project_actual_evidence(output_dir, root)
     source_validation = validate_asset_manifest(root)
     if not source_validation.get("ok"):
@@ -3233,6 +3388,7 @@ def run_pipeline_pdfs(
                 pdfs, actual_dir, cand_dir,
                 actual_fingerprints=actual_fingerprints,
                 source_validation=source_validation,
+                runtime_root=root,
             )
             print("  前次輸出驗證通過：略過 actual 重解碼與 candidate 重建。", flush=True)
         except Exception as recovery_exc:
@@ -3265,11 +3421,11 @@ def run_pipeline_pdfs(
                     print(f"  [{i}/{len(pdfs)}] PDF 與 actual 證據資產相容，reuse：{pdf.name}",flush=True)
                     continue
                 print(f"  [{i}/{len(pdfs)}] actual cache 不相容，重新解碼：{pdf.name}",flush=True)
-                decode(pdf, actual, DEFAULT_MAP, DEFAULT_GROUPS, DEFAULT_CFF_MAP,
-                       DEFAULT_XREF_OVERRIDES, DEFAULT_TRANSFORMS, DEFAULT_FINGERPRINTS,
-                       DEFAULT_OUTLINE_SIGNATURES, DEFAULT_MAPPING_CORRECTIONS,
-                       DEFAULT_SYMBOL_TEMPLATES, dynamic_actual_root / OCCURRENCE_OVERRIDE_FILE,
-                       DEFAULT_STRUCTURAL_EXCLUSIONS, DEFAULT_CFF_CONSENSUS,
+                decode(pdf, actual, root / DEFAULT_MAP.name, root / DEFAULT_GROUPS.name, root / DEFAULT_CFF_MAP.name,
+                       root / DEFAULT_XREF_OVERRIDES.name, root / DEFAULT_TRANSFORMS.name, root / DEFAULT_FINGERPRINTS.name,
+                       root / DEFAULT_OUTLINE_SIGNATURES.name, root / DEFAULT_MAPPING_CORRECTIONS.name,
+                       root / DEFAULT_SYMBOL_TEMPLATES.name, dynamic_actual_root / OCCURRENCE_OVERRIDE_FILE,
+                       root / DEFAULT_STRUCTURAL_EXCLUSIONS.name, root / DEFAULT_CFF_CONSENSUS.name,
                        fingerprint, dynamic_actual_root)
                 # A brand-new/legacy workbook may have required a conservative
                 # global-fallback fingerprint before its exact glyph dependencies
@@ -3319,7 +3475,18 @@ def run_pipeline_pdfs(
                     print(f"  [{i}/{len(pdfs)}] actual 未變且 expected 證據資產相同，reuse：{pdf.name}",flush=True)
                     continue
                 print(f"  [{i}/{len(pdfs)}] 重新建立候選：{pdf.name}",flush=True)
-                analyze(actual,Path(DEFAULT_DICT),Path(DEFAULT_RULES),cand,pdf,Path(DEFAULT_REGRESSIONS),Path(DEFAULT_CHAR_OVERRIDES),Path(DEFAULT_CONTEXT_OVERRIDES),dynamic_actual_root)
+                analyze(
+                    actual,
+                    root / DEFAULT_DICT.name,
+                    root / DEFAULT_RULES.name,
+                    cand,
+                    pdf,
+                    root / DEFAULT_REGRESSIONS.name,
+                    root / DEFAULT_CHAR_OVERRIDES.name,
+                    root / DEFAULT_CONTEXT_OVERRIDES.name,
+                    dynamic_actual_root,
+                    runtime_root=root,
+                )
 
             _write_pipeline_progress(output_dir, "3/3", "[3/3] 建立 occurrence ledger、全量對帳與 completion gate")
             print("[3/3] 建立 occurrence ledger、全量對帳與 completion gate",flush=True)
@@ -3327,6 +3494,7 @@ def run_pipeline_pdfs(
                 pdfs, actual_dir, cand_dir,
                 actual_fingerprints=actual_fingerprints,
                 source_validation=source_validation,
+                runtime_root=root,
             )
         else:
             manifest = resume_manifest
@@ -3367,7 +3535,7 @@ def run_pipeline_pdfs(
             })
             gpt_report = None
         else:
-            report=generate_report(output_dir,manifest,db)
+            report=generate_report(output_dir,manifest,db,runtime_root=root)
             gpt_report = export_pending_for_gpt(output_dir) if pending else None
         if gate["status"] == PROOFREAD_COMPLETE:
             print(f"全冊注音校對完成。\n報告：{report}",flush=True)
@@ -3482,6 +3650,46 @@ def regenerate_report(output_dir: Path) -> Path:
     return generate_report(output_dir,manifest,db)
 
 
+def repair_project_state(output_dir: Path, *, runtime_root: Path | None = None) -> Path:
+    """Rebuild expected candidates and completion state without forcing actual decode.
+
+    This is the supported v5.6.2 upgrade path for an existing sealed project.
+    ``run_pipeline_pdfs`` reuses each actual workbook when the exact PDF bytes,
+    approved actual assets, and project-owned actual evidence are unchanged. A
+    changed expected rule/regression asset rebuilds only candidate workbooks,
+    then replays durable manual decisions and regenerates the completion gate.
+    """
+    output_dir = resolve_existing_project_dir(Path(output_dir))
+    old_manifest = json_load_strict(output_dir / "校對工作階段.json")
+    validate_manifest_integrity(old_manifest)
+    validate_output_artifact_hashes(old_manifest)
+    if (
+        not schema_compatible(old_manifest.get("session_schema_version"), SESSION_SCHEMA_VERSION)
+        or not schema_compatible(old_manifest.get("ledger_schema_version"), LEDGER_SCHEMA_VERSION)
+        or not review_id_schema_compatible(old_manifest.get("review_id_schema_version"), REVIEW_ID_SCHEMA_VERSION)
+    ):
+        raise ValueError("SESSION_SCHEMA_INCOMPATIBLE：現有專案無法安全修復，需明確轉接器")
+    # Validate durable decisions before candidate workbooks can be replaced.
+    # The generic loader may quarantine unmistakably legacy data for normal UI
+    # startup, but repair must never erase/bypass an incompatible decision DB or
+    # leave the old manifest pointing at a newly rewritten candidate workbook.
+    decision_path = output_dir / "人工判定資料庫.json"
+    if decision_path.exists():
+        existing_db = normalize_db(json_load_strict(decision_path))
+        materialize_ledger(old_manifest, existing_db)
+    pdfs = _resolve_session_pdfs(output_dir, old_manifest)
+    print(
+        "[專案修復] 沿用相同 PDF 與既有人工判定；actual 證據相容時直接 reuse，只重建受影響的 expected 候選與完成門檻。",
+        flush=True,
+    )
+    pipeline_kwargs: dict[str, Any] = {
+        "session_id_override": str(old_manifest.get("session_id") or "") or None,
+    }
+    if runtime_root is not None:
+        pipeline_kwargs["runtime_root"] = Path(runtime_root)
+    return run_pipeline_pdfs(pdfs, output_dir, **pipeline_kwargs)
+
+
 def resolve_existing_project_dir(path: Path) -> Path:
     """Resolve a project folder conservatively for management/import operations.
 
@@ -3523,6 +3731,7 @@ def main():
     ap.add_argument("input",nargs="?",help="PDF 或含 PDF 的資料夾")
     ap.add_argument("-o","--output-dir")
     ap.add_argument("--report-only",action="store_true",help="只依既有工作階段與判定重新產生最終報告")
+    ap.add_argument("--repair-project",action="store_true",help="沿用 actual 與人工判定，重建受影響候選、回歸門檻及報告")
     ap.add_argument("--export-gpt",action="store_true",help="輸出 expected／差異 GPT 證據表")
     ap.add_argument("--import-gpt",help="匯入 expected／差異 GPT 證據表 xlsx")
     ap.add_argument("--import-gpt-auto", nargs="+", help="自動辨識並匯入 GPT xlsx 或單檔 GPT 判定包 zip；多檔時自動先判定包／actual 後 expected")
@@ -3530,14 +3739,18 @@ def main():
     ap.add_argument("--import-actual-gpt",help="匯入 GPT 已填寫的 actual待判定_給GPT.xlsx，驗證後自動重新解碼")
     ap.add_argument("--refresh-actual",action="store_true",help="依目前 user actual 證據重新解碼現有工作階段")
     args=ap.parse_args()
-    if args.report_only or args.export_gpt or args.import_gpt or args.import_gpt_auto or args.export_actual_gpt or args.import_actual_gpt or args.refresh_actual:
+    if args.report_only or args.repair_project or args.export_gpt or args.import_gpt or args.import_gpt_auto or args.export_actual_gpt or args.import_actual_gpt or args.refresh_actual:
         if not args.output_dir: raise SystemExit("此操作需要 -o 輸出資料夾")
         requested_outdir = Path(args.output_dir)
         outdir = resolve_existing_project_dir(requested_outdir)
         if outdir != requested_outdir:
             print(f"[專案路徑修正] {requested_outdir} -> {outdir}", flush=True)
+        if args.repair_project:
+            print(repair_project_state(outdir)); return 0
         if args.export_actual_gpt:
-            print(export_actual_pending_for_gpt(outdir)); return 0
+            package = export_actual_pending_for_gpt(outdir)
+            print(package if package is not None else NO_ACTUAL_PENDING_MESSAGE)
+            return 0
         if args.import_gpt_auto:
             planned = plan_gpt_auto_imports(args.import_gpt_auto)
             if not planned:
@@ -3562,12 +3775,11 @@ def main():
                     )
                 else:
                     n, skipped, report = import_gpt_decisions(outdir, import_path)
-                    counts = current_pending_state_counts(outdir)
-                    actual_left = counts.get("ACTUAL_DECODE_ERROR", 0) + counts.get("ACTUAL_UNRESOLVED", 0)
-                    extra = f"；目前仍有 actual 待處理 {actual_left} 筆" if actual_left else ""
                     print(
                         f"自動辨識：{import_path.name} = expected／差異 GPT 證據檔。"
-                        f"匯入 {n} 筆，略過 {skipped} 筆未操作列{extra}。\n{report}",
+                        f"匯入 {n} 筆，略過 {skipped} 筆未操作列。\n{report}\n"
+                        "完成狀態請以本次產生的報告／pipeline_status.json 為準；"
+                        "若剛升級規則，請按「修復／更新報告」。",
                         flush=True,
                     )
             return 0

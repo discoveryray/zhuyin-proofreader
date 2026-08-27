@@ -1,4 +1,14 @@
-﻿v5.6.1（2026-08-24）－零適用歷史回歸完成門檻修正
+﻿v5.6.2（2026-08-26）－現有專案完成狀態修正版
+- 修復 production runtime root 的 14 個資產 SHA mismatch：確認所有 CSV 自 v5.6.1 匯入後內容從未改變，差異只來自 Git 將已核准 CRLF bytes 無聲正規化為 LF；恢復原 manifest 所指向的 CRLF bytes，並以 `.gitattributes` 凍結 manifest-protected CSV，未重算或放寬任何 SHA、schema、actual/expected chain。
+- 新增「修復／更新報告」：沿用同一 session、人工/GPT 判定與 actual 工作簿；actual 證據相容時直接 reuse，只重建受影響的 expected 候選、回歸門檻與報告。
+- 修正三上來源限定規則把所有「轉動」高優先判為ㄓㄨㄢˋ，導致強制回歸 M25-ZHUAN-DONG 失敗；依既有人工回標與公司規範改回「轉動」ㄓㄨㄢˇ。
+- 歷史 occurrence regression 新增 applicability_mode 與 source_pdf_sha256。三上 15 筆舊案例中，14 筆為 reference_only：仍嘗試定位並留下 PASS／FAIL／not-found 稽核，但不進 completion denominator；NEG-3UP-005「一級棒／一」為 portable_gate，以版本無關 locator 定位，唯一命中才執行，0 match 為 NOT_EXECUTED、多重 match 為 IDENTITY_AMBIGUITY／FAIL，兩者都會阻擋完成。真正 hard_gate 案例仍須執行並全數通過。
+- 「輸出 actual 待判定給 GPT」遇到 0 筆時改為正常訊息並以代碼 0 結束，不再拋出 traceback。
+- expected／差異判定檔匯入訊息不再從舊 manifest 顯示可能過期的 actual 待處理數；完成狀態統一以本次報告與 pipeline_status.json 為準。
+- GUI 在待處理為 0 但仍未完成時，會直接顯示未通過的硬門檻，避免只看到「校對尚未完成」而無原因。
+- actual／expected 雙證據鏈仍完全分離；本版不以 actual 反推 expected，也不降低 mandatory regression、集合對帳或完成門檻。
+
+v5.6.1（2026-08-24）－零適用歷史回歸完成門檻修正
 - 修正全冊沒有任何適用 PDF occurrence regression（required=0, executed=0）時，regression gate 被誤判失敗的問題。
 - PDF occurrence regression 改為「所有實際 required 案例均執行完成且無 FAIL／NOT_EXECUTED／重複執行」即通過；0 個適用案例視為中性通過。
 - mandatory regression 仍維持原有硬門檻，必須完整執行並全數通過；本修正不放寬既有真實回歸案例。

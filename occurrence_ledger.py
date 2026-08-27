@@ -13,7 +13,7 @@ from unicodedata import normalize
 
 LEDGER_SCHEMA_VERSION = "2.6.0"
 SESSION_SCHEMA_VERSION = "2.6.0"
-WORKBOOK_SCHEMA_VERSION = "2.6.0"
+WORKBOOK_SCHEMA_VERSION = "2.6.1"
 # Review identity is occurrence-based and did not change in v5.5.0. Keep the
 # review-id schema stable so a printed occurrence keeps the same durable ID.
 REVIEW_ID_SCHEMA_VERSION = "2.5.0"
@@ -783,8 +783,9 @@ def candidate_payload_sha256(
         "actual_expected", "actual_matched_phrase", "failure_reason", "note",
     )
     pdf_fields = (
-        "案例ID", "課本頁", "完整詞語", "字元", "真值實際注音", "真值預期注音", "真值結論",
-        "回歸結果", "執行說明", "來源", "備註",
+        "案例ID", "課本頁", "完整詞語", "字元", "目標在詞內序號", "定位上下文",
+        "真值實際注音", "真值預期注音", "真值結論", "適用性模式", "來源PDF SHA-256",
+        "適用性狀態", "計入完成門檻", "定位命中數", "回歸結果", "執行說明", "來源", "備註",
     )
 
     canonical_ledger = []

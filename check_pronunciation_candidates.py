@@ -6,9 +6,10 @@ import hashlib
 import json
 import re
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterable, Mapping
 from unicodedata import normalize
 
 import fitz
@@ -50,7 +51,7 @@ from cross_version_compat import fingerprint_compatible, schema_compatible
 from actual_review import actual_workbook_dynamic_dependencies
 
 PROGRAM = "注音校對候選比較器"
-VERSION = "5.6.1"
+VERSION = "5.6.2"
 EXPECTED_RESOLVER_SOURCE_FILES = [
     "check_pronunciation_candidates.py",
     "pronunciation_rule_engine.py",
@@ -132,6 +133,130 @@ def evaluate_historical_regression(rec: dict | None, rg: dict) -> tuple[str, str
     return "FAIL", f"未知歷史回歸狀態：{status}"
 
 
+@dataclass(frozen=True)
+class HistoricalRegressionApplicability:
+    mode: str
+    should_locate: bool
+    completion_gate: bool
+    locator_scope: str
+    state: str
+    note: str = ""
+
+    def __iter__(self):
+        """Preserve the v5.6.2 tuple API as gate-applicability compatibility.
+
+        Legacy callers unpacked ``(applicable, note)``.  The boolean now means
+        completion-gate applicability; callers that need locator behavior must
+        use the explicit ``should_locate`` attribute.
+        """
+        yield self.completion_gate
+        yield self.note
+
+
+def historical_regression_routed_to_pdf(rg: Mapping[str, Any], pdf_stem: str) -> bool:
+    """Use names only as a coarse book-family route, never exact source identity."""
+    mode = str(rg.get("applicability_mode") or "hard_gate").strip().lower()
+    if mode == "hard_gate" and str(rg.get("source_pdf_sha256") or "").strip():
+        # Exact bytes remain authoritative even if the file was renamed.
+        return True
+    family_hint = str(rg.get("pdf_contains") or "").strip()
+    return not family_hint or family_hint in str(pdf_stem or "")
+
+
+def historical_regression_applicability(
+    rg: Mapping[str, Any], current_pdf_sha256: str
+) -> HistoricalRegressionApplicability:
+    """Plan source applicability separately from occurrence re-location.
+
+    Filename substrings are useful for routing a case to a textbook family, but
+    they are not a stable source-version identity. ``hard_gate`` may bind to
+    exact PDF bytes, ``reference_only`` always attempts a non-gating audit, and
+    ``portable_gate`` uses only pronunciation-independent locator fields and
+    must resolve to exactly one occurrence across the whole book.
+
+    Existing unbound ``hard_gate`` rows retain their legacy page-scoped gating
+    behavior. New cross-version gates must use the explicit portable mode.
+    Historical actual/expected truth is never consulted here.
+    """
+    mode = str(rg.get("applicability_mode") or "hard_gate").strip().lower()
+    if mode not in {"hard_gate", "portable_gate", "reference_only"}:
+        raise ValueError(f"歷史回歸 applicability_mode 無效：{rg.get('case_id')} / {mode}")
+    if str(rg.get("target_occurrence_index") or "").strip():
+        _regression_target_relative_offset(dict(rg))
+    if mode == "reference_only":
+        return HistoricalRegressionApplicability(
+            mode=mode,
+            should_locate=True,
+            completion_gate=False,
+            locator_scope="historical_page",
+            state="REFERENCE_AUDIT",
+            note="非阻擋參考案例，不列入完成門檻；仍嘗試依現版 occurrence locator 重現",
+        )
+
+    if mode == "portable_gate":
+        if str(rg.get("source_pdf_sha256") or "").strip():
+            raise ValueError(f"portable_gate 不得混用 source_pdf_sha256：{rg.get('case_id')}")
+        phrase = normalize("NFKC", str(rg.get("phrase") or "").strip())
+        target = normalize("NFKC", str(rg.get("target_char") or "").strip())
+        if not phrase or not target or target not in phrase:
+            raise ValueError(f"portable_gate 缺少完整 phrase／target identity：{rg.get('case_id')}")
+        if phrase.count(target) > 1 and str(rg.get("target_occurrence_index") or "").strip() == "":
+            raise ValueError(f"portable_gate 的 phrase 含重複 target，必須指定 target_occurrence_index：{rg.get('case_id')}")
+        _regression_target_relative_offset(dict(rg))
+        locator_context = normalize("NFKC", str(rg.get("locator_context") or "").strip())
+        if locator_context and phrase not in locator_context:
+            raise ValueError(f"portable_gate locator_context 必須包含完整 phrase：{rg.get('case_id')}")
+        return HistoricalRegressionApplicability(
+            mode=mode,
+            should_locate=True,
+            completion_gate=True,
+            locator_scope="whole_book_portable",
+            state="PORTABLE_GATE",
+        )
+
+    bound_hash = str(rg.get("source_pdf_sha256") or "").strip().lower()
+    current_hash = str(current_pdf_sha256 or "").strip().lower()
+    if bound_hash:
+        if not re.fullmatch(r"[0-9a-f]{64}", bound_hash):
+            raise ValueError(f"歷史回歸 source_pdf_sha256 格式無效：{rg.get('case_id')}")
+        if bound_hash != current_hash:
+            return HistoricalRegressionApplicability(
+                mode=mode,
+                should_locate=False,
+                completion_gate=False,
+                locator_scope="exact_pdf",
+                state="SOURCE_NOT_APPLICABLE",
+                note="來源 PDF SHA-256 不同；此歷史座標不適用於現版 PDF",
+            )
+        return HistoricalRegressionApplicability(
+            mode=mode,
+            should_locate=True,
+            completion_gate=True,
+            locator_scope="exact_pdf",
+            state="HARD_GATE_EXACT_SHA",
+        )
+    return HistoricalRegressionApplicability(
+        mode=mode,
+        should_locate=True,
+        completion_gate=True,
+        locator_scope="historical_page",
+        state="HARD_GATE_LEGACY_UNBOUND",
+        note="既有未綁 SHA hard_gate；維持原有頁碼 locator 行為",
+    )
+
+
+def validate_historical_regression_definitions(
+    definitions: Iterable[Mapping[str, Any]], current_pdf_sha256: str
+) -> None:
+    """Fail closed on every definition before filename-family routing.
+
+    A malformed mode or locator must not escape validation merely because its
+    filename hint does not match the PDF currently being processed.
+    """
+    for definition in definitions:
+        historical_regression_applicability(definition, current_pdf_sha256)
+
+
 def _regression_target_relative_offset(rg: dict) -> int | None:
     """Return the 0-based target-character offset inside a historical phrase.
 
@@ -157,17 +282,29 @@ def _regression_target_relative_offset(rg: dict) -> int | None:
     return offsets[value]
 
 
-def historical_regression_potential_match(rec: dict, rg: dict) -> bool:
+def _historical_locator_context_matches(rec: Mapping[str, Any], rg: Mapping[str, Any]) -> bool:
+    required = normalize("NFKC", str(rg.get("locator_context") or "").strip())
+    if not required:
+        return True
+    return any(
+        required in normalize("NFKC", str(rec.get(field) or ""))
+        for field in ("所在行", "局部詞境", "上下文")
+    )
+
+
+def historical_regression_potential_match(rec: dict, rg: dict, *, match_page: bool = True) -> bool:
     """Match a historical control to the exact phrase span containing rec.
 
     Historical pronunciation truth is deliberately excluded from occurrence
     identity.  The phrase must cover the current target position in the
     reconstructed line; appearing elsewhere on the same line is insufficient.
     """
-    try:
-        same_page = int(rec.get("課本頁") or -1) == int(rg.get("page") or -2)
-    except Exception:
-        same_page = str(rec.get("課本頁") or "").strip() == str(rg.get("page") or "").strip()
+    same_page = True
+    if match_page:
+        try:
+            same_page = int(rec.get("課本頁") or -1) == int(rg.get("page") or -2)
+        except Exception:
+            same_page = str(rec.get("課本頁") or "").strip() == str(rg.get("page") or "").strip()
     target = normalize("NFKC", str(rg.get("target_char") or "").strip())
     if not same_page or normalize("NFKC", str(rec.get("字元") or "")) != target:
         return False
@@ -189,9 +326,9 @@ def historical_regression_potential_match(rec: dict, rg: dict) -> bool:
         end = start + len(phrase)
         if start <= target_pos < end:
             if required_relative_offset is None:
-                if phrase[target_pos - start] == target:
+                if phrase[target_pos - start] == target and _historical_locator_context_matches(rec, rg):
                     return True
-            elif target_pos == start + required_relative_offset:
+            elif target_pos == start + required_relative_offset and _historical_locator_context_matches(rec, rg):
                 return True
         start = line_text.find(phrase, start + 1)
 
@@ -202,9 +339,88 @@ def historical_regression_potential_match(rec: dict, rg: dict) -> bool:
     # prevents the old "phrase exists elsewhere on a long line" false match.
     if required_relative_offset is None and phrase.count(target) == 1:
         fallback_context = normalize("NFKC", str(rec.get("上下文") or ""))
-        if fallback_context and fallback_context.count(target) == 1 and phrase in fallback_context:
+        if (
+            fallback_context
+            and fallback_context.count(target) == 1
+            and phrase in fallback_context
+            and _historical_locator_context_matches(rec, rg)
+        ):
             return True
     return False
+
+
+def execute_historical_regression(
+    rg: dict,
+    occurrence_results: list[dict],
+    current_pdf_sha256: str,
+    current_printed_pages: set[str] | None = None,
+) -> dict[str, Any]:
+    """Locate first, then evaluate truth, while preserving gate semantics."""
+    applicability = historical_regression_applicability(rg, current_pdf_sha256)
+    page = str(rg.get("page") or "").strip()
+    current_printed_pages = current_printed_pages or set()
+    match_page = applicability.locator_scope != "whole_book_portable"
+    potentials = [
+        rec for rec in occurrence_results
+        if applicability.should_locate and historical_regression_potential_match(rec, rg, match_page=match_page)
+    ]
+
+    result = ""
+    state = applicability.state
+    note = applicability.note
+    matched_records: list[dict] = []
+    if not applicability.should_locate:
+        result = "NOT_APPLICABLE"
+    elif match_page and page and page not in current_printed_pages:
+        if applicability.mode == "reference_only":
+            result = "NOT_APPLICABLE"
+            state = "REFERENCE_NOT_FOUND"
+            note = "reference not found：目前分檔未包含歷史課本頁"
+        else:
+            result = "NOT_EXECUTED"
+            state = "GATE_NOT_EXECUTED"
+            note = "目前分檔未包含此課本頁；由全冊聚合器跨 PDF 對帳"
+    elif not potentials:
+        if applicability.mode == "reference_only":
+            result = "NOT_APPLICABLE"
+            state = "REFERENCE_NOT_FOUND"
+            note = "reference not found：現版 occurrence locator 未命中"
+        else:
+            result = "NOT_EXECUTED"
+            state = "GATE_NOT_EXECUTED"
+            note = "應適用 occurrence 未找到或 scope/context 無法定位"
+    elif len(potentials) > 1:
+        status = str(rg.get("status") or "確認錯誤").strip()
+        if applicability.mode == "hard_gate" and status == "確認正確":
+            evaluations = [evaluate_historical_regression(item, rg) for item in potentials]
+            failures = [message for item_result, message in evaluations if item_result != "PASS"]
+            if not failures:
+                result = "PASS"
+                state = "HARD_GATE_EQUIVALENT_MATCHES"
+                note = f"歷史正確控制在同頁定位到 {len(potentials)} 個等價 occurrence；全部獨立通過"
+                matched_records = potentials
+            else:
+                result = "FAIL"
+                state = "HARD_GATE_EVALUATION_FAILED"
+                note = "歷史正確控制至少一筆未通過：" + "｜".join(failures[:3])
+        else:
+            result = "FAIL"
+            state = "REFERENCE_AMBIGUOUS" if applicability.mode == "reference_only" else "IDENTITY_AMBIGUITY"
+            note = f"identity ambiguity：locator 命中 {len(potentials)} 筆；禁止任選 occurrence"
+    else:
+        result, note = evaluate_historical_regression(potentials[0], rg)
+        state = "REFERENCE_MATCHED" if applicability.mode == "reference_only" else "GATE_EXECUTED"
+        matched_records = potentials
+
+    return {
+        "mode": applicability.mode,
+        "completion_gate": applicability.completion_gate,
+        "applicability_state": state,
+        "result": result,
+        "note": note,
+        "match_count": len(potentials),
+        "matched_records": matched_records,
+    }
 
 
 def split_readings(raw) -> list[str]:
@@ -1444,8 +1660,29 @@ def _build_candidate_ledger(actual_source_rows, classifications):
     return ledger
 
 
-def analyze(actual_xlsx: Path, dict_path: Path, rules_path: Path, out_xlsx: Path, pdf_path: Path | None = None, regressions_path: Path | None = None, char_overrides_path: Path | None = None, context_overrides_path: Path | None = None, dynamic_evidence_root: Path | None = None):
-    root = Path(__file__).resolve().parent
+def analyze(
+    actual_xlsx: Path,
+    dict_path: Path,
+    rules_path: Path,
+    out_xlsx: Path,
+    pdf_path: Path | None = None,
+    regressions_path: Path | None = None,
+    char_overrides_path: Path | None = None,
+    context_overrides_path: Path | None = None,
+    dynamic_evidence_root: Path | None = None,
+    *,
+    runtime_root: Path | None = None,
+):
+    root = Path(runtime_root or Path(__file__).resolve().parent).resolve()
+    runtime_dict = root / DEFAULT_DICT.name
+    runtime_rules = root / DEFAULT_RULES.name
+    runtime_regressions = root / DEFAULT_REGRESSIONS.name
+    runtime_char_overrides = root / DEFAULT_CHAR_OVERRIDES.name
+    runtime_context_overrides = root / DEFAULT_CONTEXT_OVERRIDES.name
+    runtime_concise_dict = root / DEFAULT_CONCISE_DICT.name
+    runtime_handbook_constraints = root / DEFAULT_HANDBOOK_CONSTRAINTS.name
+    runtime_handbook_rules = root / DEFAULT_HANDBOOK_RULES.name
+    runtime_mandatory_regressions = root / DEFAULT_MANDATORY_REGRESSIONS.name
     source_validation = validate_asset_manifest(root)
     if not source_validation.get("ok"):
         raise ValueError("PIPELINE_BLOCKED：核心資料來源驗證失敗：" + "；".join(source_validation.get("errors") or []))
@@ -1456,11 +1693,11 @@ def analyze(actual_xlsx: Path, dict_path: Path, rules_path: Path, out_xlsx: Path
         source_files=EXPECTED_RESOLVER_SOURCE_FILES,
     )
     expected_paths = {
-        "dict": (Path(dict_path).resolve(), DEFAULT_DICT.resolve()),
-        "rules": (Path(rules_path).resolve(), DEFAULT_RULES.resolve()),
-        "regressions": (Path(regressions_path or DEFAULT_REGRESSIONS).resolve(), DEFAULT_REGRESSIONS.resolve()),
-        "char_overrides": (Path(char_overrides_path or DEFAULT_CHAR_OVERRIDES).resolve(), DEFAULT_CHAR_OVERRIDES.resolve()),
-        "context_overrides": (Path(context_overrides_path or DEFAULT_CONTEXT_OVERRIDES).resolve(), DEFAULT_CONTEXT_OVERRIDES.resolve()),
+        "dict": (Path(dict_path).resolve(), runtime_dict),
+        "rules": (Path(rules_path).resolve(), runtime_rules),
+        "regressions": (Path(regressions_path or runtime_regressions).resolve(), runtime_regressions),
+        "char_overrides": (Path(char_overrides_path or runtime_char_overrides).resolve(), runtime_char_overrides),
+        "context_overrides": (Path(context_overrides_path or runtime_context_overrides).resolve(), runtime_context_overrides),
     }
     unmanifested = [name for name, (actual_path, required_path) in expected_paths.items() if actual_path != required_path]
     if unmanifested:
@@ -1468,10 +1705,10 @@ def analyze(actual_xlsx: Path, dict_path: Path, rules_path: Path, out_xlsx: Path
     if not pdf_path or not Path(pdf_path).exists():
         raise ValueError("PIPELINE_BLOCKED：候選分析需要現版 PDF 與 SHA-256，不得只憑舊 workbook")
     dictionary = load_dictionary(dict_path)
-    concise_dictionary = load_concise_dictionary(DEFAULT_CONCISE_DICT)
-    handbook_constraints = load_handbook_constraints(DEFAULT_HANDBOOK_CONSTRAINTS)
+    concise_dictionary = load_concise_dictionary(runtime_concise_dict)
+    handbook_constraints = load_handbook_constraints(runtime_handbook_constraints)
     dictionary = apply_handbook_constraints(dictionary, handbook_constraints)
-    handbook_rules = load_rules(DEFAULT_HANDBOOK_RULES, pdf_path.stem if pdf_path else "") if DEFAULT_HANDBOOK_RULES.exists() else []
+    handbook_rules = load_rules(runtime_handbook_rules, pdf_path.stem if pdf_path else "") if runtime_handbook_rules.exists() else []
     # A handbook exact/context rule must still be checked even when the lower
     # project dictionary has no row for its target character. Create a neutral
     # placeholder only to enter the comparison pipeline; the handbook rule,
@@ -1484,7 +1721,7 @@ def analyze(actual_xlsx: Path, dict_path: Path, rules_path: Path, out_xlsx: Path
     rules = load_rules(rules_path, pdf_path.stem if pdf_path else "")
     line_index = build_pdf_line_index(pdf_path) if pdf_path and pdf_path.exists() else {}
     char_overrides = load_character_overrides(char_overrides_path, pdf_path)
-    context_overrides_path = context_overrides_path or DEFAULT_CONTEXT_OVERRIDES
+    context_overrides_path = context_overrides_path or runtime_context_overrides
     context_overrides = load_context_overrides(context_overrides_path, pdf_path)
 
     wb_in = load_workbook(actual_xlsx, data_only=True, read_only=True)
@@ -2166,7 +2403,7 @@ def analyze(actual_xlsx: Path, dict_path: Path, rules_path: Path, out_xlsx: Path
 
     # Source-independent v2.5 mandatory suite. The existing resolver closure is
     # invoked unchanged; failures remain red and are never patched by actual.
-    mandatory_cases = load_mandatory_cases(DEFAULT_MANDATORY_REGRESSIONS)
+    mandatory_cases = load_mandatory_cases(runtime_mandatory_regressions)
     mandatory_results = run_mandatory_regressions(
         mandatory_cases,
         lambda target_char, context, target_index: decide_expected(
@@ -2188,12 +2425,9 @@ def analyze(actual_xlsx: Path, dict_path: Path, rules_path: Path, out_xlsx: Path
     if regressions_path and regressions_path.exists():
         with regressions_path.open("r", encoding="utf-8-sig", newline="") as f:
             regression_defs = list(csv.DictReader(f))
+    validate_historical_regression_definitions(regression_defs, pdf_sha256)
     pdf_stem = pdf_path.stem if pdf_path else ""
-    regression_defs = [
-        rg for rg in regression_defs
-        if not (rg.get("pdf_contains") or "").strip()
-        or (rg.get("pdf_contains") or "").strip() in pdf_stem
-    ]
+    regression_defs = [rg for rg in regression_defs if historical_regression_routed_to_pdf(rg, pdf_stem)]
     current_printed_pages = {str(rec.get("課本頁") or "").strip() for rec in rows if str(rec.get("課本頁") or "").strip()}
 
     all_mismatches_pre = single_mismatches + lexical_mismatches
@@ -2207,58 +2441,37 @@ def analyze(actual_xlsx: Path, dict_path: Path, rules_path: Path, out_xlsx: Path
     remaining_mismatches = list(all_mismatches_pre)
     for rg in regression_defs:
         cid = rg.get("case_id") or ""
-        page = str(rg.get("page") or "").strip()
-        potentials = [rec for rec in all_occurrence_results if historical_regression_potential_match(rec, rg)]
-        if page and page not in current_printed_pages:
-            regression_result = "NOT_EXECUTED"
-            execution_note = "目前分檔未包含此課本頁；由全冊聚合器跨 PDF 對帳"
-            potential = None
-        elif not potentials:
-            regression_result = "NOT_EXECUTED"
-            execution_note = "應適用 occurrence 未找到或 scope/context 無法定位"
-            potential = None
-        elif len(potentials) > 1:
-            status = (rg.get("status") or "確認錯誤").strip()
-            if status == "確認正確":
-                evaluations = [evaluate_historical_regression(item, rg) for item in potentials]
-                failed_evaluations = [note for result, note in evaluations if result != "PASS"]
-                if not failed_evaluations:
-                    regression_result = "PASS"
-                    execution_note = (
-                        f"歷史正確控制在同頁定位到 {len(potentials)} 個等價 occurrence；"
-                        "全部由現版 actual＋expected 獨立通過"
-                    )
-                    for item in potentials:
-                        confirmed_correct_controls.append({
-                            **item, "回歸案例ID": cid, "人工確認來源": rg.get("source", ""),
-                            "人工確認備註": rg.get("note", "")
-                        })
-                else:
-                    regression_result = "FAIL"
-                    execution_note = (
-                        f"歷史正確控制定位到 {len(potentials)} 個 occurrence，至少一筆未通過："
-                        + "｜".join(failed_evaluations[:3])
-                    )
-                potential = None
-            else:
-                regression_result = "FAIL"
-                execution_note = f"同一歷史錯誤案例定位到 {len(potentials)} 個 occurrence；必須唯一定位"
-                potential = None
-        else:
-            potential = potentials[0]
-            regression_result, execution_note = evaluate_historical_regression(potential, rg)
+        execution = execute_historical_regression(
+            rg,
+            all_occurrence_results,
+            pdf_sha256,
+            current_printed_pages,
+        )
+        regression_result = execution["result"]
+        execution_note = execution["note"]
 
-        if potential is not None and regression_result == "PASS" and (rg.get("status") or "確認錯誤").strip() == "確認正確":
-            confirmed_correct_controls.append({
-                **potential, "回歸案例ID": cid, "人工確認來源": rg.get("source", ""),
-                "人工確認備註": rg.get("note", "")
-            })
+        if (
+            execution["completion_gate"]
+            and regression_result == "PASS"
+            and (rg.get("status") or "確認錯誤").strip() == "確認正確"
+        ):
+            for matched in execution["matched_records"]:
+                confirmed_correct_controls.append({
+                    **matched, "回歸案例ID": cid, "人工確認來源": rg.get("source", ""),
+                    "人工確認備註": rg.get("note", "")
+                })
 
         regression_rows.append({
             "案例ID": cid, "課本頁": rg.get("page", ""), "完整詞語": rg.get("phrase", ""),
             "字元": rg.get("target_char", ""), "目標在詞內序號": rg.get("target_occurrence_index", ""),
+            "定位上下文": rg.get("locator_context", ""),
             "真值實際注音": rg.get("actual_reading", ""),
             "真值預期注音": rg.get("expected_reading", ""), "真值結論": (rg.get("status") or "確認錯誤").strip(),
+            "適用性模式": (rg.get("applicability_mode") or "hard_gate").strip(),
+            "來源PDF SHA-256": (rg.get("source_pdf_sha256") or "").strip(),
+            "適用性狀態": execution["applicability_state"],
+            "計入完成門檻": "Y" if execution["completion_gate"] else "N",
+            "定位命中數": execution["match_count"],
             "回歸結果": regression_result,
             "執行說明": execution_note,
             "來源": rg.get("source", ""), "備註": rg.get("note", "")
@@ -2266,10 +2479,17 @@ def analyze(actual_xlsx: Path, dict_path: Path, rules_path: Path, out_xlsx: Path
 
     stats["confirmed_error"] = len(confirmed_errors)
     stats["confirmed_correct"] = len(confirmed_correct_controls)
-    stats["regression_fail"] = sum(1 for r in regression_rows if r["回歸結果"] == "FAIL")
-    stats["regression_not_executed"] = sum(1 for r in regression_rows if r["回歸結果"] == "NOT_EXECUTED")
-    stats["regression_required"] = len(regression_rows)
-    stats["regression_executed"] = len(regression_rows) - stats["regression_not_executed"]
+    gating_regression_rows = [r for r in regression_rows if r["計入完成門檻"] == "Y"]
+    reference_regression_rows = [r for r in regression_rows if r["適用性模式"] == "reference_only"]
+    stats["regression_fail"] = sum(1 for r in gating_regression_rows if r["回歸結果"] == "FAIL")
+    stats["regression_not_executed"] = sum(1 for r in gating_regression_rows if r["回歸結果"] == "NOT_EXECUTED")
+    stats["regression_not_applicable"] = sum(1 for r in regression_rows if r["回歸結果"] == "NOT_APPLICABLE")
+    stats["regression_required"] = len(gating_regression_rows)
+    stats["regression_executed"] = sum(1 for r in gating_regression_rows if r["回歸結果"] in {"PASS", "FAIL"})
+    stats["reference_regression_matched"] = sum(1 for r in reference_regression_rows if r["回歸結果"] in {"PASS", "FAIL"})
+    stats["reference_regression_passed"] = sum(1 for r in reference_regression_rows if r["回歸結果"] == "PASS")
+    stats["reference_regression_failed"] = sum(1 for r in reference_regression_rows if r["回歸結果"] == "FAIL")
+    stats["reference_regression_not_found"] = sum(1 for r in reference_regression_rows if r["回歸結果"] == "NOT_APPLICABLE")
     single_mismatches = [r for r in remaining_mismatches if r.get("預期注音依據", "").startswith("專案一字多音字典")]
     lexical_mismatches = [r for r in remaining_mismatches if not r.get("預期注音依據", "").startswith("專案一字多音字典")]
 
@@ -2432,8 +2652,13 @@ def analyze(actual_xlsx: Path, dict_path: Path, rules_path: Path, out_xlsx: Path
         ("人工確認正確回歸", stats["confirmed_correct"]),
         ("回歸測試失敗", stats["regression_fail"]),
         ("回歸測試未執行", stats["regression_not_executed"]),
+        ("回歸測試不適用現版來源", stats["regression_not_applicable"]),
         ("回歸測試要求數", stats["regression_required"]),
         ("回歸測試實際執行數", stats["regression_executed"]),
+        ("reference-only 已定位稽核", stats["reference_regression_matched"]),
+        ("reference-only 稽核通過", stats["reference_regression_passed"]),
+        ("reference-only 稽核失敗（不阻擋）", stats["reference_regression_failed"]),
+        ("reference-only 未找到", stats["reference_regression_not_found"]),
         ("強制回歸要求數", stats["mandatory_regression_required"]),
         ("強制回歸實際執行數", stats["mandatory_regression_executed"]),
         ("強制回歸失敗", stats["mandatory_regression_failed"]),
@@ -2599,7 +2824,11 @@ def analyze(actual_xlsx: Path, dict_path: Path, rules_path: Path, out_xlsx: Path
         desc = f"{r.mode}｜{r.target_char}｜{r.phrase or '(預設)'}｜{r.expected_reading}｜{r.source}" if r else ""
         ws_rule_summary.append([rid, count, desc])
 
-    reg_cols=["案例ID","課本頁","完整詞語","字元","目標在詞內序號","真值實際注音","真值預期注音","真值結論","回歸結果","執行說明","來源","備註"]
+    reg_cols=[
+        "案例ID","課本頁","完整詞語","字元","目標在詞內序號","定位上下文",
+        "真值實際注音","真值預期注音","真值結論","適用性模式","來源PDF SHA-256",
+        "適用性狀態","計入完成門檻","定位命中數","回歸結果","執行說明","來源","備註",
+    ]
     ws_regression.append(reg_cols)
     append_dict(ws_regression, reg_cols, regression_rows)
 

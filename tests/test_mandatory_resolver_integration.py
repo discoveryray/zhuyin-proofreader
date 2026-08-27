@@ -62,7 +62,9 @@ class MandatoryResolverIntegrationTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             temp_root = Path(directory)
-            pdf_path = temp_root / "fixture.pdf"
+            # Use the 3上 filename scope that previously loaded the over-broad
+            # V38 「轉動」 exception and made M25-ZHUAN-DONG fail.
+            pdf_path = temp_root / "07-115國小健體3上課本-L06-0225.pdf"
             document = fitz.open()
             document.new_page()
             document.save(pdf_path)

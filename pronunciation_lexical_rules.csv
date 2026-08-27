@@ -1670,7 +1670,7 @@ V37-MOE-JIXI,265,exact,繫,繫繩,ㄐㄧˋ,,教育部《國語辭典簡編本》
 V38-MOE-SHAOBULIAO,310,exact,了,少不了,ㄌㄧㄠˇ,,教育部《重編國語辭典修訂本》2021,https://dict.revised.moe.edu.tw/dictView.jsp?ID=129783&la=0&powerMode=0,教育部完整詞條「少不了」標音ㄕㄠˇ ˙ㄅㄨ ㄌㄧㄠˇ；排除一般句末助詞「了」預設。,,moe_direct
 V38-MOE-NING-TOWEL,310,exact,擰,擰毛巾,ㄋㄧㄥˇ,,教育部《重編國語辭典修訂本》2021,https://dict.revised.moe.edu.tw/dictView.jsp?ID=3126&la=0&powerMode=0,教育部「擰」ㄋㄧㄥˇ義直接以「把毛巾擰乾」為例；「擰毛巾」同屬以手扭轉擠水義。,,moe_direct_context
 V38-MOE-PIANYI-LOWPRICE,300,exact,便,便宜,ㄆㄧㄢˊ,便宜行事;便宜處分;便宜處置,教育部《重編國語辭典修訂本》2021,https://dict.revised.moe.edu.tw/dictView.jsp?ID=25367&la=0&powerMode=0,現代「價格低廉／不昂貴」義的「便宜」讀ㄆㄧㄢˊ；另以排除詞防止「便宜行事／處分／處置」之ㄅㄧㄢˋ義跨詞命中。,,moe_direct_context
-V38-MOE-ZHUANDONG-SPIN-3UP,320,exact,轉,轉動,ㄓㄨㄢˋ,,教育部《重編國語辭典修訂本》2021＋原頁「轉圈圈」活動句境,https://dict.revised.moe.edu.tw/dictView.jsp?ID=119451&la=0&powerMode=0,教育部「轉動」另收ㄓㄨㄢˋ義「繞著中心點運轉」；三上P75整段標題與動作均為「轉圈圈」，故此來源限本冊的兩處「轉動」採旋轉義，不泛化到所有「轉動」。,115國小健體3上課本,source_scoped_context
+V38-MOE-ZHUANDONG-SPIN-3UP,320,exact,轉,轉動,ㄓㄨㄢˇ,,教育部《國語辭典簡編本》「轉動」＋公司現行注音規範（使用者確認）, ,「旋轉、轉動、轉速、轉盤」均標ㄓㄨㄢˇ；撤銷原先僅憑三上檔名與「轉圈圈」段落而把所有「轉動」判成ㄓㄨㄢˋ的過度泛化規則。,115國小健體3上課本,source_scoped_context
 V38-MOE-ZHUANDEHAO-SPIN-3UP,320,exact,轉,轉得很好,ㄓㄨㄢˋ,,教育部《國語辭典簡編本》2021＋原頁「轉圈圈」活動句境,https://dict.concised.moe.edu.tw/dictView.jsp?ID=31007&la=0&powerMode=0,三上P75「我用單手就可以轉得很好」位於「轉圈圈」活動，屬繞圈旋轉義ㄓㄨㄢˋ；來源限本冊，不作全域句法推定。,115國小健體3上課本,source_scoped_context
 V38-MOE-ZHUANQUAN,310,exact,轉,轉圈,ㄓㄨㄢˋ,,教育部《國語辭典簡編本》2021,https://dict.concised.moe.edu.tw/dictView.jsp?ID=31010&la=0&powerMode=0,教育部完整詞條「轉圈」標音ㄓㄨㄢˋ ㄑㄩㄢ；可跨冊沿用完整詞語。,,moe_direct
 V38-MOE-XIANGHOUDAO,300,exact,倒,向後倒,ㄉㄠˇ,,教育部《重編國語辭典修訂本》2021,https://dict.revised.moe.edu.tw/dictView.jsp?ID=1966&la=0&powerMode=0,「倒」ㄉㄠˇ為物體傾斜、倒下義；「身體向後倒」為身體倒下動作，不是ㄉㄠˋ的倒置／傾倒他物義。,,moe_direct_context
