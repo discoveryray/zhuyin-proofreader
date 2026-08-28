@@ -26,6 +26,11 @@ def _find_button(widget, text: str):
     return None
 
 
+def _wait_for_dialog_layout(dialog):
+    dialog.wait_visibility()
+    dialog.update_idletasks()
+
+
 ENTRY = {
     "state": "RULE_CONFLICT",
     "printed_page": 155,
@@ -87,9 +92,12 @@ class ReviewGuiVisibleFooterTests(unittest.TestCase):
             cls.root.destroy()
 
     def _assert_button_inside_dialog(self, dialog, label: str):
-        dialog.update_idletasks()
         button = _find_button(dialog, label)
         self.assertIsNotNone(button, label)
+        self.assertTrue(dialog.winfo_ismapped(), label)
+        self.assertTrue(dialog.winfo_viewable(), label)
+        self.assertTrue(button.winfo_ismapped(), label)
+        self.assertTrue(button.winfo_viewable(), label)
         dialog_bottom = dialog.winfo_rooty() + dialog.winfo_height()
         button_bottom = button.winfo_rooty() + button.winfo_height()
         self.assertLessEqual(button_bottom, dialog_bottom, label)
@@ -98,6 +106,7 @@ class ReviewGuiVisibleFooterTests(unittest.TestCase):
     def test_expected_dialog_submit_and_cancel_are_visible(self):
         dialog = ExpectedDialog(self.root, dict(ENTRY), "選擇／補充正確讀音", wait=False)
         try:
+            _wait_for_dialog_layout(dialog)
             self._assert_button_inside_dialog(dialog, "套用這筆證據")
             self._assert_button_inside_dialog(dialog, "取消")
         finally:
@@ -113,6 +122,7 @@ class ReviewGuiVisibleFooterTests(unittest.TestCase):
         })
         dialog = ConfirmationDialog(self.root, entry, wait=False)
         try:
+            _wait_for_dialog_layout(dialog)
             self._assert_button_inside_dialog(dialog, "確認為教材錯誤")
             self._assert_button_inside_dialog(dialog, "取消")
         finally:
