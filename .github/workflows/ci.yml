@@ -57,8 +57,67 @@ jobs:
       - name: Compile Python sources
         run: python -m compileall -q .
 
-      - name: Check whitespace errors
-        run: git diff --check
+      - name: Check committed whitespace (pull request)
+        if: github.event_name == 'pull_request'
+        shell: pwsh
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if (
+            [string]::IsNullOrWhiteSpace($env:BASE_SHA) -or
+            [string]::IsNullOrWhiteSpace($env:HEAD_SHA)
+          ) {
+            Write-Error "Pull request base/head SHA is unavailable."
+            exit 1
+          }
+          git diff --check "$($env:BASE_SHA)...$($env:HEAD_SHA)"
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Check committed whitespace (push)
+        if: github.event_name == 'push'
+        shell: pwsh
+        env:
+          BEFORE_SHA: ${{ github.event.before }}
+          AFTER_SHA: ${{ github.sha }}
+        run: |
+          if (
+            [string]::IsNullOrWhiteSpace($env:BEFORE_SHA) -or
+            [string]::IsNullOrWhiteSpace($env:AFTER_SHA)
+          ) {
+            Write-Error "Push before/after SHA is unavailable."
+            exit 1
+          }
+          if ($env:BEFORE_SHA -match '^0+$') {
+            $emptyTree = (git hash-object -t tree --stdin).Trim()
+            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($emptyTree)) {
+              Write-Error "Unable to derive the empty Git tree for an all-zero before SHA."
+              exit 1
+            }
+            git diff --check "$emptyTree..$($env:AFTER_SHA)"
+          } else {
+            git diff --check "$($env:BEFORE_SHA)..$($env:AFTER_SHA)"
+          }
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Check committed whitespace (workflow dispatch)
+        if: github.event_name == 'workflow_dispatch'
+        shell: pwsh
+        env:
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:HEAD_SHA)) {
+            Write-Error "Workflow dispatch HEAD SHA is unavailable."
+            exit 1
+          }
+          git diff --check "$($env:HEAD_SHA)^..$($env:HEAD_SHA)"
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
 
       - name: Check repository working tree
         if: always()
