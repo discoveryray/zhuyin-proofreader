@@ -1,0 +1,75 @@
+name: CI
+
+on:
+  pull_request:
+    branches:
+      - develop
+      - main
+  push:
+    branches:
+      - develop
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.12"
+          - "3.13"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Show Python version
+        run: python --version
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install development dependencies
+        run: python -m pip install -r requirements-dev.txt
+
+      - name: Validate runtime asset integrity
+        run: python -m unittest discover -s tests -p "test_runtime_asset_manifest_integrity_v562.py"
+
+      - name: Run full unittest suite
+        run: python -m unittest discover -s tests -p "test_*.py"
+
+      - name: Run full pytest suite
+        run: python -m pytest -q
+
+      - name: Compile Python sources
+        run: python -m compileall -q .
+
+      - name: Check whitespace errors
+        run: git diff --check
+
+      - name: Check repository working tree
+        if: always()
+        shell: pwsh
+        run: |
+          $status = @(git status --short)
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+          $status | ForEach-Object { Write-Output $_ }
+          if ($status.Count -ne 0) {
+            Write-Error "Repository working tree is not clean."
+            exit 1
+          }
