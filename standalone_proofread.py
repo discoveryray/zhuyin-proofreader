@@ -90,6 +90,7 @@ from runtime_regression_gate import load_mandatory_cases, validate_regression_ex
 from actual_review import (
     ACTUAL_REVIEW_SCHEMA_VERSION,
     OCCURRENCE_OVERRIDE_FILE, USER_GLYF_FILE, USER_CFF_FILE, GLYPH_CONFLICT_FILE, GLYPH_PROVENANCE_FILE,
+    apply_staged_manual_actual_batch,
     build_actual_review_groups,
     build_actual_group_for_entry,
     apply_verified_actual_group,
@@ -97,6 +98,8 @@ from actual_review import (
     import_actual_review_workbook,
     ensure_user_evidence_files,
     actual_workbook_dynamic_dependencies,
+    load_manual_actual_staging,
+    stage_manual_actual_group,
 )
 
 PROGRAM = "注音校對工具－單機端到端控制器"
@@ -121,6 +124,37 @@ PROJECT_ACTUAL_EVIDENCE_DIR = "actual"
 NO_ACTUAL_PENDING_MESSAGE = (
     "目前沒有 ACTUAL_DECODE_ERROR／ACTUAL_UNRESOLVED 可匯出；actual 待判定為 0，無須建立 GPT 判定包。"
 )
+
+
+class ManualActualPostApplyError(RuntimeError):
+    """Authoritative actual committed, but a later project step did not finish."""
+
+    def __init__(
+        self,
+        phase: str,
+        cause: Exception,
+        *,
+        batch_result: Mapping[str, Any],
+        cleared_event_count: int | None,
+    ) -> None:
+        self.phase = str(phase)
+        self.cause = cause
+        self.batch_result = dict(batch_result)
+        self.cleared_event_count = cleared_event_count
+        if self.phase == "clear_actual_dependent_events":
+            recovery = (
+                "請先排除人工判定資料庫的錯誤，再清除依賴舊 actual 的 confirmation；"
+                "不要重新套用已 acknowledgement 的 staging。"
+            )
+        else:
+            recovery = (
+                "可在排除錯誤後使用既有 --refresh-actual／refresh_actual_project() 恢復；"
+                "不要重新套用已 acknowledgement 的 staging。"
+            )
+        super().__init__(
+            "actual evidence 已正式套用，但後續 project refresh／驗證未完成；"
+            f"phase={self.phase}；{type(cause).__name__}: {cause}。{recovery}"
+        )
 
 
 def project_actual_evidence_root(output_dir: Path) -> Path:
@@ -3139,6 +3173,68 @@ def export_actual_pending_for_gpt(output_dir: Path) -> Path | None:
     )
 
 
+def manual_actual_staging_summary(output_dir: Path) -> dict[str, Any]:
+    """Return a read-only summary of durable, not-yet-authoritative actual intent."""
+    staging = load_manual_actual_staging(project_actual_evidence_root(Path(output_dir)))
+    groups = list(staging.get("staged_groups") or [])
+    return {
+        "staged_group_count": len(groups),
+        "staged_group_ids": [str(group.get("group_id") or "") for group in groups],
+        "staged_member_occurrence_ids": sorted({
+            str(occurrence_id)
+            for group in groups
+            for occurrence_id in (group.get("member_occurrence_ids") or [])
+            if str(occurrence_id)
+        }),
+        "staged_checked_occurrence_ids": sorted({
+            str(occurrence_id)
+            for group in groups
+            for occurrence_id in (group.get("checked_occurrence_ids") or [])
+            if str(occurrence_id)
+        }),
+    }
+
+
+def stage_manual_actual_correction(
+    output_dir: Path,
+    review_id: str,
+    reading: str,
+    checked_occurrence_ids: list[str] | None = None,
+    note: str = "",
+) -> dict[str, Any]:
+    """Rebuild one current live group and durably stage its visual actual decision."""
+    output_dir = Path(output_dir)
+    manifest = json_load_strict(output_dir / "校對工作階段.json")
+    validate_manifest_integrity(manifest)
+    validate_output_artifact_hashes(manifest)
+    db = load_or_initialize_db(output_dir)
+    ledger = materialize_ledger(manifest, db)
+    entry = next(
+        (row for row in ledger if str(row.get("review_id") or "") == str(review_id)),
+        None,
+    )
+    if entry is None:
+        raise ValueError("找不到目前 review_id；請重新開啟人工校對畫面")
+    group = build_actual_group_for_entry(ledger, entry)
+    checked_ids = (
+        [str(entry.get("occurrence_id") or "")]
+        if checked_occurrence_ids is None
+        else list(checked_occurrence_ids)
+    )
+    staged = stage_manual_actual_group(
+        project_actual_evidence_root(output_dir),
+        group,
+        reading,
+        checked_occurrence_ids=checked_ids,
+        source="人工 GUI actual 視覺確認",
+        note=note,
+    )
+    return {
+        "staged_group": staged,
+        "staging_summary": manual_actual_staging_summary(output_dir),
+    }
+
+
 def _clear_actual_dependent_events(output_dir: Path, ledger: list[dict[str, Any]], occurrence_ids: set[str]) -> int:
     if not occurrence_ids:
         return 0
@@ -3294,6 +3390,192 @@ def apply_manual_actual_correction(
     result["post_state"] = str(refreshed_entry.get("state") or "")
     result["resolved_from_pending"] = result["post_state"] not in NON_TERMINAL_STATES
     return result, report
+
+
+def _current_live_groups_for_staged_manual_actual(
+    ledger: list[dict[str, Any]],
+    staged_decisions: list[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    """Rebuild every Phase 2A live group from the current materialized ledger."""
+    by_occurrence_id: dict[str, dict[str, Any]] = {}
+    for entry in ledger:
+        occurrence_id = str(entry.get("occurrence_id") or "")
+        if not occurrence_id:
+            raise ValueError("manual actual batch current ledger 含空白 occurrence_id")
+        if occurrence_id in by_occurrence_id:
+            raise DuplicateIdError(f"manual actual batch current ledger occurrence_id 重複：{occurrence_id}")
+        by_occurrence_id[occurrence_id] = entry
+
+    live_groups: list[dict[str, Any]] = []
+    for staged in sorted(staged_decisions, key=lambda item: str(item.get("group_id") or "")):
+        current_member = next(
+            (
+                by_occurrence_id.get(str(occurrence_id or ""))
+                for occurrence_id in (staged.get("member_occurrence_ids") or [])
+                if by_occurrence_id.get(str(occurrence_id or "")) is not None
+            ),
+            None,
+        )
+        if current_member is None:
+            raise ValueError(
+                "manual actual batch staged group 在目前 ledger 找不到任何 member："
+                f"{staged.get('group_id') or ''}；整批拒絕"
+            )
+        live_groups.append(build_actual_group_for_entry(ledger, current_member))
+    return live_groups
+
+
+def _manual_actual_batch_postconditions(
+    batch_result: Mapping[str, Any],
+) -> list[dict[str, str]]:
+    """Freeze the directly checked actuals committed by the Phase 2A batch."""
+    group_results = batch_result.get("group_results")
+    if not isinstance(group_results, list):
+        raise ValueError("manual actual batch result 缺少 group_results")
+    postconditions: list[dict[str, str]] = []
+    seen_occurrence_ids: set[str] = set()
+    for index, item in enumerate(group_results):
+        if not isinstance(item, Mapping):
+            raise ValueError(f"manual actual batch group_results[{index}] 格式錯誤")
+        group_id = str(item.get("group_id") or "").strip()
+        reading = canonical_bopomofo(item.get("reading"))
+        checked_ids = item.get("verified_occurrence_ids")
+        if not group_id or not reading or not isinstance(checked_ids, list) or not checked_ids:
+            raise ValueError(f"manual actual batch result 缺少直接核對 postcondition：index={index}")
+        for occurrence_id_raw in checked_ids:
+            occurrence_id = str(occurrence_id_raw or "").strip()
+            if not occurrence_id:
+                raise ValueError(f"manual actual batch result 含空白 checked occurrence：{group_id}")
+            if occurrence_id in seen_occurrence_ids:
+                raise ValueError(f"manual actual batch result checked occurrence 重複：{occurrence_id}")
+            seen_occurrence_ids.add(occurrence_id)
+            postconditions.append({
+                "group_id": group_id,
+                "occurrence_id": occurrence_id,
+                "reading": reading,
+            })
+    if len(group_results) != int(batch_result.get("applied_group_count") or 0):
+        raise ValueError("manual actual batch result applied_group_count 與 group_results 不一致")
+    return postconditions
+
+
+def _verify_manual_actual_batch_postconditions(
+    refreshed_ledger: list[dict[str, Any]],
+    postconditions: list[Mapping[str, str]],
+) -> None:
+    by_occurrence_id = {
+        str(entry.get("occurrence_id") or ""): entry
+        for entry in refreshed_ledger
+        if str(entry.get("occurrence_id") or "")
+    }
+    for condition in postconditions:
+        occurrence_id = str(condition.get("occurrence_id") or "")
+        entry = by_occurrence_id.get(occurrence_id)
+        if entry is None:
+            raise ValueError(
+                "manual actual batch postcondition 失敗：checked occurrence 已消失："
+                f"{occurrence_id}（group={condition.get('group_id') or ''}）"
+            )
+        wanted = canonical_bopomofo(condition.get("reading"))
+        observed = canonical_bopomofo(entry.get("actual"))
+        if not wanted or observed != wanted:
+            raise ValueError(
+                "manual actual batch postcondition 失敗：checked occurrence actual 不符："
+                f"{occurrence_id}；要求={wanted or condition.get('reading') or ''}；"
+                f"重解結果={observed or '未辨識'}"
+            )
+
+
+def apply_staged_manual_actual_corrections(output_dir: Path) -> dict[str, Any]:
+    """Apply the durable GUI queue once, clear once, refresh once, then verify."""
+    output_dir = Path(output_dir)
+    manifest = json_load_strict(output_dir / "校對工作階段.json")
+    validate_manifest_integrity(manifest)
+    validate_output_artifact_hashes(manifest)
+    db = load_or_initialize_db(output_dir)
+    pre_refresh_ledger = materialize_ledger(manifest, db)
+    actual_root = project_actual_evidence_root(output_dir)
+    staging = load_manual_actual_staging(actual_root)
+    frozen_staged_decisions = list(staging.get("staged_groups") or [])
+    live_groups = _current_live_groups_for_staged_manual_actual(
+        pre_refresh_ledger,
+        frozen_staged_decisions,
+    )
+
+    batch_result = dict(apply_staged_manual_actual_batch(actual_root, live_groups))
+    if int(batch_result.get("applied_group_count") or 0) == 0:
+        return {
+            **batch_result,
+            "cleared_actual_dependent_event_count": 0,
+            "refresh_performed": False,
+            "refresh_report": "",
+            "postcondition_checked_occurrence_ids": [],
+        }
+
+    try:
+        postconditions = _manual_actual_batch_postconditions(batch_result)
+    except Exception as exc:
+        raise ManualActualPostApplyError(
+            "batch_result_contract",
+            exc,
+            batch_result=batch_result,
+            cleared_event_count=None,
+        ) from exc
+
+    affected_occurrence_ids = {
+        str(occurrence_id)
+        for occurrence_id in (batch_result.get("affected_occurrence_ids") or [])
+        if str(occurrence_id)
+    }
+    try:
+        cleared_event_count = _clear_actual_dependent_events(
+            output_dir,
+            pre_refresh_ledger,
+            affected_occurrence_ids,
+        )
+    except Exception as exc:
+        raise ManualActualPostApplyError(
+            "clear_actual_dependent_events",
+            exc,
+            batch_result=batch_result,
+            cleared_event_count=None,
+        ) from exc
+
+    try:
+        report = refresh_actual_project(output_dir)
+    except Exception as exc:
+        raise ManualActualPostApplyError(
+            "refresh_actual_project",
+            exc,
+            batch_result=batch_result,
+            cleared_event_count=cleared_event_count,
+        ) from exc
+
+    try:
+        refreshed_manifest = json_load_strict(output_dir / "校對工作階段.json")
+        validate_manifest_integrity(refreshed_manifest)
+        validate_output_artifact_hashes(refreshed_manifest)
+        refreshed_db = load_or_initialize_db(output_dir)
+        refreshed_ledger = materialize_ledger(refreshed_manifest, refreshed_db)
+        _verify_manual_actual_batch_postconditions(refreshed_ledger, postconditions)
+    except Exception as exc:
+        raise ManualActualPostApplyError(
+            "post_refresh_actual_verification",
+            exc,
+            batch_result=batch_result,
+            cleared_event_count=cleared_event_count,
+        ) from exc
+
+    return {
+        **batch_result,
+        "cleared_actual_dependent_event_count": int(cleared_event_count),
+        "refresh_performed": True,
+        "refresh_report": str(report),
+        "postcondition_checked_occurrence_ids": sorted({
+            condition["occurrence_id"] for condition in postconditions
+        }),
+    }
+
 
 def _write_pipeline_progress(output_dir: Path, phase: str, status_text: str) -> None:
     """Publish lightweight stage progress for the launcher UI.
