@@ -3,9 +3,10 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import os
 import shutil
 import zipfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -20,6 +21,8 @@ from cff_zhuyin_decoder import cff_full_annotation_signature
 from cross_version_compat import review_id_schema_compatible, schema_compatible
 
 ACTUAL_REVIEW_SCHEMA_VERSION = "1.0"
+MANUAL_ACTUAL_STAGING_SCHEMA_VERSION = "1.0"
+MANUAL_ACTUAL_STAGING_FILE = "manual_actual_staging.json"
 ACTUAL_PENDING_STATES = frozenset({"ACTUAL_DECODE_ERROR", "ACTUAL_UNRESOLVED"})
 USER_GLYF_FILE = "user_verified_glyf_fingerprints.csv"
 USER_CFF_FILE = "user_verified_cff_glyph_fingerprints.csv"
@@ -48,6 +51,16 @@ GLYPH_PROVENANCE_HEADERS = [
     "event_id", "kind", "style_group", "glyph_sha256", "bopomofo",
     "event_type", "occurrence_ids", "source", "created_at", "note",
 ]
+
+_MANUAL_ACTUAL_STAGING_ROOT_FIELDS = frozenset({"schema_version", "staged_groups"})
+_MANUAL_ACTUAL_STAGING_GROUP_FIELDS = frozenset({
+    "group_id", "group_snapshot", "kind", "exact_key", "style_group",
+    "reading", "checked_occurrence_ids", "member_occurrence_ids", "note",
+    "staged_at", "updated_at", "source",
+})
+_MANUAL_ACTUAL_STAGING_GROUP_KINDS = frozenset({
+    "TTF_GLYF_SHA256", "CFF_GLYPH_SHA256", "SESSION_STABLE_KEY", "OCCURRENCE_ONLY",
+})
 
 
 def _text(value: Any) -> str:
@@ -102,6 +115,369 @@ def _write_csv(path: Path, headers: Sequence[str], rows: Iterable[Mapping[str, A
         for row in rows:
             writer.writerow({h: row.get(h, "") for h in headers})
     tmp.replace(path)
+
+
+def manual_actual_staging_path(root: Path) -> Path:
+    """Return the project-local pending-intent store path.
+
+    The caller supplies ``project_actual_evidence_root(output_dir)``.  This file
+    deliberately lives beside dynamic actual evidence, but it is not itself
+    authoritative evidence and is not part of ``dynamic_actual_hashes``.
+    """
+    return Path(root) / MANUAL_ACTUAL_STAGING_FILE
+
+
+def _empty_manual_actual_staging() -> dict[str, Any]:
+    return {
+        "schema_version": MANUAL_ACTUAL_STAGING_SCHEMA_VERSION,
+        "staged_groups": [],
+    }
+
+
+def _reject_duplicate_json_keys(pairs: Sequence[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"manual actual staging JSON key 重複：{key}")
+        result[key] = value
+    return result
+
+
+def _staging_text(value: Any, field: str, *, allow_empty: bool = False) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"manual actual staging {field} 必須是字串")
+    normalized = value.strip()
+    if value != normalized:
+        raise ValueError(f"manual actual staging {field} 不得含首尾空白")
+    if not allow_empty and not normalized:
+        raise ValueError(f"manual actual staging {field} 不得空白")
+    return normalized
+
+
+def _staging_id_list(value: Any, field: str) -> list[str]:
+    if not isinstance(value, list):
+        raise ValueError(f"manual actual staging {field} 必須是 list")
+    result = [_staging_text(item, f"{field}[{index}]") for index, item in enumerate(value)]
+    if len(result) != len(set(result)):
+        raise ValueError(f"manual actual staging {field} 含重複 occurrence_id")
+    return result
+
+
+def _staging_timestamp(value: Any, field: str) -> tuple[str, datetime]:
+    text = _staging_text(value, field)
+    if "T" not in text:
+        raise ValueError(f"manual actual staging {field} 必須是 ISO 8601 datetime")
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"manual actual staging {field} 不是合法 ISO 8601 datetime") from exc
+    return text, parsed
+
+
+def _validate_manual_actual_staged_group(raw: Any, index: int) -> dict[str, Any]:
+    label = f"staged_groups[{index}]"
+    if not isinstance(raw, dict):
+        raise ValueError(f"manual actual staging {label} 必須是 object")
+    missing = sorted(_MANUAL_ACTUAL_STAGING_GROUP_FIELDS - set(raw))
+    unexpected = sorted(set(raw) - _MANUAL_ACTUAL_STAGING_GROUP_FIELDS)
+    if missing:
+        raise ValueError(f"manual actual staging {label} 缺少欄位：{missing}")
+    if unexpected:
+        raise ValueError(f"manual actual staging {label} 含未知欄位：{unexpected}")
+
+    group_id = _staging_text(raw.get("group_id"), f"{label}.group_id")
+    group_snapshot = _staging_text(raw.get("group_snapshot"), f"{label}.group_snapshot").lower()
+    if len(group_snapshot) != 64 or any(ch not in "0123456789abcdef" for ch in group_snapshot):
+        raise ValueError(f"manual actual staging {label}.group_snapshot 必須是 SHA-256")
+
+    kind = _staging_text(raw.get("kind"), f"{label}.kind")
+    if kind not in _MANUAL_ACTUAL_STAGING_GROUP_KINDS:
+        raise ValueError(f"manual actual staging {label}.kind 不支援：{kind}")
+    exact_key = _staging_text(raw.get("exact_key"), f"{label}.exact_key")
+    style_group = _staging_text(raw.get("style_group"), f"{label}.style_group", allow_empty=True)
+    if kind in {"TTF_GLYF_SHA256", "CFF_GLYPH_SHA256"}:
+        exact_key = exact_key.lower()
+        if len(exact_key) != 64 or any(ch not in "0123456789abcdef" for ch in exact_key):
+            raise ValueError(f"manual actual staging {label}.exact_key 必須是 exact glyph SHA-256")
+    if kind == "CFF_GLYPH_SHA256" and not style_group:
+        raise ValueError(f"manual actual staging {label}.style_group 對 CFF group 為必要欄位")
+    if kind != "CFF_GLYPH_SHA256" and style_group:
+        raise ValueError(f"manual actual staging {label}.style_group 只適用於 CFF group")
+
+    expected_group_id = "agr_" + _hash_payload({"kind": kind, "exact_key": exact_key})[:24]
+    if group_id != expected_group_id:
+        raise ValueError(f"manual actual staging {label}.group_id 與 exact group identity 不一致")
+
+    reading = _staging_text(raw.get("reading"), f"{label}.reading")
+    canonical = _canon(reading)
+    if not canonical or reading != canonical:
+        raise ValueError(f"manual actual staging {label}.reading 必須是 canonical Bopomofo")
+
+    checked_ids = _staging_id_list(raw.get("checked_occurrence_ids"), f"{label}.checked_occurrence_ids")
+    member_ids = _staging_id_list(raw.get("member_occurrence_ids"), f"{label}.member_occurrence_ids")
+    if not member_ids:
+        raise ValueError(f"manual actual staging {label}.member_occurrence_ids 不得為空")
+    if not checked_ids:
+        raise ValueError(f"manual actual staging {label}.checked_occurrence_ids 不得為空")
+    unknown_checked = sorted(set(checked_ids) - set(member_ids))
+    if unknown_checked:
+        raise ValueError(
+            f"manual actual staging {label}.checked_occurrence_ids 不屬於 group members：{unknown_checked}"
+        )
+
+    note = _staging_text(raw.get("note"), f"{label}.note", allow_empty=True)
+    source = _staging_text(raw.get("source"), f"{label}.source")
+    staged_at, staged_dt = _staging_timestamp(raw.get("staged_at"), f"{label}.staged_at")
+    updated_at, updated_dt = _staging_timestamp(raw.get("updated_at"), f"{label}.updated_at")
+    if (staged_dt.tzinfo is None) != (updated_dt.tzinfo is None):
+        raise ValueError(f"manual actual staging {label} timestamps timezone contract 不一致")
+    if updated_dt < staged_dt:
+        raise ValueError(f"manual actual staging {label}.updated_at 不得早於 staged_at")
+
+    return {
+        "group_id": group_id,
+        "group_snapshot": group_snapshot,
+        "kind": kind,
+        "exact_key": exact_key,
+        "style_group": style_group,
+        "reading": reading,
+        "checked_occurrence_ids": checked_ids,
+        "member_occurrence_ids": member_ids,
+        "note": note,
+        "staged_at": staged_at,
+        "updated_at": updated_at,
+        "source": source,
+    }
+
+
+def _validate_manual_actual_staging_document(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise ValueError("manual actual staging root 必須是 object")
+    missing = sorted(_MANUAL_ACTUAL_STAGING_ROOT_FIELDS - set(raw))
+    unexpected = sorted(set(raw) - _MANUAL_ACTUAL_STAGING_ROOT_FIELDS)
+    if missing:
+        raise ValueError(f"manual actual staging root 缺少欄位：{missing}")
+    if unexpected:
+        raise ValueError(f"manual actual staging root 含未知欄位：{unexpected}")
+    if raw.get("schema_version") != MANUAL_ACTUAL_STAGING_SCHEMA_VERSION:
+        raise ValueError(
+            "manual actual staging schema 不相容："
+            f"required={MANUAL_ACTUAL_STAGING_SCHEMA_VERSION!r}, observed={raw.get('schema_version')!r}"
+        )
+    groups_raw = raw.get("staged_groups")
+    if not isinstance(groups_raw, list):
+        raise ValueError("manual actual staging staged_groups 必須是 list")
+
+    groups: list[dict[str, Any]] = []
+    seen_group_ids: set[str] = set()
+    seen_snapshots: set[str] = set()
+    seen_occurrence_ids: set[str] = set()
+    for index, item in enumerate(groups_raw):
+        group = _validate_manual_actual_staged_group(item, index)
+        group_id = group["group_id"]
+        if group_id in seen_group_ids:
+            raise ValueError(f"manual actual staging group_id 重複：{group_id}")
+        if group["group_snapshot"] in seen_snapshots:
+            raise ValueError(f"manual actual staging group_snapshot 重複：{group['group_snapshot']}")
+        overlap = seen_occurrence_ids & set(group["member_occurrence_ids"])
+        if overlap:
+            raise ValueError(f"manual actual staging occurrence identity 同時屬於多組：{sorted(overlap)}")
+        seen_group_ids.add(group_id)
+        seen_snapshots.add(group["group_snapshot"])
+        seen_occurrence_ids.update(group["member_occurrence_ids"])
+        groups.append(group)
+    groups.sort(key=lambda group: group["group_id"])
+    return {
+        "schema_version": MANUAL_ACTUAL_STAGING_SCHEMA_VERSION,
+        "staged_groups": groups,
+    }
+
+
+def load_manual_actual_staging(root: Path) -> dict[str, Any]:
+    """Load and fully validate pending manual actual intent.
+
+    Absence is the only implicit compatibility case and represents an empty
+    queue.  Once the file exists, malformed JSON, duplicate keys, unknown
+    schema/fields, or contradictory identities fail closed.
+    """
+    path = manual_actual_staging_path(root)
+    if not path.exists():
+        return _empty_manual_actual_staging()
+    try:
+        raw = json.loads(
+            path.read_text(encoding="utf-8-sig"),
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
+    except Exception as exc:
+        if isinstance(exc, ValueError) and str(exc).startswith("manual actual staging"):
+            raise
+        raise ValueError(f"manual actual staging JSON 損壞：{path}") from exc
+    return _validate_manual_actual_staging_document(raw)
+
+
+def _write_manual_actual_staging(root: Path, document: Mapping[str, Any]) -> Path:
+    validated = _validate_manual_actual_staging_document(dict(document))
+    path = manual_actual_staging_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        with tmp.open("w", encoding="utf-8", newline="\n") as handle:
+            json.dump(validated, handle, ensure_ascii=False, indent=2, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        tmp.replace(path)
+    except Exception:
+        try:
+            tmp.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+    return path
+
+
+def stage_manual_actual_group(
+    root: Path,
+    group: Mapping[str, Any],
+    reading: str,
+    *,
+    checked_occurrence_ids: Sequence[str],
+    source: str,
+    note: str = "",
+) -> dict[str, Any]:
+    """Durably upsert one uncommitted manual actual decision.
+
+    This function extracts only actual group identity and audit fields.  It does
+    not initialize/mutate authoritative evidence, call promotion logic, clear
+    review events, refresh a PDF, decode, or regenerate reports.
+    """
+    if not isinstance(group, Mapping):
+        raise ValueError("manual actual staging group 必須是 mapping")
+    group_id = _staging_text(group.get("group_id"), "input.group_id")
+    group_snapshot = _staging_text(group.get("group_snapshot"), "input.group_snapshot").lower()
+    kind = _staging_text(group.get("kind"), "input.kind")
+    exact_key = _staging_text(group.get("exact_key"), "input.exact_key")
+    if kind in {"TTF_GLYF_SHA256", "CFF_GLYPH_SHA256"}:
+        exact_key = exact_key.lower()
+    style_group = _staging_text(group.get("style_group", ""), "input.style_group", allow_empty=True)
+
+    members = group.get("members")
+    if not isinstance(members, list) or not members:
+        raise ValueError("manual actual staging group.members 必須是非空 list")
+    member_ids: list[str] = []
+    for index, member in enumerate(members):
+        if not isinstance(member, Mapping):
+            raise ValueError(f"manual actual staging group.members[{index}] 必須是 mapping")
+        member_ids.append(_staging_text(member.get("occurrence_id"), f"input.members[{index}].occurrence_id"))
+    if len(member_ids) != len(set(member_ids)):
+        raise ValueError("manual actual staging group.members 含重複 occurrence_id")
+    occurrence_count = group.get("occurrence_count")
+    if occurrence_count is not None:
+        if isinstance(occurrence_count, bool):
+            raise ValueError("manual actual staging group.occurrence_count 無效")
+        try:
+            observed_count = int(occurrence_count)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("manual actual staging group.occurrence_count 無效") from exc
+        if observed_count != len(member_ids):
+            raise ValueError("manual actual staging group.occurrence_count 與 members 不一致")
+
+    if isinstance(checked_occurrence_ids, (str, bytes)) or not isinstance(checked_occurrence_ids, Sequence):
+        raise ValueError("manual actual staging checked_occurrence_ids 必須是 sequence")
+    checked_input = [
+        _staging_text(item, f"input.checked_occurrence_ids[{index}]")
+        for index, item in enumerate(checked_occurrence_ids)
+    ]
+    if len(checked_input) != len(set(checked_input)):
+        raise ValueError("manual actual staging checked_occurrence_ids 含重複 occurrence_id")
+    checked_set = set(checked_input)
+    if not checked_set:
+        raise ValueError("manual actual staging checked_occurrence_ids 不得為空")
+    unknown_checked = sorted(checked_set - set(member_ids))
+    if unknown_checked:
+        raise ValueError(f"manual actual staging checked occurrence 不屬於 group members：{unknown_checked}")
+    checked_ids = [occurrence_id for occurrence_id in member_ids if occurrence_id in checked_set]
+
+    canonical_reading = _canon(reading)
+    if not canonical_reading:
+        raise ValueError("manual actual staging reading 不是合法單一注音")
+    source_text = _staging_text(source, "input.source")
+    note_text = _staging_text(note, "input.note", allow_empty=True)
+
+    document = load_manual_actual_staging(root)
+    existing = next(
+        (item for item in document["staged_groups"] if item["group_id"] == group_id),
+        None,
+    )
+    immutable_identity = {
+        "group_snapshot": group_snapshot,
+        "kind": kind,
+        "exact_key": exact_key,
+        "style_group": style_group,
+        "member_occurrence_ids": member_ids,
+    }
+    if existing:
+        changed = [key for key, value in immutable_identity.items() if existing.get(key) != value]
+        if changed:
+            raise ValueError(
+                f"manual actual staging stale/contradictory group identity：{group_id} changed={changed}；請重新確認"
+            )
+
+    now_dt = datetime.now().astimezone()
+    if existing:
+        previous_updated = datetime.fromisoformat(existing["updated_at"].replace("Z", "+00:00"))
+        if now_dt <= previous_updated:
+            now_dt = previous_updated + timedelta(microseconds=1)
+    now = now_dt.isoformat(timespec="microseconds")
+    staged = {
+        "group_id": group_id,
+        **immutable_identity,
+        "reading": canonical_reading,
+        "checked_occurrence_ids": checked_ids,
+        "note": note_text,
+        "staged_at": existing["staged_at"] if existing else now,
+        "updated_at": now,
+        "source": source_text,
+    }
+    groups = [item for item in document["staged_groups"] if item["group_id"] != group_id]
+    groups.append(staged)
+    _write_manual_actual_staging(root, {
+        "schema_version": MANUAL_ACTUAL_STAGING_SCHEMA_VERSION,
+        "staged_groups": groups,
+    })
+    return dict(staged)
+
+
+def remove_staged_manual_actual_group(
+    root: Path,
+    group_id: str,
+    *,
+    group_snapshot: str,
+    updated_at: str,
+) -> bool:
+    """Atomically acknowledge one exact staged decision.
+
+    ``updated_at`` is part of the compare-and-remove guard so a later upsert of
+    the same group cannot be accidentally cleared by a stale batch-apply worker.
+    """
+    wanted_id = _staging_text(group_id, "remove.group_id")
+    wanted_snapshot = _staging_text(group_snapshot, "remove.group_snapshot").lower()
+    wanted_updated_at = _staging_text(updated_at, "remove.updated_at")
+    document = load_manual_actual_staging(root)
+    existing = next(
+        (item for item in document["staged_groups"] if item["group_id"] == wanted_id),
+        None,
+    )
+    if existing is None:
+        return False
+    if existing["group_snapshot"] != wanted_snapshot or existing["updated_at"] != wanted_updated_at:
+        raise ValueError(f"manual actual staging decision 已更新：{wanted_id}；拒絕移除較新的 staged intent")
+    remaining = [item for item in document["staged_groups"] if item["group_id"] != wanted_id]
+    _write_manual_actual_staging(root, {
+        "schema_version": MANUAL_ACTUAL_STAGING_SCHEMA_VERSION,
+        "staged_groups": remaining,
+    })
+    return True
 
 
 
