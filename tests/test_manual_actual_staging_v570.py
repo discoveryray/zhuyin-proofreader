@@ -133,16 +133,19 @@ class ManualActualStagingV570Tests(unittest.TestCase):
             root = Path(directory) / "_專案證據" / "actual"
             stage(root)
             expected = load_manual_actual_staging(root)
+            result_path = Path(directory) / "fresh_process_result.json"
+            self.assertNotEqual(result_path, manual_actual_staging_path(root))
             script = (
                 "import json, sys; "
                 "from pathlib import Path; "
                 "from actual_review import load_manual_actual_staging; "
-                "print(json.dumps(load_manual_actual_staging(Path(sys.argv[1])), ensure_ascii=False, sort_keys=True))"
+                "result = load_manual_actual_staging(Path(sys.argv[1])); "
+                "Path(sys.argv[2]).write_text(json.dumps(result, ensure_ascii=False, sort_keys=True), encoding='utf-8')"
             )
             env = dict(os.environ)
             env.update({"PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
             completed = subprocess.run(
-                [sys.executable, "-c", script, str(root)],
+                [sys.executable, "-c", script, str(root), str(result_path)],
                 cwd=ROOT,
                 env=env,
                 check=True,
@@ -150,7 +153,11 @@ class ManualActualStagingV570Tests(unittest.TestCase):
                 text=True,
                 encoding="utf-8",
             )
-            self.assertEqual(json.loads(completed.stdout), expected)
+            self.assertTrue(
+                result_path.is_file(),
+                f"fresh process did not write result; stdout={completed.stdout!r}; stderr={completed.stderr!r}",
+            )
+            self.assertEqual(json.loads(result_path.read_text(encoding="utf-8")), expected)
 
     def test_same_group_upsert_is_deduplicated_and_keeps_original_staged_at(self):
         with tempfile.TemporaryDirectory() as directory:
