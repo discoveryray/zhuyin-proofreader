@@ -13,7 +13,15 @@ python -m pip install --upgrade pip
 python -m pip install -r requirements-dev.txt
 ```
 
-## 正式 merge 前的本機驗證
+## GitHub hosted CI
+
+GitHub hosted CI 使用 Windows runner 與 Python 3.12／3.13，並為所有 Python validation steps 設定 UTF-8 Python I/O environment。CI 會執行 runtime asset integrity、完整 unittest、完整 pytest、compileall、committed whitespace validation 與 working-tree cleanliness check。
+
+`ReviewGuiVisibleFooterTests` 屬於完整 unittest 與 pytest suite，會在 hosted CI 實際執行，不再排除。
+
+## Interactive Windows 本機 merge／release gate
+
+在可互動的 Windows desktop 執行完整測試，包括 `ReviewGuiVisibleFooterTests`：
 
 ```powershell
 python -m unittest discover -s tests -p "test_*.py"
