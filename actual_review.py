@@ -52,6 +52,14 @@ GLYPH_PROVENANCE_HEADERS = [
     "event_type", "occurrence_ids", "source", "created_at", "note",
 ]
 
+_AUTHORITATIVE_DYNAMIC_ACTUAL_FILES = (
+    OCCURRENCE_OVERRIDE_FILE,
+    USER_GLYF_FILE,
+    USER_CFF_FILE,
+    GLYPH_CONFLICT_FILE,
+    GLYPH_PROVENANCE_FILE,
+)
+
 _MANUAL_ACTUAL_STAGING_ROOT_FIELDS = frozenset({"schema_version", "staged_groups"})
 _MANUAL_ACTUAL_STAGING_GROUP_FIELDS = frozenset({
     "group_id", "group_snapshot", "kind", "exact_key", "style_group",
@@ -480,6 +488,95 @@ def remove_staged_manual_actual_group(
     return True
 
 
+def _manual_actual_staging_ack_tokens(
+    staged_decisions: Sequence[Mapping[str, Any]],
+) -> list[dict[str, str]]:
+    if isinstance(staged_decisions, (str, bytes)) or not isinstance(staged_decisions, Sequence):
+        raise ValueError("manual actual staging batch acknowledgement 必須是 sequence")
+    tokens: list[dict[str, str]] = []
+    seen_group_ids: set[str] = set()
+    for index, decision in enumerate(staged_decisions):
+        if not isinstance(decision, Mapping):
+            raise ValueError(f"manual actual staging acknowledgement[{index}] 必須是 mapping")
+        group_id = _staging_text(decision.get("group_id"), f"acknowledgement[{index}].group_id")
+        if group_id in seen_group_ids:
+            raise ValueError(f"manual actual staging acknowledgement group_id 重複：{group_id}")
+        seen_group_ids.add(group_id)
+        tokens.append({
+            "group_id": group_id,
+            "group_snapshot": _staging_text(
+                decision.get("group_snapshot"),
+                f"acknowledgement[{index}].group_snapshot",
+            ),
+            "updated_at": _staging_text(
+                decision.get("updated_at"),
+                f"acknowledgement[{index}].updated_at",
+            ),
+        })
+    tokens.sort(key=lambda token: token["group_id"])
+    return tokens
+
+
+def _validate_manual_actual_staging_ack_tokens(
+    document: Mapping[str, Any],
+    tokens: Sequence[Mapping[str, str]],
+) -> None:
+    current_by_id = {
+        item["group_id"]: item
+        for item in document.get("staged_groups", [])
+    }
+    for token in tokens:
+        group_id = token["group_id"]
+        current = current_by_id.get(group_id)
+        if current is None:
+            raise ValueError(
+                f"manual actual staging decision 已不存在：{group_id}；拒絕 acknowledge stale batch"
+            )
+        if (
+            current["group_snapshot"] != token["group_snapshot"]
+            or current["updated_at"] != token["updated_at"]
+        ):
+            raise ValueError(
+                f"manual actual staging decision 已更新：{group_id}；拒絕移除較新的 staged intent"
+            )
+
+
+def remove_staged_manual_actual_groups(
+    root: Path,
+    staged_decisions: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Atomically acknowledge an exact frozen batch of staged decisions.
+
+    All selected ``group_id + group_snapshot + updated_at`` tokens are checked
+    against one freshly loaded document before a single atomic rewrite.  New
+    unrelated decisions are retained from that current document; a missing or
+    updated selected decision rejects the entire acknowledgement without write.
+    """
+    tokens = _manual_actual_staging_ack_tokens(staged_decisions)
+    document = load_manual_actual_staging(root)
+    _validate_manual_actual_staging_ack_tokens(document, tokens)
+    if not tokens:
+        return {
+            "acknowledged_group_count": 0,
+            "acknowledged_group_ids": [],
+            "staging_remaining_count": len(document["staged_groups"]),
+        }
+    selected_ids = {token["group_id"] for token in tokens}
+    remaining = [
+        item for item in document["staged_groups"]
+        if item["group_id"] not in selected_ids
+    ]
+    _write_manual_actual_staging(root, {
+        "schema_version": MANUAL_ACTUAL_STAGING_SCHEMA_VERSION,
+        "staged_groups": remaining,
+    })
+    return {
+        "acknowledged_group_count": len(tokens),
+        "acknowledged_group_ids": sorted(selected_ids),
+        "staging_remaining_count": len(remaining),
+    }
+
+
 
 KNOWN_BAD_LEGACY_OVERRIDE = {
     "pdf_contains": "15_國小健體3下課本_單元5第2課_(學)",
@@ -530,6 +627,25 @@ def ensure_user_evidence_files(root: Path) -> None:
         path = root / name
         if not path.exists():
             _write_csv(path, headers, [])
+
+
+def _snapshot_dynamic_actual_evidence(root: Path) -> dict[Path, bytes | None]:
+    root = Path(root)
+    return {
+        root / name: (root / name).read_bytes() if (root / name).exists() else None
+        for name in _AUTHORITATIVE_DYNAMIC_ACTUAL_FILES
+    }
+
+
+def _restore_dynamic_actual_evidence(backups: Mapping[Path, bytes | None]) -> None:
+    for path, data in backups.items():
+        if data is None:
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+        else:
+            path.write_bytes(data)
 
 
 def validate_dynamic_actual_evidence(root: Path) -> dict[str, Any]:
@@ -1448,6 +1564,189 @@ def apply_verified_actual_group(
     }
 
 
+def _index_live_manual_actual_groups(
+    live_groups: Sequence[Mapping[str, Any]],
+) -> dict[str, Mapping[str, Any]]:
+    if isinstance(live_groups, (str, bytes)) or not isinstance(live_groups, Sequence):
+        raise ValueError("manual actual batch live_groups 必須是 sequence")
+    by_id: dict[str, Mapping[str, Any]] = {}
+    for index, group in enumerate(live_groups):
+        if not isinstance(group, Mapping):
+            raise ValueError(f"manual actual batch live_groups[{index}] 必須是 mapping")
+        group_id = _staging_text(group.get("group_id"), f"live_groups[{index}].group_id")
+        if group_id in by_id:
+            raise ValueError(f"manual actual batch live group_id 重複：{group_id}")
+        by_id[group_id] = group
+    return by_id
+
+
+def _revalidate_staged_manual_actual_group(
+    staged: Mapping[str, Any],
+    live_group: Mapping[str, Any],
+) -> dict[str, Any]:
+    group_id = staged["group_id"]
+    comparisons = {
+        "group_id": _staging_text(live_group.get("group_id"), f"live.{group_id}.group_id"),
+        "group_snapshot": _staging_text(
+            live_group.get("group_snapshot"), f"live.{group_id}.group_snapshot"
+        ),
+        "kind": _staging_text(live_group.get("kind"), f"live.{group_id}.kind"),
+        "exact_key": _staging_text(live_group.get("exact_key"), f"live.{group_id}.exact_key"),
+        "style_group": _staging_text(
+            live_group.get("style_group", ""),
+            f"live.{group_id}.style_group",
+            allow_empty=True,
+        ),
+    }
+    for field, observed in comparisons.items():
+        if observed != staged[field]:
+            raise ValueError(
+                f"manual actual batch live group identity 已變更：{group_id} field={field}；整批拒絕"
+            )
+
+    members = live_group.get("members")
+    if not isinstance(members, list) or not members:
+        raise ValueError(f"manual actual batch live group members 無效：{group_id}")
+    member_ids: list[str] = []
+    for index, member in enumerate(members):
+        if not isinstance(member, Mapping):
+            raise ValueError(f"manual actual batch live group member 無效：{group_id}[{index}]")
+        member_ids.append(
+            _staging_text(
+                member.get("occurrence_id"),
+                f"live.{group_id}.members[{index}].occurrence_id",
+            )
+        )
+    if len(member_ids) != len(set(member_ids)):
+        raise ValueError(f"manual actual batch live group members 含重複 occurrence_id：{group_id}")
+    invalid_checked = sorted(set(staged["checked_occurrence_ids"]) - set(member_ids))
+    if invalid_checked:
+        raise ValueError(
+            f"manual actual batch checked occurrence 已失效：{group_id} ids={invalid_checked}；整批拒絕"
+        )
+    if member_ids != staged["member_occurrence_ids"]:
+        raise ValueError(f"manual actual batch live group member roster 已變更：{group_id}；整批拒絕")
+
+    occurrence_count = live_group.get("occurrence_count")
+    if isinstance(occurrence_count, bool):
+        raise ValueError(f"manual actual batch live group occurrence_count 無效：{group_id}")
+    try:
+        observed_count = int(occurrence_count)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"manual actual batch live group occurrence_count 無效：{group_id}") from exc
+    if observed_count != len(member_ids):
+        raise ValueError(f"manual actual batch live group occurrence_count 與 members 不一致：{group_id}")
+
+    return dict(live_group)
+
+
+def _empty_manual_actual_batch_result() -> dict[str, Any]:
+    return {
+        "applied_group_count": 0,
+        "group_results": [],
+        "affected_occurrence_ids": [],
+        "reopened_occurrence_ids": [],
+        "quarantined_group_ids": [],
+        "affected_pdf_names": [],
+        "staging_remaining_count": 0,
+    }
+
+
+def apply_staged_manual_actual_batch(
+    root: Path,
+    live_groups: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Apply one frozen staged-manual-actual queue as a transaction.
+
+    Pending staging is revalidated against authoritative live review groups
+    before any dynamic actual evidence mutation.  Every selected decision is
+    applied through ``apply_verified_actual_group`` in sorted ``group_id``
+    order.  The five authoritative files are restored byte-for-byte on any
+    late exception or stale final acknowledgement; staging is acknowledged in
+    one compare-and-remove rewrite only after all group applications succeed.
+    """
+    root = Path(root)
+    staging = load_manual_actual_staging(root)
+    frozen = sorted(staging["staged_groups"], key=lambda item: item["group_id"])
+    if not frozen:
+        return _empty_manual_actual_batch_result()
+
+    live_by_id = _index_live_manual_actual_groups(live_groups)
+    selected: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    occurrence_pdf_names: dict[str, str] = {}
+    for staged in frozen:
+        live = live_by_id.get(staged["group_id"])
+        if live is None:
+            raise ValueError(
+                f"manual actual batch 找不到 live group：{staged['group_id']}；整批拒絕"
+            )
+        validated_live = _revalidate_staged_manual_actual_group(staged, live)
+        selected.append((staged, validated_live))
+        for member in validated_live["members"]:
+            occurrence_id = _text(member.get("occurrence_id"))
+            pdf_name = _text(member.get("pdf_name"))
+            if occurrence_id and pdf_name:
+                occurrence_pdf_names[occurrence_id] = pdf_name
+
+    tokens = _manual_actual_staging_ack_tokens(frozen)
+    current_staging = load_manual_actual_staging(root)
+    _validate_manual_actual_staging_ack_tokens(current_staging, tokens)
+
+    backups = _snapshot_dynamic_actual_evidence(root)
+    group_results: list[dict[str, Any]] = []
+    affected_occurrence_ids: set[str] = set()
+    reopened_occurrence_ids: set[str] = set()
+    quarantined_group_ids: set[str] = set()
+    try:
+        for staged, live_group in selected:
+            applied = apply_verified_actual_group(
+                root,
+                live_group,
+                staged["reading"],
+                checked_occurrence_ids=staged["checked_occurrence_ids"],
+                source=staged["source"],
+                note=staged["note"],
+            )
+            if not isinstance(applied, Mapping):
+                raise ValueError(
+                    f"manual actual batch apply result 無效：{staged['group_id']}"
+                )
+            item = {
+                **dict(applied),
+                "group_id": staged["group_id"],
+                "group_snapshot": staged["group_snapshot"],
+            }
+            group_results.append(item)
+            affected_occurrence_ids.update(
+                _text(value) for value in (applied.get("affected_occurrence_ids") or []) if _text(value)
+            )
+            reopened_occurrence_ids.update(
+                _text(value) for value in (applied.get("reopened_occurrence_ids") or []) if _text(value)
+            )
+            if applied.get("quarantined") or applied.get("glyph_truth_conflict"):
+                quarantined_group_ids.add(staged["group_id"])
+
+        acknowledgement = remove_staged_manual_actual_groups(root, frozen)
+    except Exception:
+        _restore_dynamic_actual_evidence(backups)
+        raise
+
+    affected_ids = sorted(affected_occurrence_ids)
+    return {
+        "applied_group_count": len(group_results),
+        "group_results": group_results,
+        "affected_occurrence_ids": affected_ids,
+        "reopened_occurrence_ids": sorted(reopened_occurrence_ids),
+        "quarantined_group_ids": sorted(quarantined_group_ids),
+        "affected_pdf_names": sorted({
+            occurrence_pdf_names[occurrence_id]
+            for occurrence_id in affected_ids
+            if occurrence_id in occurrence_pdf_names
+        }),
+        "staging_remaining_count": acknowledgement["staging_remaining_count"],
+    }
+
+
 def import_actual_review_workbook(
     root: Path,
     xlsx: Path,
@@ -1536,8 +1835,7 @@ def import_actual_review_workbook(
 
     # Transactional write: if any late occurrence-level validation fails,
     # restore all dynamic actual evidence files byte-for-byte.
-    dynamic_paths = [Path(root) / name for name in (OCCURRENCE_OVERRIDE_FILE, USER_GLYF_FILE, USER_CFF_FILE, GLYPH_CONFLICT_FILE, GLYPH_PROVENANCE_FILE)]
-    backups = {path: path.read_bytes() if path.exists() else None for path in dynamic_paths}
+    backups = _snapshot_dynamic_actual_evidence(root)
     results = []
     try:
         for group, reading, ids, note in staged:
@@ -1546,14 +1844,7 @@ def import_actual_review_workbook(
                 source="GPT actual 視覺證據匯入", note=note,
             ))
     except Exception:
-        for path, data in backups.items():
-            if data is None:
-                try:
-                    path.unlink()
-                except FileNotFoundError:
-                    pass
-            else:
-                path.write_bytes(data)
+        _restore_dynamic_actual_evidence(backups)
         raise
     return {"imported_groups": len(results), "results": results}
 
