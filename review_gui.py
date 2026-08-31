@@ -507,13 +507,45 @@ class ReviewApp:
         self.reload_records()
         self.show()
         if not self.records:
-            messagebox.showinfo("沒有待處理項目", "目前沒有待人工項目。是否全冊完成仍以完整資料、回歸與集合檢查為準。")
+            title, detail, _primary_text = self._empty_actionable_state()
+            messagebox.showinfo(title, detail, parent=self.root)
 
     def reload_records(self):
-        ledger = materialize_ledger(self.manifest, self.db)
-        self.records = [entry for entry in ledger if entry.get("state") in NON_TERMINAL_STATES]
-        self.index = max(0, min(self.index, len(self.records) - 1))
         self.reload_staging_summary()
+        ledger = materialize_ledger(self.manifest, self.db)
+        self._set_actionable_records_from_ledger(ledger)
+
+    def _set_actionable_records_from_ledger(self, ledger):
+        previous_records = list(getattr(self, "records", []))
+        previous_index = int(getattr(self, "index", 0))
+        following_occurrence_ids = []
+        if 0 <= previous_index < len(previous_records):
+            following_occurrence_ids = [
+                str(item.get("occurrence_id") or "")
+                for item in previous_records[previous_index:]
+            ]
+
+        checked_ids = set(getattr(self, "staged_checked_occurrence_ids", set()))
+        self.records = [
+            entry
+            for entry in ledger
+            if entry.get("state") in NON_TERMINAL_STATES
+            and str(entry.get("occurrence_id") or "") not in checked_ids
+        ]
+        if not self.records:
+            self.index = 0
+            return
+
+        current_indexes = {
+            str(item.get("occurrence_id") or ""): index
+            for index, item in enumerate(self.records)
+            if str(item.get("occurrence_id") or "")
+        }
+        for occurrence_id in following_occurrence_ids:
+            if occurrence_id in current_indexes:
+                self.index = current_indexes[occurrence_id]
+                return
+        self.index = max(0, min(previous_index, len(self.records) - 1))
 
     def reload_staging_summary(self):
         summary = manual_actual_staging_summary(self.output_dir)
@@ -527,12 +559,26 @@ class ReviewApp:
         )
         return self.staging_summary
 
+    def _empty_actionable_state(self):
+        count = int(self.staging_summary.get("staged_group_count") or 0)
+        if count > 0:
+            return (
+                "目前沒有尚未暫存的待人工項目",
+                f"仍有 {count} 組 actual 修正等待批次套用，"
+                f"請按「套用 actual 修正（{count}）」。",
+                "請使用批次套用按鈕",
+            )
+        return (
+            "目前沒有待人工項目",
+            "請回主畫面更新報告；是否全冊完成仍由完整 completion gate 判定。",
+            "沒有待處理項目",
+        )
+
     def current(self):
         return self.records[self.index] if self.records else None
 
     def save_event(self, entry, event):
         review_id = entry["review_id"]
-        old_index = self.index
         staged = json.loads(json.dumps(self.db, ensure_ascii=False))
         staged.setdefault("events", {})[review_id] = event
         try:
@@ -550,19 +596,7 @@ class ReviewApp:
 
         json_save(self.output_dir / "人工判定資料庫.json", staged)
         self.db = staged
-        self.records = [item for item in staged_ledger if item.get("state") in NON_TERMINAL_STATES]
-
-        if resolved_entry.get("state") not in NON_TERMINAL_STATES:
-            # The resolved row has disappeared from pending.  Keeping the same
-            # numeric index therefore selects the next row that followed it.
-            self.index = max(0, min(old_index, len(self.records) - 1))
-        else:
-            # Non-terminal evidence updates should stay on the same occurrence.
-            current_index = next(
-                (i for i, item in enumerate(self.records) if item.get("review_id") == review_id),
-                None,
-            )
-            self.index = current_index if current_index is not None else max(0, min(old_index, len(self.records) - 1))
+        self._set_actionable_records_from_ledger(staged_ledger)
         self.show()
         return resolved_entry.get("state") not in NON_TERMINAL_STATES
 
@@ -733,15 +767,16 @@ class ReviewApp:
             messagebox.showerror("actual 暫存失敗", str(exc), parent=self.root)
             return
         try:
-            fresh_summary = self.reload_staging_summary()
+            self.reload_records()
             self.show()
         except Exception as exc:
             messagebox.showwarning(
-                "actual 已暫存，但畫面計數更新失敗",
+                "actual 已暫存，但待人工清單更新失敗",
                 f"人工核對結果已寫入 durable staging；重新開啟畫面仍可恢復。\n{exc}",
                 parent=self.root,
             )
             return
+        fresh_summary = self.staging_summary
         count = int(fresh_summary.get("staged_group_count") or 0)
         messagebox.showinfo(
             "actual 已暫存",
@@ -929,11 +964,12 @@ class ReviewApp:
     def show(self):
         entry = self.current()
         if not entry:
-            self.status.config(text="目前沒有待人工項目")
-            self.summary_text.config(text="請回主畫面更新報告；是否全冊完成仍由完整 completion gate 判定。")
+            title, detail, primary_text = self._empty_actionable_state()
+            self.status.config(text=title)
+            self.summary_text.config(text=detail)
             self.image.config(image="", text="")
             self.tech_text.delete("1.0", "end")
-            self.primary.config(text="沒有待處理項目", state="disabled")
+            self.primary.config(text=primary_text, state="disabled")
             self.primary.pack(side="left", padx=(0, 6), before=self.later)
             self.secondary.pack_forget()
             return
@@ -953,7 +989,7 @@ class ReviewApp:
 
         is_staged = str(entry.get("occurrence_id") or "") in self.staged_checked_occurrence_ids
         staged_status = "｜actual 已暫存，等待批次套用" if is_staged else ""
-        self.status.config(text=f"第 {self.index + 1} / {len(self.records)} 筆待處理｜{friendly_state(state)}{staged_status}")
+        self.status.config(text=f"第 {self.index + 1} / {len(self.records)} 筆待人工處理｜{friendly_state(state)}{staged_status}")
         help_text = STATE_HELP.get(state, "這一筆需要人工處理。")
         staged_line = "\nactual 狀態：已暫存人工核對結果，等待批次套用。" if is_staged else ""
         summary = (
