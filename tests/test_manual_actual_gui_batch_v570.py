@@ -676,6 +676,51 @@ class ImmediateThread:
 
 
 class ManualActualGuiBehaviorTests(unittest.TestCase):
+    def test_only_directly_checked_member_is_shown_as_staged(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output_dir = make_project(Path(directory))
+            checked = entry("checked-a", "9" * 64, pdf_name="a.pdf", x0=10.0)
+            unchecked = entry("unchecked-b", "9" * 64, pdf_name="b.pdf", x0=30.0)
+            group = group_for([checked, unchecked])
+            stage_manual_actual_group(
+                actual_root(output_dir),
+                group,
+                "ㄓㄨㄢˇ",
+                checked_occurrence_ids=["checked-a"],
+                source="人工 GUI actual 視覺確認",
+            )
+
+            summary = sp.manual_actual_staging_summary(output_dir)
+            self.assertEqual(summary["staged_group_count"], 1)
+            self.assertEqual(set(summary["staged_member_occurrence_ids"]), {"checked-a", "unchecked-b"})
+            self.assertEqual(summary["staged_checked_occurrence_ids"], ["checked-a"])
+
+            app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
+            app.output_dir = output_dir
+            app.apply_actual_button = DummyButton()
+            app.records = [checked, unchecked]
+            app.index = 0
+            app.status = DummyButton()
+            app.summary_text = DummyButton()
+            app.tech_text = MagicMock()
+            app.configure_actions = MagicMock()
+            app.render = MagicMock()
+            app.reload_staging_summary()
+
+            self.assertEqual(app.staged_member_occurrence_ids, {"checked-a", "unchecked-b"})
+            self.assertEqual(app.staged_checked_occurrence_ids, {"checked-a"})
+            self.assertEqual(app.apply_actual_button.options["text"], "套用 actual 修正（1）")
+
+            app.show()
+            self.assertIn("actual 已暫存，等待批次套用", app.status.options["text"])
+            self.assertIn("已暫存人工核對結果", app.summary_text.options["text"])
+
+            app.index = 1
+            app.show()
+            self.assertNotIn("actual 已暫存", app.status.options["text"])
+            self.assertNotIn("已暫存人工核對結果", app.summary_text.options["text"])
+            app.configure_actions.assert_called_with(unchecked)
+
     def test_count_zero_disables_and_positive_count_enables_button(self):
         app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
         app.output_dir = Path("unused")
@@ -684,6 +729,7 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
             "staged_group_count": 0,
             "staged_group_ids": [],
             "staged_member_occurrence_ids": [],
+            "staged_checked_occurrence_ids": [],
         }):
             app.reload_staging_summary()
         self.assertEqual(app.apply_actual_button.options["state"], "disabled")
@@ -692,11 +738,13 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
             "staged_group_count": 3,
             "staged_group_ids": ["a", "b", "c"],
             "staged_member_occurrence_ids": ["o1", "o2", "o3"],
+            "staged_checked_occurrence_ids": ["o1", "o3"],
         }):
             app.reload_staging_summary()
         self.assertEqual(app.apply_actual_button.options["state"], "normal")
         self.assertEqual(app.apply_actual_button.options["text"], "套用 actual 修正（3）")
         self.assertEqual(app.staged_member_occurrence_ids, {"o1", "o2", "o3"})
+        self.assertEqual(app.staged_checked_occurrence_ids, {"o1", "o3"})
 
     def test_new_app_state_reads_durable_summary_instead_of_session_memory(self):
         with tempfile.TemporaryDirectory() as directory:

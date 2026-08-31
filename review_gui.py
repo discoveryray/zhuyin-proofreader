@@ -440,6 +440,7 @@ class ReviewApp:
         self.tech_visible = False
         self.staging_summary = {}
         self.staged_member_occurrence_ids = set()
+        self.staged_checked_occurrence_ids = set()
 
         root.title(f"注音校對－人工確認 v{VERSION}")
         apply_screen_safe_geometry(root, 1180, 850, min_width=760, min_height=520)
@@ -518,6 +519,7 @@ class ReviewApp:
         summary = manual_actual_staging_summary(self.output_dir)
         self.staging_summary = dict(summary)
         self.staged_member_occurrence_ids = set(summary.get("staged_member_occurrence_ids") or [])
+        self.staged_checked_occurrence_ids = set(summary.get("staged_checked_occurrence_ids") or [])
         count = int(summary.get("staged_group_count") or 0)
         self.apply_actual_button.config(
             text=f"套用 actual 修正（{count}）",
@@ -949,7 +951,7 @@ class ReviewApp:
             for r in self.records
         )[group_key]
 
-        is_staged = str(entry.get("occurrence_id") or "") in self.staged_member_occurrence_ids
+        is_staged = str(entry.get("occurrence_id") or "") in self.staged_checked_occurrence_ids
         staged_status = "｜actual 已暫存，等待批次套用" if is_staged else ""
         self.status.config(text=f"第 {self.index + 1} / {len(self.records)} 筆待處理｜{friendly_state(state)}{staged_status}")
         help_text = STATE_HELP.get(state, "這一筆需要人工處理。")
