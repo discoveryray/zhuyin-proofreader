@@ -676,7 +676,31 @@ class ImmediateThread:
 
 
 class ManualActualGuiBehaviorTests(unittest.TestCase):
-    def test_only_directly_checked_member_is_shown_as_staged(self):
+    def test_reload_records_excludes_checked_occurrences_and_reduces_denominator(self):
+        ledger = [entry(name, str(index) * 64) for index, name in enumerate("abcde", start=1)]
+        app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
+        app.output_dir = Path("project")
+        app.manifest = {}
+        app.db = {}
+        app.records = []
+        app.index = 0
+        app.apply_actual_button = DummyButton()
+        with (
+            patch.object(review_gui, "materialize_ledger", return_value=ledger),
+            patch.object(review_gui, "manual_actual_staging_summary", return_value={
+                "staged_group_count": 1,
+                "staged_group_ids": ["group-bc"],
+                "staged_member_occurrence_ids": ["b", "c"],
+                "staged_checked_occurrence_ids": ["b", "c"],
+            }),
+        ):
+            app.reload_records()
+
+        self.assertEqual([item["occurrence_id"] for item in app.records], ["a", "d", "e"])
+        self.assertEqual(len(app.records), 3)
+        self.assertEqual(app.apply_actual_button.options["text"], "套用 actual 修正（1）")
+
+    def test_only_directly_checked_member_is_removed_from_actionable_queue(self):
         with tempfile.TemporaryDirectory() as directory:
             output_dir = make_project(Path(directory))
             checked = entry("checked-a", "9" * 64, pdf_name="a.pdf", x0=10.0)
@@ -698,24 +722,23 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
             app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
             app.output_dir = output_dir
             app.apply_actual_button = DummyButton()
-            app.records = [checked, unchecked]
+            app.manifest = {}
+            app.db = {}
+            app.records = []
             app.index = 0
             app.status = DummyButton()
             app.summary_text = DummyButton()
             app.tech_text = MagicMock()
             app.configure_actions = MagicMock()
             app.render = MagicMock()
-            app.reload_staging_summary()
+            with patch.object(review_gui, "materialize_ledger", return_value=[checked, unchecked]):
+                app.reload_records()
 
             self.assertEqual(app.staged_member_occurrence_ids, {"checked-a", "unchecked-b"})
             self.assertEqual(app.staged_checked_occurrence_ids, {"checked-a"})
             self.assertEqual(app.apply_actual_button.options["text"], "套用 actual 修正（1）")
+            self.assertEqual([item["occurrence_id"] for item in app.records], ["unchecked-b"])
 
-            app.show()
-            self.assertIn("actual 已暫存，等待批次套用", app.status.options["text"])
-            self.assertIn("已暫存人工核對結果", app.summary_text.options["text"])
-
-            app.index = 1
             app.show()
             self.assertNotIn("actual 已暫存", app.status.options["text"])
             self.assertNotIn("已暫存人工核對結果", app.summary_text.options["text"])
@@ -746,10 +769,12 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
         self.assertEqual(app.staged_member_occurrence_ids, {"o1", "o2", "o3"})
         self.assertEqual(app.staged_checked_occurrence_ids, {"o1", "o3"})
 
-    def test_new_app_state_reads_durable_summary_instead_of_session_memory(self):
+    def test_new_app_filters_durable_checked_occurrence_without_changing_ledger_truth(self):
         with tempfile.TemporaryDirectory() as directory:
             output_dir = make_project(Path(directory))
-            ledger = [entry("durable", "e" * 64)]
+            staged_entry = entry("durable", "e" * 64)
+            remaining_entry = entry("remaining", "f" * 64)
+            ledger = [staged_entry, remaining_entry]
             with patch.object(sp, "materialize_ledger", return_value=ledger):
                 sp.stage_manual_actual_correction(
                     output_dir, "review-durable", "ㄉㄨˊ", ["durable"],
@@ -757,27 +782,41 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
             for _restart in range(2):
                 app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
                 app.output_dir = output_dir
+                app.manifest = {}
+                app.db = {}
+                app.records = []
+                app.index = 0
                 app.apply_actual_button = DummyButton()
-                summary = app.reload_staging_summary()
-                self.assertEqual(summary["staged_group_count"], 1)
+                with patch.object(review_gui, "materialize_ledger", return_value=ledger):
+                    app.reload_records()
+                self.assertEqual(app.staging_summary["staged_group_count"], 1)
                 self.assertEqual(app.apply_actual_button.options["text"], "套用 actual 修正（1）")
+                self.assertEqual([item["occurrence_id"] for item in app.records], ["remaining"])
+            self.assertEqual(staged_entry["state"], "ACTUAL_DECODE_ERROR")
+            self.assertEqual(sp.json_load_strict(output_dir / "人工判定資料庫.json").get("events"), {})
 
-    def test_correct_actual_submit_only_stages_without_refresh_or_thread(self):
+    def test_correct_actual_removes_all_checked_and_advances_from_b_to_d(self):
         app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
-        current = entry("gui-stage", "f" * 64)
-        ledger = [current]
-        group = group_for(ledger)
+        ledger = [
+            entry("a", "a" * 64),
+            entry("b", "f" * 64, x0=10.0),
+            entry("c", "f" * 64, x0=30.0),
+            entry("d", "d" * 64),
+            entry("e", "e" * 64),
+        ]
+        current = ledger[1]
+        group = group_for(ledger, 1)
         app.root = object()
         app.output_dir = Path("project")
         app.manifest = {"manifest": "current"}
         app.db = {"events": {}}
-        app.records = ledger
-        app.index = 0
-        app.reload_staging_summary = MagicMock(return_value={"staged_group_count": 1})
+        app.records = list(ledger)
+        app.index = 1
+        app.apply_actual_button = DummyButton()
         app.show = MagicMock()
         dialog = SimpleNamespace(result={
             "reading": "ㄓㄨㄢˇ",
-            "checked_occurrence_ids": ["gui-stage"],
+            "checked_occurrence_ids": ["b", "c"],
             "note": "visual",
         })
         stage_result = {
@@ -786,6 +825,12 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
         }
         with (
             patch.object(review_gui, "materialize_ledger", return_value=ledger),
+            patch.object(review_gui, "manual_actual_staging_summary", return_value={
+                "staged_group_count": 1,
+                "staged_group_ids": [group["group_id"]],
+                "staged_member_occurrence_ids": ["b", "c"],
+                "staged_checked_occurrence_ids": ["b", "c"],
+            }),
             patch.object(review_gui, "build_actual_group_for_entry", return_value=group),
             patch.object(review_gui, "ActualReadingDialog", return_value=dialog),
             patch.object(review_gui, "stage_manual_actual_correction", return_value=stage_result) as stage,
@@ -799,17 +844,100 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
             app.correct_actual()
         stage.assert_called_once_with(
             app.output_dir,
-            "review-gui-stage",
+            "review-b",
             "ㄓㄨㄢˇ",
-            ["gui-stage"],
+            ["b", "c"],
             "visual",
         )
         batch.assert_not_called()
         thread.assert_not_called()
         manifest_reload.assert_not_called()
         db_reload.assert_not_called()
-        app.reload_staging_summary.assert_called_once()
+        self.assertEqual([item["occurrence_id"] for item in app.records], ["a", "d", "e"])
+        self.assertEqual(app.index, 1)
+        self.assertEqual(app.current()["occurrence_id"], "d")
+        self.assertTrue(all(item["state"] == "ACTUAL_DECODE_ERROR" for item in ledger))
         app.show.assert_called_once()
+
+    def test_filtering_staged_last_item_clamps_to_new_last_item(self):
+        ledger = [entry(name, str(index) * 64) for index, name in enumerate("abcde", start=1)]
+        app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
+        app.output_dir = Path("project")
+        app.manifest = {}
+        app.db = {}
+        app.records = list(ledger)
+        app.index = 4
+        app.apply_actual_button = DummyButton()
+        with (
+            patch.object(review_gui, "materialize_ledger", return_value=ledger),
+            patch.object(review_gui, "manual_actual_staging_summary", return_value={
+                "staged_group_count": 1,
+                "staged_checked_occurrence_ids": ["e"],
+            }),
+        ):
+            app.reload_records()
+        self.assertEqual(app.index, 3)
+        self.assertEqual(app.current()["occurrence_id"], "d")
+
+    def test_save_event_does_not_reintroduce_previously_staged_occurrence(self):
+        current = entry("expected-a", "a" * 64)
+        staged_actual = entry("staged-b", "b" * 64)
+        next_entry = entry("next-c", "c" * 64)
+        resolved = copy.deepcopy(current)
+        resolved["state"] = "PASS"
+        staged_ledger = [resolved, staged_actual, next_entry]
+        app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
+        app.root = object()
+        app.output_dir = Path("project")
+        app.manifest = {}
+        app.db = {"events": {}}
+        app.records = [current, next_entry]
+        app.index = 0
+        app.staged_checked_occurrence_ids = {"staged-b"}
+        app.show = MagicMock()
+        with (
+            patch.object(review_gui, "materialize_ledger", return_value=staged_ledger),
+            patch.object(review_gui, "json_save") as save,
+        ):
+            terminal = app.save_event(current, {"action": "確認 expected"})
+        self.assertTrue(terminal)
+        save.assert_called_once()
+        self.assertEqual([item["occurrence_id"] for item in app.records], ["next-c"])
+        self.assertNotIn("staged-b", [item["occurrence_id"] for item in app.records])
+        app.show.assert_called_once()
+
+    def test_all_actionable_staged_keeps_batch_enabled_and_explains_next_step(self):
+        pending = entry("only", "a" * 64)
+        app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
+        app.output_dir = Path("project")
+        app.manifest = {}
+        app.db = {}
+        app.records = [pending]
+        app.index = 0
+        app.apply_actual_button = DummyButton()
+        app.status = DummyButton()
+        app.summary_text = DummyButton()
+        app.image = MagicMock()
+        app.tech_text = MagicMock()
+        app.primary = MagicMock()
+        app.secondary = MagicMock()
+        app.later = object()
+        with (
+            patch.object(review_gui, "materialize_ledger", return_value=[pending]),
+            patch.object(review_gui, "manual_actual_staging_summary", return_value={
+                "staged_group_count": 2,
+                "staged_checked_occurrence_ids": ["only"],
+            }),
+        ):
+            app.reload_records()
+        app.show()
+
+        self.assertEqual(app.records, [])
+        self.assertEqual(app.apply_actual_button.options["state"], "normal")
+        self.assertEqual(app.apply_actual_button.options["text"], "套用 actual 修正（2）")
+        self.assertIn("沒有尚未暫存", app.status.options["text"])
+        self.assertIn("仍有 2 組 actual 修正等待批次套用", app.summary_text.options["text"])
+        self.assertNotIn("全冊完成", app.summary_text.options["text"])
 
     def test_final_button_asks_confirmation_before_starting_worker(self):
         app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
