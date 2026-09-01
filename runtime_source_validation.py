@@ -24,7 +24,7 @@ from cross_version_compat import (
 ASSET_MANIFEST_SCHEMA_VERSION = "2.6.2"
 ACTUAL_FINGERPRINT_SCHEMA_VERSION = "2.9.0"
 EXPECTED_FINGERPRINT_SCHEMA_VERSION = "2.7.0"
-TOOL_VERSION = "5.6.2"
+TOOL_VERSION = "5.7.0"
 REQUIRED_ASSET_CHAINS = {
     "moe_concise_dictionary": "expected",
     "project_polyphonic_dictionary": "expected",
