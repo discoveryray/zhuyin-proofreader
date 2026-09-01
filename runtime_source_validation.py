@@ -14,12 +14,17 @@ from openpyxl import load_workbook
 
 from occurrence_ledger import LEDGER_SCHEMA_VERSION, canonical_bopomofo
 from actual_review import dynamic_actual_hashes
+from cross_version_compat import (
+    ACTUAL_DECODER_SEMANTICS_EPOCH,
+    EXPECTED_RESOLVER_SEMANTICS_EPOCH,
+    fingerprint_contract_components,
+)
 
 
 ASSET_MANIFEST_SCHEMA_VERSION = "2.6.2"
 ACTUAL_FINGERPRINT_SCHEMA_VERSION = "2.9.0"
 EXPECTED_FINGERPRINT_SCHEMA_VERSION = "2.7.0"
-TOOL_VERSION = "5.6.2"
+TOOL_VERSION = "5.7.0"
 REQUIRED_ASSET_CHAINS = {
     "moe_concise_dictionary": "expected",
     "project_polyphonic_dictionary": "expected",
@@ -487,6 +492,7 @@ def compute_actual_asset_fingerprint(
         raise SourceValidationError(f"動態 actual 證據驗證失敗：{exc}") from exc
     components = {
         "fingerprint_schema_version": ACTUAL_FINGERPRINT_SCHEMA_VERSION,
+        "actual_decoder_semantics_epoch": ACTUAL_DECODER_SEMANTICS_EPOCH,
         "pdf_sha256": sha256_file(pdf_path),
         "actual_ledger_schema_version": LEDGER_SCHEMA_VERSION,
         "decoder_version": decoder_version,
@@ -499,15 +505,11 @@ def compute_actual_asset_fingerprint(
         "reuse_policy": "evidence_assets_v1",
     }
     # v5.6: tool version and implementation source hashes remain auditable but
-    # no longer invalidate a cache by themselves.  Reuse is keyed to the exact
-    # PDF bytes, approved actual data assets and the project-scoped dynamic
-    # evidence relevant to this PDF.
-    reuse_components = {
-        "reuse_policy": "evidence_assets_v1",
-        "pdf_sha256": components["pdf_sha256"],
-        "actual_asset_hashes": components["actual_asset_hashes"],
-        "dynamic_actual_evidence_hashes": components["dynamic_actual_evidence_hashes"],
-    }
+    # no longer invalidate a cache by themselves.  Reuse is keyed to the
+    # explicit fingerprint schema/policy contract, exact PDF bytes, approved
+    # actual data assets and the project-scoped dynamic evidence relevant to
+    # this PDF.
+    reuse_components = fingerprint_contract_components(components, chain="actual")
     raw = json.dumps(reuse_components, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return {"fingerprint": hashlib.sha256(raw).hexdigest(), "components": components, "reuse_components": reuse_components}
 
@@ -571,18 +573,17 @@ def compute_expected_asset_fingerprint(
         raise SourceValidationError("asset manifest 沒有已驗證的 expected 核心資產")
     components = {
         "fingerprint_schema_version": EXPECTED_FINGERPRINT_SCHEMA_VERSION,
+        "expected_resolver_semantics_epoch": EXPECTED_RESOLVER_SEMANTICS_EPOCH,
         "resolver_version": resolver_version,
         "expected_resolver_source_hashes": dict(sorted(source_hashes.items())),
         "expected_asset_hashes": dict(sorted(expected_assets.items())),
         "reuse_policy": "evidence_assets_v1",
     }
     # v5.6: resolver/tool updates are audit information, not automatic cache
-    # invalidators.  A candidate cache is rebuilt when expected data assets
-    # change; otherwise prior reviewed work remains reusable across releases.
-    reuse_components = {
-        "reuse_policy": "evidence_assets_v1",
-        "expected_asset_hashes": components["expected_asset_hashes"],
-    }
+    # invalidators.  A candidate cache is rebuilt when its explicit
+    # schema/policy contract or expected data assets change; otherwise prior
+    # reviewed work remains reusable across releases.
+    reuse_components = fingerprint_contract_components(components, chain="expected")
     raw = json.dumps(reuse_components, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
     return {"fingerprint": hashlib.sha256(raw).hexdigest(), "components": components, "reuse_components": reuse_components}
 

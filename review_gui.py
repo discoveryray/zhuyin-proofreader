@@ -15,17 +15,20 @@ import fitz
 
 from occurrence_ledger import CONFIRMATION_GATES, NON_TERMINAL_STATES, canonical_bopomofo
 from standalone_proofread import (
+    ManualActualPostApplyError,
     VERSION,
+    apply_staged_manual_actual_corrections,
     build_reusable_rule,
     friendly_state,
     json_load,
     json_load_strict,
     json_save,
     load_or_initialize_db,
+    manual_actual_staging_summary,
     materialize_ledger,
     regenerate_report,
-    apply_manual_actual_correction,
     save_reusable_expected_rule,
+    stage_manual_actual_correction,
     validate_manifest_integrity,
     validate_output_artifact_hashes,
 )
@@ -249,7 +252,7 @@ class ExpectedDialog(tk.Toplevel):
 
 class ActualReadingDialog(tk.Toplevel):
     """Human visual confirmation for the actual evidence chain only."""
-    def __init__(self, parent, entry, group, output_dir: Path):
+    def __init__(self, parent, entry, group, output_dir: Path, *, wait: bool = True):
         super().__init__(parent)
         self.result = None
         self.entry = entry
@@ -264,13 +267,17 @@ class ActualReadingDialog(tk.Toplevel):
         footer = tk.Frame(self, bd=1, relief="groove")
         footer.pack(side="bottom", fill="x")
         tk.Button(footer, text="取消", width=12, command=self.destroy).pack(side="right", padx=8, pady=10)
-        tk.Button(footer, text="儲存 actual 並重新解碼", width=22, command=self.submit).pack(side="right", padx=4, pady=10)
+        tk.Button(footer, text="暫存這筆 actual", width=20, command=self.submit).pack(side="right", padx=4, pady=10)
         body, _canvas = create_scrollable_body(self)
 
         tk.Label(body, text="只看 PDF 原頁，確認實際印出的注音", font=("Microsoft JhengHei UI", 13, "bold")).pack(anchor="w", padx=16, pady=(14,4))
         tk.Label(
             body,
-            text="這個視窗不提供 expected／字典答案。請只依原頁可見字形輸入 actual。若同一 exact glyph 有第二個位置，可同時核對後升格成可重用 exact 字形真值。",
+            text=(
+                "這個視窗不提供 expected／字典答案，請只依原頁可見字形輸入 actual。"
+                "這次只會保存人工核對結果，不會立即重跑 PDF；你可以繼續確認下一筆，"
+                "最後由主畫面的「套用 actual 修正」一次處理。"
+            ),
             fg="#555555", justify="left", wraplength=900,
         ).pack(anchor="w", padx=16, pady=(0,8))
 
@@ -312,11 +319,12 @@ class ActualReadingDialog(tk.Toplevel):
         form.columnconfigure(1, weight=1)
         kind = str(group.get("kind") or "")
         if len(self.samples) > 1 and kind in {"TTF_GLYF_SHA256", "CFF_GLYPH_SHA256"}:
-            tk.Label(body, text="若 A、B 都勾選且讀音相同，這個 exact 字形可升格為跨位置重用真值；只勾 A 則只修正本位置。", fg="#555555").pack(anchor="w", padx=18, pady=(0,10))
+            tk.Label(body, text="若 A、B 都勾選且讀音相同，批次套用時這個 exact 字形可升格為跨位置重用真值；只勾 A 則只修正本位置。", fg="#555555").pack(anchor="w", padx=18, pady=(0,10))
         else:
-            tk.Label(body, text="目前沒有第二個可交叉核對的 exact glyph；本次會先保存 occurrence-specific actual 修正。", fg="#555555").pack(anchor="w", padx=18, pady=(0,10))
+            tk.Label(body, text="目前沒有第二個可交叉核對的 exact glyph；本次會先暫存 occurrence-specific actual 修正。", fg="#555555").pack(anchor="w", padx=18, pady=(0,10))
         self.protocol("WM_DELETE_WINDOW", self.destroy)
-        self.wait_window(self)
+        if wait:
+            self.wait_window(self)
 
     def submit(self):
         reading = canonical_bopomofo(self.reading.get())
@@ -430,6 +438,9 @@ class ReviewApp:
         self.photo = None
         self.records = []
         self.tech_visible = False
+        self.staging_summary = {}
+        self.staged_member_occurrence_ids = set()
+        self.staged_checked_occurrence_ids = set()
 
         root.title(f"注音校對－人工確認 v{VERSION}")
         apply_screen_safe_geometry(root, 1180, 850, min_width=760, min_height=520)
@@ -455,14 +466,16 @@ class ReviewApp:
 
         actions = tk.Frame(root)
         actions.pack(fill="x", padx=12, pady=(4, 10))
-        self.primary = tk.Button(actions, text="", width=18, height=2)
+        decision_actions = tk.Frame(actions)
+        decision_actions.pack(fill="x")
+        self.primary = tk.Button(decision_actions, text="", width=18, height=2)
         self.primary.pack(side="left", padx=(0, 6))
-        self.secondary = tk.Button(actions, text="", width=18, height=2)
+        self.secondary = tk.Button(decision_actions, text="", width=18, height=2)
         self.secondary.pack(side="left", padx=6)
-        self.later = tk.Button(actions, text="稍後處理", width=14, height=2, command=self.next)
+        self.later = tk.Button(decision_actions, text="稍後處理", width=14, height=2, command=self.next)
         self.later.pack(side="left", padx=6)
 
-        self.more_button = tk.Menubutton(actions, text="更多…", width=12, height=2, relief="raised")
+        self.more_button = tk.Menubutton(decision_actions, text="更多…", width=12, height=2, relief="raised")
         self.more_menu = tk.Menu(self.more_button, tearoff=False)
         self.more_button.config(menu=self.more_menu)
         self.more_button.pack(side="left", padx=6)
@@ -473,22 +486,99 @@ class ReviewApp:
         self.more_menu.add_command(label="查看／隱藏技術資訊", command=self.toggle_tech)
         self.more_menu.add_command(label="更新 Excel 報告", command=self.report)
 
+        batch_actions = tk.Frame(actions)
+        batch_actions.pack(fill="x", pady=(6, 0))
+        self.apply_actual_button = tk.Button(
+            batch_actions,
+            text="套用 actual 修正（0）",
+            width=24,
+            height=2,
+            state="disabled",
+            command=self.apply_staged_actuals,
+        )
+        self.apply_actual_button.pack(side="right")
+        tk.Label(
+            batch_actions,
+            text="先逐筆暫存原頁 actual；確認完後再一次套用與增量更新。",
+            fg="#555555",
+            anchor="w",
+        ).pack(side="left", fill="x", expand=True)
+
         self.reload_records()
         self.show()
         if not self.records:
-            messagebox.showinfo("沒有待處理項目", "目前沒有待人工項目。是否全冊完成仍以完整資料、回歸與集合檢查為準。")
+            title, detail, _primary_text = self._empty_actionable_state()
+            messagebox.showinfo(title, detail, parent=self.root)
 
     def reload_records(self):
+        self.reload_staging_summary()
         ledger = materialize_ledger(self.manifest, self.db)
-        self.records = [entry for entry in ledger if entry.get("state") in NON_TERMINAL_STATES]
-        self.index = max(0, min(self.index, len(self.records) - 1))
+        self._set_actionable_records_from_ledger(ledger)
+
+    def _set_actionable_records_from_ledger(self, ledger):
+        previous_records = list(getattr(self, "records", []))
+        previous_index = int(getattr(self, "index", 0))
+        following_occurrence_ids = []
+        if 0 <= previous_index < len(previous_records):
+            following_occurrence_ids = [
+                str(item.get("occurrence_id") or "")
+                for item in previous_records[previous_index:]
+            ]
+
+        checked_ids = set(getattr(self, "staged_checked_occurrence_ids", set()))
+        self.records = [
+            entry
+            for entry in ledger
+            if entry.get("state") in NON_TERMINAL_STATES
+            and str(entry.get("occurrence_id") or "") not in checked_ids
+        ]
+        if not self.records:
+            self.index = 0
+            return
+
+        current_indexes = {
+            str(item.get("occurrence_id") or ""): index
+            for index, item in enumerate(self.records)
+            if str(item.get("occurrence_id") or "")
+        }
+        for occurrence_id in following_occurrence_ids:
+            if occurrence_id in current_indexes:
+                self.index = current_indexes[occurrence_id]
+                return
+        self.index = max(0, min(previous_index, len(self.records) - 1))
+
+    def reload_staging_summary(self):
+        summary = manual_actual_staging_summary(self.output_dir)
+        self.staging_summary = dict(summary)
+        self.staged_member_occurrence_ids = set(summary.get("staged_member_occurrence_ids") or [])
+        self.staged_checked_occurrence_ids = set(summary.get("staged_checked_occurrence_ids") or [])
+        count = int(summary.get("staged_group_count") or 0)
+        self.apply_actual_button.config(
+            text=f"套用 actual 修正（{count}）",
+            state="normal" if count > 0 else "disabled",
+        )
+        return self.staging_summary
+
+    def _empty_actionable_state(self):
+        count = int(self.staging_summary.get("staged_group_count") or 0)
+        if count > 0:
+            return (
+                "目前沒有尚未暫存的待人工項目",
+                f"仍有 {count} 組 actual 修正等待批次套用，"
+                f"請按「套用 actual 修正（{count}）」。",
+                "請使用批次套用按鈕",
+            )
+        return (
+            "目前沒有待人工項目",
+            "請回主畫面更新報告；是否全冊完成仍由完整 completion gate 判定。",
+            "沒有待處理項目",
+        )
 
     def current(self):
         return self.records[self.index] if self.records else None
 
     def save_event(self, entry, event):
         review_id = entry["review_id"]
-        old_index = self.index
         staged = json.loads(json.dumps(self.db, ensure_ascii=False))
         staged.setdefault("events", {})[review_id] = event
         try:
@@ -506,19 +596,7 @@ class ReviewApp:
 
         json_save(self.output_dir / "人工判定資料庫.json", staged)
         self.db = staged
-        self.records = [item for item in staged_ledger if item.get("state") in NON_TERMINAL_STATES]
-
-        if resolved_entry.get("state") not in NON_TERMINAL_STATES:
-            # The resolved row has disappeared from pending.  Keeping the same
-            # numeric index therefore selects the next row that followed it.
-            self.index = max(0, min(old_index, len(self.records) - 1))
-        else:
-            # Non-terminal evidence updates should stay on the same occurrence.
-            current_index = next(
-                (i for i, item in enumerate(self.records) if item.get("review_id") == review_id),
-                None,
-            )
-            self.index = current_index if current_index is not None else max(0, min(old_index, len(self.records) - 1))
+        self._set_actionable_records_from_ledger(staged_ledger)
         self.show()
         return resolved_entry.get("state") not in NON_TERMINAL_STATES
 
@@ -677,33 +755,82 @@ class ReviewApp:
         dialog = ActualReadingDialog(self.root, entry, group, self.output_dir)
         if not dialog.result:
             return
+        try:
+            stage_manual_actual_correction(
+                self.output_dir,
+                str(entry.get("review_id") or ""),
+                dialog.result["reading"],
+                list(dialog.result.get("checked_occurrence_ids") or []),
+                dialog.result.get("note", ""),
+            )
+        except Exception as exc:
+            messagebox.showerror("actual 暫存失敗", str(exc), parent=self.root)
+            return
+        try:
+            self.reload_records()
+            self.show()
+        except Exception as exc:
+            messagebox.showwarning(
+                "actual 已暫存，但待人工清單更新失敗",
+                f"人工核對結果已寫入 durable staging；重新開啟畫面仍可恢復。\n{exc}",
+                parent=self.root,
+            )
+            return
+        fresh_summary = self.staging_summary
+        count = int(fresh_summary.get("staged_group_count") or 0)
+        messagebox.showinfo(
+            "actual 已暫存",
+            "這筆已暫存，尚未正式寫入 actual evidence，也尚未重新解碼 PDF。\n"
+            f"目前共有 {count} 組等待套用；你可以繼續確認下一筆，最後按「套用 actual 修正」。",
+            parent=self.root,
+        )
+
+    def apply_staged_actuals(self):
+        try:
+            summary = self.reload_staging_summary()
+        except Exception as exc:
+            messagebox.showerror("無法讀取 actual 暫存清單", str(exc), parent=self.root)
+            return
+        count = int(summary.get("staged_group_count") or 0)
+        if count <= 0:
+            return
+        if not messagebox.askyesno(
+            "套用 actual 修正",
+            f"目前有 {count} 組 actual 人工確認等待套用。\n"
+            "套用後會正式寫入 actual 證據，並一次增量重新處理受影響 PDF。\n"
+            "是否繼續？",
+            parent=self.root,
+        ):
+            return
 
         progress = tk.Toplevel(self.root)
-        progress.title("重新解碼 actual")
-        apply_screen_safe_geometry(progress, 520, 180, min_width=420, min_height=150)
+        progress.title("批次套用 actual")
+        apply_screen_safe_geometry(progress, 560, 210, min_width=440, min_height=170)
         progress.transient(self.root)
         progress.grab_set()
-        tk.Label(progress, text="已保存 visual actual 證據，正在增量更新受影響 PDF…", font=("Microsoft JhengHei UI", 11, "bold")).pack(padx=18, pady=(28,8))
-        tk.Label(progress, text="未受影響 PDF 會沿用 cache；請勿關閉程式。", fg="#555555").pack(padx=18, pady=4)
-        bar = ttk.Progressbar(progress, mode="indeterminate", length=380)
+        tk.Label(
+            progress,
+            text=f"正在一次套用 {count} 組 actual 修正",
+            font=("Microsoft JhengHei UI", 11, "bold"),
+        ).pack(padx=18, pady=(28, 8))
+        tk.Label(
+            progress,
+            text="未受影響 PDF 將直接沿用 cache；請勿關閉程式。",
+            fg="#555555",
+        ).pack(padx=18, pady=4)
+        bar = ttk.Progressbar(progress, mode="indeterminate", length=400)
         bar.pack(padx=18, pady=12)
         bar.start(12)
         old_index = self.index
 
         def worker():
             try:
-                result, report = apply_manual_actual_correction(
-                    self.output_dir,
-                    str(entry.get("review_id") or ""),
-                    dialog.result["reading"],
-                    list(dialog.result.get("checked_occurrence_ids") or []),
-                    dialog.result.get("note", ""),
-                )
-                self.root.after(0, lambda: done(result, report, None))
+                result = apply_staged_manual_actual_corrections(self.output_dir)
+                self.root.after(0, lambda: done(result, None))
             except Exception as exc:
-                self.root.after(0, lambda exc=exc: done(None, None, exc))
+                self.root.after(0, lambda exc=exc: done(None, exc))
 
-        def done(result, report, error):
+        def done(result, error):
             try:
                 bar.stop()
                 progress.grab_release()
@@ -711,39 +838,60 @@ class ReviewApp:
             except Exception:
                 pass
             if error:
-                messagebox.showerror("actual 修正失敗", str(error), parent=self.root)
+                try:
+                    self.reload_staging_summary()
+                    self.show()
+                except Exception:
+                    pass
+                if isinstance(error, ManualActualPostApplyError):
+                    title = "actual evidence 已套用，但後續未完成"
+                else:
+                    title = "套用 actual 修正失敗"
+                messagebox.showerror(title, str(error), parent=self.root)
                 return
             try:
                 self.manifest = json_load_strict(self.output_dir / "校對工作階段.json")
+                validate_manifest_integrity(self.manifest)
+                validate_output_artifact_hashes(self.manifest)
                 self.db = load_or_initialize_db(self.output_dir)
                 self.index = old_index
                 self.reload_records()
                 self.show()
             except Exception as exc:
-                messagebox.showerror("actual 已重解碼，但重新載入畫面失敗", str(exc), parent=self.root)
+                messagebox.showerror(
+                    "actual 已套用，但畫面重新載入失敗",
+                    f"batch、refresh 與 postcondition 已完成；請重新開啟人工校對畫面。\n{exc}",
+                    parent=self.root,
+                )
                 return
-            level = str((result or {}).get("learning_level") or "")
-            if level == "VERIFIED_EXACT_GLYPH":
-                reused = "；已升格為 exact 可重用字形真值"
-            elif level == "GLYPH_TRUTH_CONFLICT":
-                readings = "／".join((result or {}).get("known_conflicting_readings") or [])
-                reopened = len((result or {}).get("reopened_occurrence_ids") or [])
-                reused = (
-                    f"；occurrence 修正已保存，但 exact glyph 發現互斥讀音{('（' + readings + '）') if readings else ''}，"
-                    f"已進入 GLYPH_TRUTH_CONFLICT 隔離並停止全域泛化；另重新開啟 {reopened} 筆未直接覆核 occurrence"
+
+            result = dict(result or {})
+            applied_count = int(result.get("applied_group_count") or 0)
+            affected_pdfs = list(result.get("affected_pdf_names") or [])
+            quarantined = list(result.get("quarantined_group_ids") or [])
+            cleared = int(result.get("cleared_actual_dependent_event_count") or 0)
+            pending_counts = Counter(str(item.get("state") or "") for item in self.records)
+            pending_text = "、".join(
+                f"{friendly_state(state)} {number} 筆"
+                for state, number in sorted(pending_counts.items())
+            ) or "0 筆"
+            pdf_text = "、".join(affected_pdfs) or "無"
+            lines = [
+                f"已一次套用 {applied_count} 組 actual 修正。",
+                f"受影響 PDF：{len(affected_pdfs)} 個（{pdf_text}）。",
+                f"quarantined group：{len(quarantined)} 組。",
+                f"因 actual 更新而撤銷的舊差異 confirmation：{cleared} 筆。",
+                f"current pending 狀態已重新載入：{pending_text}。",
+            ]
+            if quarantined:
+                lines.append(
+                    f"有 {len(quarantined)} 組 exact glyph 因不同位置出現互斥人工讀音，"
+                    "已依既有規則進入隔離，不會做全域泛化。"
                 )
-            else:
-                reused = "；目前先保存為位置限定／單例證據"
-            post_actual = str((result or {}).get("post_actual") or "")
-            post_state = str((result or {}).get("post_state") or "")
-            if (result or {}).get("resolved_from_pending"):
-                outcome = "該筆已從待處理清單移除，畫面已前進到下一筆。"
-            else:
-                outcome = (
-                    f"actual 已確認為 {post_actual or '（未顯示）'}；但此 occurrence 仍為 {friendly_state(post_state)}，"
-                    "表示還有獨立的 expected／差異確認工作，不是 actual 修正未生效。"
-                )
-            messagebox.showinfo("actual 已更新", f"實際注音已完成增量更新{reused}。\n{outcome}\n報告：{report}", parent=self.root)
+            lines.append(
+                "工作階段與候選狀態已更新；Excel 最終報告可按「更新 Excel 報告」再產生。"
+            )
+            messagebox.showinfo("actual 批次套用完成", "\n".join(lines), parent=self.root)
 
         threading.Thread(target=worker, daemon=True).start()
 
@@ -816,11 +964,12 @@ class ReviewApp:
     def show(self):
         entry = self.current()
         if not entry:
-            self.status.config(text="目前沒有待人工項目")
-            self.summary_text.config(text="請回主畫面更新報告；是否全冊完成仍由完整 completion gate 判定。")
+            title, detail, primary_text = self._empty_actionable_state()
+            self.status.config(text=title)
+            self.summary_text.config(text=detail)
             self.image.config(image="", text="")
             self.tech_text.delete("1.0", "end")
-            self.primary.config(text="沒有待處理項目", state="disabled")
+            self.primary.config(text=primary_text, state="disabled")
             self.primary.pack(side="left", padx=(0, 6), before=self.later)
             self.secondary.pack_forget()
             return
@@ -838,14 +987,17 @@ class ReviewApp:
             for r in self.records
         )[group_key]
 
-        self.status.config(text=f"第 {self.index + 1} / {len(self.records)} 筆待處理｜{friendly_state(state)}")
+        is_staged = str(entry.get("occurrence_id") or "") in self.staged_checked_occurrence_ids
+        staged_status = "｜actual 已暫存，等待批次套用" if is_staged else ""
+        self.status.config(text=f"第 {self.index + 1} / {len(self.records)} 筆待人工處理｜{friendly_state(state)}{staged_status}")
         help_text = STATE_HELP.get(state, "這一筆需要人工處理。")
+        staged_line = "\nactual 狀態：已暫存人工核對結果，等待批次套用。" if is_staged else ""
         summary = (
             f"課本頁：{entry.get('printed_page', '')}　　目標字：{entry.get('char', '')}　　同類項目：{group_count} 筆\n"
             f"詞語／局部詞境：{phrase}\n"
             f"所在句：{sentence}\n"
             f"課本目前注音：{entry.get('actual', '') or '尚未辨識'}　　應標注音：{expected_text}\n"
-            f"原因：{help_text}"
+            f"原因：{help_text}{staged_line}"
         )
         self.summary_text.config(text=summary)
 

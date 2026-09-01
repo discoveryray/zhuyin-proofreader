@@ -127,6 +127,7 @@ class ReportIntegrityTests(unittest.TestCase):
             "records": ledger,
             "actual_source_ids": [row["occurrence_id"] for row in sources],
             "expected_asset_fingerprint": expected_fingerprint["fingerprint"],
+            "expected_asset_fingerprint_components": expected_fingerprint["components"],
             "regression_gate": regression,
             "mandatory_regression": regression,
             "pdf_regression": {"failed": 0, "not_executed": 0},

@@ -1,5 +1,6 @@
-﻿注音校對工具 v5.6.2－雙證據鏈＋現有專案完成狀態修正版（思考模式 2.5）
+﻿注音校對工具 v5.7.0－人工 actual 批次確認與證據相容性強化版（思考模式 2.5）
 
+v5.7.0 將人工 visual actual 改為「先暫存多筆、最後一次套用」：可連續核對原頁而不立即重跑 PDF，最後按「套用 actual 修正（N）」才正式寫入 actual evidence，並一次增量更新真正受影響的 PDF。新版同時強化 fingerprint／semantics compatibility 的 fail-closed contract；actual 與 expected 仍是完全獨立的證據鏈。
 v5.6.2 新增「修復／更新報告」續作入口：同一教材與同一「注音校對_輸出」可直接沿用既有 actual、人工/GPT 判定與 session；actual 證據未變時不重解碼，只重建受規則／回歸修正影響的 expected 候選與完成門檻。
 v5.6.1 修正「本批沒有任何適用 PDF occurrence regression 時，required=0 被誤判為 regression gate 失敗」；0 個適用案例現在視為中性通過，mandatory regression 與所有實際存在的 regression 案例仍維持原硬門檻。
 v5.6.0 以 v5.5.1 為基準，保留 occurrence-local actual、GLYPH_TRUTH_CONFLICT 隔離與 actual／expected 雙證據鏈；主要改動是把「工具版本」從硬性安全邊界改成稽核資訊，讓同一校對專案可直接跨版本續用。
@@ -42,10 +43,19 @@ v5.6.0 以 v5.5.1 為基準，保留 occurrence-local actual、GLYPH_TRUTH_CONFL
 
 5. 「更多…」
    - 此處不需校對：只有確實不屬注音校對母體時使用，例如插圖文字根本沒有可見注音。
-   - 實際注音辨識有誤：直接開啟原頁 visual actual 核對視窗；只修 actual 證據，不提供 expected／字典答案。儲存後會使舊 actual cache 安全失效並重新解碼。
+   - 實際注音辨識有誤：直接開啟原頁 visual actual 核對視窗；只核對 actual，不提供 expected／字典答案。按「暫存這筆 actual」只保存人工核對結果，不會立即寫入正式 evidence 或重新解碼。
    - 撤銷本筆人工判定：取消本筆人工事件，回到自動證據狀態。
    - 查看／隱藏技術資訊：顯示 occurrence_id、review_id、內部 state、證據來源等除錯資料。
    - 更新 Excel 報告：重新依目前 ledger 與人工事件產生報告。
+
+6. 人工 actual 的暫存與批次套用
+   - Actual 核對視窗可顯示同一 exact glyph group 的位置；只有你勾選「我已直接核對這張 PDF 原頁」的 occurrence 才算直接人工 checked。未勾選的同 group peer 不會被假裝成已確認，也仍會留在「待人工處理」清單。
+   - 按「暫存這筆 actual」後，決定會 durable 保存；即使關閉並重開程式仍存在。這一步不是正式套用，不修改 authoritative actual evidence，也不觸發 PDF decode。
+   - 已直接 checked 並 staged 的 occurrence 會暫時從 GUI「待人工處理」清單隱藏，畫面自動前進下一個尚未 staged 的位置；authoritative ledger 在正式套用前仍維持 pending，這不代表 completion gate 已完成。
+   - 主畫面「套用 actual 修正（N）」中的 N 是等待套用的 staged exact group 數，不是 occurrence 數。同一 group 可直接核對一個或多個位置；queue denominator 只依真正 checked 的 occurrence 下降。
+   - 完成多筆核對後按「套用 actual 修正（N）」：程式才會一次 transaction 寫入正式 actual evidence、一次更新依賴舊 actual 的確認狀態，並一次執行完整 session 的 incremental refresh。
+   - Refresh 仍檢查整冊 PDF 清單；未受此次 actual evidence 影響的 PDF 會依 fingerprint/cache 直接沿用，真正受影響的 PDF 才重新解碼。
+   - Batch 完成後工作階段與候選狀態已更新；大型 Excel 最終報告仍可在完成一批操作後按「更新 Excel 報告」再產生。
 
 三、六閘門仍然存在，但操作簡化
 確認教材錯誤時，同一個視窗會要求一次確認：
@@ -119,15 +129,15 @@ v5.6.0 以 v5.5.1 為基準，保留 occurrence-local actual、GLYPH_TRUTH_CONFL
 - v5.5.0 的 GPT expected workbook metadata 會封存 expected_asset_fingerprint；expected action 綁定 PDF／頁碼／字元／所在行／局部詞境，而不是綁定 mutable actual 或自動 resolver 當下輸出。
 - GPT 單檔判定包先 preflight expected 目標與證據格式，再寫 actual；降低 actual 已提交後才發現 expected 檔本來就無效的半套狀態。
 
-十一、v5.5.0 單 PDF／依賴範圍增量 actual 更新
-- 人工「實際注音辨識有誤」或匯入 GPT actual 證據後，不再因動態 actual 資料庫任何一列改變就整冊 20 個 PDF 全部重解。程式會先判斷哪些 PDF 真正依賴被修改的 occurrence／exact glyph，只讓這些 PDF 的 actual cache 失效。
+十一、單 PDF／依賴範圍增量 actual 更新
+- 人工 batch 正式套用或匯入 GPT actual 證據後，不再因動態 actual 資料庫任何一列改變就整冊 20 個 PDF 全部重解。程式會先判斷哪些 PDF 真正依賴被修改的 occurrence／exact glyph，只讓這些 PDF 的 actual cache 失效；單筆人工 staging 本身不會使 cache 失效。
 - occurrence-specific override：原則上只重新解碼該 occurrence 所在 PDF。
 - TTF exact glyph truth：只重新解碼實際含有該 raw-glyf SHA-256 的 PDF；若同一 glyph 同時出現在多個 PDF，這些依賴 PDF 都會更新。
 - CFF exact glyph truth：只重新解碼實際含有相同 style group＋完整 CFF glyph SHA-256 的 PDF。
 - decoder 程式、靜態 actual 對照表或 fingerprint schema 改版屬全域語義變更，仍必須 fail closed 使相關 actual cache 全部失效；增量機制不會用來掩蓋程式版本變更。
 - CFF 跨檔證據仍會讀取全冊既有 actual workbook，但只改寫受影響工作簿，確保跨檔證據能力保留而未受影響 XLSX 不被無意重存。
 - actual 未變且 expected fingerprint 未變的 PDF，可直接沿用既有 candidate workbook，不必重新跑 expected resolver。
-- 互動式 actual 修正採「快速更新」：立即更新受影響 PDF、ledger、pending 與 completion gate；大型 Excel 報告預設延後。建議連續修完數筆後，再按一次「更新 Excel 報告」，避免每一筆都花時間重建大型技術稽核表。
-- 人工 actual 修正現在有硬性驗收：更新完成後，新 ledger 中該 occurrence 的 canonical actual 必須等於你輸入的讀音。若證據沒有真正套用，程式會報錯，不會顯示成功卻把同一筆原封不動留下。
+- 人工 actual batch 採「一次快速更新」：正式套用整批後更新受影響 PDF、ledger、pending 與 completion gate；大型 Excel 報告預設延後。建議連續暫存多筆後一次套用，再按一次「更新 Excel 報告」，避免每一筆都花時間更新專案。
+- 人工 actual batch 有硬性驗收：更新完成後，新 ledger 中所有直接 checked occurrences 的 canonical actual 必須等於各自 staged 讀音。若任一筆 evidence 沒有真正生效，程式會報錯，不會把整批誤報成成功。
 - 若 actual 已正確套用，但該筆因 expected 未決、規則衝突或 actual≠expected 的獨立問題仍須處理，GUI 會明確顯示剩餘原因；此時留下該筆是狀態正確，而不是 actual 更新失敗。
 
