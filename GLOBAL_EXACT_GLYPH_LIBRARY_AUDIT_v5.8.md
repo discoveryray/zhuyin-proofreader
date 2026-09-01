@@ -13,7 +13,7 @@ That design cannot be copied directly into a cross-project library. The current 
 The unique recommendation for v5.8 is:
 
 1. Store the library outside Git and outside every project at `%LOCALAPPDATA%\DiscoveryRay\ZhuyinProofreader\GlobalExactGlyphLibrary\library.sqlite3`.
-2. Keep one canonical identity registry: TTF is raw `glyf` SHA-256; CFF is `(style_group, complete CFF glyph SHA-256)`.
+2. Keep one canonical identity registry: a TTF global identity exists only for a legally parsed simple `glyf` record and uses the SHA-256 of that complete raw record; CFF is `(style_group, complete resolved CFF glyph-recording SHA-256)`.
 3. Admit only directly checked visual actual evidence. Expected evidence, dictionary data, semantic/context inference, normalized outlines, components, font names, and font indexes are ineligible.
 4. Require two correlation-resistant independent sources—distinct project identity, PDF SHA-256, and embedded-font-program SHA-256—with the same reading, followed by an explicit promotion approval bound to that exact evidence quorum. Until then the row is a non-reusable candidate.
 5. On any contradictory direct reading, retain the new occurrence override but atomically place the exact identity in durable global quarantine. Never use last-writer-wins.
@@ -21,7 +21,7 @@ The unique recommendation for v5.8 is:
 7. Add a required per-PDF global exact-subset digest to the actual fingerprint contract. Do not fingerprint the whole database file or global generation counter.
 8. Do not bump `ACTUAL_DECODER_SEMANTICS_EPOCH` merely for this evidence source. Do create an incompatible actual fingerprint schema/reuse-policy contract and a strict global-library schema.
 
-The recommended implementation is split into five separately reviewable phases. No phase may introduce normalized-outline or component-level global learning.
+The recommended implementation is split into six separately reviewable phases. Exact-identity hardening is completed before the global repository exists. No phase may introduce normalized-outline or component-level global learning.
 
 ## 2. Current v5.7 architecture
 
@@ -126,7 +126,7 @@ The global design must preserve all of the following:
 1. Global data is actual evidence only. It cannot read expected sets, dictionaries, candidate equality, semantic context, words, parts of speech, or user expected rules to select a reading.
 2. Only an explicit direct visual confirmation of a printed occurrence may contribute promotion evidence. Propagated overrides and automatic decodes never count.
 3. A local occurrence override is never withdrawn merely because global promotion conflicts or fails.
-4. Only complete exact identities are reusable: TTF raw `glyf` SHA-256 and CFF style group + complete glyph SHA-256.
+4. Only complete, structurally eligible exact identities are reusable: TTF is limited to a legally parsed non-composite `glyf` record (`numberOfContours >= 0`) hashed over its complete raw bytes; CFF is style group + complete resolved glyph-recording SHA-256.
 5. `full_signature`, annotation components, normalized outline, component similarity, font name, font index, glyph index, and xref are not global reuse keys.
 6. Any incompatible direct reading disables reusable truth for that identity until explicit audited resolution.
 7. Unknown schema, invalid identity, or unprovable cache compatibility fails closed. A present-but-unreadable store is not treated as an empty store.
@@ -141,25 +141,44 @@ The global design must preserve all of the following:
 | Class | Data | Rule |
 |---|---|---|
 | A — forever project-local | `manual_actual_staging.json`; occurrence overrides; manifest/session; DB events; current ledger; workbook/candidate/report; project-local singles, exact records and provenance | They describe one project, one occurrence, or one transaction. Global success never replaces or deletes them. |
-| B — eligible global exact evidence | Canonical reading from directly checked occurrences with a complete TTF or CFF exact identity, plus the immutable direct-evidence records required by the global quorum | It becomes reusable only after the global promotion policy and approval pass. |
+| B — eligible global exact evidence | Canonical reading from directly checked occurrences with either a proven-simple complete TTF `glyf` identity or a complete CFF exact identity, plus the immutable direct-evidence records required by the global quorum | It becomes reusable only after the global promotion policy and approval pass. Composite or malformed TTF records never enter this class. |
 | C — provenance only | `full_signature`; CFF component/signature sequence; normalized outline; component IDs; font name/index/xref/gid; page/coordinates; decoder result; source note; source file/program SHA; migration source hashes | These may explain, correlate, deduplicate, or audit evidence. They cannot be the glyph reuse key. The embedded-font SHA is an independence qualifier, not a glyph identity. |
 | D — conflict/quarantine | Every contrary direct reading for one exact identity; imported project conflict rows; disagreements among verified project/global/static exact truth; unresolved adjudication history | These records are durable and result-affecting. They block reusable exact truth but never turn into expected evidence. |
 
 `USER_VERIFIED_SINGLE` is a project-local candidate, not global truth. Existing `VERIFIED_EXACT_GLYPH` is also not automatically global truth because its historical source count does not prove independence.
 
+A project may continue to retain a composite or malformed TTF raw-record hash in its existing local evidence and provenance. The global admission result must label it `UNSUPPORTED_EXACT_IDENTITY` / `NON_GLOBAL_ELIGIBLE`, set `counts_toward_global_quorum = false`, and never create reusable global truth from it.
+
 ## 5. Exact identity contract
 
 ### 5.1 TTF
 
-Reusable identity:
+`TrueTypeGlyphInspector.glyph_sha256()` currently hashes the bytes returned by `glyph_bytes()` without classifying the record. `simple_contours()` separately returns an empty result for composite glyphs and documents a corpus assumption that textbook Bopomofo components are simple. That assumption is not an identity proof.
+
+For a composite glyph, the raw record contains component glyph IDs and transforms rather than the recursively resolved component outlines. Two embedded font programs can therefore contain the same composite record bytes while the same referenced GIDs resolve to different component outlines. Consequently, equal raw composite-record SHA-256 values do **not** prove equal cross-font visible glyphs.
+
+The only v5.8 production-reusable TTF identity is:
 
 ```text
+eligibility = GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1
 kind = TTF_GLYF_SHA256
 style_group = ""
-glyph_sha256 = lowercase SHA-256 of the complete raw glyf evidence used by v5.7
+glyph_sha256 = lowercase SHA-256 of the complete raw, legally parsed simple glyf record
 ```
 
-`font`, `font_xref`, glyph/component index, normalized outline and source font program are not part of the reuse key.
+The canonical encoder and every admission and decoder-lookup boundary must establish all of the following from the actual `glyf` structure:
+
+1. The record range and complete record parse are valid.
+2. The signed `numberOfContours` value is greater than or equal to zero.
+3. The record is not composite; a negative `numberOfContours` is always non-global-eligible.
+4. `glyph_sha256` covers the complete raw record, not a header, contour subset, component list, or normalized outline.
+5. Classification is derived from the parsed `glyf` bytes, never from font name, font index, GID, character meaning, or a corpus assumption. A non-empty `simple_contours()` result is not itself the canonical classification contract.
+
+Composite, malformed, truncated, out-of-range, or otherwise unprovable records fail closed as `UNSUPPORTED_EXACT_IDENTITY` / `NON_GLOBAL_ELIGIBLE`. Their direct occurrence correction, project-local learning row, and audit/provenance may remain, but they cannot create or query `VERIFIED_GLOBAL`, cannot create promotion-ready evidence, and cannot count toward the global quorum.
+
+`font`, `font_xref`, glyph/component index and `source_font_program_sha256` are not part of the reusable glyph key. The source font-program SHA remains only an independent-source correlation qualifier. Adding it to the key would partition the unsafe composite case by font rather than prove an exact reusable glyph, so it is not the remedy.
+
+Future composite TTF global reuse requires a separately designed, versioned **recursive exact composite-closure identity** that binds the composite structure and transforms plus exact evidence for every recursively referenced component. v5.8 does not implement that identity, normalized outlines, or component similarity.
 
 ### 5.2 CFF
 
@@ -168,16 +187,16 @@ Reusable identity:
 ```text
 kind = CFF_GLYPH_SHA256
 style_group = canonical non-empty cff_style_group
-glyph_sha256 = lowercase SHA-256 of the complete CFF glyph outline/recording used by v5.7
+glyph_sha256 = lowercase SHA-256 of the complete resolved CFF glyph recording used by v5.7
 ```
 
-The composite key is `(style_group, glyph_sha256)`. `full_signature`, body/tone/neutral signatures, annotation components, font name, font index and CID/glyph ID are audit metadata only.
+`CFFZhuyinInspector._recording()` calls `fontTools` `CharString.draw(RecordingPen)`, and `cff_glyph_outline_sha256()` hashes the resulting complete resolved recording. The audit therefore found no TTF-style ambiguity in which an unchanged raw component-GID reference could resolve to a different outline in another font program. The composite key remains `(style_group, glyph_sha256)`; it is not changed to a font-program key. `full_signature`, body/tone/neutral signatures, annotation components, font name, font index, CID/glyph ID and source font-program SHA are audit/correlation metadata only.
 
 ### 5.3 Current consistency gap to close before global writes
 
 The persistent CFF learning and decoder lookup correctly use `(style_group, complete glyph SHA)`, but current `build_actual_review_groups()`, `build_actual_group_for_entry()` and `group_id` group by `(kind, exact_key)` and do not include `style_group`. A rare same-SHA/different-style case could therefore share a review group even though its reusable storage key is different.
 
-Global admission must never trust the current `group_id` as proof of CFF identity. It must recompute the full identity for every directly checked member and require all tuples to match. The first foundation phase should centralize the canonical identity encoder. If project staging `group_id` is changed to include CFF style, that is an explicit staging identity/schema migration with a fail-closed adapter for pending v5.7 staging—not an unversioned rewrite.
+Global admission must never trust the current `group_id` as proof of CFF identity. It must recompute the full identity for every directly checked member and require all tuples to match. Phase 1 must centralize the canonical identity encoder before any global repository is created. If project staging `group_id` is changed to include CFF style, that is an explicit staging identity/schema migration with a fail-closed adapter for pending v5.7 staging—not an unversioned rewrite.
 
 ## 6. Proposed global storage
 
@@ -212,8 +231,8 @@ Recommended strict tables:
 | Table | Required purpose and fields |
 |---|---|
 | `library_meta` | Singleton row: `schema_version`, `identity_contract_version`, `promotion_policy_version`, monotonic `generation`, `created_at`, `updated_at`. |
-| `glyph_truth` | `glyph_id` (deterministic canonical identity hash), `kind`, `style_group`, `glyph_sha256`, `state`, nullable `active_reading`, `direct_source_count`, `independent_source_count`, `revision`, `created_at`, `updated_at`; unique `(kind, style_group, glyph_sha256)`. |
-| `source_evidence` | Deterministic `evidence_id`, `glyph_id`, canonical `reading`, `evidence_class`, `source_project_id`, `source_pdf_sha256`, `source_font_program_sha256`, `source_occurrence_id`, `source_review_id`, `decision_snapshot_sha256`, `confirmation_channel`, `confirmed_at`, `ingested_at`. |
+| `glyph_truth` | `glyph_id` (deterministic canonical identity hash), `identity_contract_version`, `identity_eligibility`, `kind`, `style_group`, `glyph_sha256`, `state`, nullable `active_reading`, `direct_source_count`, `independent_source_count`, `revision`, `created_at`, `updated_at`; unique `(kind, style_group, glyph_sha256)`. |
+| `source_evidence` | Deterministic `evidence_id`, `glyph_id`, canonical `reading`, `evidence_class`, derived `counts_toward_global_quorum`, `source_project_id`, `source_pdf_sha256`, `source_font_program_sha256`, `source_occurrence_id`, `source_review_id`, `decision_snapshot_sha256`, `confirmation_channel`, `confirmed_at`, `ingested_at`. |
 | `promotion_approval` | `approval_id`, `glyph_id`, canonical `reading`, immutable `quorum_digest`, `promotion_policy_version`, approval source, `approved_at`; unique active approval per identity/revision. |
 | `glyph_conflict` | `glyph_id`, durable `status`, canonical conflicting-readings payload, first/last event times, open/resolved generations, optional resolution reference. Conflict history is not deleted on resolution. |
 | `provenance_event` | Deterministic `event_id`, `transaction_id`, `glyph_id`, `event_type`, optional reading, referenced evidence/approval IDs, canonical payload digest, `created_at`. Append-only through the service. |
@@ -222,11 +241,11 @@ Recommended strict tables:
 
 TTF and CFF share `glyph_truth`, but strict checks express their distinct contracts:
 
-- `TTF_GLYF_SHA256` requires empty `style_group` and 64 lowercase hex `glyph_sha256`.
-- `CFF_GLYPH_SHA256` requires non-empty canonical `style_group` and 64 lowercase hex `glyph_sha256`.
+- `TTF_GLYF_SHA256` requires empty `style_group`, 64 lowercase hex `glyph_sha256`, and `identity_eligibility = GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1`. Admission and target lookup must both obtain that result from a legal parse of the complete current raw record; a hash alone is insufficient proof.
+- `CFF_GLYPH_SHA256` requires non-empty canonical `style_group`, 64 lowercase hex `glyph_sha256`, and `identity_eligibility = GLOBAL_ELIGIBLE_COMPLETE_CFF_RECORDING_V1`; the font-program SHA remains outside the reusable key.
 - Other `kind` values are rejected; `SESSION_STABLE_KEY` and `OCCURRENCE_ONLY` are never stored globally.
 
-Allowed `evidence_class` values are finite. Only `DIRECT_VISUAL_ACTUAL` counts toward promotion. `LEGACY_PROJECT_CANDIDATE` and `PROPAGATED_PROJECT_OCCURRENCE` are audit-only; expected-derived classes do not exist.
+Allowed `evidence_class` values are finite. Only globally eligible `DIRECT_VISUAL_ACTUAL` evidence counts toward promotion. `LEGACY_PROJECT_CANDIDATE` and `PROPAGATED_PROJECT_OCCURRENCE` are audit-only; expected-derived classes do not exist. A composite/malformed TTF result is retained, if desired, in project-local provenance or a non-reusable migration diagnostic; the global service rejects it before a `glyph_truth`/`source_evidence` mutation.
 
 Counts in `glyph_truth` are transactionally derived caches of `source_evidence`. Validation must recompute and reject drift instead of trusting a hand-edited count.
 
@@ -238,10 +257,10 @@ Every open must validate before returning any reusable record:
 2. `PRAGMA user_version` and `library_meta.schema_version` are known and agree exactly or have an explicit tested adapter.
 3. Required tables, columns, indexes, uniqueness and check constraints match the declared schema. Unknown schema transitions are not guessed.
 4. There is exactly one meta row; generation/revisions are non-negative and internally consistent.
-5. Every SHA is lowercase 64-hex; every reading is already canonical and valid; every state/transition enum is known.
-6. Identity hashes, quorum digests, event IDs and cached counts recompute exactly.
+5. Every SHA is lowercase 64-hex; every reading is already canonical and valid; every state/transition/eligibility enum is known. A TTF reusable row must carry the exact simple-glyf eligibility contract; unsupported/composite/malformed TTF identities cannot be silently skipped or accepted.
+6. Identity hashes, quorum digests, event IDs, `counts_toward_global_quorum` and cached counts recompute exactly.
 7. Conflicted identities have at least two distinct canonical readings and no active reusable reading.
-8. Trusted identities have a valid approval whose quorum still satisfies the recorded policy.
+8. Trusted identities have a valid approval whose quorum still satisfies the recorded policy and contains only globally eligible exact identities.
 
 An invalid row makes the present store invalid; loaders must not skip the row and return a partial truth map.
 
@@ -254,7 +273,8 @@ Cache fingerprints use a canonical logical subset, not database bytes, WAL bytes
   "identity_contract_version": "1.0",
   "promotion_policy_version": "1.0",
   "requested_identity": ["TTF_GLYF_SHA256", "", "<sha256>"],
-  "effective_state": "ABSENT|VERIFIED_GLOBAL|QUARANTINED_CONFLICT",
+  "identity_eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1|NON_GLOBAL_ELIGIBLE",
+  "effective_state": "NON_GLOBAL_ELIGIBLE|ABSENT|VERIFIED_GLOBAL|QUARANTINED_CONFLICT",
   "active_reading": "",
   "conflicting_readings": []
 }
@@ -280,7 +300,7 @@ An identity may enter `VERIFIED_GLOBAL` only when all conditions hold:
 1. At least two `DIRECT_VISUAL_ACTUAL` evidence rows have the same canonical reading.
 2. The quorum contains at least two distinct sealed project identities, two distinct PDF SHA-256 values, and two distinct embedded-font-program SHA-256 values.
 3. The occurrences and review decisions are distinct and were among `checked_occurrence_ids`; affected/propagated peers do not count.
-4. Every decision was rebuilt from the current ledger, bound to a valid manifest and artifact hashes, and contains the exact complete glyph identity.
+4. Every decision was rebuilt from the current ledger, bound to a valid manifest and artifact hashes, and contains a complete globally eligible exact identity. A TTF member must independently pass the simple-glyf structural gate; matching raw composite hashes never count.
 5. No project/global/static exact contradiction or open quarantine exists.
 6. An explicit promotion approval confirms the reading and source samples. The approval stores a digest of the exact evidence IDs, identity, reading and policy version.
 
@@ -402,9 +422,9 @@ It must be declared in the same `FINGERPRINT_COMPATIBILITY_REQUIRED_KEYS["actual
 
 ### 12.2 Per-PDF scoping
 
-Reuse the exact roster already available from `actual_workbook_dynamic_dependencies()`:
+Reuse the exact roster already available from `actual_workbook_dynamic_dependencies()`, but do not mistake the existing TTF SHA column for proof of global eligibility:
 
-- for TTF, request every `TTF_GLYF_SHA256` physically recorded in the PDF workbook;
+- for TTF, revalidate the current embedded-font raw record through the canonical parser. Query global truth only for a legally parsed simple record; emit a deterministic `NON_GLOBAL_ELIGIBLE` dependency result for composite/malformed/unprovable records;
 - for CFF, request every canonical `(style_group, CFF_GLYPH_SHA256)`;
 - hash the snapshot's logical state for exactly those identities, including explicit `ABSENT` rows.
 
@@ -414,12 +434,12 @@ Example:
 - A's subset payload includes X, so X promotion/quarantine/reading changes its fingerprint.
 - B's payload does not include X, so its fingerprint remains byte-for-byte identical.
 
-The dependency roster must include exact keys that were unresolved when the workbook was written; otherwise a later global promotion could not invalidate them.
+The dependency roster must include globally eligible exact keys that were unresolved when the workbook was written; otherwise a later global promotion could not invalidate them. Its identity-contract version also binds the TTF structural eligibility gate. A composite TTF hash is never looked up or promoted merely because the legacy workbook recorded it.
 
 ### 12.3 New and legacy workbooks
 
-- New PDF/no workbook: reuse is already impossible. Decode against the immutable global snapshot, record encountered exact keys, then rewrite only fingerprint metadata with the final per-PDF subset, following the existing two-stage project-dynamic pattern. Do not hash the full global database as a provisional boundary.
-- Current v5.7 workbook: its existing exact columns can derive the roster, but its stored actual fingerprint lacks the new required global contract. The recommended first v5.8 integration has no general 2.9.0 adapter; it fails reuse once, rebuilds, and seals the new contract.
+- New PDF/no workbook: reuse is already impossible. Decode against the immutable global snapshot, classify each encountered TTF record from its actual structure, record eligible exact keys and typed non-eligible results, then rewrite only fingerprint metadata with the final per-PDF subset, following the existing two-stage project-dynamic pattern. Do not hash the full global database as a provisional boundary.
+- Current v5.7 workbook: its exact columns provide raw dependency candidates but cannot prove TTF simple-glyf eligibility. Its stored actual fingerprint also lacks the new required global contract. The recommended first v5.8 integration has no general 2.9.0 adapter; it fails reuse once, rebuilds from the current embedded-font structures, and seals the new identity/subset contract.
 - Older workbook missing exact columns: distinguish “legacy contract missing” from “corrupt workbook.” Do not silently conflate exceptions with an empty roster. It must re-decode; corruption still fails artifact validation.
 - Present global store cannot be read/validated: do not reuse an old workbook and do not silently treat the store as empty.
 
@@ -433,7 +453,7 @@ The dependency roster must include exact keys that were unresolved when the work
 | `EXPECTED_RESOLVER_SEMANTICS_EPOCH` | **No bump** | Expected is not involved. |
 | Actual fingerprint schema | **Bump required**; recommended new incompatible family such as `3.0.0` | Old components cannot prove the global subset/policy contract. Do not use release number as the boundary. |
 | Actual `reuse_policy` | **New explicit value required**, e.g. `evidence_assets_with_global_exact_v1` | The evidence repertoire and required compatibility contract changed. |
-| Workbook schema | **No bump in the minimal read-only integration** | Existing TTF/CFF exact columns and the existing fingerprint JSON metadata cell can carry the dependency and new components. If a new required worksheet column/layout is introduced later, bump then. |
+| Workbook schema | **No bump in the minimal read-only integration, conditional on re-parsing TTF structure** | The existing TTF/CFF exact columns remain dependency candidates and the fingerprint JSON metadata can carry the new contract, but legacy TTF SHA alone never proves simple eligibility. Re-parse the current embedded font before global lookup/reuse. If implementation instead persists a new required eligibility column/layout, bump the workbook schema explicitly. |
 | Session/ledger/review identity schemas | **No bump for global read reuse** | Occurrence/review identity and whole-session layout do not change. |
 | Global library schema | **Required**, exact `1.0` plus `identity_contract_version` and `promotion_policy_version` | The mutable external evidence store needs its own strict lifecycle and adapters. |
 | Manual staging schema | **Conditional explicit bump** | Required only if the CFF group/group-ID contract is corrected to include style. Pending v5.7 decisions then need an explicit adapter or fail-closed re-review. |
@@ -574,9 +594,11 @@ v5.9 normalized-outline evaluation should use these metrics to determine whether
 | Schema creation | Empty v1 DB creates exact tables/constraints/meta; database starts at generation 0. |
 | Strict schema | Missing/extra required structure, duplicate meta, unknown `user_version`, unknown state, invalid cached count and identity digest all fail closed. |
 | Corruption | Truncated DB, malformed WAL, failed `quick_check`, foreign-key violation and invalid row block all reusable reads. |
-| TTF identity | Exact lowercase raw-glyf SHA matches; case/canonical input normalized before storage; different SHA does not reuse; font name/index cannot match. |
-| CFF identity | Same style + complete SHA matches; same SHA with different style does not; same annotation/full signature with different complete SHA does not. |
+| TTF simple eligibility | A legally parsed simple `glyf` with `numberOfContours >= 0` is eligible and hashes its complete raw record; a composite is `NON_GLOBAL_ELIGIBLE`; malformed/truncated records fail closed. Classification comes from structure, not font name/index, GID, semantics or corpus assumptions. |
+| TTF composite ambiguity | Construct two synthetic fonts with byte-identical composite records but different outlines at the referenced component GID; they must never produce, count toward, query or reuse the same global exact glyph truth. Project-local evidence/provenance remains allowed. |
+| TTF/CFF identity separation | A TTF eligible-simple exact SHA is independent of font name/index. CFF uses `style_group` + the resolved complete `RecordingPen` recording SHA; same CFF SHA with different style does not reuse. Neither key includes font-program SHA. |
 | Current CFF gap | Global admission rejects a live group whose members do not share `(style, SHA)`; any staging identity migration is explicitly tested. |
+| Phase 1 project regression | With no global library, existing project-local actual pronunciation behavior remains unchanged except for the separately reviewed CFF grouping identity hardening; composite/malformed global ineligibility cannot erase local corrections. |
 | Actual/expected separation | Promotion/read modules cannot import expected resolver/dictionary modules; expected fields in intent/store payload are rejected; actual decisions do not inspect expected. |
 | Candidate policy | One direct source stays candidate; two occurrences in one PDF stay candidate; copied project/PDF stays candidate; same embedded font stays candidate. |
 | Independent quorum | Two distinct project + PDF + font sources with same reading become promotion-ready; missing any axis does not. |
@@ -610,25 +632,35 @@ Tests must simulate at least two project roots and two concurrent processes on W
 
 Each phase has one main objective and its own review/validation gate.
 
-### Phase 1 — Canonical identity and global repository foundation
+### Phase 1 — Exact identity contract hardening
 
-Objective: establish a strict, injectable, concurrency-safe global storage/read snapshot without changing decoder results.
+Objective: stabilize the one canonical exact-identity contract shared by project and future global code before any global repository exists.
 
-- Centralize TTF/CFF canonical identity and explicitly close the CFF style/group admission gap.
-- Implement `%LOCALAPPDATA%` resolver, SQLite v1 schema, validation, immutable snapshot, logical subset digest primitives and backup/recovery diagnostics.
-- No GUI, no decoder consumption, no project promotion writes, no migration.
-- Gate: schema/corruption/identity/Windows multi-process tests and proof that production output is unchanged.
+- Add the canonical TTF identity encoder and its legal-parse/simple-glyf global eligibility gate. Composite or malformed records return a typed non-global-eligible result and never count toward a global quorum.
+- Canonicalize CFF identity as `(style_group, complete resolved glyph-recording SHA-256)` and explicitly close the current CFF review-group/group-ID consistency gap.
+- If the CFF correction changes manual staging `group_id` or schema, provide an explicit version, tested adapter or fail-closed migration; never reinterpret pending v5.7 staging silently.
+- Do not create SQLite, resolve `%LOCALAPPDATA%`, read global evidence, write global evidence, or change a decoder pronunciation result because of a global library.
+- Gate: simple/composite/malformed TTF identity tests, CFF style/group tests, staging migration tests if applicable, and proof that existing project-local actual behavior remains unchanged except for the explicitly reviewed CFF grouping hardening.
 
-### Phase 2 — Read-only exact reuse and per-PDF fingerprint scoping
+### Phase 2 — Global repository foundation
+
+Objective: establish a strict, injectable, concurrency-safe global storage and immutable read-snapshot foundation without connecting it to decoding or project promotion.
+
+- Implement the exact `%LOCALAPPDATA%` resolver, SQLite v1 schema, strict validation, immutable snapshots, logical subset digest primitives and backup/recovery diagnostics.
+- Implement WAL, `BEGIN IMMEDIATE`, bounded busy timeout, CAS/revision and idempotency primitives.
+- Do not consume global evidence in the decoder and do not write promotion evidence from a project.
+- Gate: root/schema/corruption/logical-subset/Windows multi-process tests; production pronunciation output remains unchanged.
+
+### Phase 3 — Read-only exact reuse and per-PDF fingerprint scoping
 
 Objective: allow only manually seeded/test-fixture `VERIFIED_GLOBAL` exact records to participate in actual decoding with precise cache invalidation.
 
-- Add the required global subset fingerprint component, new actual fingerprint schema/reuse policy, snapshot injection and source labels.
+- Add the required global subset fingerprint component, new actual fingerprint schema/reuse policy, snapshot injection, TTF simple-glyf lookup gate and source labels.
 - Preserve complete session refresh, decoder ordering, conflict gate, expected separation and one-decode-per-invalidated-PDF behavior.
 - Do not write/promote global evidence from project reviews yet.
-- Gate: TTF/CFF exact reuse, precedence/conflict, v5.7 one-time rebuild and per-PDF cache tests.
+- Gate: eligible-simple TTF/CFF exact reuse, composite/malformed TTF rejection, precedence/conflict, v5.7 one-time rebuild and per-PDF cache tests.
 
-### Phase 3 — Transactional promotion delivery and global conflict writes
+### Phase 4 — Transactional promotion delivery and global conflict writes
 
 Objective: deliver new directly checked project evidence safely to the global repository.
 
@@ -637,7 +669,7 @@ Objective: deliver new directly checked project evidence safely to the global re
 - Only `checked_occurrence_ids` can produce `DIRECT_VISUAL_ACTUAL` evidence.
 - Gate: project/global failure matrix, crash/idempotency, concurrent same/different reading and refresh-failure semantics.
 
-### Phase 4 — Auditable legacy candidate migration
+### Phase 5 — Auditable legacy candidate migration
 
 Objective: import existing project learning as non-reusable candidate/conflict evidence without bulk promotion.
 
@@ -645,7 +677,7 @@ Objective: import existing project learning as non-reusable candidate/conflict e
 - No automatic trusted import, no broad filesystem scan, no change to promotion threshold.
 - Gate: multi-project migration, duplicates, corrupted project, rerun and candidate-to-fresh-evidence tests.
 
-### Phase 5 — Operational GUI observability and metrics
+### Phase 6 — Operational GUI observability and metrics
 
 Objective: expose source/conflict/pending/success/failure and safe retry states without changing evidence semantics.
 
@@ -658,6 +690,7 @@ No later phase starts until the preceding phase has independent review and its r
 ## 22. Explicit non-goals
 
 - No production implementation in this audit.
+- No composite TTF global reuse in v5.8. Any future support requires a separately versioned recursive exact composite-closure identity binding structure, transforms and all recursively referenced component evidence; adding `source_font_program_sha256` to the reusable key is not a substitute.
 - No normalized-outline global identity or reuse; that is at most a v5.9 research question.
 - No component similarity/learning; that is at most a v5.10 research question.
 - No fuzzy/nearest-neighbor matching, semantic inference, word/character meaning, font-name/index matching, or annotation-component global promotion.
