@@ -103,7 +103,7 @@ from actual_review import (
 )
 
 PROGRAM = "注音校對工具－單機端到端控制器"
-VERSION = "5.6.2"
+VERSION = "5.7.0"
 # Tool release number is not a cache/session boundary. Compatibility is decided
 # by schema family, durable review IDs, PDF bytes and evidence assets.
 COMPATIBLE_SESSION_VERSIONS = None

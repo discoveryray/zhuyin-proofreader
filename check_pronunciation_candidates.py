@@ -51,7 +51,7 @@ from cross_version_compat import fingerprint_compatible, schema_compatible
 from actual_review import actual_workbook_dynamic_dependencies
 
 PROGRAM = "注音校對候選比較器"
-VERSION = "5.6.2"
+VERSION = "5.7.0"
 EXPECTED_RESOLVER_SOURCE_FILES = [
     "check_pronunciation_candidates.py",
     "pronunciation_rule_engine.py",

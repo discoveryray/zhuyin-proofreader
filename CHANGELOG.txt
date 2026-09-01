@@ -1,4 +1,18 @@
-﻿v5.6.2（2026-08-26）－現有專案完成狀態修正版
+﻿v5.7.0（2026-09-01）－人工 actual 批次確認與證據相容性強化版
+- 統一 actual／expected fingerprint producer 與 comparator 的 required contract registry；schema、reuse policy、semantics epoch 與各證據鏈必要欄位均須完整一致，未知欄位、缺欄與未明確支援的 future contract 一律 fail closed。tool version、implementation source hash 等仍只作 audit metadata，不會冒充 cache compatibility boundary。
+- 新增 actual／expected 各自獨立的 semantics epoch contract，兩者目前都維持初始 epoch `1`。只有相同 evidence 可能因演算法語意改變而得到不同讀音時才應 bump；本次 v5.7.0 release counter 不改 epoch。released v5.6.2、Phase 0B1 transitional 與 v5.5.1 schema adapters 只在 exact known digest／contract 成立時相容，未知 legacy fingerprint 不再獲得寬鬆 fallback。
+- 建立 GitHub hosted Windows CI baseline：Python 3.12／3.13 都執行 runtime asset integrity、完整 unittest、完整 pytest、compileall、committed whitespace 與 clean-working-tree checks；GUI layout tests 使用 deterministic event synchronization，不以 sleep 或排除 Windows 規避失敗。
+- 新增 project-owned durable manual actual staging：人工 visual actual 先寫入 `_專案證據/actual/manual_actual_staging.json`，重開程式仍可恢復；同 exact group 使用 deterministic upsert／dedupe。Staging 不是 authoritative actual evidence，不修改五個 actual evidence files，也不加入 dynamic actual hashes。
+- 新增 transactional staged batch apply：套用前從 current ledger 重建並 revalidate 全批 live groups，依 deterministic group order 一次更新 manual occurrence overrides、TTF/CFF verified truth、glyph conflict 與 provenance 五檔；任何 apply／acknowledgement 失敗會還原原始 bytes 或原始不存在狀態。Staging acknowledgement 為 atomic compare-and-remove，會阻止 stale/newer upsert 被誤清除並保留 unrelated concurrent staging。
+- Glyph truth conflict 繼續依既有規則隔離：直接覆核位置可保留 occurrence-local correction，互斥 exact glyph 不做全域泛化；quarantined group 不會被誤當成 expected 問題或整批失敗。
+- 人工 GUI actual 改為批次流程：「暫存這筆 actual」可連續保存多組核對，主畫面以「套用 actual 修正（N）」一次正式寫入 evidence、一次清除 actual-dependent confirmations、一次執行 incremental refresh。Refresh 仍交付完整 session PDF roster，whole-book manifest／ledger／reconciliation／completion gate／historical regression／CFF cross-file evidence pool 不被 partial pipeline 破壞；未受影響 PDF 由 per-PDF fingerprint 與 cache reuse 沿用。
+- Batch refresh 後會重新載入 current ledger，逐一確認所有直接 checked occurrences 的 canonical actual 等於人工 staged reading；occurrence 消失、未解出或讀音不符都不會回報成功。若 evidence 已正式套用但後續 refresh／驗證失敗，會明確提示可用既有 actual refresh 路徑恢復，不會對可能已部分更新的 workbook 做危險 rollback。
+- GUI actionable queue 改為 authoritative NON_TERMINAL entries 減去 `staged_checked_occurrence_ids`：直接 staged 的位置立即從「待人工處理」隱藏，denominator 同步下降並自動前進下一筆；同 exact group 但未直接 checked 的 peer 仍保留，`staged_member_occurrence_ids` 不再被誤當成人工覆核。最後一筆可安全 clamp；restart 與後續 save_event 也維持相同 filter。
+- 當所有 actionable occurrences 都已暫存但尚未正式套用時，GUI 會明確顯示仍有 N 組 actual 等待批次套用，batch button 保持 enabled，不會把 authoritative pending 或 completion gate 假裝成已完成。N 維持 staged group count，不是 checked occurrence count。
+- 真實教材《115國小健體2上》已完成使用者互動驗收：實際連續 durable staging 多筆 actual、一次核對同 group 多個 occurrence、確認 GUI queue 正確下降與前進、執行 transactional batch apply 與 one-shot incremental refresh；「課本其實正確但 actual decoder 辨識錯」亦由「更多…→實際注音辨識有誤…」完成修正，完成後目前未再發現其他異常。此項為真實教材操作驗收，不是 GitHub CI fixture。
+- 安全邊界維持不變：actual／expected 證據鏈完全獨立；未因 release bump 修改 semantics epoch、fingerprint/schema、ledger/session/workbook/review identity；未修改或重算 runtime asset truth／SHA；未以 tool version/source hash 取代 semantic contract，也未降低 source validation、artifact integrity、regression、reconciliation 或 completion gate。
+
+v5.6.2（2026-08-26）－現有專案完成狀態修正版
 - 修復 production runtime root 的 14 個資產 SHA mismatch：確認所有 CSV 自 v5.6.1 匯入後內容從未改變，差異只來自 Git 將已核准 CRLF bytes 無聲正規化為 LF；恢復原 manifest 所指向的 CRLF bytes，並以 `.gitattributes` 凍結 manifest-protected CSV，未重算或放寬任何 SHA、schema、actual/expected chain。
 - 新增「修復／更新報告」：沿用同一 session、人工/GPT 判定與 actual 工作簿；actual 證據相容時直接 reuse，只重建受影響的 expected 候選、回歸門檻與報告。
 - 修正三上來源限定規則把所有「轉動」高優先判為ㄓㄨㄢˋ，導致強制回歸 M25-ZHUAN-DONG 失敗；依既有人工回標與公司規範改回「轉動」ㄓㄨㄢˇ。

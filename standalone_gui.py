@@ -10,7 +10,7 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
-VERSION = "5.6.2"
+VERSION = "5.7.0"
 
 
 STATUS_TEXT = {
