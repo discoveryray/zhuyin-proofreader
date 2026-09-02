@@ -46,7 +46,7 @@ DEFAULT_STRUCTURAL_EXCLUSIONS = Path(__file__).with_name("structural_detection_e
 ACTUAL_DECODER_SOURCE_FILES = [
     "export_zhuyin_readings.py", "export_pdf_text_diagnostics.py", "cff_zhuyin_decoder.py",
     "cff_unseen_family_bootstrap.py", "ttf_zhuyin_shape_decoder.py", "ttf_symbol_recombination.py",
-    "cff_zero_map_batch.py", "occurrence_ledger.py", "actual_review.py",
+    "cff_zero_map_batch.py", "occurrence_ledger.py", "actual_review.py", "exact_glyph_identity.py",
 ]
 
 from cff_zhuyin_decoder import CFFZhuyinInspector, cff_style_group, load_cff_symbol_map
