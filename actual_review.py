@@ -19,9 +19,20 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from occurrence_ledger import canonical_bopomofo
 from cff_zhuyin_decoder import cff_full_annotation_signature
 from cross_version_compat import review_id_schema_compatible, schema_compatible
+from exact_glyph_identity import (
+    ACTUAL_GROUP_IDENTITY_KINDS,
+    CFF_GLYPH_SHA256,
+    TTF_GLYF_SHA256,
+    actual_group_id,
+    actual_group_identity_payload,
+    actual_group_match_key,
+    canonical_actual_group_identity,
+    legacy_v1_actual_group_id,
+)
 
-ACTUAL_REVIEW_SCHEMA_VERSION = "1.0"
-MANUAL_ACTUAL_STAGING_SCHEMA_VERSION = "1.0"
+ACTUAL_REVIEW_SCHEMA_VERSION = "1.1"
+MANUAL_ACTUAL_STAGING_SCHEMA_VERSION = "1.1"
+LEGACY_MANUAL_ACTUAL_STAGING_SCHEMA_VERSION = "1.0"
 MANUAL_ACTUAL_STAGING_FILE = "manual_actual_staging.json"
 ACTUAL_PENDING_STATES = frozenset({"ACTUAL_DECODE_ERROR", "ACTUAL_UNRESOLVED"})
 USER_GLYF_FILE = "user_verified_glyf_fingerprints.csv"
@@ -66,9 +77,7 @@ _MANUAL_ACTUAL_STAGING_GROUP_FIELDS = frozenset({
     "reading", "checked_occurrence_ids", "member_occurrence_ids", "note",
     "staged_at", "updated_at", "source",
 })
-_MANUAL_ACTUAL_STAGING_GROUP_KINDS = frozenset({
-    "TTF_GLYF_SHA256", "CFF_GLYPH_SHA256", "SESSION_STABLE_KEY", "OCCURRENCE_ONLY",
-})
+_MANUAL_ACTUAL_STAGING_GROUP_KINDS = ACTUAL_GROUP_IDENTITY_KINDS
 
 
 def _text(value: Any) -> str:
@@ -182,7 +191,12 @@ def _staging_timestamp(value: Any, field: str) -> tuple[str, datetime]:
     return text, parsed
 
 
-def _validate_manual_actual_staged_group(raw: Any, index: int) -> dict[str, Any]:
+def _validate_manual_actual_staged_group(
+    raw: Any,
+    index: int,
+    *,
+    schema_version: str = MANUAL_ACTUAL_STAGING_SCHEMA_VERSION,
+) -> dict[str, Any]:
     label = f"staged_groups[{index}]"
     if not isinstance(raw, dict):
         raise ValueError(f"manual actual staging {label} 必須是 object")
@@ -203,16 +217,18 @@ def _validate_manual_actual_staged_group(raw: Any, index: int) -> dict[str, Any]
         raise ValueError(f"manual actual staging {label}.kind 不支援：{kind}")
     exact_key = _staging_text(raw.get("exact_key"), f"{label}.exact_key")
     style_group = _staging_text(raw.get("style_group"), f"{label}.style_group", allow_empty=True)
-    if kind in {"TTF_GLYF_SHA256", "CFF_GLYPH_SHA256"}:
-        exact_key = exact_key.lower()
-        if len(exact_key) != 64 or any(ch not in "0123456789abcdef" for ch in exact_key):
-            raise ValueError(f"manual actual staging {label}.exact_key 必須是 exact glyph SHA-256")
-    if kind == "CFF_GLYPH_SHA256" and not style_group:
-        raise ValueError(f"manual actual staging {label}.style_group 對 CFF group 為必要欄位")
-    if kind != "CFF_GLYPH_SHA256" and style_group:
-        raise ValueError(f"manual actual staging {label}.style_group 只適用於 CFF group")
+    try:
+        identity = canonical_actual_group_identity(kind, exact_key, style_group)
+    except ValueError as exc:
+        raise ValueError(f"manual actual staging {label} exact identity 無效：{exc}") from exc
+    kind = identity["kind"]
+    exact_key = identity["exact_key"]
+    style_group = identity["style_group"]
 
-    expected_group_id = "agr_" + _hash_payload({"kind": kind, "exact_key": exact_key})[:24]
+    if schema_version == LEGACY_MANUAL_ACTUAL_STAGING_SCHEMA_VERSION:
+        expected_group_id = legacy_v1_actual_group_id(identity)
+    else:
+        expected_group_id = actual_group_id(identity)
     if group_id != expected_group_id:
         raise ValueError(f"manual actual staging {label}.group_id 與 exact group identity 不一致")
 
@@ -267,7 +283,16 @@ def _validate_manual_actual_staging_document(raw: Any) -> dict[str, Any]:
         raise ValueError(f"manual actual staging root 缺少欄位：{missing}")
     if unexpected:
         raise ValueError(f"manual actual staging root 含未知欄位：{unexpected}")
-    if raw.get("schema_version") != MANUAL_ACTUAL_STAGING_SCHEMA_VERSION:
+    schema_version = raw.get("schema_version")
+    if not isinstance(schema_version, str):
+        raise ValueError(
+            "manual actual staging schema 不相容："
+            f"required={MANUAL_ACTUAL_STAGING_SCHEMA_VERSION!r}, observed={schema_version!r}"
+        )
+    if schema_version not in {
+        MANUAL_ACTUAL_STAGING_SCHEMA_VERSION,
+        LEGACY_MANUAL_ACTUAL_STAGING_SCHEMA_VERSION,
+    }:
         raise ValueError(
             "manual actual staging schema 不相容："
             f"required={MANUAL_ACTUAL_STAGING_SCHEMA_VERSION!r}, observed={raw.get('schema_version')!r}"
@@ -281,7 +306,11 @@ def _validate_manual_actual_staging_document(raw: Any) -> dict[str, Any]:
     seen_snapshots: set[str] = set()
     seen_occurrence_ids: set[str] = set()
     for index, item in enumerate(groups_raw):
-        group = _validate_manual_actual_staged_group(item, index)
+        group = _validate_manual_actual_staged_group(
+            item,
+            index,
+            schema_version=str(schema_version),
+        )
         group_id = group["group_id"]
         if group_id in seen_group_ids:
             raise ValueError(f"manual actual staging group_id 重複：{group_id}")
@@ -294,6 +323,14 @@ def _validate_manual_actual_staging_document(raw: Any) -> dict[str, Any]:
         seen_snapshots.add(group["group_snapshot"])
         seen_occurrence_ids.update(group["member_occurrence_ids"])
         groups.append(group)
+    if (
+        schema_version == LEGACY_MANUAL_ACTUAL_STAGING_SCHEMA_VERSION
+        and any(group["kind"] == CFF_GLYPH_SHA256 for group in groups)
+    ):
+        raise ValueError(
+            "manual actual staging v1.0 含 pending CFF decision；"
+            "舊 group_id 未綁定 style_group，禁止靜默重新解釋，請重新進行 actual review"
+        )
     groups.sort(key=lambda group: group["group_id"])
     return {
         "schema_version": MANUAL_ACTUAL_STAGING_SCHEMA_VERSION,
@@ -304,9 +341,11 @@ def _validate_manual_actual_staging_document(raw: Any) -> dict[str, Any]:
 def load_manual_actual_staging(root: Path) -> dict[str, Any]:
     """Load and fully validate pending manual actual intent.
 
-    Absence is the only implicit compatibility case and represents an empty
-    queue.  Once the file exists, malformed JSON, duplicate keys, unknown
-    schema/fields, or contradictory identities fail closed.
+    Absence represents an empty queue.  The only legacy adapters are the
+    explicitly validated v1.0 empty and non-CFF forms; a pending v1.0 CFF
+    decision cannot prove the new style-bound identity and fails closed without
+    rewriting the file.  Malformed JSON, duplicate keys, unknown schema/fields,
+    or contradictory identities also fail closed.
     """
     path = manual_actual_staging_path(root)
     if not path.exists():
@@ -365,9 +404,16 @@ def stage_manual_actual_group(
     group_snapshot = _staging_text(group.get("group_snapshot"), "input.group_snapshot").lower()
     kind = _staging_text(group.get("kind"), "input.kind")
     exact_key = _staging_text(group.get("exact_key"), "input.exact_key")
-    if kind in {"TTF_GLYF_SHA256", "CFF_GLYPH_SHA256"}:
-        exact_key = exact_key.lower()
     style_group = _staging_text(group.get("style_group", ""), "input.style_group", allow_empty=True)
+    try:
+        identity = canonical_actual_group_identity(kind, exact_key, style_group)
+    except ValueError as exc:
+        raise ValueError(f"manual actual staging input exact identity 無效：{exc}") from exc
+    kind = identity["kind"]
+    exact_key = identity["exact_key"]
+    style_group = identity["style_group"]
+    if group_id != actual_group_id(identity):
+        raise ValueError("manual actual staging input.group_id 與 canonical exact identity 不一致")
 
     members = group.get("members")
     if not isinstance(members, list) or not members:
@@ -377,6 +423,16 @@ def stage_manual_actual_group(
         if not isinstance(member, Mapping):
             raise ValueError(f"manual actual staging group.members[{index}] 必須是 mapping")
         member_ids.append(_staging_text(member.get("occurrence_id"), f"input.members[{index}].occurrence_id"))
+        try:
+            member_key = actual_group_match_key(actual_group_identity(member))
+        except ValueError as exc:
+            raise ValueError(
+                f"manual actual staging group.members[{index}] exact identity 無效：{exc}"
+            ) from exc
+        if member_key != actual_group_match_key(identity):
+            raise ValueError(
+                f"manual actual staging group.members[{index}] 不屬於 canonical exact group"
+            )
     if len(member_ids) != len(set(member_ids)):
         raise ValueError("manual actual staging group.members 含重複 occurrence_id")
     occurrence_count = group.get("occurrence_count")
@@ -859,13 +915,19 @@ def actual_group_identity(entry: Mapping[str, Any]) -> dict[str, str]:
     source = _source(entry)
     sha = _text(source.get("TTF字形SHA256")).lower()
     if len(sha) == 64 and all(ch in "0123456789abcdef" for ch in sha):
-        return {"kind": "TTF_GLYF_SHA256", "exact_key": sha, "style_group": "", "full_signature": ""}
-    cff_glyph_sha = _text(source.get("CFF整字字形SHA256")).lower()
-    if len(cff_glyph_sha) == 64 and all(ch in "0123456789abcdef" for ch in cff_glyph_sha):
         return {
-            "kind": "CFF_GLYPH_SHA256",
-            "exact_key": cff_glyph_sha,
-            "style_group": _text(source.get("CFF樣式群組")),
+            **canonical_actual_group_identity(TTF_GLYF_SHA256, sha),
+            "full_signature": "",
+        }
+    cff_glyph_sha = _text(source.get("CFF整字字形SHA256")).lower()
+    cff_style = _text(source.get("CFF樣式群組"))
+    if (
+        cff_style
+        and len(cff_glyph_sha) == 64
+        and all(ch in "0123456789abcdef" for ch in cff_glyph_sha)
+    ):
+        return {
+            **canonical_actual_group_identity(CFF_GLYPH_SHA256, cff_glyph_sha, cff_style),
             "full_signature": _cff_full_signature(source),
         }
     # Older workbooks may carry only an annotation signature.  That signature
@@ -874,8 +936,17 @@ def actual_group_identity(entry: Mapping[str, Any]) -> dict[str, str]:
     # until a current decoder supplies the complete-glyph SHA-256.
     stable = _text(entry.get("stable_key") or source.get("穩定注音鍵"))
     if stable:
-        return {"kind": "SESSION_STABLE_KEY", "exact_key": _text(entry.get("occurrence_id") or stable), "style_group": "", "full_signature": _cff_full_signature(source)}
-    return {"kind": "OCCURRENCE_ONLY", "exact_key": _text(entry.get("occurrence_id")), "style_group": "", "full_signature": ""}
+        return {
+            **canonical_actual_group_identity(
+                "SESSION_STABLE_KEY",
+                _text(entry.get("occurrence_id") or stable),
+            ),
+            "full_signature": _cff_full_signature(source),
+        }
+    return {
+        **canonical_actual_group_identity("OCCURRENCE_ONLY", _text(entry.get("occurrence_id"))),
+        "full_signature": "",
+    }
 
 
 def build_actual_review_groups(entries: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
@@ -886,27 +957,27 @@ def build_actual_review_groups(entries: Sequence[Mapping[str, Any]]) -> list[dic
     promotion writes occurrence-scoped overrides for all currently affected
     PDFs, so per-PDF fingerprints can safely invalidate only true dependants.
     """
-    all_grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
-    pending_keys: set[tuple[str, str]] = set()
+    all_grouped: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    pending_keys: set[tuple[str, str, str]] = set()
     for raw in entries:
         entry = dict(raw)
         ident = actual_group_identity(entry)
-        key = (ident["kind"], ident["exact_key"])
+        key = actual_group_match_key(ident)
         all_grouped.setdefault(key, []).append(entry)
         if _text(raw.get("state")) in ACTUAL_PENDING_STATES:
             pending_keys.add(key)
     result = []
-    for kind, exact_key in sorted(pending_keys):
-        members = all_grouped.get((kind, exact_key), [])
+    for kind, style_group, exact_key in sorted(pending_keys):
+        members = all_grouped.get((kind, style_group, exact_key), [])
         if not members:
             continue
         members.sort(key=lambda e: (_text(e.get("pdf_name")), int(e.get("physical_page") or 0), float(e.get("y0") or 0), float(e.get("x0") or 0)))
         ident = actual_group_identity(members[0])
-        group_id = "agr_" + _hash_payload({"kind": kind, "exact_key": exact_key})[:24]
+        identity_payload = actual_group_identity_payload(ident)
+        group_id = actual_group_id(ident)
         snapshot = _hash_payload({
             "group_id": group_id,
-            "kind": kind,
-            "exact_key": exact_key,
+            **identity_payload,
             "members": [
                 {
                     "occurrence_id": e.get("occurrence_id"),
@@ -923,7 +994,7 @@ def build_actual_review_groups(entries: Sequence[Mapping[str, Any]]) -> list[dic
             "group_snapshot": snapshot,
             "kind": kind,
             "exact_key": exact_key,
-            "style_group": ident.get("style_group", ""),
+            "style_group": style_group,
             "full_signature": ident.get("full_signature", ""),
             "members": members,
             "occurrence_count": len(members),
@@ -942,15 +1013,16 @@ def build_actual_group_for_entry(entries: Sequence[Mapping[str, Any]], target: M
     """
     ident = actual_group_identity(target)
     kind, exact_key = ident["kind"], ident["exact_key"]
-    members = [dict(e) for e in entries if actual_group_identity(e).get("kind") == kind and actual_group_identity(e).get("exact_key") == exact_key]
+    group_key = actual_group_match_key(ident)
+    members = [dict(e) for e in entries if actual_group_match_key(actual_group_identity(e)) == group_key]
     if not members:
         members = [dict(target)]
     members.sort(key=lambda e: (_text(e.get("pdf_name")), int(e.get("physical_page") or 0), float(e.get("y0") or 0), float(e.get("x0") or 0)))
-    group_id = "agr_" + _hash_payload({"kind": kind, "exact_key": exact_key})[:24]
+    identity_payload = actual_group_identity_payload(ident)
+    group_id = actual_group_id(ident)
     snapshot = _hash_payload({
         "group_id": group_id,
-        "kind": kind,
-        "exact_key": exact_key,
+        **identity_payload,
         "members": [
             {"occurrence_id": e.get("occurrence_id"), "review_id": e.get("review_id"), "state": e.get("state"), "actual": e.get("actual")}
             for e in members
@@ -1603,6 +1675,25 @@ def _revalidate_staged_manual_actual_group(
             raise ValueError(
                 f"manual actual batch live group identity 已變更：{group_id} field={field}；整批拒絕"
             )
+    try:
+        staged_identity = canonical_actual_group_identity(
+            staged.get("kind"), staged.get("exact_key"), staged.get("style_group", "")
+        )
+        live_identity = canonical_actual_group_identity(
+            comparisons["kind"], comparisons["exact_key"], comparisons["style_group"]
+        )
+    except ValueError as exc:
+        raise ValueError(
+            f"manual actual batch live group exact identity 無效：{group_id}；整批拒絕"
+        ) from exc
+    if actual_group_id(live_identity) != comparisons["group_id"]:
+        raise ValueError(
+            f"manual actual batch live group_id 未綁定 canonical exact identity：{group_id}；整批拒絕"
+        )
+    if actual_group_match_key(staged_identity) != actual_group_match_key(live_identity):
+        raise ValueError(
+            f"manual actual batch live group canonical exact identity 已變更：{group_id}；整批拒絕"
+        )
 
     members = live_group.get("members")
     if not isinstance(members, list) or not members:
@@ -1617,6 +1708,17 @@ def _revalidate_staged_manual_actual_group(
                 f"live.{group_id}.members[{index}].occurrence_id",
             )
         )
+        try:
+            member_key = actual_group_match_key(actual_group_identity(member))
+        except ValueError as exc:
+            raise ValueError(
+                f"manual actual batch live group member exact identity 無效：{group_id}[{index}]；整批拒絕"
+            ) from exc
+        if member_key != actual_group_match_key(live_identity):
+            raise ValueError(
+                f"manual actual batch live group member 不屬於 canonical exact identity："
+                f"{group_id}[{index}]；整批拒絕"
+            )
     if len(member_ids) != len(set(member_ids)):
         raise ValueError(f"manual actual batch live group members 含重複 occurrence_id：{group_id}")
     invalid_checked = sorted(set(staged["checked_occurrence_ids"]) - set(member_ids))

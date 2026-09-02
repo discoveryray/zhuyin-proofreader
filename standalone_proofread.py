@@ -191,6 +191,7 @@ ACTUAL_DECODER_SOURCE_FILES = [
     "cff_zero_map_batch.py",
     "occurrence_ledger.py",
     "actual_review.py",
+    "exact_glyph_identity.py",
 ]
 
 DECISION_SEED = Path(__file__).with_name("校對判定記憶.json")
