@@ -173,7 +173,9 @@ def classify_ttf_glyf_record(
     This parser deliberately does not accept font names, font indexes, GIDs,
     characters, expected readings, dictionaries, or corpus assumptions.  Equal
     raw bytes receive an eligible identity only when the complete record is a
-    legally parseable simple glyph (signed ``numberOfContours >= 0``).
+    legally parseable, visible simple glyph (signed ``numberOfContours > 0``).
+    A structurally simple zero-contour glyph is deliberately non-eligible
+    because it has no visible outline for direct visual actual evidence.
     """
 
     try:
@@ -193,6 +195,8 @@ def classify_ttf_glyf_record(
         return _ttf_result(raw, eligible=False, reason="INVALID_GLYF_BOUNDS")
     if number_of_contours < 0:
         return _ttf_result(raw, eligible=False, reason="COMPOSITE_GLYF")
+    if number_of_contours == 0:
+        return _ttf_result(raw, eligible=False, reason="EMPTY_SIMPLE_GLYF")
 
     pos = 10
     end_points: tuple[int, ...] = ()
@@ -218,6 +222,7 @@ def classify_ttf_glyf_record(
 
     point_count = end_points[-1] + 1 if end_points else 0
     flags: list[int] = []
+    encoded_flag_index = 0
     while len(flags) < point_count:
         if pos >= len(raw):
             return _ttf_result(raw, eligible=False, reason="TRUNCATED_SIMPLE_FLAGS")
@@ -225,6 +230,9 @@ def classify_ttf_glyf_record(
         pos += 1
         if flag & 0x80:
             return _ttf_result(raw, eligible=False, reason="INVALID_SIMPLE_RESERVED_FLAG")
+        if flag & 0x40 and encoded_flag_index != 0:
+            return _ttf_result(raw, eligible=False, reason="INVALID_OVERLAP_SIMPLE_POSITION")
+        encoded_flag_index += 1
         flags.append(flag)
         if flag & 0x08:
             if pos >= len(raw):

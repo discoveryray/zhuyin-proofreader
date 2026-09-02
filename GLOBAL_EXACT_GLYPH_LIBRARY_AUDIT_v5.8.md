@@ -126,7 +126,7 @@ The global design must preserve all of the following:
 1. Global data is actual evidence only. It cannot read expected sets, dictionaries, candidate equality, semantic context, words, parts of speech, or user expected rules to select a reading.
 2. Only an explicit direct visual confirmation of a printed occurrence may contribute promotion evidence. Propagated overrides and automatic decodes never count.
 3. A local occurrence override is never withdrawn merely because global promotion conflicts or fails.
-4. Only complete, structurally eligible exact identities are reusable: TTF is limited to a legally parsed non-composite `glyf` record (`numberOfContours >= 0`) hashed over its complete raw bytes; CFF is style group + complete resolved glyph-recording SHA-256.
+4. Only complete, structurally eligible exact identities are reusable: OpenType classifies `numberOfContours >= 0` as simple, but v5.8 global TTF admission further requires `numberOfContours > 0` and hashes the complete raw record; a zero-contour glyph has no visible outline for direct visual actual evidence. CFF is style group + complete resolved glyph-recording SHA-256.
 5. `full_signature`, annotation components, normalized outline, component similarity, font name, font index, glyph index, and xref are not global reuse keys.
 6. Any incompatible direct reading disables reusable truth for that identity until explicit audited resolution.
 7. Unknown schema, invalid identity, or unprovable cache compatibility fails closed. A present-but-unreadable store is not treated as an empty store.
@@ -169,8 +169,8 @@ glyph_sha256 = lowercase SHA-256 of the complete raw, legally parsed simple glyf
 The canonical encoder and every admission and decoder-lookup boundary must establish all of the following from the actual `glyf` structure:
 
 1. The record range and complete record parse are valid.
-2. The signed `numberOfContours` value is greater than or equal to zero.
-3. The record is not composite; a negative `numberOfContours` is always non-global-eligible.
+2. OpenType structural classification treats signed `numberOfContours >= 0` as simple, but v5.8 global reusable admission requires `numberOfContours > 0` because a zero-contour glyph has no visible outline for direct visual actual evidence.
+3. The record is not composite or empty; negative and zero `numberOfContours` values are always non-global-eligible.
 4. `glyph_sha256` covers the complete raw record, not a header, contour subset, component list, or normalized outline.
 5. Classification is derived from the parsed `glyf` bytes, never from font name, font index, GID, character meaning, or a corpus assumption. A non-empty `simple_contours()` result is not itself the canonical classification contract.
 
@@ -594,7 +594,7 @@ v5.9 normalized-outline evaluation should use these metrics to determine whether
 | Schema creation | Empty v1 DB creates exact tables/constraints/meta; database starts at generation 0. |
 | Strict schema | Missing/extra required structure, duplicate meta, unknown `user_version`, unknown state, invalid cached count and identity digest all fail closed. |
 | Corruption | Truncated DB, malformed WAL, failed `quick_check`, foreign-key violation and invalid row block all reusable reads. |
-| TTF simple eligibility | A legally parsed simple `glyf` with `numberOfContours >= 0` is eligible and hashes its complete raw record; a composite is `NON_GLOBAL_ELIGIBLE`; malformed/truncated records fail closed. Classification comes from structure, not font name/index, GID, semantics or corpus assumptions. |
+| TTF simple eligibility | OpenType still classifies `numberOfContours >= 0` as simple, but v5.8 global admission requires a legally parsed visible simple `glyf` with `numberOfContours > 0` and hashes its complete raw record. Zero-contour, composite, malformed and truncated records are `NON_GLOBAL_ELIGIBLE`. Classification comes from structure, not font name/index, GID, semantics or corpus assumptions. |
 | TTF composite ambiguity | Construct two synthetic fonts with byte-identical composite records but different outlines at the referenced component GID; they must never produce, count toward, query or reuse the same global exact glyph truth. Project-local evidence/provenance remains allowed. |
 | TTF/CFF identity separation | A TTF eligible-simple exact SHA is independent of font name/index. CFF uses `style_group` + the resolved complete `RecordingPen` recording SHA; same CFF SHA with different style does not reuse. Neither key includes font-program SHA. |
 | Current CFF gap | Global admission rejects a live group whose members do not share `(style, SHA)`; any staging identity migration is explicitly tested. |

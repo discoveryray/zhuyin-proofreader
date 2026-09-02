@@ -71,6 +71,15 @@ def simple_glyph(x: int = 0) -> bytes:
     return header + end_points + instruction_length + body
 
 
+def simple_glyph_with_encoded_flags(point_count: int, encoded_flags: bytes) -> bytes:
+    if point_count <= 0:
+        raise ValueError("synthetic fixture requires visible points")
+    header = struct.pack(">hhhhh", 1, 0, 0, 0, 0)
+    end_points = struct.pack(">H", point_count - 1)
+    instruction_length = struct.pack(">H", 0)
+    return header + end_points + instruction_length + encoded_flags
+
+
 def composite_glyph(component_gid: int = 1) -> bytes:
     header = struct.pack(">hhhhh", -1, 0, 0, 0, 0)
     # ARGS_ARE_XY_VALUES with byte-sized zero offsets; no more components.
@@ -190,6 +199,35 @@ class TTFExactIdentityTests(unittest.TestCase):
         self.assertEqual(first, second)
         self.assertEqual(first["eligibility"], GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1)
         self.assertEqual(first["glyph_sha256"], hashlib.sha256(shared).hexdigest())
+
+    def test_overlap_simple_on_first_encoded_flag_is_eligible(self):
+        raw = simple_glyph_with_encoded_flags(2, bytes((0x71, 0x31)))
+        result = classify_ttf_glyf_record(raw)
+        self.assertEqual(result["status"], CANONICAL_EXACT_IDENTITY)
+        self.assertEqual(result["eligibility"], GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1)
+
+    def test_overlap_simple_on_later_encoded_flag_fails_closed(self):
+        raw = simple_glyph_with_encoded_flags(2, bytes((0x31, 0x71)))
+        result = classify_ttf_glyf_record(raw)
+        self.assertEqual(result["status"], UNSUPPORTED_EXACT_IDENTITY)
+        self.assertEqual(result["eligibility"], NON_GLOBAL_ELIGIBLE)
+        self.assertEqual(result["reason"], "INVALID_OVERLAP_SIMPLE_POSITION")
+
+    def test_overlap_simple_repeat_on_first_encoded_flag_remains_eligible(self):
+        # The first encoded flag repeats once to cover two logical points.  The
+        # expanded flags both contain 0x40, but only one raw flag byte encoded it.
+        raw = simple_glyph_with_encoded_flags(2, bytes((0x79, 0x01)))
+        result = classify_ttf_glyf_record(raw)
+        self.assertEqual(result["status"], CANONICAL_EXACT_IDENTITY)
+        self.assertEqual(result["eligibility"], GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1)
+
+    def test_header_only_zero_contour_simple_glyph_is_empty_not_truncated(self):
+        raw = struct.pack(">hhhhh", 0, 0, 0, 0, 0)
+        result = classify_ttf_glyf_record(raw)
+        self.assertEqual(result["status"], UNSUPPORTED_EXACT_IDENTITY)
+        self.assertEqual(result["eligibility"], NON_GLOBAL_ELIGIBLE)
+        self.assertEqual(result["reason"], "EMPTY_SIMPLE_GLYF")
+        self.assertNotEqual(result["reason"], "TRUNCATED_SIMPLE_INSTRUCTION_LENGTH")
 
     def test_equal_composite_raw_sha_with_different_component_outlines_is_never_global_eligible(self):
         shared_composite = composite_glyph(1)
