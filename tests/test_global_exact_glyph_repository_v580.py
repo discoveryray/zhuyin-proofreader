@@ -112,6 +112,7 @@ def _direct_evidence(
     glyph_id: str,
     reading: str,
     index: int,
+    **overrides: object,
 ) -> dict[str, object]:
     digit = str(index)
     values: dict[str, object] = {
@@ -129,6 +130,7 @@ def _direct_evidence(
         "confirmed_at": NOW,
         "ingested_at": NOW,
     }
+    values.update(overrides)
     values["evidence_id"] = library.compute_source_evidence_id(
         glyph_id=values["glyph_id"],
         reading=values["reading"],
@@ -140,7 +142,6 @@ def _direct_evidence(
         source_review_id=values["source_review_id"],
         decision_snapshot_sha256=values["decision_snapshot_sha256"],
         confirmation_channel=values["confirmation_channel"],
-        confirmed_at=values["confirmed_at"],
     )
     return values
 
@@ -166,6 +167,7 @@ def _insert_verified_fixture(
     *,
     sha256: str = SHA_A,
     reading: str = "ㄅ",
+    second_evidence_overrides: dict[str, object] | None = None,
 ) -> str:
     repo = _repo(root)
     repo.initialize()
@@ -176,7 +178,15 @@ def _insert_verified_fixture(
         identity.glyph_sha256,
         identity_eligibility=identity.identity_eligibility,
     )
-    evidence = [_direct_evidence(glyph_id, reading, 1), _direct_evidence(glyph_id, reading, 2)]
+    evidence = [
+        _direct_evidence(glyph_id, reading, 1),
+        _direct_evidence(
+            glyph_id,
+            reading,
+            2,
+            **(second_evidence_overrides or {}),
+        ),
+    ]
     evidence_ids = sorted(str(item["evidence_id"]) for item in evidence)
     quorum_json = json.dumps(evidence_ids, ensure_ascii=False, separators=(",", ":"))
     quorum_digest = library.compute_quorum_digest(glyph_id, reading, evidence_ids)
@@ -313,6 +323,115 @@ def _insert_conflict_fixture(root: Path, *, sha256: str = SHA_A) -> str:
     return glyph_id
 
 
+def _append_direct_evidence(
+    root: Path,
+    glyph_id: str,
+    *rows: dict[str, object],
+) -> None:
+    connection = _connection(root)
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        for row in rows:
+            _insert_evidence(connection, row)
+        retained = [
+            dict(row)
+            for row in connection.execute(
+                "SELECT * FROM source_evidence WHERE glyph_id = ?",
+                (glyph_id,),
+            )
+        ]
+        direct_count = sum(int(row["counts_toward_global_quorum"]) for row in retained)
+        independent_count = library._maximum_independent_source_count(retained)
+        connection.execute(
+            """
+            UPDATE glyph_truth
+            SET direct_source_count = ?, independent_source_count = ?, updated_at = ?
+            WHERE glyph_id = ?
+            """,
+            (direct_count, independent_count, NOW, glyph_id),
+        )
+        connection.execute(
+            "UPDATE library_meta SET generation = generation + 1, updated_at = ? WHERE meta_id = 1",
+            (NOW,),
+        )
+        connection.execute("COMMIT")
+    finally:
+        connection.close()
+
+
+def _replace_open_conflict_readings(root: Path, readings: tuple[str, ...]) -> None:
+    canonical = tuple(sorted(set(readings)))
+    connection = _connection(root)
+    try:
+        row = connection.execute(
+            "SELECT glyph_id, opened_generation FROM glyph_conflict WHERE status = ?",
+            (library.OPEN,),
+        ).fetchone()
+        if row is None:
+            raise AssertionError("fixture has no OPEN conflict")
+        conflict_id = library.compute_glyph_conflict_id(
+            row["glyph_id"],
+            canonical,
+            int(row["opened_generation"]),
+        )
+        connection.execute(
+            """
+            UPDATE glyph_conflict
+            SET conflict_id = ?, conflicting_readings_json = ?
+            WHERE status = ?
+            """,
+            (
+                conflict_id,
+                json.dumps(list(canonical), ensure_ascii=False, separators=(",", ":")),
+                library.OPEN,
+            ),
+        )
+    finally:
+        connection.close()
+
+
+def _insert_matching_revocation(root: Path) -> tuple[str, str]:
+    connection = _connection(root)
+    try:
+        approved = dict(connection.execute(
+            "SELECT * FROM promotion_approval WHERE status = ?",
+            (library.APPROVED,),
+        ).fetchone())
+        revoked_id = library.compute_promotion_approval_id(
+            glyph_id=approved["glyph_id"],
+            reading=approved["reading"],
+            quorum_digest=approved["quorum_digest"],
+            promotion_policy_version=approved["promotion_policy_version"],
+            glyph_revision=approved["glyph_revision"],
+            approval_source=approved["approval_source"],
+            status=library.REVOKED,
+        )
+        connection.execute(
+            """
+            INSERT INTO promotion_approval (
+                approval_id, glyph_id, reading, quorum_digest,
+                quorum_evidence_ids_json, promotion_policy_version,
+                glyph_revision, approval_source, status, approved_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                revoked_id,
+                approved["glyph_id"],
+                approved["reading"],
+                approved["quorum_digest"],
+                approved["quorum_evidence_ids_json"],
+                approved["promotion_policy_version"],
+                approved["glyph_revision"],
+                approved["approval_source"],
+                library.REVOKED,
+                "2025-01-01T00:00:00Z",
+            ),
+        )
+        return str(approved["approval_id"]), revoked_id
+    finally:
+        connection.close()
+
+
 def _count_rows(root: Path, table: str) -> int:
     connection = _connection(root)
     try:
@@ -344,7 +463,8 @@ def _processed_insert(
 def _busy_holder_worker(root: str, ready, release, queue) -> None:
     try:
         repo = _repo(Path(root), busy_timeout_ms=1000, write_retry_limit=0)
-        with repo.write_transaction():
+        with repo.write_transaction() as transaction:
+            transaction.bump_generation(updated_at=NOW)
             ready.set()
             if not release.wait(15):
                 raise RuntimeError("release event timeout")
@@ -375,6 +495,30 @@ def _busy_contender_worker(root: str, ready, queue) -> None:
         queue.put(("contender", exc.status))
     except BaseException as exc:
         queue.put(("contender", "error", type(exc).__name__, str(exc)))
+
+
+def _concurrent_reader_worker(root: str, glyph_id: str, ready, queue) -> None:
+    try:
+        if not ready.wait(15):
+            raise RuntimeError("ready event timeout")
+        repo = _repo(Path(root), busy_timeout_ms=100, write_retry_limit=0)
+        snapshot = repo.load_snapshot()
+        diagnostic = repo.inspect()
+        if diagnostic.status == library.BUSY:
+            queue.put(("reader", library.BUSY))
+            return
+        revision = repo.get_glyph_revision(glyph_id)
+        queue.put((
+            "reader",
+            snapshot.store_status,
+            snapshot.generation,
+            diagnostic.status,
+            revision,
+        ))
+    except library.GlobalLibraryBusyError as exc:
+        queue.put(("reader", exc.status))
+    except BaseException as exc:
+        queue.put(("reader", "error", type(exc).__name__, str(exc)))
 
 
 def _cas_worker(root: str, glyph_id: str, barrier, queue) -> None:
@@ -547,6 +691,62 @@ class GlobalLibraryRootAndInitializationTests(unittest.TestCase):
             with self.assertRaises(library.GlobalLibraryCorruptError):
                 _repo(root).initialize()
             self.assertEqual(path.read_bytes(), original)
+
+
+class GlobalLibraryEvidenceIdTests(unittest.TestCase):
+    def test_evidence_id_is_versioned_timestamp_free_and_stable(self):
+        glyph_id = "f" * 64
+        first = _direct_evidence(
+            glyph_id,
+            "ㄅ",
+            1,
+            confirmed_at="2026-09-02T00:00:00Z",
+            ingested_at="2026-09-02T00:00:01Z",
+        )
+        audit_retry = _direct_evidence(
+            glyph_id,
+            "ㄅ",
+            1,
+            confirmed_at="2026-09-03T00:00:00Z",
+            ingested_at="2026-09-04T00:00:00Z",
+        )
+        self.assertEqual(first["evidence_id"], audit_retry["evidence_id"])
+
+        changed = {
+            "reading": _direct_evidence(glyph_id, "ㄆ", 1),
+            "decision_snapshot": _direct_evidence(
+                glyph_id,
+                "ㄅ",
+                1,
+                decision_snapshot_sha256=SHA_C,
+            ),
+            "glyph": _direct_evidence("e" * 64, "ㄅ", 1),
+        }
+        for name, evidence in changed.items():
+            with self.subTest(name=name):
+                self.assertNotEqual(first["evidence_id"], evidence["evidence_id"])
+
+    def test_evidence_id_schema_version_is_in_canonical_payload(self):
+        evidence = _direct_evidence("f" * 64, "ㄅ", 1)
+        payload = library.canonical_source_evidence_id_payload(
+            glyph_id=evidence["glyph_id"],
+            reading=evidence["reading"],
+            evidence_class=evidence["evidence_class"],
+            source_project_id=evidence["source_project_id"],
+            source_pdf_sha256=evidence["source_pdf_sha256"],
+            source_font_program_sha256=evidence["source_font_program_sha256"],
+            source_occurrence_id=evidence["source_occurrence_id"],
+            source_review_id=evidence["source_review_id"],
+            decision_snapshot_sha256=evidence["decision_snapshot_sha256"],
+            confirmation_channel=evidence["confirmation_channel"],
+        )
+        self.assertEqual(
+            payload["evidence_id_schema_version"],
+            library.GLOBAL_SOURCE_EVIDENCE_ID_SCHEMA_VERSION,
+        )
+        self.assertNotIn("confirmed_at", payload)
+        self.assertNotIn("ingested_at", payload)
+        self.assertEqual(library._canonical_sha256(payload), evidence["evidence_id"])
 
 
 class GlobalLibraryStrictValidationTests(unittest.TestCase):
@@ -808,6 +1008,188 @@ class GlobalLibraryStrictValidationTests(unittest.TestCase):
         self.assertEqual(self._diagnostic_after(mutation).status, library.VALIDATION_FAILED)
 
 
+class GlobalLibraryEvidenceInvariantTests(unittest.TestCase):
+    def test_verified_global_with_third_contradictory_direct_reading_fails_closed(self):
+        with _temporary_root() as directory:
+            root = Path(directory) / "store"
+            glyph_id = _insert_verified_fixture(root, reading="ㄅ")
+            _append_direct_evidence(
+                root,
+                glyph_id,
+                _direct_evidence(glyph_id, "ㄆ", 3),
+            )
+
+            diagnostic = _repo(root).inspect()
+            self.assertEqual(diagnostic.status, library.VALIDATION_FAILED)
+            self.assertIn("contradictory retained direct readings", diagnostic.message)
+            with self.assertRaises(library.GlobalLibraryValidationError):
+                _repo(root).load_snapshot()
+
+    def test_resolved_conflict_does_not_reauthorize_retained_direct_contradiction(self):
+        with _temporary_root() as directory:
+            root = Path(directory) / "store"
+            glyph_id = _insert_verified_fixture(root, reading="ㄅ")
+            _append_direct_evidence(
+                root,
+                glyph_id,
+                _direct_evidence(glyph_id, "ㄆ", 3),
+            )
+            readings = ("ㄅ", "ㄆ")
+            connection = _connection(root)
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO glyph_conflict (
+                        conflict_id, glyph_id, status, conflicting_readings_json,
+                        first_event_at, last_event_at, opened_generation,
+                        resolved_generation, resolution_reference
+                    ) VALUES (?, ?, ?, ?, ?, ?, 1, 2, ?)
+                    """,
+                    (
+                        library.compute_glyph_conflict_id(glyph_id, readings, 1),
+                        glyph_id,
+                        library.RESOLVED,
+                        json.dumps(list(readings), ensure_ascii=False, separators=(",", ":")),
+                        NOW,
+                        NOW,
+                        "unbound-phase-2-resolution",
+                    ),
+                )
+            finally:
+                connection.close()
+
+            diagnostic = _repo(root).inspect()
+            self.assertEqual(diagnostic.status, library.VALIDATION_FAILED)
+            self.assertIn("contradictory retained direct readings", diagnostic.message)
+
+    def test_candidate_with_contradictory_direct_readings_fails_closed(self):
+        with _temporary_root() as directory:
+            root = Path(directory) / "store"
+            glyph_id = _insert_candidate_fixture(root)
+            _append_direct_evidence(
+                root,
+                glyph_id,
+                _direct_evidence(glyph_id, "ㄅ", 1),
+                _direct_evidence(glyph_id, "ㄆ", 2),
+            )
+
+            diagnostic = _repo(root).inspect()
+            self.assertEqual(diagnostic.status, library.VALIDATION_FAILED)
+            self.assertIn("QUARANTINED_CONFLICT", diagnostic.message)
+
+    def test_quarantine_open_conflict_must_cover_all_retained_direct_readings(self):
+        with _temporary_root() as directory:
+            root = Path(directory) / "store"
+            _insert_conflict_fixture(root)
+            _replace_open_conflict_readings(root, ("ㄅ", "ㄇ"))
+
+            diagnostic = _repo(root).inspect()
+            self.assertEqual(diagnostic.status, library.VALIDATION_FAILED)
+            self.assertIn("未涵蓋所有 retained direct readings", diagnostic.message)
+
+    def test_matching_direct_conflict_is_valid(self):
+        with _temporary_root() as directory:
+            root = Path(directory) / "store"
+            _insert_conflict_fixture(root)
+            snapshot = _repo(root).load_snapshot()
+            self.assertEqual(snapshot.store_status, library.VALID)
+            self.assertEqual(snapshot.quarantined_identities[0].conflicting_readings, ("ㄅ", "ㄆ"))
+
+    def test_conflict_payload_may_include_migration_only_safety_reading(self):
+        with _temporary_root() as directory:
+            root = Path(directory) / "store"
+            _insert_conflict_fixture(root)
+            _replace_open_conflict_readings(root, ("ㄅ", "ㄆ", "ㄇ"))
+
+            snapshot = _repo(root).load_snapshot()
+            self.assertEqual(snapshot.store_status, library.VALID)
+            self.assertEqual(
+                snapshot.quarantined_identities[0].conflicting_readings,
+                ("ㄅ", "ㄆ", "ㄇ"),
+            )
+
+    def test_approval_requires_distinct_occurrences(self):
+        with _temporary_root() as directory:
+            root = Path(directory) / "store"
+            _insert_verified_fixture(
+                root,
+                second_evidence_overrides={"source_occurrence_id": "occurrence-1"},
+            )
+            diagnostic = _repo(root).inspect()
+            self.assertEqual(diagnostic.status, library.VALIDATION_FAILED)
+            self.assertIn("occurrence independence", diagnostic.message)
+
+    def test_approval_requires_distinct_review_decisions(self):
+        with _temporary_root() as directory:
+            root = Path(directory) / "store"
+            _insert_verified_fixture(
+                root,
+                second_evidence_overrides={"source_review_id": "review-1"},
+            )
+            diagnostic = _repo(root).inspect()
+            self.assertEqual(diagnostic.status, library.VALIDATION_FAILED)
+            self.assertIn("review independence", diagnostic.message)
+
+    def test_five_axis_independent_approval_remains_valid(self):
+        with _temporary_root() as directory:
+            root = Path(directory) / "store"
+            _insert_verified_fixture(root)
+            snapshot = _repo(root).load_snapshot()
+            self.assertEqual(snapshot.store_status, library.VALID)
+            self.assertEqual(len(snapshot.trusted_identities), 1)
+
+    def test_matching_revocation_disables_approval_without_deleting_history(self):
+        with _temporary_root() as directory:
+            root = Path(directory) / "store"
+            _insert_verified_fixture(root)
+            approved_id, revoked_id = _insert_matching_revocation(root)
+            before = _connection(root)
+            try:
+                ids_before = {
+                    str(row[0])
+                    for row in before.execute(
+                        "SELECT approval_id FROM promotion_approval ORDER BY approval_id"
+                    )
+                }
+            finally:
+                before.close()
+
+            diagnostic = _repo(root).inspect()
+            self.assertEqual(diagnostic.status, library.VALIDATION_FAILED)
+            self.assertIn("unrevoked", diagnostic.message)
+
+            after = _connection(root)
+            try:
+                ids_after = {
+                    str(row[0])
+                    for row in after.execute(
+                        "SELECT approval_id FROM promotion_approval ORDER BY approval_id"
+                    )
+                }
+            finally:
+                after.close()
+            self.assertEqual(ids_before, {approved_id, revoked_id})
+            self.assertEqual(ids_after, ids_before)
+
+    def test_revoked_without_matching_approved_identity_fails_closed(self):
+        with _temporary_root() as directory:
+            root = Path(directory) / "store"
+            _insert_verified_fixture(root)
+            approved_id, _revoked_id = _insert_matching_revocation(root)
+            connection = _connection(root)
+            try:
+                connection.execute(
+                    "DELETE FROM promotion_approval WHERE approval_id = ?",
+                    (approved_id,),
+                )
+            finally:
+                connection.close()
+
+            diagnostic = _repo(root).inspect()
+            self.assertEqual(diagnostic.status, library.VALIDATION_FAILED)
+            self.assertIn("matching APPROVED identity", diagnostic.message)
+
+
 class GlobalLibraryCorruptionAndDiagnosticsTests(unittest.TestCase):
     def test_malformed_and_truncated_databases_are_corrupt_not_absent(self):
         for payload in (b"not sqlite", b"SQLite format 3\x00" + b"\x00" * 20):
@@ -822,13 +1204,58 @@ class GlobalLibraryCorruptionAndDiagnosticsTests(unittest.TestCase):
                 self.assertNotEqual(diagnostic.status, library.ABSENT)
                 self.assertEqual(path.read_bytes(), before)
 
-    def test_deterministically_invalid_wal_header_is_corrupt(self):
+    def test_sqlite_ignores_orphan_invalid_wal_and_validates_consistent_main_db(self):
         with _temporary_root() as directory:
             root = Path(directory) / "store"
             _repo(root).initialize()
             wal = Path(str(_db_path(root)) + "-wal")
             wal.write_bytes(b"invalid-wal-header" + b"\x00" * 32)
-            self.assertEqual(_repo(root).inspect().status, library.CORRUPT)
+            diagnostic = _repo(root).inspect()
+            self.assertEqual(diagnostic.status, library.VALID)
+            self.assertNotEqual(diagnostic.status, library.ABSENT)
+            self.assertEqual(_repo(root).load_snapshot().generation, 0)
+
+    def test_sqlite_reported_malformed_wal_is_typed_corrupt(self):
+        with _temporary_root() as directory:
+            root = Path(directory) / "store"
+            _repo(root).initialize()
+            wal = Path(str(_db_path(root)) + "-wal")
+            wal.write_bytes(b"persistent-malformed-wal")
+            with patch.object(
+                library,
+                "_connect_existing",
+                side_effect=sqlite3.DatabaseError("database disk image is malformed (WAL)"),
+            ):
+                diagnostic = _repo(root).inspect()
+            self.assertEqual(diagnostic.status, library.CORRUPT)
+            self.assertNotEqual(diagnostic.status, library.ABSENT)
+
+    def test_wal_observation_open_disappearance_cannot_escape_sqlite_boundary(self):
+        with _temporary_root() as directory:
+            root = Path(directory) / "store"
+            _repo(root).initialize()
+            wal = Path(str(_db_path(root)) + "-wal")
+            wal.write_bytes(b"sidecar-that-may-disappear")
+            real_stat = Path.stat
+            real_open = Path.open
+            wal_operations: list[str] = []
+
+            def racing_stat(candidate: Path, *args, **kwargs):
+                if candidate == wal:
+                    wal_operations.append("observe")
+                return real_stat(candidate, *args, **kwargs)
+
+            def disappearing_open(candidate: Path, *args, **kwargs):
+                if candidate == wal:
+                    wal_operations.append("disappear")
+                    raise FileNotFoundError(str(candidate))
+                return real_open(candidate, *args, **kwargs)
+
+            with patch.object(Path, "stat", racing_stat), patch.object(Path, "open", disappearing_open):
+                diagnostic = _repo(root).inspect()
+
+            self.assertEqual(diagnostic.status, library.VALID)
+            self.assertEqual(wal_operations, [])
 
     def test_permission_denied_is_not_collapsed_to_absent(self):
         with _temporary_root() as directory:
@@ -1292,6 +1719,41 @@ class GlobalLibraryMultiProcessTests(unittest.TestCase):
             _join_process(self, contender)
             _join_process(self, holder)
             self.assertEqual(_repo(root).inspect().status, library.VALID)
+
+    def test_reader_during_normal_write_gets_consistent_snapshot_or_typed_busy(self):
+        with _temporary_root() as directory:
+            root = Path(directory) / "store"
+            _repo(root).initialize()
+            context = multiprocessing.get_context("spawn")
+            ready = context.Event()
+            release = context.Event()
+            queue = context.Queue()
+            holder = context.Process(
+                target=_busy_holder_worker,
+                args=(str(root), ready, release, queue),
+            )
+            reader = context.Process(
+                target=_concurrent_reader_worker,
+                args=(str(root), "0" * 64, ready, queue),
+            )
+            holder.start()
+            self.assertTrue(ready.wait(15))
+            reader.start()
+            reader_result = queue.get(timeout=15)
+            release.set()
+            holder_result = queue.get(timeout=15)
+            _join_process(self, reader)
+            _join_process(self, holder)
+
+            self.assertIn(
+                reader_result,
+                {
+                    ("reader", library.BUSY),
+                    ("reader", library.VALID, 0, library.VALID, None),
+                },
+            )
+            self.assertEqual(holder_result, ("holder", "ok"))
+            self.assertEqual(_repo(root).load_snapshot().generation, 1)
 
     def test_two_process_same_revision_cas_has_at_most_one_success(self):
         with _temporary_root() as directory:

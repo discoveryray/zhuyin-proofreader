@@ -28,6 +28,7 @@ GLOBAL_LIBRARY_SCHEMA_VERSION = "1.0"
 GLOBAL_LIBRARY_SQLITE_USER_VERSION = 1
 GLOBAL_IDENTITY_CONTRACT_VERSION = "1.0"
 GLOBAL_PROMOTION_POLICY_VERSION = "1.0"
+GLOBAL_SOURCE_EVIDENCE_ID_SCHEMA_VERSION = "1.0"
 GLOBAL_LIBRARY_FILENAME = "library.sqlite3"
 GLOBAL_LIBRARY_DEFAULT_BUSY_TIMEOUT_MS = 500
 GLOBAL_LIBRARY_DEFAULT_WRITE_RETRY_LIMIT = 1
@@ -387,7 +388,7 @@ def compute_global_glyph_id(
     })
 
 
-def compute_source_evidence_id(
+def canonical_source_evidence_id_payload(
     *,
     glyph_id: Any,
     reading: Any,
@@ -399,9 +400,16 @@ def compute_source_evidence_id(
     source_review_id: Any,
     decision_snapshot_sha256: Any,
     confirmation_channel: Any,
-    confirmed_at: Any,
-) -> str:
-    payload = {
+) -> dict[str, str]:
+    """Return the versioned immutable identity of one frozen evidence decision.
+
+    Project/PDF/font/occurrence/review identity, the decision snapshot, evidence
+    class, and confirmation channel are immutable evidence-contract fields.
+    ``confirmed_at`` and ``ingested_at`` remain separately validated audit
+    metadata in ``source_evidence`` and deliberately do not participate here.
+    """
+    return {
+        "evidence_id_schema_version": GLOBAL_SOURCE_EVIDENCE_ID_SCHEMA_VERSION,
         "glyph_id": _sha256_text(glyph_id, "glyph_id"),
         "reading": _canonical_reading(reading),
         "evidence_class": _strict_text(evidence_class, "evidence_class"),
@@ -418,9 +426,34 @@ def compute_source_evidence_id(
             "decision_snapshot_sha256",
         ),
         "confirmation_channel": _strict_text(confirmation_channel, "confirmation_channel"),
-        "confirmed_at": _validate_timestamp(confirmed_at, "confirmed_at"),
     }
-    return _canonical_sha256(payload)
+
+
+def compute_source_evidence_id(
+    *,
+    glyph_id: Any,
+    reading: Any,
+    evidence_class: Any,
+    source_project_id: Any,
+    source_pdf_sha256: Any,
+    source_font_program_sha256: Any,
+    source_occurrence_id: Any,
+    source_review_id: Any,
+    decision_snapshot_sha256: Any,
+    confirmation_channel: Any,
+) -> str:
+    return _canonical_sha256(canonical_source_evidence_id_payload(
+        glyph_id=glyph_id,
+        reading=reading,
+        evidence_class=evidence_class,
+        source_project_id=source_project_id,
+        source_pdf_sha256=source_pdf_sha256,
+        source_font_program_sha256=source_font_program_sha256,
+        source_occurrence_id=source_occurrence_id,
+        source_review_id=source_review_id,
+        decision_snapshot_sha256=decision_snapshot_sha256,
+        confirmation_channel=confirmation_channel,
+    ))
 
 
 def compute_quorum_digest(
@@ -879,44 +912,6 @@ def _path_is_absent(path: Path) -> bool:
     return False
 
 
-def _validate_wal_sidecar(path: Path) -> None:
-    wal_path = Path(str(path) + "-wal")
-    try:
-        size = wal_path.stat().st_size
-    except FileNotFoundError:
-        return
-    except PermissionError as exc:
-        raise GlobalLibraryPermissionError(
-            f"global library WAL 無法存取：{wal_path}",
-            path=path,
-        ) from exc
-    if size == 0:
-        return
-    if size < 32:
-        raise GlobalLibraryCorruptError("global library WAL header truncated", path=path)
-    try:
-        with wal_path.open("rb") as stream:
-            header = stream.read(32)
-    except PermissionError as exc:
-        raise GlobalLibraryPermissionError(
-            f"global library WAL 無法讀取：{wal_path}",
-            path=path,
-        ) from exc
-    magic = int.from_bytes(header[0:4], "big")
-    if magic not in {0x377F0682, 0x377F0683}:
-        raise GlobalLibraryCorruptError("global library WAL magic 無效", path=path)
-    page_size = int.from_bytes(header[8:12], "big")
-    if page_size == 1:
-        page_size = 65536
-    if (
-        page_size < 512
-        or page_size > 65536
-        or page_size & (page_size - 1)
-        or (size - 32) % (24 + page_size) != 0
-    ):
-        raise GlobalLibraryCorruptError("global library WAL frame layout 無效", path=path)
-
-
 def _sqlite_uri(path: Path, mode: str) -> str:
     return path.resolve(strict=False).as_uri() + f"?mode={mode}"
 
@@ -930,6 +925,13 @@ def _configure_connection(connection: sqlite3.Connection, busy_timeout_ms: int) 
 
 
 def _connect_existing(path: Path, *, read_only: bool, busy_timeout_ms: int) -> sqlite3.Connection:
+    """Open the store through SQLite's VFS, which is the sole WAL authority.
+
+    The ``-wal`` file is a live SQLite-managed sidecar and may appear, grow,
+    truncate, or disappear between ordinary filesystem calls.  Callers must
+    validate only after SQLite has established the corresponding transaction;
+    no out-of-band sidecar stat/open preflight is safe here.
+    """
     mode = "ro" if read_only else "rw"
     connection = sqlite3.connect(
         _sqlite_uri(path, mode),
@@ -1177,6 +1179,7 @@ def _validate_rows(connection: sqlite3.Connection, path: Path) -> dict[str, Any]
     evidence_rows = [dict(row) for row in connection.execute("SELECT * FROM source_evidence ORDER BY evidence_id")]
     evidence: dict[str, dict[str, Any]] = {}
     evidence_by_glyph: dict[str, list[dict[str, Any]]] = {glyph_id: [] for glyph_id in glyphs}
+    direct_readings_by_glyph: dict[str, set[str]] = {glyph_id: set() for glyph_id in glyphs}
     for row in evidence_rows:
         evidence_id = _sha256_text(row["evidence_id"], "source_evidence.evidence_id")
         glyph_id = _sha256_text(row["glyph_id"], "source_evidence.glyph_id")
@@ -1213,12 +1216,13 @@ def _validate_rows(connection: sqlite3.Connection, path: Path) -> dict[str, Any]
             source_review_id=row["source_review_id"],
             decision_snapshot_sha256=row["decision_snapshot_sha256"],
             confirmation_channel=channel,
-            confirmed_at=row["confirmed_at"],
         )
         if recomputed != evidence_id:
             raise GlobalLibraryValidationError(f"evidence_id 無法重算：{evidence_id}", path=path)
         evidence[evidence_id] = row
         evidence_by_glyph[glyph_id].append(row)
+        if evidence_class == DIRECT_VISUAL_ACTUAL and int(row["counts_toward_global_quorum"]) == 1:
+            direct_readings_by_glyph[glyph_id].add(reading)
 
     for glyph_id, glyph in glyphs.items():
         source_rows = evidence_by_glyph[glyph_id]
@@ -1231,6 +1235,10 @@ def _validate_rows(connection: sqlite3.Connection, path: Path) -> dict[str, Any]
 
     approvals = [dict(row) for row in connection.execute("SELECT * FROM promotion_approval ORDER BY approval_id")]
     valid_approvals: dict[tuple[str, int, str], list[dict[str, Any]]] = {}
+    approval_events: dict[
+        tuple[str, str, str, str, int, str],
+        dict[str, dict[str, Any]],
+    ] = {}
     approval_ids: set[str] = set()
     for row in approvals:
         approval_id = _sha256_text(row["approval_id"], "promotion_approval.approval_id")
@@ -1268,6 +1276,10 @@ def _validate_rows(connection: sqlite3.Connection, path: Path) -> dict[str, Any]
             selected.append(item)
         if _maximum_independent_source_count(selected) < 2:
             raise GlobalLibraryValidationError("approval quorum 未達獨立來源門檻", path=path)
+        if len({str(item["source_occurrence_id"]) for item in selected}) < 2:
+            raise GlobalLibraryValidationError("approval quorum 未達 occurrence independence 門檻", path=path)
+        if len({str(item["source_review_id"]) for item in selected}) < 2:
+            raise GlobalLibraryValidationError("approval quorum 未達 review independence 門檻", path=path)
         if compute_quorum_digest(
             glyph_id,
             reading,
@@ -1286,8 +1298,20 @@ def _validate_rows(connection: sqlite3.Connection, path: Path) -> dict[str, Any]
         ) != approval_id:
             raise GlobalLibraryValidationError("approval_id 無法重算", path=path)
         approval_ids.add(approval_id)
-        if status == APPROVED:
-            valid_approvals.setdefault((glyph_id, revision, reading), []).append(row)
+        match_key = (glyph_id, reading, quorum_digest, policy, revision, source)
+        events_for_approval = approval_events.setdefault(match_key, {})
+        if status in events_for_approval:
+            raise GlobalLibraryValidationError("duplicate immutable approval event", path=path)
+        events_for_approval[status] = row
+
+    for match_key, events_for_approval in approval_events.items():
+        approved = events_for_approval.get(APPROVED)
+        revoked = events_for_approval.get(REVOKED)
+        if revoked is not None and approved is None:
+            raise GlobalLibraryValidationError("REVOKED approval 缺少 matching APPROVED identity", path=path)
+        if approved is not None and revoked is None:
+            glyph_id, reading, _quorum, _policy, revision, _source = match_key
+            valid_approvals.setdefault((glyph_id, revision, reading), []).append(approved)
 
     conflicts = [dict(row) for row in connection.execute("SELECT * FROM glyph_conflict ORDER BY conflict_id")]
     open_conflicts: dict[str, list[tuple[str, ...]]] = {}
@@ -1327,15 +1351,35 @@ def _validate_rows(connection: sqlite3.Connection, path: Path) -> dict[str, Any]
 
     for glyph_id, glyph in glyphs.items():
         open_for_glyph = open_conflicts.get(glyph_id, [])
+        direct_readings = direct_readings_by_glyph[glyph_id]
+        if len(direct_readings) >= 2 and glyph["state"] != QUARANTINED_CONFLICT:
+            raise GlobalLibraryValidationError(
+                "contradictory retained direct readings 必須 QUARANTINED_CONFLICT",
+                path=path,
+            )
         if glyph["state"] == QUARANTINED_CONFLICT:
             if len(open_for_glyph) != 1:
                 raise GlobalLibraryValidationError("quarantined glyph 必須有 exactly one open conflict", path=path)
+            if not direct_readings.issubset(set(open_for_glyph[0])):
+                raise GlobalLibraryValidationError(
+                    "open conflict payload 未涵蓋所有 retained direct readings",
+                    path=path,
+                )
         elif open_for_glyph:
             raise GlobalLibraryValidationError("non-quarantined glyph 不得有 open conflict", path=path)
         if glyph["state"] == VERIFIED_GLOBAL:
-            key = (glyph_id, int(glyph["revision"]), str(glyph["active_reading"]))
+            active_reading = str(glyph["active_reading"])
+            if any(reading != active_reading for reading in direct_readings):
+                raise GlobalLibraryValidationError(
+                    "VERIFIED_GLOBAL retained direct reading 與 active_reading 矛盾",
+                    path=path,
+                )
+            key = (glyph_id, int(glyph["revision"]), active_reading)
             if len(valid_approvals.get(key, [])) != 1:
-                raise GlobalLibraryValidationError("VERIFIED_GLOBAL 缺少 exact revision/quorum approval", path=path)
+                raise GlobalLibraryValidationError(
+                    "VERIFIED_GLOBAL 缺少 exactly one unrevoked exact revision/quorum approval",
+                    path=path,
+                )
 
     provenance = [dict(row) for row in connection.execute("SELECT * FROM provenance_event ORDER BY event_id")]
     for row in provenance:
@@ -1458,7 +1502,6 @@ def _absent_snapshot(path: Path) -> GlobalExactGlyphSnapshot:
 def _load_snapshot_from_path(path: Path, busy_timeout_ms: int) -> GlobalExactGlyphSnapshot:
     if _path_is_absent(path):
         return _absent_snapshot(path)
-    _validate_wal_sidecar(path)
     connection: sqlite3.Connection | None = None
     try:
         connection = _connect_existing(path, read_only=True, busy_timeout_ms=busy_timeout_ms)
@@ -1914,7 +1957,6 @@ class GlobalExactGlyphRepository:
                 "global library absent；write 不得 implicit initialize",
                 path=self.path,
             )
-        _validate_wal_sidecar(self.path)
         connection: sqlite3.Connection | None = None
         try:
             connection = _connect_existing(
@@ -1959,7 +2001,6 @@ class GlobalExactGlyphRepository:
         canonical_id = _sha256_text(glyph_id, "glyph_id")
         if _path_is_absent(self.path):
             return None
-        _validate_wal_sidecar(self.path)
         connection: sqlite3.Connection | None = None
         try:
             connection = _connect_existing(
