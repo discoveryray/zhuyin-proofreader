@@ -515,6 +515,75 @@ def _initialize_worker(root: str, barrier, queue) -> None:
         queue.put(("error", type(exc).__name__, str(exc)))
 
 
+def _uncommitted_initialization_holder_worker(root: str, ready, release, queue) -> None:
+    connection: sqlite3.Connection | None = None
+    path = _db_path(Path(root))
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(
+            library._sqlite_uri(path, "rwc"),
+            uri=True,
+            timeout=1.0,
+            isolation_level=None,
+        )
+        library._configure_connection(connection, 1000)
+        journal_mode = str(connection.execute("PRAGMA journal_mode = WAL").fetchone()[0])
+        if journal_mode.lower() != "wal":
+            raise RuntimeError(f"WAL unavailable: {journal_mode}")
+        connection.execute("BEGIN IMMEDIATE")
+        for statement in library._TABLE_SQL.values():
+            connection.execute(statement)
+        for statement in library._INDEX_SQL.values():
+            connection.execute(statement)
+        connection.execute(
+            """
+            INSERT INTO library_meta (
+                meta_id, schema_version, identity_contract_version,
+                promotion_policy_version, generation, created_at, updated_at
+            ) VALUES (1, ?, ?, ?, 0, ?, ?)
+            """,
+            (
+                library.GLOBAL_LIBRARY_SCHEMA_VERSION,
+                library.GLOBAL_IDENTITY_CONTRACT_VERSION,
+                library.GLOBAL_PROMOTION_POLICY_VERSION,
+                NOW,
+                NOW,
+            ),
+        )
+        connection.execute(
+            f"PRAGMA user_version = {library.GLOBAL_LIBRARY_SQLITE_USER_VERSION}"
+        )
+        library._validate_connection(connection, path)
+        ready.set()
+        if not release.wait(15):
+            raise RuntimeError("release event timeout")
+        connection.execute("COMMIT")
+        queue.put(("holder", "ok"))
+    except BaseException as exc:
+        if connection is not None and connection.in_transaction:
+            connection.execute("ROLLBACK")
+        queue.put(("holder", "error", type(exc).__name__, str(exc)))
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+def _initialization_window_contender_worker(root: str, ready, queue) -> None:
+    try:
+        if not ready.wait(15):
+            raise RuntimeError("ready event timeout")
+        snapshot = _repo(
+            Path(root),
+            busy_timeout_ms=50,
+            write_retry_limit=0,
+        ).initialize()
+        queue.put(("contender", snapshot.store_status, snapshot.generation))
+    except library.GlobalLibraryBusyError as exc:
+        queue.put(("contender", exc.status))
+    except BaseException as exc:
+        queue.put(("contender", "error", type(exc).__name__, str(exc)))
+
+
 def _busy_contender_worker(root: str, ready, queue) -> None:
     try:
         if not ready.wait(15):
@@ -712,6 +781,122 @@ class GlobalLibraryRootAndInitializationTests(unittest.TestCase):
             self.assertEqual(second.generation, 0)
             self.assertEqual(meta_after, meta_before)
             self.assertEqual(path.read_bytes(), before)
+
+    def test_initialize_publishes_only_a_committed_valid_candidate(self):
+        with _temporary_root() as directory:
+            root = Path(directory) / "store"
+            target = _db_path(root)
+            real_link = library.os.link
+            observed_candidates: list[tuple[str, str | None, int, int]] = []
+
+            def inspect_then_publish(source, destination) -> None:
+                candidate = Path(source)
+                self.assertEqual(Path(destination), target)
+                self.assertFalse(target.exists())
+                snapshot = library._load_snapshot_from_path(candidate, 500)
+                connection = library._connect_existing(
+                    candidate,
+                    read_only=True,
+                    busy_timeout_ms=500,
+                )
+                try:
+                    user_version = int(
+                        connection.execute("PRAGMA user_version").fetchone()[0]
+                    )
+                finally:
+                    connection.close()
+                observed_candidates.append((
+                    snapshot.store_status,
+                    snapshot.schema_version,
+                    snapshot.generation,
+                    user_version,
+                ))
+                real_link(source, destination)
+
+            with patch.object(library.os, "link", side_effect=inspect_then_publish):
+                snapshot = _repo(root).initialize()
+
+            self.assertEqual(snapshot.store_status, library.VALID)
+            self.assertEqual(
+                observed_candidates,
+                [(library.VALID, "1.0", 0, 1)],
+            )
+            self.assertEqual(
+                list(root.glob(".*.initializing.sqlite3*")),
+                [],
+            )
+
+    def test_initialize_preexisting_empty_sqlite_database_fails_closed(self):
+        with _temporary_root() as directory:
+            root = Path(directory) / "store"
+            root.mkdir(parents=True)
+            path = _db_path(root)
+            sqlite3.connect(path).close()
+
+            with self.assertRaises(library.GlobalLibrarySchemaError):
+                _repo(root).initialize()
+
+            connection = sqlite3.connect(path)
+            try:
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 0)
+                tables = connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            finally:
+                connection.close()
+            self.assertEqual(tables, [])
+
+    def test_initialize_preexisting_partial_user_version_zero_fails_closed(self):
+        with _temporary_root() as directory:
+            root = Path(directory) / "store"
+            root.mkdir(parents=True)
+            path = _db_path(root)
+            connection = sqlite3.connect(path)
+            try:
+                connection.execute("CREATE TABLE partial_fixture (value TEXT)")
+                connection.commit()
+            finally:
+                connection.close()
+
+            with self.assertRaises(library.GlobalLibrarySchemaError):
+                _repo(root).initialize()
+
+            connection = sqlite3.connect(path)
+            try:
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 0)
+                tables = {
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    )
+                }
+            finally:
+                connection.close()
+            self.assertEqual(tables, {"partial_fixture"})
+
+    def test_initialize_preexisting_unknown_user_version_fails_closed(self):
+        with _temporary_root() as directory:
+            root = Path(directory) / "store"
+            root.mkdir(parents=True)
+            path = _db_path(root)
+            connection = sqlite3.connect(path)
+            try:
+                connection.execute("PRAGMA user_version = 99")
+            finally:
+                connection.close()
+
+            with self.assertRaises(library.GlobalLibrarySchemaError):
+                _repo(root).initialize()
+
+            connection = sqlite3.connect(path)
+            try:
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 99)
+                tables = connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                ).fetchall()
+            finally:
+                connection.close()
+            self.assertEqual(tables, [])
 
     def test_initialize_present_invalid_database_preserves_original_bytes(self):
         with _temporary_root() as directory:
@@ -1761,8 +1946,89 @@ class GlobalLibraryMultiProcessTests(unittest.TestCase):
                     or result[:2] == ("error", "GlobalLibraryBusyError"),
                     result,
                 )
-            self.assertEqual(_repo(root).initialize().generation, 0)
+            snapshot = _repo(root).initialize()
+            self.assertEqual(snapshot.store_status, library.VALID)
+            self.assertEqual(snapshot.schema_version, "1.0")
+            self.assertEqual(snapshot.generation, 0)
             self.assertEqual(_repo(root).inspect().status, library.VALID)
+            connection = _connection(root)
+            try:
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 1)
+                tables = {
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master "
+                        "WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                    )
+                }
+                indexes = {
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master "
+                        "WHERE type='index' AND sql IS NOT NULL"
+                    )
+                }
+                meta_count = int(
+                    connection.execute("SELECT COUNT(*) FROM library_meta").fetchone()[0]
+                )
+            finally:
+                connection.close()
+            self.assertEqual(tables, set(library._TABLE_SQL))
+            self.assertEqual(indexes, set(library._INDEX_SQL))
+            self.assertEqual(meta_count, 1)
+
+    def test_initializer_during_uncommitted_publication_gets_typed_busy(self):
+        with _temporary_root() as directory:
+            root = Path(directory) / "store"
+            context = multiprocessing.get_context("spawn")
+            ready = context.Event()
+            release = context.Event()
+            queue = context.Queue()
+            holder = context.Process(
+                target=_uncommitted_initialization_holder_worker,
+                args=(str(root), ready, release, queue),
+            )
+            contender = context.Process(
+                target=_initialization_window_contender_worker,
+                args=(str(root), ready, queue),
+            )
+
+            holder.start()
+            self.assertTrue(ready.wait(15))
+            contender.start()
+            contender_result = queue.get(timeout=15)
+            self.assertEqual(contender_result, ("contender", library.BUSY))
+            release.set()
+            holder_result = queue.get(timeout=15)
+            self.assertEqual(holder_result, ("holder", "ok"))
+            _join_process(self, contender)
+            _join_process(self, holder)
+
+            snapshot = _repo(root).initialize()
+            self.assertEqual(snapshot.store_status, library.VALID)
+            self.assertEqual(snapshot.schema_version, "1.0")
+            self.assertEqual(snapshot.generation, 0)
+            connection = _connection(root)
+            try:
+                self.assertEqual(connection.execute("PRAGMA user_version").fetchone()[0], 1)
+                tables = {
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master "
+                        "WHERE type='table' AND name NOT LIKE 'sqlite_%'"
+                    )
+                }
+                indexes = {
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT name FROM sqlite_master "
+                        "WHERE type='index' AND sql IS NOT NULL"
+                    )
+                }
+            finally:
+                connection.close()
+            self.assertEqual(tables, set(library._TABLE_SQL))
+            self.assertEqual(indexes, set(library._INDEX_SQL))
             self.assertEqual(_count_rows(root, "library_meta"), 1)
 
     def test_bounded_begin_immediate_lock_is_typed_and_store_remains_valid(self):

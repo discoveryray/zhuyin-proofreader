@@ -943,6 +943,26 @@ def _connect_existing(path: Path, *, read_only: bool, busy_timeout_ms: int) -> s
     return connection
 
 
+def _begin_immediate_with_bounded_retry(
+    connection: sqlite3.Connection,
+    path: Path,
+    retry_limit: int,
+) -> None:
+    last_error: sqlite3.OperationalError | None = None
+    for _attempt in range(retry_limit + 1):
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            return
+        except sqlite3.OperationalError as exc:
+            if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
+                raise
+            last_error = exc
+    raise GlobalLibraryBusyError(
+        f"BEGIN IMMEDIATE bounded retries exhausted：{last_error}",
+        path=path,
+    )
+
+
 def _translated_error(exc: BaseException, path: Path) -> GlobalLibraryError:
     if isinstance(exc, GlobalLibraryError):
         return exc
@@ -1883,20 +1903,42 @@ class GlobalExactGlyphRepository:
     def load_snapshot(self) -> GlobalExactGlyphSnapshot:
         return _load_snapshot_from_path(self.path, self.busy_timeout_ms)
 
-    def initialize(self) -> GlobalExactGlyphSnapshot:
-        if not _path_is_absent(self.path):
-            return self.load_snapshot()
-        try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-        except PermissionError as exc:
-            raise GlobalLibraryPermissionError(
-                f"global library parent 無法建立：{self.path.parent}",
+    def _load_after_initialization_serialization(self) -> GlobalExactGlyphSnapshot:
+        """Validate a present target only after taking SQLite's writer lock."""
+        if _path_is_absent(self.path):
+            raise GlobalLibraryAbsentError(
+                "global library initialization target disappeared before validation",
                 path=self.path,
-            ) from exc
+            )
+        connection: sqlite3.Connection | None = None
+        try:
+            connection = _connect_existing(
+                self.path,
+                read_only=False,
+                busy_timeout_ms=self.busy_timeout_ms,
+            )
+            _begin_immediate_with_bounded_retry(
+                connection,
+                self.path,
+                self.write_retry_limit,
+            )
+            _validate_connection(connection, self.path)
+            connection.execute("COMMIT")
+        except BaseException as exc:
+            if connection is not None and connection.in_transaction:
+                connection.execute("ROLLBACK")
+            raise _translated_error(exc, self.path) from exc
+        finally:
+            if connection is not None:
+                connection.close()
+        return self.load_snapshot()
+
+    def _build_initialization_candidate(self, candidate: Path) -> None:
+        """Build and validate a private v1 SQLite store before publication."""
         connection: sqlite3.Connection | None = None
         try:
             connection = sqlite3.connect(
-                _sqlite_uri(self.path, "rwc"),
+                _sqlite_uri(candidate, "rwc"),
                 uri=True,
                 timeout=self.busy_timeout_ms / 1000.0,
                 isolation_level=None,
@@ -1908,7 +1950,11 @@ class GlobalExactGlyphRepository:
                     f"SQLite 無法啟用 WAL：{journal_mode}",
                     path=self.path,
                 )
-            connection.execute("BEGIN IMMEDIATE")
+            _begin_immediate_with_bounded_retry(
+                connection,
+                self.path,
+                self.write_retry_limit,
+            )
             existing_schema_objects = int(connection.execute(
                 """
                 SELECT COUNT(*)
@@ -1919,36 +1965,43 @@ class GlobalExactGlyphRepository:
             existing_user_version = int(
                 connection.execute("PRAGMA user_version").fetchone()[0]
             )
-            if not existing_schema_objects and not existing_user_version:
-                for statement in _TABLE_SQL.values():
-                    connection.execute(statement)
-                for statement in _INDEX_SQL.values():
-                    connection.execute(statement)
-                timestamp = _utc_now()
-                connection.execute(
-                    """
-                    INSERT INTO library_meta (
-                        meta_id, schema_version, identity_contract_version,
-                        promotion_policy_version, generation, created_at, updated_at
-                    ) VALUES (1, ?, ?, ?, 0, ?, ?)
-                    """,
-                    (
-                        GLOBAL_LIBRARY_SCHEMA_VERSION,
-                        GLOBAL_IDENTITY_CONTRACT_VERSION,
-                        GLOBAL_PROMOTION_POLICY_VERSION,
-                        timestamp,
-                        timestamp,
-                    ),
+            if existing_schema_objects or existing_user_version:
+                raise GlobalLibraryValidationError(
+                    "private initialization candidate was not empty",
+                    path=self.path,
                 )
-                connection.execute(
-                    f"PRAGMA user_version = {GLOBAL_LIBRARY_SQLITE_USER_VERSION}"
-                )
-            # Another explicit initializer may have won the race between the
-            # initial absence check and BEGIN IMMEDIATE.  Adopt only a fully
-            # valid v1 store; never mask partial/unknown structure with CREATE
-            # IF NOT EXISTS.
-            _validate_connection(connection, self.path)
+            for statement in _TABLE_SQL.values():
+                connection.execute(statement)
+            for statement in _INDEX_SQL.values():
+                connection.execute(statement)
+            timestamp = _utc_now()
+            connection.execute(
+                """
+                INSERT INTO library_meta (
+                    meta_id, schema_version, identity_contract_version,
+                    promotion_policy_version, generation, created_at, updated_at
+                ) VALUES (1, ?, ?, ?, 0, ?, ?)
+                """,
+                (
+                    GLOBAL_LIBRARY_SCHEMA_VERSION,
+                    GLOBAL_IDENTITY_CONTRACT_VERSION,
+                    GLOBAL_PROMOTION_POLICY_VERSION,
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            connection.execute(
+                f"PRAGMA user_version = {GLOBAL_LIBRARY_SQLITE_USER_VERSION}"
+            )
+            _validate_connection(connection, candidate)
             connection.execute("COMMIT")
+            checkpoint = connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchone()
+            if checkpoint is None or int(checkpoint[0]) != 0:
+                raise GlobalLibraryBusyError(
+                    f"private initialization WAL checkpoint incomplete：{checkpoint}",
+                    path=self.path,
+                )
+            _validate_connection(connection, candidate)
         except BaseException as exc:
             if connection is not None and connection.in_transaction:
                 connection.execute("ROLLBACK")
@@ -1956,7 +2009,57 @@ class GlobalExactGlyphRepository:
         finally:
             if connection is not None:
                 connection.close()
-        return self.load_snapshot()
+        snapshot = _load_snapshot_from_path(candidate, self.busy_timeout_ms)
+        if snapshot.store_status != VALID or snapshot.generation != 0:
+            raise GlobalLibraryValidationError(
+                "private initialization candidate did not validate as generation zero",
+                path=self.path,
+            )
+
+    def initialize(self) -> GlobalExactGlyphSnapshot:
+        if not _path_is_absent(self.path):
+            return self._load_after_initialization_serialization()
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+        except PermissionError as exc:
+            raise GlobalLibraryPermissionError(
+                f"global library parent 無法建立：{self.path.parent}",
+                path=self.path,
+            ) from exc
+
+        candidate = self.path.parent / (
+            f".{self.path.name}.{uuid4().hex}.initializing.sqlite3"
+        )
+        try:
+            self._build_initialization_candidate(candidate)
+            try:
+                # Hard-link publication is atomic and create-if-absent: no
+                # caller can observe the private pre-commit SQLite state, and
+                # an already-present target is never overwritten or replaced.
+                os.link(candidate, self.path)
+            except FileExistsError:
+                pass
+            except PermissionError as exc:
+                raise GlobalLibraryPermissionError(
+                    f"global library initialization target 無法 publish：{self.path}",
+                    path=self.path,
+                ) from exc
+            except OSError as exc:
+                raise GlobalLibraryValidationError(
+                    f"global library initialization publish failure：{exc}",
+                    path=self.path,
+                ) from exc
+        finally:
+            for private_path in (
+                candidate,
+                Path(str(candidate) + "-wal"),
+                Path(str(candidate) + "-shm"),
+            ):
+                try:
+                    private_path.unlink()
+                except FileNotFoundError:
+                    pass
+        return self._load_after_initialization_serialization()
 
     @contextmanager
     def write_transaction(self) -> Iterator[GlobalWriteTransaction]:
@@ -1972,22 +2075,11 @@ class GlobalExactGlyphRepository:
                 read_only=False,
                 busy_timeout_ms=self.busy_timeout_ms,
             )
-            begun = False
-            last_error: BaseException | None = None
-            for _attempt in range(self.write_retry_limit + 1):
-                try:
-                    connection.execute("BEGIN IMMEDIATE")
-                    begun = True
-                    break
-                except sqlite3.OperationalError as exc:
-                    last_error = exc
-                    if "locked" not in str(exc).lower() and "busy" not in str(exc).lower():
-                        raise
-            if not begun:
-                raise GlobalLibraryBusyError(
-                    f"BEGIN IMMEDIATE bounded retries exhausted：{last_error}",
-                    path=self.path,
-                )
+            _begin_immediate_with_bounded_retry(
+                connection,
+                self.path,
+                self.write_retry_limit,
+            )
             _validate_connection(connection, self.path)
             transaction = GlobalWriteTransaction(connection, self.path)
             yield transaction
