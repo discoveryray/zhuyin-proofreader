@@ -1315,6 +1315,7 @@ def _validate_rows(connection: sqlite3.Connection, path: Path) -> dict[str, Any]
 
     conflicts = [dict(row) for row in connection.execute("SELECT * FROM glyph_conflict ORDER BY conflict_id")]
     open_conflicts: dict[str, list[tuple[str, ...]]] = {}
+    resolved_conflicts_by_glyph: dict[str, list[tuple[str, ...]]] = {}
     for row in conflicts:
         conflict_id = _sha256_text(row["conflict_id"], "glyph_conflict.conflict_id")
         glyph_id = _sha256_text(row["glyph_id"], "glyph_conflict.glyph_id")
@@ -1348,6 +1349,7 @@ def _validate_rows(connection: sqlite3.Connection, path: Path) -> dict[str, Any]
             if resolved_generation < opened or resolved_generation > generation:
                 raise GlobalLibraryValidationError("resolved conflict generation 無效", path=path)
             _strict_text(row["resolution_reference"], "resolution_reference")
+            resolved_conflicts_by_glyph.setdefault(glyph_id, []).append(readings)
 
     for glyph_id, glyph in glyphs.items():
         open_for_glyph = open_conflicts.get(glyph_id, [])
@@ -1372,6 +1374,12 @@ def _validate_rows(connection: sqlite3.Connection, path: Path) -> dict[str, Any]
             if any(reading != active_reading for reading in direct_readings):
                 raise GlobalLibraryValidationError(
                     "VERIFIED_GLOBAL retained direct reading 與 active_reading 矛盾",
+                    path=path,
+                )
+            if resolved_conflicts_by_glyph.get(glyph_id):
+                raise GlobalLibraryValidationError(
+                    "RESOLVED conflict history cannot reauthorize VERIFIED_GLOBAL；"
+                    "Phase 2 缺少 adjudication、fresh quorum 與 resolution revision binding",
                     path=path,
                 )
             key = (glyph_id, int(glyph["revision"]), active_reading)

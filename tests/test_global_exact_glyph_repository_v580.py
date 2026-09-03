@@ -390,6 +390,38 @@ def _replace_open_conflict_readings(root: Path, readings: tuple[str, ...]) -> No
         connection.close()
 
 
+def _insert_resolved_conflict_history(
+    root: Path,
+    glyph_id: str,
+    *,
+    resolved_generation: int,
+) -> None:
+    readings = ("ㄅ", "ㄆ")
+    connection = _connection(root)
+    try:
+        connection.execute(
+            """
+            INSERT INTO glyph_conflict (
+                conflict_id, glyph_id, status, conflicting_readings_json,
+                first_event_at, last_event_at, opened_generation,
+                resolved_generation, resolution_reference
+            ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
+            """,
+            (
+                library.compute_glyph_conflict_id(glyph_id, readings, 1),
+                glyph_id,
+                library.RESOLVED,
+                json.dumps(list(readings), ensure_ascii=False, separators=(",", ":")),
+                NOW,
+                NOW,
+                resolved_generation,
+                "unbound-phase-2-resolution",
+            ),
+        )
+    finally:
+        connection.close()
+
+
 def _insert_matching_revocation(root: Path) -> tuple[str, str]:
     connection = _connection(root)
     try:
@@ -1034,33 +1066,74 @@ class GlobalLibraryEvidenceInvariantTests(unittest.TestCase):
                 glyph_id,
                 _direct_evidence(glyph_id, "ㄆ", 3),
             )
-            readings = ("ㄅ", "ㄆ")
-            connection = _connection(root)
-            try:
-                connection.execute(
-                    """
-                    INSERT INTO glyph_conflict (
-                        conflict_id, glyph_id, status, conflicting_readings_json,
-                        first_event_at, last_event_at, opened_generation,
-                        resolved_generation, resolution_reference
-                    ) VALUES (?, ?, ?, ?, ?, ?, 1, 2, ?)
-                    """,
-                    (
-                        library.compute_glyph_conflict_id(glyph_id, readings, 1),
-                        glyph_id,
-                        library.RESOLVED,
-                        json.dumps(list(readings), ensure_ascii=False, separators=(",", ":")),
-                        NOW,
-                        NOW,
-                        "unbound-phase-2-resolution",
-                    ),
-                )
-            finally:
-                connection.close()
+            _insert_resolved_conflict_history(
+                root,
+                glyph_id,
+                resolved_generation=2,
+            )
 
             diagnostic = _repo(root).inspect()
             self.assertEqual(diagnostic.status, library.VALIDATION_FAILED)
             self.assertIn("contradictory retained direct readings", diagnostic.message)
+
+    def test_resolved_history_alone_blocks_verified_global_reauthorization(self):
+        with _temporary_root() as directory:
+            root = Path(directory) / "store"
+            glyph_id = _insert_verified_fixture(root, reading="ㄅ")
+            connection = _connection(root)
+            try:
+                retained_direct_readings = {
+                    str(row[0])
+                    for row in connection.execute(
+                        """
+                        SELECT reading
+                        FROM source_evidence
+                        WHERE glyph_id = ?
+                          AND evidence_class = ?
+                          AND counts_toward_global_quorum = 1
+                        """,
+                        (glyph_id, library.DIRECT_VISUAL_ACTUAL),
+                    )
+                }
+            finally:
+                connection.close()
+            self.assertEqual(retained_direct_readings, {"ㄅ"})
+            _insert_resolved_conflict_history(
+                root,
+                glyph_id,
+                resolved_generation=1,
+            )
+
+            diagnostic = _repo(root).inspect()
+            self.assertEqual(diagnostic.status, library.VALIDATION_FAILED)
+            self.assertIn("RESOLVED conflict history cannot reauthorize VERIFIED_GLOBAL", diagnostic.message)
+            self.assertIn("resolution revision binding", diagnostic.message)
+            with self.assertRaisesRegex(
+                library.GlobalLibraryValidationError,
+                "RESOLVED conflict history cannot reauthorize VERIFIED_GLOBAL",
+            ):
+                _repo(root).load_snapshot()
+
+    def test_resolved_history_does_not_invalidate_nonreusable_states(self):
+        for state in (library.CANDIDATE, library.PROMOTION_READY):
+            with self.subTest(state=state), _temporary_root() as directory:
+                root = Path(directory) / "store"
+                glyph_id = _insert_candidate_fixture(root)
+                if state != library.CANDIDATE:
+                    connection = _connection(root)
+                    try:
+                        connection.execute(
+                            "UPDATE glyph_truth SET state = ? WHERE glyph_id = ?",
+                            (state, glyph_id),
+                        )
+                    finally:
+                        connection.close()
+                _insert_resolved_conflict_history(
+                    root,
+                    glyph_id,
+                    resolved_generation=1,
+                )
+                self.assertEqual(_repo(root).load_snapshot().store_status, library.VALID)
 
     def test_candidate_with_contradictory_direct_readings_fails_closed(self):
         with _temporary_root() as directory:
