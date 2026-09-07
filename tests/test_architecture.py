@@ -57,6 +57,15 @@ from standalone_proofread import (  # noqa: E402
 
 
 PDF_HASH = "a" * 64
+GLOBAL_EXACT_COMPONENT = {
+    "dependency_contract_version": "1.0",
+    "identity_contract_version": "1.0",
+    "promotion_policy_version": "1.0",
+    "scope_mode": "per_pdf_exact_identity_v1",
+    "ttf_subset_sha256": "1" * 64,
+    "cff_subset_sha256": "2" * 64,
+    "conflict_subset_sha256": "3" * 64,
+}
 
 
 def source_row(char="角", actual="ㄐㄩㄝˊ", source_row_number=1):
@@ -418,8 +427,8 @@ class SourceAndFingerprintTests(unittest.TestCase):
             base = {"ok": True, "manifest_schema_version": ASSET_MANIFEST_SCHEMA_VERSION, "assets": [{"name": "map", "chain": "actual", "ok": True, "sha256": "1" * 64}]}
             changed_expected = deepcopy(base)
             changed_expected["assets"].append({"name": "rules", "chain": "expected", "ok": True, "sha256": "2" * 64})
-            first = compute_actual_asset_fingerprint(root, pdf, base, decoder_version="5.2.0", source_files=["decoder.py"])
-            second = compute_actual_asset_fingerprint(root, pdf, changed_expected, decoder_version="5.2.0", source_files=["decoder.py"])
+            first = compute_actual_asset_fingerprint(root, pdf, base, decoder_version="5.2.0", source_files=["decoder.py"], global_exact_glyph_evidence_hashes=GLOBAL_EXACT_COMPONENT)
+            second = compute_actual_asset_fingerprint(root, pdf, changed_expected, decoder_version="5.2.0", source_files=["decoder.py"], global_exact_glyph_evidence_hashes=GLOBAL_EXACT_COMPONENT)
             self.assertEqual(first["fingerprint"], second["fingerprint"])
 
     def test_invalid_expected_chain_does_not_block_actual_fingerprint(self):
@@ -436,7 +445,7 @@ class SourceAndFingerprintTests(unittest.TestCase):
                     {"name": "rules", "chain": "expected", "ok": False, "sha256": "2" * 64},
                 ],
             }
-            result = compute_actual_asset_fingerprint(root, pdf, report, decoder_version="5.2.0", source_files=["decoder.py"])
+            result = compute_actual_asset_fingerprint(root, pdf, report, decoder_version="5.2.0", source_files=["decoder.py"], global_exact_glyph_evidence_hashes=GLOBAL_EXACT_COMPONENT)
             self.assertTrue(result["fingerprint"])
 
     def test_actual_asset_change_invalidates_fingerprint(self):
@@ -446,8 +455,8 @@ class SourceAndFingerprintTests(unittest.TestCase):
             pdf = root / "book.pdf"; pdf.write_bytes(b"pdf-current")
             first_report = {"ok": True, "manifest_schema_version": ASSET_MANIFEST_SCHEMA_VERSION, "assets": [{"name": "map", "chain": "actual", "ok": True, "sha256": "1" * 64}]}
             second_report = {"ok": True, "manifest_schema_version": ASSET_MANIFEST_SCHEMA_VERSION, "assets": [{"name": "map", "chain": "actual", "ok": True, "sha256": "2" * 64}]}
-            first = compute_actual_asset_fingerprint(root, pdf, first_report, decoder_version="5.2.0", source_files=["decoder.py"])
-            second = compute_actual_asset_fingerprint(root, pdf, second_report, decoder_version="5.2.0", source_files=["decoder.py"])
+            first = compute_actual_asset_fingerprint(root, pdf, first_report, decoder_version="5.2.0", source_files=["decoder.py"], global_exact_glyph_evidence_hashes=GLOBAL_EXACT_COMPONENT)
+            second = compute_actual_asset_fingerprint(root, pdf, second_report, decoder_version="5.2.0", source_files=["decoder.py"], global_exact_glyph_evidence_hashes=GLOBAL_EXACT_COMPONENT)
             self.assertNotEqual(first["fingerprint"], second["fingerprint"])
 
     def test_expected_fingerprint_excludes_actual_assets(self):
@@ -481,11 +490,12 @@ class SourceAndFingerprintTests(unittest.TestCase):
             pdf_hash = hashlib.sha256(b"current pdf").hexdigest()
             components = {
                 "fingerprint_schema_version": ACTUAL_FINGERPRINT_SCHEMA_VERSION,
-                "reuse_policy": "evidence_assets_v1",
+                "reuse_policy": "evidence_assets_with_global_exact_v1",
                 "actual_decoder_semantics_epoch": ACTUAL_DECODER_SEMANTICS_EPOCH,
                 "pdf_sha256": pdf_hash,
                 "actual_asset_hashes": {"map": "1" * 64},
                 "dynamic_actual_evidence_hashes": {"scope": "2" * 64},
+                "global_exact_glyph_evidence_hashes": GLOBAL_EXACT_COMPONENT,
             }
             for item in [
                 ("workbook_schema_version", WORKBOOK_SCHEMA_VERSION), ("ledger_schema_version", LEDGER_SCHEMA_VERSION),

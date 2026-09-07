@@ -98,8 +98,13 @@ from actual_review import (
     import_actual_review_workbook,
     ensure_user_evidence_files,
     actual_workbook_dynamic_dependencies,
+    actual_workbook_global_exact_dependencies,
     load_manual_actual_staging,
     stage_manual_actual_group,
+)
+from global_exact_glyph_library import (
+    GlobalExactGlyphRepository,
+    global_exact_glyph_evidence_hashes,
 )
 
 PROGRAM = "注音校對工具－單機端到端控制器"
@@ -192,6 +197,7 @@ ACTUAL_DECODER_SOURCE_FILES = [
     "occurrence_ledger.py",
     "actual_review.py",
     "exact_glyph_identity.py",
+    "global_exact_glyph_library.py",
 ]
 
 DECISION_SEED = Path(__file__).with_name("校對判定記憶.json")
@@ -3623,41 +3629,80 @@ def run_pipeline_pdfs(
     defer_excel_reports: bool = False,
     runtime_root: Path | None = None,
 ) -> Path:
-    output_dir.mkdir(parents=True,exist_ok=True)
-    actual_dir=output_dir/"01_實際注音"; cand_dir=output_dir/"02_候選報告"
-    actual_dir.mkdir(exist_ok=True); cand_dir.mkdir(exist_ok=True)
-
     pdfs = [Path(pdf).resolve() for pdf in pdfs]
     root=Path(runtime_root or Path(__file__).resolve().parent).resolve()
-    dynamic_actual_root = initialize_project_actual_evidence(output_dir, root)
     source_validation = validate_asset_manifest(root)
     if not source_validation.get("ok"):
         blocked_path = write_pipeline_blocked(output_dir, source_validation, "SOURCE_INVALID")
         raise SourceValidationError(f"核心資料來源驗證失敗；處理被阻擋：{blocked_path}")
+    try:
+        # One immutable snapshot is the sole global truth view for this whole
+        # session.  Fingerprint computation, every PDF decode, and final
+        # metadata sealing all receive this same object.
+        global_snapshot = GlobalExactGlyphRepository.resolved().load_snapshot()
+    except Exception as exc:
+        blocked_report = {
+            **dict(source_validation),
+            "ok": False,
+            "errors": [
+                *list(source_validation.get("errors") or []),
+                f"global exact glyph source validation failed：{type(exc).__name__}: {exc}",
+            ],
+        }
+        blocked_path = write_pipeline_blocked(
+            output_dir,
+            blocked_report,
+            "GLOBAL_EXACT_SOURCE_INVALID",
+        )
+        raise SourceValidationError(
+            f"global exact glyph 資料來源驗證失敗；處理被阻擋：{blocked_path}"
+        ) from exc
+
+    output_dir.mkdir(parents=True,exist_ok=True)
+    actual_dir=output_dir/"01_實際注音"; cand_dir=output_dir/"02_候選報告"
+    actual_dir.mkdir(exist_ok=True); cand_dir.mkdir(exist_ok=True)
+    dynamic_actual_root = initialize_project_actual_evidence(output_dir, root)
     # Freeze the previous session before any output file is touched.  Reuse
     # decisions must not be recomputed after the first rewritten workbook,
     # otherwise one changed file would invalidate the old manifest and make all
     # later PDFs look stale.
-    baseline_manifest = load_reuse_baseline_manifest(output_dir)
-    expected_chain_fingerprint = compute_expected_asset_fingerprint(
-        root,
-        source_validation,
-        resolver_version=EXPECTED_RESOLVER_VERSION,
-        source_files=EXPECTED_RESOLVER_SOURCE_FILES,
-    )
-    actual_fingerprints: dict[str, dict[str, Any]] = {}
-    for pdf in pdfs:
-        actual = actual_workbook_path(actual_dir, pdf)
-        dependencies = actual_workbook_dynamic_dependencies(actual)
-        actual_fingerprints[pdf.name] = compute_actual_asset_fingerprint(
+    try:
+        baseline_manifest = load_reuse_baseline_manifest(output_dir)
+        expected_chain_fingerprint = compute_expected_asset_fingerprint(
             root,
-            pdf,
             source_validation,
-            decoder_version=ACTUAL_DECODER_VERSION,
-            source_files=ACTUAL_DECODER_SOURCE_FILES,
-            dynamic_dependencies=dependencies,
-            dynamic_evidence_root=dynamic_actual_root,
+            resolver_version=EXPECTED_RESOLVER_VERSION,
+            source_files=EXPECTED_RESOLVER_SOURCE_FILES,
         )
+        actual_fingerprints: dict[str, dict[str, Any]] = {}
+        for pdf in pdfs:
+            actual = actual_workbook_path(actual_dir, pdf)
+            dependencies = actual_workbook_dynamic_dependencies(actual)
+            global_dependencies = actual_workbook_global_exact_dependencies(actual, pdf)
+            actual_fingerprints[pdf.name] = compute_actual_asset_fingerprint(
+                root,
+                pdf,
+                source_validation,
+                decoder_version=ACTUAL_DECODER_VERSION,
+                source_files=ACTUAL_DECODER_SOURCE_FILES,
+                global_exact_glyph_evidence_hashes=global_exact_glyph_evidence_hashes(
+                    global_snapshot,
+                    global_dependencies,
+                ),
+                dynamic_dependencies=dependencies,
+                dynamic_evidence_root=dynamic_actual_root,
+            )
+    except Exception as exc:
+        blocked_report = {
+            **dict(source_validation),
+            "ok": False,
+            "errors": [
+                *list(source_validation.get("errors") or []),
+                f"actual dependency validation failed：{type(exc).__name__}: {exc}",
+            ],
+        }
+        write_pipeline_blocked(output_dir, blocked_report, "ACTUAL_DEPENDENCY_INVALID")
+        raise
     resume_manifest: dict[str, Any] | None = None
     if baseline_manifest is None and _has_complete_pre_session_outputs(pdfs, actual_dir, cand_dir):
         _write_pipeline_progress(
@@ -3709,18 +3754,27 @@ def run_pipeline_pdfs(
                        root / DEFAULT_OUTLINE_SIGNATURES.name, root / DEFAULT_MAPPING_CORRECTIONS.name,
                        root / DEFAULT_SYMBOL_TEMPLATES.name, dynamic_actual_root / OCCURRENCE_OVERRIDE_FILE,
                        root / DEFAULT_STRUCTURAL_EXCLUSIONS.name, root / DEFAULT_CFF_CONSENSUS.name,
-                       fingerprint, dynamic_actual_root)
+                       fingerprint, dynamic_actual_root, global_snapshot=global_snapshot)
                 # A brand-new/legacy workbook may have required a conservative
                 # global-fallback fingerprint before its exact glyph dependencies
                 # were known.  Re-seal only the metadata with the final per-PDF
                 # dependency fingerprint; pronunciation cells are untouched.
                 final_dependencies = actual_workbook_dynamic_dependencies(actual)
+                final_global_dependencies = actual_workbook_global_exact_dependencies(actual, pdf)
+                if final_global_dependencies is None:
+                    raise SourceValidationError(
+                        f"新 actual workbook 無法建立完整 global exact dependency roster：{pdf.name}"
+                    )
                 final_fingerprint = compute_actual_asset_fingerprint(
                     root,
                     pdf,
                     source_validation,
                     decoder_version=ACTUAL_DECODER_VERSION,
                     source_files=ACTUAL_DECODER_SOURCE_FILES,
+                    global_exact_glyph_evidence_hashes=global_exact_glyph_evidence_hashes(
+                        global_snapshot,
+                        final_global_dependencies,
+                    ),
                     dynamic_dependencies=final_dependencies,
                     dynamic_evidence_root=dynamic_actual_root,
                 )
@@ -3769,6 +3823,7 @@ def run_pipeline_pdfs(
                     root / DEFAULT_CONTEXT_OVERRIDES.name,
                     dynamic_actual_root,
                     runtime_root=root,
+                    global_snapshot=global_snapshot,
                 )
 
             _write_pipeline_progress(output_dir, "3/3", "[3/3] 建立 occurrence ledger、全量對帳與 completion gate")
@@ -3898,26 +3953,48 @@ def regenerate_report(output_dir: Path) -> Path:
     ):
         raise ValueError("SESSION_SCHEMA_INCOMPATIBLE：資料布局或 occurrence identity 規則不同，需有明確轉接器")
     root = Path(__file__).resolve().parent
-    dynamic_actual_root = initialize_project_actual_evidence(output_dir, root)
     source_validation = validate_asset_manifest(root)
     if not source_validation.get("ok"):
         write_pipeline_blocked(output_dir, source_validation, "SOURCE_INVALID_DURING_REGENERATE")
         raise SourceValidationError("資料來源驗證失敗；未覆寫上一份最終報告")
+    try:
+        global_snapshot = GlobalExactGlyphRepository.resolved().load_snapshot()
+    except Exception as exc:
+        blocked_report = {
+            **dict(source_validation),
+            "ok": False,
+            "errors": [
+                *list(source_validation.get("errors") or []),
+                f"global exact glyph source validation failed：{type(exc).__name__}: {exc}",
+            ],
+        }
+        write_pipeline_blocked(
+            output_dir,
+            blocked_report,
+            "GLOBAL_EXACT_SOURCE_INVALID_DURING_REGENERATE",
+        )
+        raise SourceValidationError("global exact glyph 資料來源驗證失敗；未覆寫最終報告") from exc
+    dynamic_actual_root = initialize_project_actual_evidence(output_dir, root)
     pdfs = _resolve_session_pdfs(output_dir, old_manifest)
-    fingerprints = {
-        pdf.name: compute_actual_asset_fingerprint(
+    fingerprints = {}
+    for pdf in pdfs:
+        actual_path = actual_workbook_path(output_dir / "01_實際注音", pdf)
+        global_dependencies = actual_workbook_global_exact_dependencies(actual_path, pdf)
+        fingerprints[pdf.name] = compute_actual_asset_fingerprint(
             root,
             pdf,
             source_validation,
             decoder_version=ACTUAL_DECODER_VERSION,
             source_files=ACTUAL_DECODER_SOURCE_FILES,
+            global_exact_glyph_evidence_hashes=global_exact_glyph_evidence_hashes(
+                global_snapshot,
+                global_dependencies,
+            ),
             dynamic_dependencies=actual_workbook_dynamic_dependencies(
-                actual_workbook_path(output_dir / "01_實際注音", pdf)
+                actual_path
             ),
             dynamic_evidence_root=dynamic_actual_root,
         )
-        for pdf in pdfs
-    }
     manifest = collect_manifest(
         pdfs,
         output_dir / "01_實際注音",

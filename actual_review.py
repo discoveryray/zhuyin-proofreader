@@ -19,15 +19,23 @@ from openpyxl.worksheet.datavalidation import DataValidation
 from occurrence_ledger import canonical_bopomofo
 from cff_zhuyin_decoder import cff_full_annotation_signature
 from cross_version_compat import review_id_schema_compatible, schema_compatible
+from export_pdf_text_diagnostics import TrueTypeGlyphInspector
 from exact_glyph_identity import (
     ACTUAL_GROUP_IDENTITY_KINDS,
     CFF_GLYPH_SHA256,
+    GLOBAL_ELIGIBLE_COMPLETE_CFF_RECORDING_V1,
+    GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1,
+    NON_GLOBAL_ELIGIBLE,
     TTF_GLYF_SHA256,
     actual_group_id,
     actual_group_identity_payload,
     actual_group_match_key,
     canonical_actual_group_identity,
     legacy_v1_actual_group_id,
+)
+from global_exact_glyph_library import (
+    GlobalExactGlyphIdentity,
+    canonical_global_exact_identity,
 )
 
 ACTUAL_REVIEW_SCHEMA_VERSION = "1.1"
@@ -822,6 +830,181 @@ def actual_workbook_dynamic_dependencies(path: Path) -> dict[str, Any] | None:
             wb.close()
     except Exception:
         return None
+
+
+def actual_workbook_global_exact_dependencies(
+    path: Path,
+    pdf_path: Path,
+) -> tuple[GlobalExactGlyphIdentity, ...] | None:
+    """Revalidate one workbook's global-exact roster against current PDF bytes.
+
+    Existing workbook SHA columns are candidates, never TTF eligibility proof.
+    Every TTF candidate is re-parsed from its current embedded font and passed
+    through ``TrueTypeGlyphInspector.global_exact_identity``.  ``None`` means
+    that the dependency contract is missing/unprovable and therefore forces a
+    decode; a structurally unreadable XLSX raises so artifact corruption cannot
+    be mistaken for an empty roster.
+    """
+    path = Path(path)
+    pdf_path = Path(pdf_path)
+    if not path.exists():
+        return None
+
+    required_columns = {
+        "字形架構",
+        "font_xref",
+        "注音元件ID",
+        "TTF字形SHA256",
+        "CFF樣式群組",
+        "CFF整字字形SHA256",
+    }
+    try:
+        workbook = load_workbook(path, read_only=True, data_only=True)
+    except Exception as exc:
+        raise ValueError(f"actual workbook 損壞，無法驗證 global exact dependency：{path}") from exc
+
+    document = None
+    try:
+        if "實際注音" not in workbook.sheetnames:
+            return None
+        worksheet = workbook["實際注音"]
+        iterator = worksheet.iter_rows(values_only=True)
+        try:
+            raw_headers = next(iterator)
+        except StopIteration:
+            return None
+        headers = [str(value or "") for value in raw_headers]
+        if len(headers) != len(set(headers)):
+            raise ValueError(f"actual workbook 實際注音欄位重複：{path}")
+        if not required_columns.issubset(headers):
+            return None
+        index = {name: offset for offset, name in enumerate(headers)}
+
+        try:
+            document = fitz.open(pdf_path)
+        except Exception:
+            return None
+        inspectors: dict[int, TrueTypeGlyphInspector | None] = {}
+        dependencies: dict[tuple[str, str, str], GlobalExactGlyphIdentity] = {}
+
+        for row in iterator:
+            def cell(name: str) -> Any:
+                offset = index[name]
+                return row[offset] if offset < len(row) else None
+
+            raw_ttf_sha = str(cell("TTF字形SHA256") or "").strip()
+            raw_cff_sha = str(cell("CFF整字字形SHA256") or "").strip()
+            raw_architecture = str(cell("字形架構") or "")
+            architecture = raw_architecture.strip()
+            if raw_architecture != architecture:
+                return None
+            if architecture == "TrueType複合元件":
+                if not raw_ttf_sha or raw_cff_sha:
+                    return None
+            elif architecture == "CFF整字注音":
+                if raw_ttf_sha or not raw_cff_sha:
+                    return None
+            else:
+                # Every row in the actual sheet is a detected occurrence.  An
+                # unknown/blank architecture cannot prove that its exact
+                # dependency roster is complete.
+                return None
+            if raw_ttf_sha and raw_cff_sha:
+                return None
+
+            if raw_ttf_sha:
+                if (
+                    raw_ttf_sha != raw_ttf_sha.lower()
+                    or len(raw_ttf_sha) != 64
+                    or any(ch not in "0123456789abcdef" for ch in raw_ttf_sha)
+                ):
+                    return None
+                try:
+                    xref_value = cell("font_xref")
+                    glyph_value = cell("注音元件ID")
+                    if isinstance(xref_value, bool) or isinstance(glyph_value, bool):
+                        return None
+                    if isinstance(xref_value, float) and not xref_value.is_integer():
+                        return None
+                    if isinstance(glyph_value, float) and not glyph_value.is_integer():
+                        return None
+                    xref = int(xref_value)
+                    glyph_id = int(glyph_value)
+                except (TypeError, ValueError, OverflowError):
+                    return None
+                if xref < 0 or glyph_id < 0:
+                    return None
+                if xref not in inspectors:
+                    try:
+                        _name, extension, _font_type, data = document.extract_font(xref)
+                        inspectors[xref] = (
+                            TrueTypeGlyphInspector(data)
+                            if str(extension or "").lower() == "ttf"
+                            else None
+                        )
+                    except Exception:
+                        inspectors[xref] = None
+                inspector = inspectors[xref]
+                if inspector is None:
+                    return None
+                result = inspector.global_exact_identity(glyph_id)
+                current_sha = str(result.get("glyph_sha256") or "")
+                if current_sha != raw_ttf_sha:
+                    return None
+                eligibility = str(result.get("eligibility") or "")
+                if eligibility == GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1:
+                    identity = canonical_global_exact_identity(
+                        TTF_GLYF_SHA256,
+                        "",
+                        current_sha,
+                        eligibility,
+                    )
+                elif eligibility == NON_GLOBAL_ELIGIBLE:
+                    identity = GlobalExactGlyphIdentity(
+                        TTF_GLYF_SHA256,
+                        "",
+                        current_sha,
+                        NON_GLOBAL_ELIGIBLE,
+                    )
+                else:
+                    return None
+                existing = dependencies.get(identity.tuple)
+                if existing is not None and existing.identity_eligibility != identity.identity_eligibility:
+                    return None
+                dependencies[identity.tuple] = identity
+
+            if raw_cff_sha:
+                if (
+                    raw_cff_sha != raw_cff_sha.lower()
+                    or len(raw_cff_sha) != 64
+                    or any(ch not in "0123456789abcdef" for ch in raw_cff_sha)
+                ):
+                    return None
+                raw_style_value = cell("CFF樣式群組")
+                raw_style = str(raw_style_value or "")
+                style = raw_style.strip()
+                # Unknown CFF families have no canonical global identity.  They
+                # remain available to the existing direct/zero-map decoders.
+                if not style:
+                    continue
+                if raw_style != style:
+                    return None
+                try:
+                    identity = canonical_global_exact_identity(
+                        CFF_GLYPH_SHA256,
+                        style,
+                        raw_cff_sha,
+                        GLOBAL_ELIGIBLE_COMPLETE_CFF_RECORDING_V1,
+                    )
+                except Exception:
+                    return None
+                dependencies[identity.tuple] = identity
+
+        return tuple(dependencies[key] for key in sorted(dependencies))
+    finally:
+        if document is not None:
+            document.close()
+        workbook.close()
 
 
 def dynamic_actual_hashes(

@@ -10,6 +10,16 @@ from typing import Iterable
 from fontTools.cffLib import CFFFontSet
 from fontTools.pens.recordingPen import RecordingPen
 
+from exact_glyph_identity import (
+    CFF_GLYPH_SHA256,
+    GLOBAL_ELIGIBLE_COMPLETE_CFF_RECORDING_V1,
+)
+from global_exact_glyph_library import (
+    GlobalExactGlyphSnapshot,
+    canonical_global_exact_identity,
+    resolve_exact_glyph_reuse,
+)
+
 # The embedded CFF fonts in this textbook family use a 1500-unit wide glyph:
 # Han character at the left, Bopomofo column at ~x=1000-1329, tone mark at >=1330.
 ANNOTATION_X_MIN = 1000
@@ -214,7 +224,16 @@ def _classify_tone(tone_contours, neutral_contours):
 
 
 class CFFZhuyinInspector:
-    def __init__(self, data: bytes, font_name: str, symbol_map, verified_glyph_fingerprints=None):
+    def __init__(
+        self,
+        data: bytes,
+        font_name: str,
+        symbol_map,
+        verified_glyph_fingerprints=None,
+        *,
+        global_snapshot: GlobalExactGlyphSnapshot | None = None,
+        quarantined_glyph_identities=None,
+    ):
         cff = CFFFontSet()
         cff.decompile(BytesIO(data), None)
         top_name = list(cff.keys())[0]
@@ -223,6 +242,8 @@ class CFFZhuyinInspector:
         self.style_group = cff_style_group(self.font_name)
         self.symbol_map = symbol_map
         self.verified_glyph_fingerprints = verified_glyph_fingerprints or {}
+        self.global_snapshot = global_snapshot
+        self.quarantined_glyph_identities = set(quarantined_glyph_identities or ())
 
     def _recording(self, glyph_id: int):
         name = f"cid{int(glyph_id):05d}"
@@ -312,10 +333,48 @@ class CFFZhuyinInspector:
         tone, tone_evidence = _classify_tone(tone_contours, neutral_contours)
         base = "".join(symbols)
         verified = self.verified_glyph_fingerprints.get((self.style_group, glyph_sha256))
-        if verified and verified.get("bopomofo"):
-            reading = str(verified.get("bopomofo") or "")
+        exact_reading = str(verified.get("bopomofo") or "") if verified else ""
+        exact_sources: tuple[str, ...] = ("PROJECT_VERIFIED_EXACT",) if exact_reading else ()
+        exact_conflict = (self.style_group, glyph_sha256) in self.quarantined_glyph_identities
+        exact_conflicting_readings: tuple[str, ...] = ()
+        global_effective_state = ""
+        if self.global_snapshot is not None and self.style_group:
+            identity = canonical_global_exact_identity(
+                CFF_GLYPH_SHA256,
+                self.style_group,
+                glyph_sha256,
+                GLOBAL_ELIGIBLE_COMPLETE_CFF_RECORDING_V1,
+            )
+            resolution = resolve_exact_glyph_reuse(
+                self.global_snapshot,
+                identity,
+                higher_priority_sources=(
+                    (("PROJECT_VERIFIED_EXACT", exact_reading),)
+                    if exact_reading
+                    else ()
+                ),
+                exact_identity_quarantined=exact_conflict,
+            )
+            exact_reading = resolution.reading
+            exact_sources = resolution.sources
+            exact_conflict = resolution.conflict
+            exact_conflicting_readings = resolution.conflicting_readings
+            global_effective_state = resolution.global_effective_state
+        elif exact_conflict:
+            exact_reading = ""
+            exact_sources = ()
+
+        exact_source_label = ""
+        if exact_reading:
+            if exact_sources == ("PROJECT_VERIFIED_EXACT", "GLOBAL_VERIFIED_EXACT"):
+                exact_source_label = "Project exact + Global exact agreement"
+            elif "GLOBAL_VERIFIED_EXACT" in exact_sources:
+                exact_source_label = "Global exact CFF（樣式群組 + 完整字形 SHA-256）"
+            else:
+                exact_source_label = "使用者雙例驗證 exact CFF 整字字形 SHA-256"
+            reading = exact_reading
             status = "已解碼"
-            method = "使用者雙例驗證 exact CFF 整字字形 SHA-256"
+            method = exact_source_label
             tone_evidence = f"{tone_evidence}；exact CFF full-glyph SHA-256 verified"
         elif unknown or not base or tone == "?":
             reading = ""
@@ -341,4 +400,10 @@ class CFFZhuyinInspector:
             "full_signature": full_signature,
             "glyph_sha256": glyph_sha256,
             "neutral_count": len(neutral_contours),
+            "exact_source_label": exact_source_label,
+            "exact_reading": exact_reading,
+            "exact_reuse_sources": exact_sources,
+            "exact_conflict": exact_conflict,
+            "exact_conflicting_readings": exact_conflicting_readings,
+            "global_effective_state": global_effective_state,
         }
