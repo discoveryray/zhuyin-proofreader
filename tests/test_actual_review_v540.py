@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -21,6 +22,9 @@ from actual_review import (
     load_user_verified_cff,
 )
 
+
+O1 = "occ_" + hashlib.sha256(b"o1").hexdigest()
+O2 = "occ_" + hashlib.sha256(b"o2").hexdigest()
 
 SHA = "a" * 64
 
@@ -67,18 +71,18 @@ class ActualReviewV540Tests(unittest.TestCase):
             ensure_user_evidence_files(root)
             pdf = root / "book.pdf"
             make_pdf(pdf)
-            a = entry("o1", "r1", pdf, 60)
-            b = entry("o2", "r2", pdf, 120)
+            a = entry(O1, "r1", pdf, 60)
+            b = entry(O2, "r2", pdf, 120)
             group = build_actual_review_groups([a, b])[0]
             self.assertEqual(group["kind"], "TTF_GLYF_SHA256")
             self.assertEqual(group["occurrence_count"], 2)
 
-            first = apply_verified_actual_group(root, group, "ㄒㄧ˙", checked_occurrence_ids=["o1"], source="test")
+            first = apply_verified_actual_group(root, group, "ㄒㄧ˙", checked_occurrence_ids=[O1], source="test")
             self.assertEqual(first["reading"], "˙ㄒㄧ")
             self.assertEqual(first["learning_level"], "USER_VERIFIED_SINGLE")
             self.assertFalse(first["propagated_to_group"])
 
-            second = apply_verified_actual_group(root, group, "˙ㄒㄧ", checked_occurrence_ids=["o1", "o2"], source="test")
+            second = apply_verified_actual_group(root, group, "˙ㄒㄧ", checked_occurrence_ids=[O1, O2], source="test")
             self.assertEqual(second["learning_level"], "VERIFIED_EXACT_GLYPH")
             self.assertTrue(second["propagated_to_group"])
             with (root / USER_GLYF_FILE).open(encoding="utf-8-sig", newline="") as fh:
@@ -91,8 +95,8 @@ class ActualReviewV540Tests(unittest.TestCase):
             root = Path(td)
             pdf = root / "book.pdf"
             make_pdf(pdf)
-            a = entry("o1", "r1", pdf, 60, state="DIFFERENCE_PENDING_CONFIRMATION")
-            b = entry("o2", "r2", pdf, 120, state="PASS")
+            a = entry(O1, "r1", pdf, 60, state="DIFFERENCE_PENDING_CONFIRMATION")
+            b = entry(O2, "r2", pdf, 120, state="PASS")
             group = build_actual_group_for_entry([a, b], a)
             self.assertEqual(group["occurrence_count"], 2)
             self.assertEqual(group["kind"], "TTF_GLYF_SHA256")
@@ -110,8 +114,8 @@ class ActualReviewV540Tests(unittest.TestCase):
                 "CFF輕聲簽名": "",
                 "CFF完整注音簽名": "same-annotation-full-signature",
             }
-            a = entry("o1", "r1", pdf, 60, source={**shared_annotation, "CFF整字字形SHA256": "b" * 64})
-            b = entry("o2", "r2", pdf, 120, source={**shared_annotation, "CFF整字字形SHA256": "c" * 64})
+            a = entry(O1, "r1", pdf, 60, source={**shared_annotation, "CFF整字字形SHA256": "b" * 64})
+            b = entry(O2, "r2", pdf, 120, source={**shared_annotation, "CFF整字字形SHA256": "c" * 64})
             groups = build_actual_review_groups([a, b])
             self.assertEqual(len(groups), 2, "same annotation signature must not merge different complete CFF glyphs")
             self.assertTrue(all(g["kind"] == "CFF_GLYPH_SHA256" for g in groups))
@@ -128,8 +132,8 @@ class ActualReviewV540Tests(unittest.TestCase):
                 "CFF聲調簽名": "tone",
                 "CFF整字字形SHA256": "d" * 64,
             }
-            a = entry("o1", "r1", pdf, 60, source=src)
-            b = entry("o2", "r2", pdf, 120, source=src)
+            a = entry(O1, "r1", pdf, 60, source=src)
+            b = entry(O2, "r2", pdf, 120, source=src)
             groups = build_actual_review_groups([a, b])
             self.assertEqual(len(groups), 1)
             self.assertEqual(groups[0]["kind"], "CFF_GLYPH_SHA256")
@@ -141,8 +145,8 @@ class ActualReviewV540Tests(unittest.TestCase):
             ensure_user_evidence_files(root)
             pdf = root / "book.pdf"
             make_pdf(pdf)
-            a = entry("o1", "r1", pdf, 60)
-            b = entry("o2", "r2", pdf, 120)
+            a = entry(O1, "r1", pdf, 60)
+            b = entry(O2, "r2", pdf, 120)
             ledger = [a, b]
             meta = {
                 "version": "5.4.0",

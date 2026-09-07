@@ -42,6 +42,7 @@ from global_glyph_promotion import (
     GLOBAL_PROMOTION_OUTBOX_FILE,
     assert_project_actual_readable,
     direct_visual_project_transaction,
+    post_commit_recovery_plan_from_results,
     direct_visual_intents,
     enqueue_promotion_intents,
 )
@@ -1976,7 +1977,7 @@ def apply_direct_visual_actual_batch(
         all_intents.extend(intents)
         prepared.append((decision, reading, checked, admissions))
     results = []
-    with direct_visual_project_transaction(root):
+    with direct_visual_project_transaction(root) as bind_recovery_plan:
         if initialize_evidence is not None:
             initialize_evidence()
         for decision, reading, checked, admissions in prepared:
@@ -1992,6 +1993,7 @@ def apply_direct_visual_actual_batch(
                 "group_snapshot": group.get("group_snapshot", ""),
                 "global_admissions": admissions,
             })
+        bind_recovery_plan(post_commit_recovery_plan_from_results(results))
         enqueue_promotion_intents(root, all_intents)
         acknowledgement = acknowledge() if acknowledge else {}
     return {

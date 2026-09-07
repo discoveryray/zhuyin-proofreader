@@ -4,6 +4,7 @@ import base64
 import hashlib
 import json
 import os
+import re
 import threading
 from contextlib import contextmanager
 from pathlib import Path
@@ -13,6 +14,7 @@ from uuid import uuid4
 import fitz
 
 import global_exact_glyph_library as library
+from occurrence_ledger import canonical_bopomofo
 from cff_zhuyin_decoder import CFFZhuyinInspector
 from export_pdf_text_diagnostics import (
     TrueTypeGlyphInspector, build_font_lookup, resolve_font, normalize_basefont,
@@ -238,15 +240,62 @@ def _restore_staging(root, packed):
         _write_json(path, current)
 
 
+def validate_post_commit_recovery_plan(value):
+    plan = library._exact_fields(value, (
+        "schema_version", "affected_occurrence_ids", "checked_postconditions",
+    ), "post-commit recovery plan")
+    if plan["schema_version"] != "1.0":
+        raise library.GlobalLibraryValidationError("invalid recovery plan version")
+    def identity(value, pattern):
+        if not isinstance(value, str) or re.fullmatch(pattern, value) is None:
+            raise library.GlobalLibraryValidationError("malformed recovery identity")
+        return value
+    affected = plan["affected_occurrence_ids"]
+    checked = plan["checked_postconditions"]
+    if not isinstance(affected, list) or not isinstance(checked, list):
+        raise library.GlobalLibraryValidationError("recovery plan lists required")
+    for oid in affected:
+        identity(oid, r"occ_[0-9a-f]{64}")
+    if affected != sorted(set(affected)):
+        raise library.GlobalLibraryValidationError("noncanonical/duplicate affected IDs")
+    conditions = []
+    for value in checked:
+        condition = library._exact_fields(value, ("group_id", "occurrence_id", "reading"), "checked postcondition")
+        identity(condition["group_id"], r"agr_[0-9a-f]{24}")
+        identity(condition["occurrence_id"], r"occ_[0-9a-f]{64}")
+        reading = condition["reading"]
+        if not isinstance(reading, str) or not reading or canonical_bopomofo(reading) != reading:
+            raise library.GlobalLibraryValidationError("noncanonical recovery reading")
+        conditions.append(dict(condition))
+    ids = [item["occurrence_id"] for item in conditions]
+    if ids != sorted(set(ids)) or not set(ids).issubset(affected):
+        raise library.GlobalLibraryValidationError("duplicate/unsorted/unaffected checked postconditions")
+    return {"schema_version": "1.0", "affected_occurrence_ids": list(affected),
+            "checked_postconditions": conditions}
+
+
+def post_commit_recovery_plan_from_results(results):
+    affected, conditions = set(), []
+    for item in results:
+        affected.update(item.get("affected_occurrence_ids") or item.get("target_occurrence_ids") or [])
+        for oid in item["verified_occurrence_ids"]:
+            conditions.append({"group_id": item["group_id"], "occurrence_id": oid, "reading": item["reading"]})
+            affected.add(oid)
+    return validate_post_commit_recovery_plan({
+        "schema_version": "1.0", "affected_occurrence_ids": sorted(affected),
+        "checked_postconditions": sorted(conditions, key=lambda item: item["occurrence_id"]),
+    })
+
+
 def _validated_project_journal(raw):
     journal = library._exact_fields(_json(raw), (
-        "schema_version", "state", "files", "staging", "transaction_id", "previous_refresh_token",
+        "schema_version", "state", "files", "staging", "transaction_id", "recovery_plan",
     ), "project transaction")
     if journal["schema_version"] != "1.0" or journal["state"] not in {"PREPARED", "COMMITTED"}:
         raise library.GlobalLibraryValidationError("invalid project transaction contract")
     library._sha256_text(journal["transaction_id"], "project transaction ID")
-    if journal["previous_refresh_token"] is not None:
-        library._sha256_text(journal["previous_refresh_token"], "previous refresh token")
+    if journal["state"] == "COMMITTED" or journal["recovery_plan"] is not None:
+        validate_post_commit_recovery_plan(journal["recovery_plan"])
     files = library._exact_fields(journal["files"], PROJECT_FILES, "transaction files")
     for value in files.values():
         _unpacked(value)
@@ -270,14 +319,7 @@ def recover_project_actual_transaction(root: Path):
             else:
                 _atomic_bytes(target, raw)
         _restore_staging(root, journal["staging"])
-        if journal["previous_refresh_token"] is None:
-            path.unlink()
-        else:
-            # A failed newer correction must not erase an older committed refresh.
-            journal["state"] = "COMMITTED"
-            journal["transaction_id"] = journal["previous_refresh_token"]
-            journal["previous_refresh_token"] = None
-            _write_json(path, journal)
+        path.unlink()
     return state
 
 
@@ -298,6 +340,17 @@ def project_refresh_token(root: Path):
     if journal["state"] != "COMMITTED":
         raise library.GlobalLibraryValidationError("project actual transaction is incomplete")
     return journal["transaction_id"]
+
+
+def committed_project_recovery(root: Path):
+    """Read the strict durable plan without mutating operational files."""
+    path = Path(root) / PROJECT_TRANSACTION_FILE
+    if not path.exists():
+        return None
+    journal = _validated_project_journal(path.read_bytes())
+    if journal["state"] != "COMMITTED":
+        raise library.GlobalLibraryValidationError("project actual transaction is incomplete")
+    return journal["transaction_id"], journal["recovery_plan"]
 
 
 def assert_project_actual_readable(root: Path):
@@ -325,19 +378,25 @@ def direct_visual_project_transaction(root: Path):
     root = Path(root)
     with project_delivery_lock(root):
         recover_project_actual_transaction(root)
+        if project_refresh_token(root) is not None:
+            raise library.GlobalLibraryValidationError("finish committed project recovery before a new actual transaction")
         load_promotion_outbox(root)  # malformed outbox fails before project writes
         journal = {
             "schema_version": "1.0", "state": "PREPARED",
             "transaction_id": hashlib.sha256(uuid4().bytes).hexdigest(),
-            "previous_refresh_token": project_refresh_token(root),
+            "recovery_plan": None,
             "files": {name: _packed((root / name).read_bytes() if (root / name).exists() else None)
                       for name in PROJECT_FILES},
             "staging": _packed((root / STAGING_FILE).read_bytes() if (root / STAGING_FILE).exists() else None),
         }
         path = root / PROJECT_TRANSACTION_FILE
         _write_json(path, journal)
+        def bind_recovery_plan(plan):
+            journal["recovery_plan"] = validate_post_commit_recovery_plan(plan)
         try:
-            yield
+            yield bind_recovery_plan
+            validate_post_commit_recovery_plan(journal["recovery_plan"])
+            _write_json(path, journal)  # plan durable before COMMITTED publication
             journal["state"] = "COMMITTED"
             _write_json(path, journal)
         except BaseException:

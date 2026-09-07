@@ -134,7 +134,7 @@ NO_ACTUAL_PENDING_MESSAGE = (
 
 from global_glyph_promotion import (
     deliver_pending_promotion_outbox, project_refresh_token, acknowledge_project_refresh,
-    recover_pending_project_actual_write,
+    recover_pending_project_actual_write, committed_project_recovery, project_delivery_lock,
 )
 
 
@@ -188,7 +188,71 @@ def _deliver_after_actual_commit(output_dir, result):
         ) from exc
 
 
+def recover_committed_actual_project(output_dir: Path, *, acknowledge: bool = True):
+    """Explicit restart recovery; staging is never reapplied here.
+
+    The single-correction caller defers acknowledgement until its additional
+    target postcondition succeeds. Explicit restart recovery acknowledges here.
+    """
+    output_dir = Path(output_dir)
+    root = project_actual_evidence_root(output_dir)
+    recover_pending_project_actual_write(root)
+    if committed_project_recovery(root) is None:
+        return None
+    with project_delivery_lock(root):
+        pending = committed_project_recovery(root)
+        if pending is None:
+            return None
+        token, plan = pending
+        result = {"project_actual_commit": "COMMITTED", "project_refresh": "NOT_STARTED",
+                  "global_promotion_delivery": {"status": "NOT_ATTEMPTED"},
+                  "affected_occurrence_ids": plan["affected_occurrence_ids"],
+                  "recovery_plan": plan, "project_refresh_token": token}
+        phase, removed = "global_promotion_delivery", None
+        try:
+            result["global_promotion_delivery"] = deliver_pending_promotion_outbox(root)
+            phase = "reload_current_ledger"
+            manifest = json_load_strict(output_dir / "校對工作階段.json")
+            validate_manifest_integrity(manifest)
+            validate_output_artifact_hashes(manifest)
+            ledger = materialize_ledger(manifest, load_or_initialize_db(output_dir))
+            phase = "clear_actual_dependent_events"
+            removed = _clear_actual_dependent_events(output_dir, ledger, set(plan["affected_occurrence_ids"]))
+            phase = "refresh_actual_project"
+            report = refresh_actual_project(output_dir)
+            phase = "post_refresh_actual_verification"
+            manifest = json_load_strict(output_dir / "校對工作階段.json")
+            validate_manifest_integrity(manifest)
+            validate_output_artifact_hashes(manifest)
+            refreshed = materialize_ledger(manifest, load_or_initialize_db(output_dir))
+            _verify_manual_actual_batch_postconditions(refreshed, plan["checked_postconditions"])
+            phase = "acknowledge_project_refresh"
+            if acknowledge:
+                acknowledge_project_refresh(root, token)
+        except Exception as exc:
+            raise ManualActualPostApplyError(
+                phase, exc, batch_result=result, cleared_event_count=removed,
+            ) from exc
+        result.update(project_refresh="SUCCESS", cleared_actual_dependent_event_count=removed,
+                      refresh_performed=True, refresh_report=str(report),
+                      postcondition_checked_occurrence_ids=[item["occurrence_id"] for item in plan["checked_postconditions"]])
+        return result
+
+
+def refresh_actual_with_recovery(output_dir: Path) -> Path:
+    recovered = recover_committed_actual_project(output_dir)
+    if recovered is None:
+        return refresh_actual_project(output_dir)
+    print("actual recovery: COMMITTED; Global: " + recovered["global_promotion_delivery"]["status"]
+          + "; project refresh: SUCCESS", flush=True)
+    return Path(recovered["refresh_report"])
+
+
 def _finish_direct_actual_commit(output_dir, ledger, result, *, refresh=True, acknowledge=True):
+    if committed_project_recovery(project_actual_evidence_root(output_dir)) is not None:
+        recovered = recover_committed_actual_project(output_dir, acknowledge=acknowledge)
+        result.update(recovered)
+        return recovered["cleared_actual_dependent_event_count"], Path(recovered["refresh_report"])
     _deliver_after_actual_commit(output_dir, result)
     group_results = result.get("group_results", result.get("results", []))
     affected = {
@@ -248,7 +312,7 @@ class ManualActualPostApplyError(RuntimeError):
             )
         else:
             recovery = (
-                "可在排除錯誤後使用既有 --refresh-actual／refresh_actual_project() 恢復；"
+                "可在排除錯誤後使用 --refresh-actual／refresh_actual_with_recovery() 恢復；"
                 "不要重新套用已 acknowledgement 的 staging。"
             )
         super().__init__(
@@ -3597,6 +3661,8 @@ def apply_staged_manual_actual_corrections(output_dir: Path) -> dict[str, Any]:
     validate_manifest_integrity(manifest)
     validate_output_artifact_hashes(manifest)
     recover_pending_project_actual_write(project_actual_evidence_root(output_dir))
+    if committed_project_recovery(project_actual_evidence_root(output_dir)) is not None:
+        return recover_committed_actual_project(output_dir)
     db = load_or_initialize_db(output_dir)
     pre_refresh_ledger = materialize_ledger(manifest, db)
     actual_root = project_actual_evidence_root(output_dir)
@@ -3614,6 +3680,8 @@ def apply_staged_manual_actual_corrections(output_dir: Path) -> dict[str, Any]:
         ))
     else:
         batch_result = dict(apply_staged_manual_actual_batch(actual_root, live_groups))
+    if committed_project_recovery(actual_root) is not None:
+        return {**batch_result, **recover_committed_actual_project(output_dir)}
     _deliver_after_actual_commit(output_dir, batch_result)
     if (int(batch_result.get("applied_group_count") or 0) == 0
             and not batch_result.get("project_refresh_token")):
@@ -4260,7 +4328,7 @@ def main():
         if args.import_actual_gpt:
             n,removed,report=import_actual_gpt_decisions(outdir,Path(args.import_actual_gpt)); print(f"匯入 actual {n} 組；撤銷 {removed} 筆依賴舊 actual 的人工事件。\n{report}"); return 0
         if args.refresh_actual:
-            print(refresh_actual_project(outdir)); return 0
+            print(refresh_actual_with_recovery(outdir)); return 0
         if args.export_gpt:
             print(export_pending_for_gpt(outdir)); return 0
         if args.import_gpt:

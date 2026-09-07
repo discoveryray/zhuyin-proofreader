@@ -33,7 +33,7 @@ def intent(index=1, reading="ㄅ", *, identity=None, **overrides):
         "reading": reading, "source_project_id": f"project-{index}",
         "source_pdf_sha256": sha(f"pdf-{index}"),
         "source_font_program_sha256": sha(f"font-{index}"),
-        "source_occurrence_id": f"occ-{index}", "source_review_id": f"review-{index}",
+        "source_occurrence_id": "occ_" + sha(f"occ-{index}"), "source_review_id": f"review-{index}",
         "decision_snapshot_sha256": sha(f"decision-{index}"),
     }
     source.update(overrides)
@@ -109,7 +109,7 @@ class GlobalPromotionTests(unittest.TestCase):
             ("source_project_id", "project-1"),
             ("source_pdf_sha256", sha("pdf-1")),
             ("source_font_program_sha256", sha("font-1")),
-            ("source_occurrence_id", "occ-1"),
+            ("source_occurrence_id", "occ_" + sha("occ-1")),
             ("source_review_id", "review-1"),
         ):
             with self.subTest(axis=axis):
@@ -321,26 +321,23 @@ class OutboxTests(unittest.TestCase):
         self.root.mkdir()
         self.repo = library.GlobalExactGlyphRepository.resolved(Path(self.temp.name) / "global")
 
-    def test_refresh_marker_survives_delivery_and_failed_newer_transaction(self):
-        with promotion.direct_visual_project_transaction(self.root):
+    def test_refresh_marker_survives_delivery_and_blocks_newer_transaction(self):
+        with promotion.direct_visual_project_transaction(self.root) as bind:
+            bind({"schema_version": "1.0", "affected_occurrence_ids": [], "checked_postconditions": []})
             promotion.enqueue_promotion_intents(self.root, [intent()])
         token = promotion.project_refresh_token(self.root)
         self.assertEqual(promotion.deliver_pending_promotion_outbox(self.root, self.repo)["status"], "DELIVERED")
-        self.assertEqual(promotion.project_refresh_token(self.root), token)
-        with self.assertRaises(RuntimeError):
+        before = (self.root / promotion.PROJECT_TRANSACTION_FILE).read_bytes()
+        with self.assertRaises(library.GlobalLibraryValidationError):
             with promotion.direct_visual_project_transaction(self.root):
-                promotion.enqueue_promotion_intents(self.root, [intent(2)])
-                raise RuntimeError("later correction failed")
-        self.assertEqual(promotion.project_refresh_token(self.root), token)
-        with promotion.direct_visual_project_transaction(self.root):
-            promotion.enqueue_promotion_intents(self.root, [intent(2)])
-        with self.assertRaises(library.GlobalLibraryIntentConflictError):
-            promotion.acknowledge_project_refresh(self.root, token)
-        promotion.acknowledge_project_refresh(self.root, promotion.project_refresh_token(self.root))
+                self.fail("new transaction must not start")
+        self.assertEqual((self.root / promotion.PROJECT_TRANSACTION_FILE).read_bytes(), before)
+        promotion.acknowledge_project_refresh(self.root, token)
         self.assertIsNone(promotion.project_refresh_token(self.root))
 
     def test_prepared_and_malformed_journal_read_paths_fail_without_mutation(self):
-        with promotion.direct_visual_project_transaction(self.root):
+        with promotion.direct_visual_project_transaction(self.root) as bind:
+            bind({"schema_version": "1.0", "affected_occurrence_ids": [], "checked_postconditions": []})
             with self.assertRaises(library.GlobalLibraryValidationError):
                 review.validate_dynamic_actual_evidence(self.root)
             self.assertFalse((self.root / promotion.PROJECT_FILES[0]).exists())
@@ -395,7 +392,8 @@ class OutboxTests(unittest.TestCase):
         self.assertEqual({item["status"] for item in promotion.load_promotion_outbox(self.root)["items"]}, {"DELIVERED"})
 
     def test_global_failure_keeps_project_committed_and_pending(self):
-        with promotion.direct_visual_project_transaction(self.root):
+        with promotion.direct_visual_project_transaction(self.root) as bind:
+            bind({"schema_version": "1.0", "affected_occurrence_ids": [], "checked_postconditions": []})
             (self.root / promotion.PROJECT_FILES[0]).write_bytes(b"local correction")
             promotion.enqueue_promotion_intents(self.root, [intent()])
         with patch.object(library, "deliver_global_direct_evidence", side_effect=OSError("locked")):
@@ -410,7 +408,8 @@ class OutboxTests(unittest.TestCase):
         promotion.enqueue_promotion_intents(self.root, [intent()])
         before = {name: (self.root / name).read_bytes() for name in promotion.PROJECT_FILES}
         with self.assertRaisesRegex(RuntimeError, "project failure"):
-            with promotion.direct_visual_project_transaction(self.root):
+            with promotion.direct_visual_project_transaction(self.root) as bind:
+                bind({"schema_version": "1.0", "affected_occurrence_ids": [], "checked_postconditions": []})
                 for name in promotion.PROJECT_FILES[:-1]:
                     (self.root / name).write_bytes(b"after")
                 promotion.enqueue_promotion_intents(self.root, [intent(2)])
@@ -514,7 +513,7 @@ class AdmissionAndProjectIntegrationTests(unittest.TestCase):
         font = synthetic_sfnt([record], font_name_marker=b"same-font")
         digest = hashlib.sha256(record).hexdigest()
         members = [{
-            "occurrence_id": f"occ-{index}", "review_id": f"review-{index}",
+            "occurrence_id": "occ_" + sha(f"occ-{index}"), "review_id": f"review-{index}",
             "pdf": str(self.pdf), "pdf_name": self.pdf.name, "physical_page": 1,
             "char": "字", "x0": 10 + index * 20, "y0": 10, "x1": 20 + index * 20, "y1": 30,
             "actual": "", "actual_evidence": "unresolved", "state": "ACTUAL_DECODE_ERROR",
@@ -556,22 +555,22 @@ class AdmissionAndProjectIntegrationTests(unittest.TestCase):
         member["source_record"] = {"TTF字形SHA256": identity["glyph_sha256"],
                                    "font_xref": xref, "注音元件ID": char[1]}
         group = review.build_actual_group_for_entry([member], member)
-        items, admissions = promotion.direct_visual_intents(group, "ㄅ", ["occ-0"], self.context)
+        items, admissions = promotion.direct_visual_intents(group, "ㄅ", ["occ_" + sha("occ-0")], self.context)
         self.assertEqual(len(items), 1, admissions)
         group["members"][0]["x0"] += 20
-        items, admissions = promotion.direct_visual_intents(group, "ㄅ", ["occ-0"], self.context)
+        items, admissions = promotion.direct_visual_intents(group, "ㄅ", ["occ_" + sha("occ-0")], self.context)
         self.assertEqual(items, [])
         self.assertIn("UNPROVABLE", admissions[0]["reason"])
 
     def test_only_checked_current_ttf_creates_deterministic_intents(self):
         group, font = self.group()
         with patch.object(promotion.fitz, "open", return_value=FakeDocument(font)):
-            first, admissions = promotion.direct_visual_intents(group, "ㄅ", ["occ-0", "occ-1"], self.context)
-            second, _ = promotion.direct_visual_intents(group, "ㄅ", ["occ-0", "occ-1"], self.context)
+            first, admissions = promotion.direct_visual_intents(group, "ㄅ", ["occ_" + sha("occ-0"), "occ_" + sha("occ-1")], self.context)
+            second, _ = promotion.direct_visual_intents(group, "ㄅ", ["occ_" + sha("occ-0"), "occ_" + sha("occ-1")], self.context)
         self.assertEqual(first, second)
         self.assertEqual(len(first), 2)
         self.assertTrue(all(row["status"] == "ELIGIBLE" for row in admissions))
-        self.assertEqual({item["payload"]["evidence"]["source_occurrence_id"] for item in first}, {"occ-0", "occ-1"})
+        self.assertEqual({item["payload"]["evidence"]["source_occurrence_id"] for item in first}, {"occ_" + sha("occ-0"), "occ_" + sha("occ-1")})
         self.assertTrue(all(item["payload"]["evidence"]["source_font_program_sha256"] ==
                             hashlib.sha256(font).hexdigest() for item in first))
         repo = library.GlobalExactGlyphRepository.resolved(self.base / "global")
@@ -586,7 +585,7 @@ class AdmissionAndProjectIntegrationTests(unittest.TestCase):
             root = self.base / str(index)
             with patch.object(promotion.fitz, "open", return_value=FakeDocument(font)):
                 result = review.apply_direct_visual_actual_batch(root, [{
-                    "group": group, "reading": "ㄅ", "checked_occurrence_ids": ["occ-0"], "source": "visual",
+                    "group": group, "reading": "ㄅ", "checked_occurrence_ids": ["occ_" + sha("occ-0")], "source": "visual",
                 }], source_context=self.context)
             self.assertEqual(result["project_actual_commit"], "COMMITTED")
             self.assertEqual(result["group_results"][0]["global_admissions"][0]["status"], "NON_GLOBAL_ELIGIBLE")
@@ -599,12 +598,12 @@ class AdmissionAndProjectIntegrationTests(unittest.TestCase):
         cases[2]["pdfs"][self.pdf.name]["pdf_sha256"] = sha("wrong")
         for context in cases:
             with patch.object(promotion.fitz, "open", return_value=FakeDocument(font)):
-                items, admissions = promotion.direct_visual_intents(group, "ㄅ", ["occ-0"], context)
+                items, admissions = promotion.direct_visual_intents(group, "ㄅ", ["occ_" + sha("occ-0")], context)
             self.assertEqual(items, [])
             self.assertEqual(admissions[0]["status"], "NON_GLOBAL_ELIGIBLE")
         group["members"][0]["source_record"]["font_xref"] = 999
         with patch.object(promotion.fitz, "open", return_value=FakeDocument(font)):
-            items, admissions = promotion.direct_visual_intents(group, "ㄅ", ["occ-0"], self.context)
+            items, admissions = promotion.direct_visual_intents(group, "ㄅ", ["occ_" + sha("occ-0")], self.context)
         self.assertEqual(items, [])
         self.assertIn("FONT_NOT_ON", admissions[0]["reason"])
 
@@ -620,18 +619,18 @@ class AdmissionAndProjectIntegrationTests(unittest.TestCase):
         }
         group = review.build_actual_group_for_entry([member], member)
         with patch.object(promotion.fitz, "open", return_value=FakeDocument(data, "cff", "DFBiaoKaiZhuIn-W5")):
-            items, admissions = promotion.direct_visual_intents(group, "ㄅ", ["occ-0"], self.context)
+            items, admissions = promotion.direct_visual_intents(group, "ㄅ", ["occ_" + sha("occ-0")], self.context)
         self.assertEqual(admissions[0]["status"], "ELIGIBLE")
         other = intent(2, identity=dict(items[0]["payload"]["identity"], style_group="YUAN_W7"))
         self.assertNotEqual(items[0]["payload"]["evidence"]["glyph_id"], other["payload"]["evidence"]["glyph_id"])
         member["source_record"]["CFF整字字形SHA256"] = sha("untrusted workbook")
         with patch.object(promotion.fitz, "open", return_value=FakeDocument(data, "cff", "DFBiaoKaiZhuIn-W5")):
-            items, admissions = promotion.direct_visual_intents(group, "ㄅ", ["occ-0"], self.context)
+            items, admissions = promotion.direct_visual_intents(group, "ㄅ", ["occ_" + sha("occ-0")], self.context)
         self.assertEqual(items, [])
 
     def test_staged_ack_failure_rolls_back_six_and_retains_staging(self):
         group, font = self.group()
-        review.stage_manual_actual_group(self.root, group, "ㄅ", checked_occurrence_ids=["occ-0"], source="visual")
+        review.stage_manual_actual_group(self.root, group, "ㄅ", checked_occurrence_ids=["occ_" + sha("occ-0")], source="visual")
         staging = (self.root / review.MANUAL_ACTUAL_STAGING_FILE).read_bytes()
         with (patch.object(promotion.fitz, "open", return_value=FakeDocument(font)),
               patch.object(review, "remove_staged_manual_actual_groups", side_effect=RuntimeError("ack failure")),
@@ -644,18 +643,18 @@ class AdmissionAndProjectIntegrationTests(unittest.TestCase):
         group, font = self.group()
         with patch.object(promotion.fitz, "open", return_value=FakeDocument(font)):
             result = review.apply_direct_visual_actual_batch(self.root, [{
-                "group": group, "reading": "ㄅ", "checked_occurrence_ids": ["occ-0", "occ-1"],
+                "group": group, "reading": "ㄅ", "checked_occurrence_ids": ["occ_" + sha("occ-0"), "occ_" + sha("occ-1")],
                 "source": "visual",
             }], source_context=self.context)
         self.assertTrue(result["group_results"][0]["propagated_to_group"])
         rows = promotion.load_promotion_outbox(self.root)["items"]
         self.assertEqual(len(rows), 2)
-        self.assertNotIn("occ-2", {row["payload"]["evidence"]["source_occurrence_id"] for row in rows})
+        self.assertNotIn("occ_" + sha("occ-2"), {row["payload"]["evidence"]["source_occurrence_id"] for row in rows})
 
     def test_low_level_unsealed_entry_is_explicitly_excluded(self):
         group, _ = self.group()
         result = review.apply_direct_visual_actual_batch(self.root, [{
-            "group": group, "reading": "ㄅ", "checked_occurrence_ids": ["occ-0"], "source": "legacy caller",
+            "group": group, "reading": "ㄅ", "checked_occurrence_ids": ["occ_" + sha("occ-0")], "source": "legacy caller",
         }])
         admission = result["group_results"][0]["global_admissions"][0]
         self.assertEqual(admission["status"], "NON_GLOBAL_ELIGIBLE")
@@ -664,7 +663,7 @@ class AdmissionAndProjectIntegrationTests(unittest.TestCase):
 
     def test_delivery_failure_does_not_prevent_controller_refresh(self):
         output = self.base / "output"
-        result = {"group_results": [{"affected_occurrence_ids": ["occ-0"]}]}
+        result = {"group_results": [{"affected_occurrence_ids": ["occ_" + sha("occ-0")]}]}
         with (patch.object(pipeline, "deliver_pending_promotion_outbox", return_value={"status": "PENDING_RETRY"}),
               patch.object(pipeline, "_clear_actual_dependent_events", return_value=1) as clear,
               patch.object(pipeline, "refresh_actual_project", return_value=output / "report.xlsx") as refresh):
@@ -682,7 +681,7 @@ class AdmissionAndProjectIntegrationTests(unittest.TestCase):
         promotion.enqueue_promotion_intents(root, [intent()])
         repo = library.GlobalExactGlyphRepository.resolved(self.base / "global")
         original = promotion.deliver_pending_promotion_outbox
-        result = {"group_results": [{"affected_occurrence_ids": ["occ-0"]}]}
+        result = {"group_results": [{"affected_occurrence_ids": ["occ_" + sha("occ-0")]}]}
         with (patch.object(pipeline, "deliver_pending_promotion_outbox", side_effect=lambda root: original(root, repo)),
               patch.object(pipeline, "_clear_actual_dependent_events", return_value=1),
               patch.object(pipeline, "refresh_actual_project", side_effect=RuntimeError("refresh failure")),

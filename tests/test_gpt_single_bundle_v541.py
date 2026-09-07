@@ -56,7 +56,7 @@ class GptSingleBundleV541Tests(unittest.TestCase):
             sp.seal_manifest(manifest)
             (folder / "校對工作階段.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
             entry = {
-                "occurrence_id": "occ1",
+                "occurrence_id": ("occ_" + hashlib.sha256(b"occ1").hexdigest()),
                 "review_id": "rev1",
                 "pdf_name": "a.pdf",
                 "physical_page": 2,
@@ -75,7 +75,7 @@ class GptSingleBundleV541Tests(unittest.TestCase):
             ]
             with csv_path.open("w", encoding="utf-8-sig", newline="") as f:
                 w = csv.DictWriter(f, fieldnames=fields); w.writeheader(); w.writerow({
-                    "occurrence_id": "occ1", "review_id": "rev1", "pdf_name": "a.pdf",
+                    "occurrence_id": ("occ_" + hashlib.sha256(b"occ1").hexdigest()), "review_id": "rev1", "pdf_name": "a.pdf",
                     "physical_page": "2", "char": "蛋", "exported_actual": "ㄊㄢˊ",
                     "exported_actual_evidence_sha256": hashlib.sha256(b"glyph-evidence").hexdigest(),
                     "verified_actual": "ㄉㄢˋ", "visual_confirmation": "Y", "note": "visual only",
@@ -87,11 +87,12 @@ class GptSingleBundleV541Tests(unittest.TestCase):
                 "workbook_schema_version": sp.WORKBOOK_SCHEMA_VERSION,
                 "review_id_schema_version": sp.REVIEW_ID_SCHEMA_VERSION,
             }
-            group = {"group_id": "g1", "members": [entry], "kind": "OCCURRENCE_ONLY", "exact_key": "occ1", "occurrence_count": 1}
+            group = {"group_id": "agr_" + "1" * 24, "members": [entry], "kind": "OCCURRENCE_ONLY", "exact_key": ("occ_" + hashlib.sha256(b"occ1").hexdigest()), "occurrence_count": 1}
             with patch.object(sp, "load_or_initialize_db", return_value={}), \
-                 patch.object(sp, "materialize_ledger", return_value=[entry]), \
+                 patch.object(sp, "materialize_ledger", side_effect=[[entry], [entry], [dict(entry, actual="ㄉㄢˋ")]]), \
                  patch.object(sp, "build_actual_group_for_entry", return_value=group), \
-                 patch.object(sp, "apply_verified_actual_group", return_value={"target_occurrence_ids": ["occ1"]}) as apply_mock, \
+                 patch.object(sp, "apply_verified_actual_group", return_value={"target_occurrence_ids": [entry["occurrence_id"]],
+                                                                           "verified_occurrence_ids": [entry["occurrence_id"]], "reading": "ㄉㄢˋ"}) as apply_mock, \
                  patch.object(sp, "_clear_actual_dependent_events", return_value=0), \
                  patch.object(sp, "refresh_actual_project", return_value=folder / "report.xlsx") as refresh_mock:
                 n, removed, report = sp.import_actual_occurrence_decisions(folder, csv_path, package_meta=meta)
