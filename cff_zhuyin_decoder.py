@@ -251,6 +251,21 @@ class CFFZhuyinInspector:
         self.top.CharStrings[name].draw(pen)
         return pen.value
 
+    def global_exact_identity(self, glyph_id: int):
+        """Canonical complete resolved recording identity, without decoding a reading."""
+        recording = self._recording(glyph_id)
+        if not self.style_group or not recording:
+            raise ValueError("CFF exact identity lacks canonical style or complete recording")
+        identity = canonical_global_exact_identity(
+            CFF_GLYPH_SHA256, self.style_group, cff_glyph_outline_sha256(recording),
+            GLOBAL_ELIGIBLE_COMPLETE_CFF_RECORDING_V1,
+        )
+        return {
+            "kind": identity.kind, "style_group": identity.style_group,
+            "glyph_sha256": identity.glyph_sha256,
+            "eligibility": identity.identity_eligibility,
+        }
+
     def decode(self, glyph_id: int):
         """Decode only evidence physically present in the CFF glyph.
 

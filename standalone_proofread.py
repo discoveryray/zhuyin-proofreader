@@ -94,6 +94,7 @@ from actual_review import (
     build_actual_review_groups,
     build_actual_group_for_entry,
     apply_verified_actual_group,
+    apply_direct_visual_actual_batch,
     export_actual_review_package,
     import_actual_review_workbook,
     ensure_user_evidence_files,
@@ -131,6 +132,93 @@ NO_ACTUAL_PENDING_MESSAGE = (
 )
 
 
+from global_glyph_promotion import (
+    deliver_pending_promotion_outbox, project_refresh_token, acknowledge_project_refresh,
+    recover_pending_project_actual_write,
+)
+
+
+class ActualBundleImportResult(tuple):
+    """Five-value bundle result retaining the actual lane's split status."""
+    def __new__(cls, values, status):
+        result = super().__new__(cls, values)
+        result.status = dict(status)
+        return result
+
+
+class ActualImportResult(tuple):
+    """Backward-compatible three-value import result with truthful split status."""
+    def __new__(cls, count, removed, report, status):
+        result = super().__new__(cls, (count, removed, report))
+        result.status = dict(status)
+        return result
+
+
+def _global_direct_source_context(output_dir, manifest):
+    # Called only after the controller validates the sealed manifest/artifacts.
+    # No expected fields cross this boundary.
+    infos = {str(info.get("pdf_name") or ""): {
+        "pdf": str(info.get("pdf") or ""), "pdf_sha256": info.get("pdf_sha256"),
+    } for info in manifest.get("pdfs", [])}
+    if any(not Path(info["pdf"]).is_file() for info in infos.values()):
+        try:
+            for pdf in _resolve_session_pdfs(output_dir, manifest):
+                if pdf.name in infos:
+                    infos[pdf.name]["pdf"] = str(pdf)
+        except (OSError, ValueError):
+            # Missing bytes produce explicit per-occurrence ineligibility below.
+            pass
+    return {"session_id": manifest.get("session_id"), "pdfs": infos}
+
+
+def _deliver_after_actual_commit(output_dir, result):
+    result.setdefault("project_actual_commit",
+                      "COMMITTED" if result.get("group_results", result.get("results")) else "NO_CHANGES")
+    result["global_promotion_delivery"] = deliver_pending_promotion_outbox(
+        project_actual_evidence_root(output_dir)
+    )
+    result["project_refresh"] = "NOT_STARTED"
+    try:
+        result["project_refresh_token"] = project_refresh_token(project_actual_evidence_root(output_dir))
+        if result["project_refresh_token"]:
+            result["project_actual_commit"] = "COMMITTED"
+    except Exception as exc:
+        raise ManualActualPostApplyError(
+            "project_refresh_recovery", exc, batch_result=result, cleared_event_count=None,
+        ) from exc
+
+
+def _finish_direct_actual_commit(output_dir, ledger, result, *, refresh=True, acknowledge=True):
+    _deliver_after_actual_commit(output_dir, result)
+    group_results = result.get("group_results", result.get("results", []))
+    affected = {
+        oid for item in group_results
+        for oid in (item.get("affected_occurrence_ids") or item.get("target_occurrence_ids") or [])
+        if oid
+    }
+    removed = None
+    phase = "clear_actual_dependent_events"
+    try:
+        removed = _clear_actual_dependent_events(output_dir, ledger, affected)
+        phase = "refresh_actual_project"
+        if refresh or result.get("project_refresh_token"):
+            report = refresh_actual_project(output_dir)
+            result["project_refresh"] = "SUCCESS"
+            phase = "acknowledge_project_refresh"
+            if acknowledge:
+                acknowledge_project_refresh(
+                    project_actual_evidence_root(output_dir), result.get("project_refresh_token"),
+                )
+        else:
+            report = Path(output_dir) / "注音校對_最終報告.xlsx"
+            result["project_refresh"] = "NOT_REQUIRED"
+        return removed, report
+    except Exception as exc:
+        raise ManualActualPostApplyError(
+            phase, exc, batch_result=result, cleared_event_count=removed,
+        ) from exc
+
+
 class ManualActualPostApplyError(RuntimeError):
     """Authoritative actual committed, but a later project step did not finish."""
 
@@ -145,6 +233,13 @@ class ManualActualPostApplyError(RuntimeError):
         self.phase = str(phase)
         self.cause = cause
         self.batch_result = dict(batch_result)
+        self.batch_result["project_actual_commit"] = "COMMITTED"
+        self.batch_result["project_refresh"] = "FAILED"
+        self.project_actual_commit = "COMMITTED"
+        self.global_promotion_delivery = self.batch_result.get(
+            "global_promotion_delivery", {"status": "NOT_ATTEMPTED"}
+        )
+        self.project_refresh = "FAILED"
         self.cleared_event_count = cleared_event_count
         if self.phase == "clear_actual_dependent_events":
             recovery = (
@@ -198,6 +293,7 @@ ACTUAL_DECODER_SOURCE_FILES = [
     "actual_review.py",
     "exact_glyph_identity.py",
     "global_exact_glyph_library.py",
+    "global_glyph_promotion.py",
 ]
 
 DECISION_SEED = Path(__file__).with_name("校對判定記憶.json")
@@ -1180,6 +1276,7 @@ def import_actual_occurrence_decisions(output_dir: Path, csv_path: Path, *, pack
     validate_manifest_integrity(manifest)
     validate_output_artifact_hashes(manifest)
     _validate_gpt_bundle_metadata(package_meta, manifest)
+    recover_pending_project_actual_write(project_actual_evidence_root(output_dir))
     db = load_or_initialize_db(output_dir)
     ledger = materialize_ledger(manifest, db)
     by_occ = {str(e.get("occurrence_id") or ""): e for e in ledger}
@@ -1266,50 +1363,36 @@ def import_actual_occurrence_decisions(output_dir: Path, csv_path: Path, *, pack
     if errors:
         raise ValueError("GPT actual occurrence 匯入整批拒絕；未寫入任何一列：\n" + "\n".join(errors[:100]))
 
-    root = initialize_project_actual_evidence(output_dir, Path(__file__).resolve().parent)
-    dynamic_names = [OCCURRENCE_OVERRIDE_FILE, USER_GLYF_FILE, USER_CFF_FILE, GLYPH_CONFLICT_FILE, GLYPH_PROVENANCE_FILE]
-    backups = {root / name: (root / name).read_bytes() if (root / name).exists() else None for name in dynamic_names}
-    results = []
-    try:
-        for slot in staged_by_group.values():
-            results.append(apply_verified_actual_group(
-                root,
-                slot["group"],
-                slot["reading"],
-                checked_occurrence_ids=slot["ids"],
-                source="GPT 判定包 actual 原頁視覺覆核",
-                note="；".join(slot["notes"]) or "GPT 判定包：actual 僅由原頁可見注音判定",
-            ))
-    except Exception:
-        for path, data in backups.items():
-            if data is None:
-                if path.exists():
-                    path.unlink()
-            else:
-                path.write_bytes(data)
-        raise
-
-    affected = {oid for item in results for oid in (item.get("affected_occurrence_ids") or item.get("target_occurrence_ids") or []) if oid}
-    removed = _clear_actual_dependent_events(output_dir, ledger, affected)
+    root = project_actual_evidence_root(output_dir)
+    transaction_result = apply_direct_visual_actual_batch(
+        root,
+        [{"group": slot["group"], "reading": slot["reading"],
+          "checked_occurrence_ids": slot["ids"], "source": "GPT 判定包 actual 原頁視覺覆核",
+          "note": "；".join(slot["notes"]) or "GPT 判定包：actual 僅由原頁可見注音判定"}
+         for slot in staged_by_group.values()],
+        source_context=_global_direct_source_context(output_dir, manifest),
+        apply_function=apply_verified_actual_group,
+        initialize_evidence=lambda: initialize_project_actual_evidence(output_dir),
+    )
+    results = transaction_result["group_results"]
+    removed, report = _finish_direct_actual_commit(
+        output_dir, ledger, transaction_result, refresh=bool(results),
+    )
     if already_applied_ids:
         print(
             f"  GPT actual 判定包重試：{len(already_applied_ids)} 筆 current actual 已等於 verified_actual；"
             "視為前次已安全套用。",
             flush=True,
         )
-    if results:
-        report = refresh_actual_project(output_dir)
-    else:
-        # A previous bundle attempt may already have completed the expensive
-        # actual refresh and then failed in the expected phase.  Re-importing the
-        # same bundle should continue directly from expected instead of decoding
-        # the same PDFs again.
-        report = output_dir / "注音校對_最終報告.xlsx"
-        if not report.exists():
+    if not results and not report.exists():
+        try:
             report = generate_report(output_dir, manifest, db)
-        if already_applied_ids:
-            print("  actual 階段已在前次完成；略過重解碼，直接續跑 expected 階段。", flush=True)
-    return len(rows), removed, report
+        except Exception as exc:
+            raise ManualActualPostApplyError(
+                "report_recovery", exc, batch_result=transaction_result, cleared_event_count=removed,
+            ) from exc
+    return ActualImportResult(len(rows), removed, report, transaction_result)
+
 
 
 def import_gpt_decision_bundle(output_dir: Path, bundle: Path) -> tuple[int, int, int, int, Path]:
@@ -1342,11 +1425,14 @@ def import_gpt_decision_bundle(output_dir: Path, bundle: Path) -> tuple[int, int
                 # Fail before actual mutation if the expected workbook is already
                 # invalid for this printed occurrence/context or source version.
                 import_gpt_decisions(output_dir, expected_path, dry_run=True)
-            actual_n, removed, report = import_actual_occurrence_decisions(output_dir, actual_csv, package_meta=meta)
+            actual_result = import_actual_occurrence_decisions(output_dir, actual_csv, package_meta=meta)
+            actual_n, removed, report = actual_result
             expected_n = skipped = 0
             if expected_path is not None:
                 expected_n, skipped, report = import_gpt_decisions(output_dir, expected_path)
-            return actual_n, removed, expected_n, skipped, report
+            return ActualBundleImportResult(
+                (actual_n, removed, expected_n, skipped, report), getattr(actual_result, "status", {}),
+            )
 
 
 def current_pending_state_counts(output_dir: Path) -> dict[str, int]:
@@ -3308,24 +3394,21 @@ def import_actual_gpt_decisions(output_dir: Path, xlsx: Path) -> tuple[int, int,
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
     validate_output_artifact_hashes(manifest)
+    recover_pending_project_actual_write(project_actual_evidence_root(output_dir))
     db = load_or_initialize_db(output_dir)
     ledger = materialize_ledger(manifest, db)
     groups = build_actual_review_groups(ledger)
     result = import_actual_review_workbook(
-        initialize_project_actual_evidence(output_dir, Path(__file__).resolve().parent),
+        project_actual_evidence_root(output_dir),
         Path(xlsx),
         groups,
         expected_metadata=_session_metadata_for_actual(manifest),
+        source_context=_global_direct_source_context(output_dir, manifest),
+        initialize_evidence=lambda: initialize_project_actual_evidence(output_dir),
     )
-    occurrence_ids = {
-        oid
-        for item in result.get("results", [])
-        for oid in (item.get("affected_occurrence_ids") or item.get("target_occurrence_ids") or [])
-        if oid
-    }
-    removed = _clear_actual_dependent_events(output_dir, ledger, occurrence_ids)
-    report = refresh_actual_project(output_dir)
-    return int(result.get("imported_groups") or 0), removed, report
+    removed, report = _finish_direct_actual_commit(output_dir, ledger, result)
+    return ActualImportResult(int(result.get("imported_groups") or 0), removed, report, result)
+
 
 
 def apply_manual_actual_correction(
@@ -3340,62 +3423,76 @@ def apply_manual_actual_correction(
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
     validate_output_artifact_hashes(manifest)
+    recover_pending_project_actual_write(project_actual_evidence_root(output_dir))
     db = load_or_initialize_db(output_dir)
     ledger = materialize_ledger(manifest, db)
     entry = next((row for row in ledger if str(row.get("review_id") or "") == str(review_id)), None)
     if entry is None:
         raise ValueError("找不到目前 review_id；請重新開啟人工校對畫面")
     group = build_actual_group_for_entry(ledger, entry)
-    result = apply_verified_actual_group(
-        initialize_project_actual_evidence(output_dir, Path(__file__).resolve().parent),
-        group,
-        reading,
-        checked_occurrence_ids=checked_occurrence_ids,
-        source="人工 GUI actual 視覺確認",
-        note=note,
+    checked = list(checked_occurrence_ids) if checked_occurrence_ids else [entry["occurrence_id"]]
+    transaction_result = apply_direct_visual_actual_batch(
+        project_actual_evidence_root(output_dir),
+        [{"group": group, "reading": reading, "checked_occurrence_ids": checked,
+          "source": "人工 GUI actual 視覺確認", "note": note}],
+        source_context=_global_direct_source_context(output_dir, manifest),
+        apply_function=apply_verified_actual_group,
+        initialize_evidence=lambda: initialize_project_actual_evidence(output_dir),
     )
-    affected = set(result.get("affected_occurrence_ids") or result.get("target_occurrence_ids") or [])
-    _clear_actual_dependent_events(output_dir, ledger, affected)
-    report = refresh_actual_project(output_dir)
+    removed, report = _finish_direct_actual_commit(
+        output_dir, ledger, transaction_result, acknowledge=False,
+    )
+    result = dict(transaction_result["group_results"][0])
+    for key in ("project_actual_commit", "global_promotion_delivery", "project_refresh"):
+        result[key] = transaction_result[key]
 
     # Hard postcondition: a visual actual correction is not considered applied
     # merely because the refresh command completed.  The rebuilt ledger must
     # show the submitted actual at the same occurrence; otherwise surface a
     # deterministic error instead of silently leaving the same review card.
-    refreshed_manifest = json_load_strict(output_dir / "校對工作階段.json")
-    refreshed_db = load_or_initialize_db(output_dir)
-    refreshed_ledger = materialize_ledger(refreshed_manifest, refreshed_db)
-    target_occurrence_id = str(entry.get("occurrence_id") or "")
-    refreshed_entry = next(
-        (row for row in refreshed_ledger if str(row.get("occurrence_id") or "") == target_occurrence_id),
-        None,
-    )
-    if refreshed_entry is None:
-        # Defensive fallback for a future identity-schema migration: coordinates
-        # plus PDF/page/character are still occurrence-scoped and auditable.
-        def same_location(row):
-            if str(row.get("pdf_name") or "") != str(entry.get("pdf_name") or ""):
-                return False
-            if str(row.get("char") or "") != str(entry.get("char") or ""):
-                return False
-            if int(row.get("physical_page") or 0) != int(entry.get("physical_page") or 0):
-                return False
-            try:
-                return abs(float(row.get("x0") or 0) - float(entry.get("x0") or 0)) <= 0.8 and abs(float(row.get("y0") or 0) - float(entry.get("y0") or 0)) <= 0.8
-            except Exception:
-                return False
-        refreshed_entry = next((row for row in refreshed_ledger if same_location(row)), None)
-    wanted = canonical_bopomofo(reading)
-    observed = canonical_bopomofo((refreshed_entry or {}).get("actual"))
-    if refreshed_entry is None or not wanted or observed != wanted:
-        raise ValueError(
-            "actual 視覺修正已寫入，但重新解碼後未套用到目標位置；"
-            f"要求={wanted or reading}，重解結果={observed or '未辨識'}。"
-            "程式已停止把此筆視為完成，請使用 v5.5.x 的 occurrence 匹配修正後再試。"
+    try:
+        refreshed_manifest = json_load_strict(output_dir / "校對工作階段.json")
+        refreshed_db = load_or_initialize_db(output_dir)
+        refreshed_ledger = materialize_ledger(refreshed_manifest, refreshed_db)
+        target_occurrence_id = str(entry.get("occurrence_id") or "")
+        refreshed_entry = next(
+            (row for row in refreshed_ledger if str(row.get("occurrence_id") or "") == target_occurrence_id),
+            None,
         )
-    result["post_actual"] = observed
-    result["post_state"] = str(refreshed_entry.get("state") or "")
-    result["resolved_from_pending"] = result["post_state"] not in NON_TERMINAL_STATES
+        if refreshed_entry is None:
+            # Defensive fallback for a future identity-schema migration: coordinates
+            # plus PDF/page/character are still occurrence-scoped and auditable.
+            def same_location(row):
+                if str(row.get("pdf_name") or "") != str(entry.get("pdf_name") or ""):
+                    return False
+                if str(row.get("char") or "") != str(entry.get("char") or ""):
+                    return False
+                if int(row.get("physical_page") or 0) != int(entry.get("physical_page") or 0):
+                    return False
+                try:
+                    return abs(float(row.get("x0") or 0) - float(entry.get("x0") or 0)) <= 0.8 and abs(float(row.get("y0") or 0) - float(entry.get("y0") or 0)) <= 0.8
+                except Exception:
+                    return False
+            refreshed_entry = next((row for row in refreshed_ledger if same_location(row)), None)
+        wanted = canonical_bopomofo(reading)
+        observed = canonical_bopomofo((refreshed_entry or {}).get("actual"))
+        if refreshed_entry is None or not wanted or observed != wanted:
+            raise ValueError(
+                "actual 視覺修正已寫入，但重新解碼後未套用到目標位置；"
+                f"要求={wanted or reading}，重解結果={observed or '未辨識'}。"
+                "程式已停止把此筆視為完成，請使用 v5.5.x 的 occurrence 匹配修正後再試。"
+            )
+        result["post_actual"] = observed
+        result["post_state"] = str(refreshed_entry.get("state") or "")
+        result["resolved_from_pending"] = result["post_state"] not in NON_TERMINAL_STATES
+        acknowledge_project_refresh(
+            project_actual_evidence_root(output_dir), transaction_result.get("project_refresh_token"),
+        )
+    except Exception as exc:
+        raise ManualActualPostApplyError(
+            "post_refresh_actual_verification", exc, batch_result=transaction_result,
+            cleared_event_count=removed,
+        ) from exc
     return result, report
 
 
@@ -3499,6 +3596,7 @@ def apply_staged_manual_actual_corrections(output_dir: Path) -> dict[str, Any]:
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
     validate_output_artifact_hashes(manifest)
+    recover_pending_project_actual_write(project_actual_evidence_root(output_dir))
     db = load_or_initialize_db(output_dir)
     pre_refresh_ledger = materialize_ledger(manifest, db)
     actual_root = project_actual_evidence_root(output_dir)
@@ -3509,8 +3607,16 @@ def apply_staged_manual_actual_corrections(output_dir: Path) -> dict[str, Any]:
         frozen_staged_decisions,
     )
 
-    batch_result = dict(apply_staged_manual_actual_batch(actual_root, live_groups))
-    if int(batch_result.get("applied_group_count") or 0) == 0:
+    if frozen_staged_decisions:
+        batch_result = dict(apply_staged_manual_actual_batch(
+            actual_root, live_groups,
+            source_context=_global_direct_source_context(output_dir, manifest),
+        ))
+    else:
+        batch_result = dict(apply_staged_manual_actual_batch(actual_root, live_groups))
+    _deliver_after_actual_commit(output_dir, batch_result)
+    if (int(batch_result.get("applied_group_count") or 0) == 0
+            and not batch_result.get("project_refresh_token")):
         return {
             **batch_result,
             "cleared_actual_dependent_event_count": 0,
@@ -3573,6 +3679,14 @@ def apply_staged_manual_actual_corrections(output_dir: Path) -> dict[str, Any]:
             cleared_event_count=cleared_event_count,
         ) from exc
 
+    try:
+        acknowledge_project_refresh(actual_root, batch_result.get("project_refresh_token"))
+    except Exception as exc:
+        raise ManualActualPostApplyError(
+            "acknowledge_project_refresh", exc, batch_result=batch_result,
+            cleared_event_count=cleared_event_count,
+        ) from exc
+    batch_result["project_refresh"] = "SUCCESS"
     return {
         **batch_result,
         "cleared_actual_dependent_event_count": int(cleared_event_count),

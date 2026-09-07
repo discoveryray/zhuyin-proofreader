@@ -48,6 +48,7 @@ ACTUAL_DECODER_SOURCE_FILES = [
     "cff_unseen_family_bootstrap.py", "ttf_zhuyin_shape_decoder.py", "ttf_symbol_recombination.py",
     "cff_zero_map_batch.py", "occurrence_ledger.py", "actual_review.py", "exact_glyph_identity.py",
     "global_exact_glyph_library.py",
+    "global_glyph_promotion.py",
 ]
 GLOBAL_TTF_SOURCE_LABEL = "Global exact TTF glyf SHA-256"
 GLOBAL_CFF_SOURCE_LABEL = "Global exact CFF（樣式群組 + 完整字形 SHA-256）"
