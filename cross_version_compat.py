@@ -4,6 +4,11 @@ import hashlib
 import json
 from typing import Any, Mapping
 
+from global_exact_glyph_library import (
+    GLOBAL_EXACT_PER_PDF_SCOPE_MODE,
+    canonical_global_exact_glyph_evidence_hashes,
+)
+
 
 # These epochs are semantic compatibility boundaries for result-affecting
 # algorithms.  They are not tool versions, source hashes, or release counters.
@@ -24,6 +29,7 @@ FINGERPRINT_COMPATIBILITY_REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
         "pdf_sha256",
         "actual_asset_hashes",
         "dynamic_actual_evidence_hashes",
+        "global_exact_glyph_evidence_hashes",
     ),
     "expected": (
         "fingerprint_schema_version",
@@ -269,6 +275,23 @@ def _compatibility_contract_matches(
     adapted = _adapt_stored_fingerprint_contract(stored_fingerprint, stored, current, chain=chain)
     if adapted is None:
         return False
+    if chain == "actual":
+        try:
+            stored_global = canonical_global_exact_glyph_evidence_hashes(
+                adapted.get("global_exact_glyph_evidence_hashes")
+            )
+            current_global = canonical_global_exact_glyph_evidence_hashes(
+                current.get("global_exact_glyph_evidence_hashes")
+            )
+        except Exception:
+            return False
+        # Provisional metadata exists only during a decode and is never a cache
+        # compatibility claim, even if two provisional payloads happen to match.
+        if (
+            stored_global["scope_mode"] != GLOBAL_EXACT_PER_PDF_SCOPE_MODE
+            or current_global["scope_mode"] != GLOBAL_EXACT_PER_PDF_SCOPE_MODE
+        ):
+            return False
     for key in required_keys:
         if key not in adapted or key not in current:
             return False

@@ -6,6 +6,7 @@ import json
 import multiprocessing
 import sqlite3
 import tempfile
+import threading
 import unittest
 from dataclasses import FrozenInstanceError, replace
 from pathlib import Path
@@ -2209,12 +2210,11 @@ class GlobalLibraryArchitectureBoundaryTests(unittest.TestCase):
         }
         self.assertFalse({column for column in columns if "expected" in column.lower()})
 
-    def test_decoder_pipeline_project_review_and_gui_do_not_import_global_store(self):
+    def test_phase3_actual_read_paths_import_global_store_but_gui_does_not(self):
         for name in (
             "export_zhuyin_readings.py",
             "standalone_proofread.py",
             "actual_review.py",
-            "review_gui.py",
         ):
             with self.subTest(file=name):
                 tree = ast.parse((ROOT / name).read_text(encoding="utf-8"))
@@ -2229,9 +2229,16 @@ class GlobalLibraryArchitectureBoundaryTests(unittest.TestCase):
                     if isinstance(node, ast.Import)
                     for alias in node.names
                 )
-                self.assertNotIn("global_exact_glyph_library", imports)
+                self.assertIn("global_exact_glyph_library", imports)
+        gui_tree = ast.parse((ROOT / "review_gui.py").read_text(encoding="utf-8"))
+        gui_imports = {
+            node.module
+            for node in ast.walk(gui_tree)
+            if isinstance(node, ast.ImportFrom) and node.module
+        }
+        self.assertNotIn("global_exact_glyph_library", gui_imports)
 
-    def test_no_global_fingerprint_source_roster_policy_schema_or_epoch_change(self):
+    def test_phase3_global_fingerprint_source_roster_policy_schema_and_epochs(self):
         def assigned_source_list(path: Path) -> list[str]:
             tree = ast.parse(path.read_text(encoding="utf-8"))
             assignment = next(
@@ -2248,19 +2255,19 @@ class GlobalLibraryArchitectureBoundaryTests(unittest.TestCase):
         exported = assigned_source_list(ROOT / "export_zhuyin_readings.py")
         pipeline = assigned_source_list(ROOT / "standalone_proofread.py")
         self.assertEqual(exported, pipeline)
-        self.assertNotIn("global_exact_glyph_library.py", exported)
-        self.assertEqual(runtime_source_validation.ACTUAL_FINGERPRINT_SCHEMA_VERSION, "2.9.0")
+        self.assertIn("global_exact_glyph_library.py", exported)
+        self.assertEqual(runtime_source_validation.ACTUAL_FINGERPRINT_SCHEMA_VERSION, "3.0.0")
         self.assertEqual(runtime_source_validation.EXPECTED_FINGERPRINT_SCHEMA_VERSION, "2.7.0")
         self.assertEqual(cross_version_compat.ACTUAL_DECODER_SEMANTICS_EPOCH, "1")
         self.assertEqual(cross_version_compat.EXPECTED_RESOLVER_SEMANTICS_EPOCH, "1")
-        self.assertNotIn(
-            "global_exact_glyph_subset",
+        self.assertIn(
+            "global_exact_glyph_evidence_hashes",
             cross_version_compat.FINGERPRINT_COMPATIBILITY_REQUIRED_KEYS["actual"],
         )
-        self.assertNotIn("global", json.dumps(
-            cross_version_compat.FINGERPRINT_COMPATIBILITY_REQUIRED_KEYS,
-            sort_keys=True,
-        ))
+        self.assertNotIn(
+            "global_exact_glyph_evidence_hashes",
+            cross_version_compat.FINGERPRINT_COMPATIBILITY_REQUIRED_KEYS["expected"],
+        )
 
     def test_global_store_is_dynamic_not_runtime_asset_and_no_project_outbox_exists(self):
         manifest = json.loads((ROOT / "runtime_asset_manifest.json").read_text(encoding="utf-8"))
@@ -2269,7 +2276,7 @@ class GlobalLibraryArchitectureBoundaryTests(unittest.TestCase):
         self.assertNotIn("global_exact_glyph_library.py", serialized)
         self.assertFalse((ROOT / "_專案證據" / "actual" / "global_exact_glyph_promotion_outbox.json").exists())
 
-    def test_cff_eligibility_constant_is_non_behavioral_contract_only(self):
+    def test_cff_eligibility_constant_remains_exact_style_bound_contract(self):
         self.assertEqual(
             GLOBAL_ELIGIBLE_COMPLETE_CFF_RECORDING_V1,
             "GLOBAL_ELIGIBLE_COMPLETE_CFF_RECORDING_V1",
@@ -2281,6 +2288,68 @@ class GlobalLibraryArchitectureBoundaryTests(unittest.TestCase):
             GLOBAL_ELIGIBLE_COMPLETE_CFF_RECORDING_V1,
         )
         self.assertEqual(cff.style_group, "KAICHU_MD")
+
+
+class Phase3ImmutableSnapshotConsistencyTests(unittest.TestCase):
+    def test_mid_session_database_change_cannot_mix_fingerprint_and_decoder_snapshots(self):
+        with _temporary_root() as directory:
+            root = Path(directory)
+            repository = _repo(root)
+            repository.initialize()
+            identity = _ttf_identity(SHA_A)
+
+            snapshot_a = repository.load_snapshot()
+            initial_component = library.global_exact_glyph_evidence_hashes(
+                snapshot_a,
+                (identity,),
+            )
+            initial_decode = library.resolve_exact_glyph_reuse(snapshot_a, identity)
+            self.assertEqual(initial_decode.global_effective_state, library.ABSENT)
+            self.assertEqual(initial_decode.reading, "")
+
+            begin_write = threading.Event()
+            write_finished = threading.Event()
+            writer_errors: list[BaseException] = []
+
+            def writer() -> None:
+                try:
+                    if not begin_write.wait(timeout=5):
+                        raise AssertionError("snapshot consistency writer was not released")
+                    # This fixture helper opens a separate SQLite connection and
+                    # promotes X from logically ABSENT to VERIFIED_GLOBAL.
+                    _insert_verified_fixture(root, sha256=SHA_A, reading="ㄅ")
+                except BaseException as exc:  # surfaced deterministically below
+                    writer_errors.append(exc)
+                finally:
+                    write_finished.set()
+
+            thread = threading.Thread(target=writer, name="phase3-global-writer")
+            thread.start()
+            begin_write.set()
+            self.assertTrue(write_finished.wait(timeout=10))
+            thread.join(timeout=5)
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(writer_errors, [])
+
+            # The same run retains snapshot A for decoder and final metadata,
+            # even though the on-disk database is now snapshot B.
+            final_decode_same_run = library.resolve_exact_glyph_reuse(snapshot_a, identity)
+            final_component_same_run = library.global_exact_glyph_evidence_hashes(
+                snapshot_a,
+                (identity,),
+            )
+            self.assertEqual(final_decode_same_run, initial_decode)
+            self.assertEqual(final_component_same_run, initial_component)
+
+            snapshot_b = repository.load_snapshot()
+            next_decode = library.resolve_exact_glyph_reuse(snapshot_b, identity)
+            next_component = library.global_exact_glyph_evidence_hashes(
+                snapshot_b,
+                (identity,),
+            )
+            self.assertEqual(next_decode.reading, "ㄅ")
+            self.assertEqual(next_decode.global_effective_state, library.VERIFIED_GLOBAL)
+            self.assertNotEqual(next_component, initial_component)
 
 
 if __name__ == "__main__":

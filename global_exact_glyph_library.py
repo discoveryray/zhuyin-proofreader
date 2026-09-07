@@ -29,6 +29,7 @@ GLOBAL_LIBRARY_SQLITE_USER_VERSION = 1
 GLOBAL_IDENTITY_CONTRACT_VERSION = "1.0"
 GLOBAL_PROMOTION_POLICY_VERSION = "1.0"
 GLOBAL_SOURCE_EVIDENCE_ID_SCHEMA_VERSION = "1.0"
+GLOBAL_EXACT_DEPENDENCY_CONTRACT_VERSION = "1.0"
 GLOBAL_LIBRARY_FILENAME = "library.sqlite3"
 GLOBAL_LIBRARY_DEFAULT_BUSY_TIMEOUT_MS = 500
 GLOBAL_LIBRARY_DEFAULT_WRITE_RETRY_LIMIT = 1
@@ -46,6 +47,19 @@ VERIFIED_GLOBAL = "VERIFIED_GLOBAL"
 QUARANTINED_CONFLICT = "QUARANTINED_CONFLICT"
 CANDIDATE = "CANDIDATE"
 PROMOTION_READY = "PROMOTION_READY"
+
+GLOBAL_EXACT_PER_PDF_SCOPE_MODE = "per_pdf_exact_identity_v1"
+GLOBAL_EXACT_PROVISIONAL_SCOPE_MODE = "provisional_unsealed_v1"
+GLOBAL_EXACT_NO_CONFLICT = "NO_CONFLICT"
+GLOBAL_EXACT_EVIDENCE_HASH_KEYS = (
+    "dependency_contract_version",
+    "identity_contract_version",
+    "promotion_policy_version",
+    "scope_mode",
+    "ttf_subset_sha256",
+    "cff_subset_sha256",
+    "conflict_subset_sha256",
+)
 
 DIRECT_VISUAL_ACTUAL = "DIRECT_VISUAL_ACTUAL"
 LEGACY_PROJECT_CANDIDATE = "LEGACY_PROJECT_CANDIDATE"
@@ -239,6 +253,23 @@ class LogicalSubsetDigest:
     rows: tuple[LogicalSubsetRow, ...]
     canonical_json: str
     sha256: str
+
+
+@dataclass(frozen=True)
+class ExactGlyphReuseResolution:
+    """Read-only exact-evidence decision for one canonical glyph identity.
+
+    Project/global/static inputs are compared before any nominal precedence is
+    applied.  A disagreement or quarantine suppresses every exact donor while
+    leaving the caller free to continue through independently gated decoders.
+    """
+
+    reading: str
+    sources: tuple[str, ...]
+    conflict: bool
+    conflicting_readings: tuple[str, ...]
+    global_effective_state: str
+    global_conflicting_readings: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -1684,6 +1715,178 @@ def canonical_logical_subset_digest(
         rows=tuple(rows),
         canonical_json=canonical_json,
         sha256=hashlib.sha256(canonical_json.encode("utf-8")).hexdigest(),
+    )
+
+
+def canonical_global_exact_glyph_evidence_hashes(value: Mapping[str, Any]) -> dict[str, str]:
+    """Validate the fixed Phase-3 per-PDF global dependency component."""
+    if not isinstance(value, Mapping):
+        raise GlobalLibraryValidationError("global exact evidence hashes 必須是 mapping")
+    missing = [key for key in GLOBAL_EXACT_EVIDENCE_HASH_KEYS if key not in value]
+    unexpected = sorted(set(value) - set(GLOBAL_EXACT_EVIDENCE_HASH_KEYS))
+    if missing:
+        raise GlobalLibraryValidationError(f"global exact evidence hashes 缺少欄位：{missing}")
+    if unexpected:
+        raise GlobalLibraryValidationError(f"global exact evidence hashes 含未知欄位：{unexpected}")
+    result = {
+        "dependency_contract_version": _strict_text(
+            value.get("dependency_contract_version"),
+            "dependency_contract_version",
+        ),
+        "identity_contract_version": _strict_text(
+            value.get("identity_contract_version"),
+            "identity_contract_version",
+        ),
+        "promotion_policy_version": _strict_text(
+            value.get("promotion_policy_version"),
+            "promotion_policy_version",
+        ),
+        "scope_mode": _strict_text(value.get("scope_mode"), "scope_mode"),
+        "ttf_subset_sha256": _sha256_text(value.get("ttf_subset_sha256"), "ttf_subset_sha256"),
+        "cff_subset_sha256": _sha256_text(value.get("cff_subset_sha256"), "cff_subset_sha256"),
+        "conflict_subset_sha256": _sha256_text(
+            value.get("conflict_subset_sha256"),
+            "conflict_subset_sha256",
+        ),
+    }
+    if result["dependency_contract_version"] != GLOBAL_EXACT_DEPENDENCY_CONTRACT_VERSION:
+        raise GlobalLibraryValidationError("global exact dependency contract version 不相容")
+    if result["identity_contract_version"] != GLOBAL_IDENTITY_CONTRACT_VERSION:
+        raise GlobalLibraryValidationError("global exact identity contract version 不相容")
+    if result["promotion_policy_version"] != GLOBAL_PROMOTION_POLICY_VERSION:
+        raise GlobalLibraryValidationError("global exact promotion policy version 不相容")
+    if result["scope_mode"] not in {
+        GLOBAL_EXACT_PER_PDF_SCOPE_MODE,
+        GLOBAL_EXACT_PROVISIONAL_SCOPE_MODE,
+    }:
+        raise GlobalLibraryValidationError("global exact dependency scope_mode 不支援")
+    return result
+
+
+def global_exact_glyph_evidence_hashes(
+    snapshot: GlobalExactGlyphSnapshot,
+    dependencies: Iterable[GlobalExactGlyphIdentity | Mapping[str, Any]] | None,
+) -> dict[str, str]:
+    """Hash only one PDF's effective logical global exact dependencies.
+
+    ``None`` is an intentionally non-reusable provisional roster used before a
+    new/legacy workbook has been decoded.  A real empty roster remains distinct
+    through ``scope_mode``.  No database bytes, path, generation, timestamps,
+    provenance, notes, revisions, or source counts participate.
+    """
+    if dependencies is None:
+        requested: tuple[GlobalExactGlyphIdentity | Mapping[str, Any], ...] = ()
+        scope_mode = GLOBAL_EXACT_PROVISIONAL_SCOPE_MODE
+    else:
+        if isinstance(dependencies, (str, bytes, Mapping)):
+            raise GlobalLibraryValidationError("global exact dependencies 必須是 identity iterable")
+        requested = tuple(dependencies)
+        scope_mode = GLOBAL_EXACT_PER_PDF_SCOPE_MODE
+
+    logical = canonical_logical_subset_digest(snapshot, requested)
+    ttf_rows = [row.as_dict() for row in logical.rows if row.requested_identity[0] == TTF_GLYF_SHA256]
+    cff_rows = [row.as_dict() for row in logical.rows if row.requested_identity[0] == CFF_GLYPH_SHA256]
+    conflict_rows = [
+        {
+            "requested_identity": list(row.requested_identity),
+            "identity_eligibility": row.identity_eligibility,
+            "effective_conflict_state": (
+                QUARANTINED_CONFLICT
+                if row.effective_state == QUARANTINED_CONFLICT
+                else GLOBAL_EXACT_NO_CONFLICT
+            ),
+            "conflicting_readings": (
+                list(row.conflicting_readings)
+                if row.effective_state == QUARANTINED_CONFLICT
+                else []
+            ),
+        }
+        for row in logical.rows
+    ]
+    return canonical_global_exact_glyph_evidence_hashes({
+        "dependency_contract_version": GLOBAL_EXACT_DEPENDENCY_CONTRACT_VERSION,
+        "identity_contract_version": snapshot.identity_contract_version,
+        "promotion_policy_version": snapshot.promotion_policy_version,
+        "scope_mode": scope_mode,
+        "ttf_subset_sha256": _canonical_sha256({"rows": ttf_rows}),
+        "cff_subset_sha256": _canonical_sha256({"rows": cff_rows}),
+        "conflict_subset_sha256": _canonical_sha256({"rows": conflict_rows}),
+    })
+
+
+def resolve_exact_glyph_reuse(
+    snapshot: GlobalExactGlyphSnapshot,
+    identity: GlobalExactGlyphIdentity | Mapping[str, Any],
+    *,
+    higher_priority_sources: Iterable[tuple[str, Any]] = (),
+    lower_priority_sources: Iterable[tuple[str, Any]] = (),
+    exact_identity_quarantined: bool = False,
+    quarantine_readings: Iterable[Any] = (),
+) -> ExactGlyphReuseResolution:
+    """Resolve project/global/static exact evidence with a union conflict gate."""
+    logical = canonical_logical_subset_digest(snapshot, (identity,))
+    if len(logical.rows) != 1:
+        raise GlobalLibraryValidationError("exact reuse identity 必須產生一筆 logical row")
+    row = logical.rows[0]
+    if row.identity_eligibility == NON_GLOBAL_ELIGIBLE:
+        raise GlobalLibraryValidationError("NON_GLOBAL_ELIGIBLE identity 不得查詢 global exact reuse")
+
+    ordered_sources: list[tuple[str, str]] = []
+    seen_labels: set[str] = set()
+
+    def append_sources(raw_sources: Iterable[tuple[str, Any]]) -> None:
+        for raw_label, raw_reading in raw_sources:
+            label = _strict_text(raw_label, "exact source label")
+            if label in seen_labels:
+                raise GlobalLibraryValidationError(f"exact source label 重複：{label}")
+            reading = _canonical_reading(raw_reading, f"{label} reading")
+            seen_labels.add(label)
+            ordered_sources.append((label, reading))
+
+    append_sources(higher_priority_sources)
+    if row.effective_state == VERIFIED_GLOBAL:
+        if "GLOBAL_VERIFIED_EXACT" in seen_labels:
+            raise GlobalLibraryValidationError(
+                "GLOBAL_VERIFIED_EXACT label 只能由 immutable global snapshot 提供"
+            )
+        seen_labels.add("GLOBAL_VERIFIED_EXACT")
+        ordered_sources.append(("GLOBAL_VERIFIED_EXACT", row.active_reading))
+    append_sources(lower_priority_sources)
+
+    readings = {reading for _label, reading in ordered_sources}
+    conflict_readings = {
+        _canonical_reading(value, "quarantine reading")
+        for value in quarantine_readings
+    }
+    conflict_readings.update(row.conflicting_readings)
+    conflict_readings.update(readings)
+    conflict = bool(exact_identity_quarantined) or row.effective_state == QUARANTINED_CONFLICT or len(readings) > 1
+    if conflict:
+        return ExactGlyphReuseResolution(
+            reading="",
+            sources=(),
+            conflict=True,
+            conflicting_readings=tuple(sorted(conflict_readings)),
+            global_effective_state=row.effective_state,
+            global_conflicting_readings=row.conflicting_readings,
+        )
+    if not ordered_sources:
+        return ExactGlyphReuseResolution(
+            reading="",
+            sources=(),
+            conflict=False,
+            conflicting_readings=(),
+            global_effective_state=row.effective_state,
+            global_conflicting_readings=(),
+        )
+    reading = ordered_sources[0][1]
+    return ExactGlyphReuseResolution(
+        reading=reading,
+        sources=tuple(label for label, _source_reading in ordered_sources),
+        conflict=False,
+        conflicting_readings=(),
+        global_effective_state=row.effective_state,
+        global_conflicting_readings=(),
     )
 
 

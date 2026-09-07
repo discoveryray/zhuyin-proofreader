@@ -42,13 +42,22 @@ from runtime_regression_gate import (
     validate_regression_execution,
 )
 from runtime_source_validation import (
+    SourceValidationError,
     compute_actual_asset_fingerprint,
     compute_expected_asset_fingerprint,
     rewrite_actual_workbook_fingerprint,
     validate_asset_manifest,
 )
 from cross_version_compat import fingerprint_compatible, schema_compatible
-from actual_review import actual_workbook_dynamic_dependencies
+from actual_review import (
+    actual_workbook_dynamic_dependencies,
+    actual_workbook_global_exact_dependencies,
+)
+from global_exact_glyph_library import (
+    GlobalExactGlyphRepository,
+    GlobalExactGlyphSnapshot,
+    global_exact_glyph_evidence_hashes,
+)
 
 PROGRAM = "注音校對候選比較器"
 VERSION = "5.7.0"
@@ -1672,6 +1681,7 @@ def analyze(
     dynamic_evidence_root: Path | None = None,
     *,
     runtime_root: Path | None = None,
+    global_snapshot: GlobalExactGlyphSnapshot | None = None,
 ):
     root = Path(runtime_root or Path(__file__).resolve().parent).resolve()
     runtime_dict = root / DEFAULT_DICT.name
@@ -1686,6 +1696,13 @@ def analyze(
     source_validation = validate_asset_manifest(root)
     if not source_validation.get("ok"):
         raise ValueError("PIPELINE_BLOCKED：核心資料來源驗證失敗：" + "；".join(source_validation.get("errors") or []))
+    if global_snapshot is None:
+        try:
+            global_snapshot = GlobalExactGlyphRepository.resolved().load_snapshot()
+        except Exception as exc:
+            raise SourceValidationError(
+                f"PIPELINE_BLOCKED：global exact glyph 資料來源驗證失敗：{type(exc).__name__}: {exc}"
+            ) from exc
     expected_fingerprint = compute_expected_asset_fingerprint(
         root,
         source_validation,
@@ -1762,6 +1779,10 @@ def analyze(
             source_validation,
             decoder_version=DECODER_VERSION,
             source_files=ACTUAL_DECODER_SOURCE_FILES,
+            global_exact_glyph_evidence_hashes=global_exact_glyph_evidence_hashes(
+                global_snapshot,
+                actual_workbook_global_exact_dependencies(actual_xlsx, pdf_path),
+            ),
             dynamic_dependencies=actual_workbook_dynamic_dependencies(actual_xlsx),
             dynamic_evidence_root=dynamic_evidence_root,
         )
@@ -2930,12 +2951,27 @@ def main():
         raise SystemExit("PIPELINE_BLOCKED：核心資料來源驗證失敗：" + "；".join(source_validation.get("errors") or []))
     if Path(args.map).resolve() != DEFAULT_MAP.resolve() or Path(args.groups).resolve() != DEFAULT_GROUPS.resolve():
         raise SystemExit("PIPELINE_BLOCKED：v5.2.2 不接受未列入 runtime manifest 的自訂 actual mapping 資產")
+    try:
+        global_snapshot = GlobalExactGlyphRepository.resolved().load_snapshot()
+    except Exception as exc:
+        raise SystemExit(
+            f"PIPELINE_BLOCKED：global exact glyph 資料來源驗證失敗：{type(exc).__name__}: {exc}"
+        ) from exc
+    global_dependencies = (
+        actual_workbook_global_exact_dependencies(actual_out, pdf)
+        if actual_out.exists()
+        else None
+    )
     fingerprint = compute_actual_asset_fingerprint(
         root,
         pdf,
         source_validation,
         decoder_version=DECODER_VERSION,
         source_files=ACTUAL_DECODER_SOURCE_FILES,
+        global_exact_glyph_evidence_hashes=global_exact_glyph_evidence_hashes(
+            global_snapshot,
+            global_dependencies,
+        ),
         dynamic_dependencies=actual_workbook_dynamic_dependencies(actual_out) if actual_out.exists() else None,
     )
 
@@ -2947,19 +2983,43 @@ def main():
             (fingerprint.get("components") or {}).get("pdf_sha256", ""),
         )
     if dec is None:
-        dec = decode(pdf, actual_out, Path(args.map), Path(args.groups), actual_asset_fingerprint=fingerprint)
+        dec = decode(
+            pdf,
+            actual_out,
+            Path(args.map),
+            Path(args.groups),
+            actual_asset_fingerprint=fingerprint,
+            global_snapshot=global_snapshot,
+        )
+        final_global_dependencies = actual_workbook_global_exact_dependencies(actual_out, pdf)
+        if final_global_dependencies is None:
+            raise ValueError("新 actual workbook 無法建立完整 global exact dependency roster")
         final_fingerprint = compute_actual_asset_fingerprint(
             root,
             pdf,
             source_validation,
             decoder_version=DECODER_VERSION,
             source_files=ACTUAL_DECODER_SOURCE_FILES,
+            global_exact_glyph_evidence_hashes=global_exact_glyph_evidence_hashes(
+                global_snapshot,
+                final_global_dependencies,
+            ),
             dynamic_dependencies=actual_workbook_dynamic_dependencies(actual_out),
         )
         if final_fingerprint.get("fingerprint") != fingerprint.get("fingerprint"):
             rewrite_actual_workbook_fingerprint(actual_out, final_fingerprint)
             fingerprint = final_fingerprint
-    result = analyze(actual_out, Path(args.dict), Path(args.rules), report_out, pdf, Path(args.regressions), Path(args.char_overrides), Path(args.context_overrides))
+    result = analyze(
+        actual_out,
+        Path(args.dict),
+        Path(args.rules),
+        report_out,
+        pdf,
+        Path(args.regressions),
+        Path(args.char_overrides),
+        Path(args.context_overrides),
+        global_snapshot=global_snapshot,
+    )
     st = result["stats"]
     message = (
         f"處理結束；是否校對完成須由 occurrence ledger completion gate 判定。\n\n"

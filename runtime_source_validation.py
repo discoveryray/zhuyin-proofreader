@@ -19,10 +19,11 @@ from cross_version_compat import (
     EXPECTED_RESOLVER_SEMANTICS_EPOCH,
     fingerprint_contract_components,
 )
+from global_exact_glyph_library import canonical_global_exact_glyph_evidence_hashes
 
 
 ASSET_MANIFEST_SCHEMA_VERSION = "2.6.2"
-ACTUAL_FINGERPRINT_SCHEMA_VERSION = "2.9.0"
+ACTUAL_FINGERPRINT_SCHEMA_VERSION = "3.0.0"
 EXPECTED_FINGERPRINT_SCHEMA_VERSION = "2.7.0"
 TOOL_VERSION = "5.7.0"
 REQUIRED_ASSET_CHAINS = {
@@ -460,6 +461,7 @@ def compute_actual_asset_fingerprint(
     *,
     decoder_version: str,
     source_files: Iterable[str | Path],
+    global_exact_glyph_evidence_hashes: Mapping[str, Any],
     dynamic_dependencies: Mapping[str, Any] | None = None,
     dynamic_evidence_root: Path | None = None,
 ) -> dict[str, Any]:
@@ -490,6 +492,12 @@ def compute_actual_asset_fingerprint(
         )
     except Exception as exc:
         raise SourceValidationError(f"動態 actual 證據驗證失敗：{exc}") from exc
+    try:
+        global_hashes = canonical_global_exact_glyph_evidence_hashes(
+            global_exact_glyph_evidence_hashes
+        )
+    except Exception as exc:
+        raise SourceValidationError(f"global exact actual 證據驗證失敗：{exc}") from exc
     components = {
         "fingerprint_schema_version": ACTUAL_FINGERPRINT_SCHEMA_VERSION,
         "actual_decoder_semantics_epoch": ACTUAL_DECODER_SEMANTICS_EPOCH,
@@ -499,10 +507,11 @@ def compute_actual_asset_fingerprint(
         "actual_decoder_source_hashes": dict(sorted(source_hashes.items())),
         "actual_asset_hashes": dict(sorted(actual_assets.items())),
         "dynamic_actual_evidence_hashes": dynamic_hashes,
+        "global_exact_glyph_evidence_hashes": global_hashes,
         "dynamic_dependency_mode": "per_pdf_exact_dependency_v1" if dynamic_dependencies is not None else "global_fallback",
         "cff_batch_algorithm_hash": source_hashes.get("cff_zero_map_batch.py", ""),
         "consensus_hash": actual_assets.get("cff_crossfamily_cid_consensus", ""),
-        "reuse_policy": "evidence_assets_v1",
+        "reuse_policy": "evidence_assets_with_global_exact_v1",
     }
     # v5.6: tool version and implementation source hashes remain auditable but
     # no longer invalidate a cache by themselves.  Reuse is keyed to the

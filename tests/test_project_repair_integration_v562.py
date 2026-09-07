@@ -49,6 +49,10 @@ from runtime_source_validation import (  # noqa: E402
     sha256_file,
     validate_asset_manifest,
 )
+from global_exact_glyph_library import (  # noqa: E402
+    GlobalExactGlyphRepository,
+    global_exact_glyph_evidence_hashes,
+)
 
 
 PDF_NAME = "repair-v562-fixture.pdf"
@@ -132,6 +136,20 @@ class ProjectRepairIntegrationV562Tests(unittest.TestCase):
     def setUpClass(cls):
         cls._temporary = tempfile.TemporaryDirectory()
         cls.fixture_root = Path(cls._temporary.name)
+        cls._localapp_patch = patch.dict(
+            os.environ,
+            {"LOCALAPPDATA": str(cls.fixture_root / "LocalAppData")},
+        )
+        cls._localapp_patch.start()
+        cls._global_dependency_patches = [
+            patch.object(proof, "actual_workbook_global_exact_dependencies", return_value=()),
+            patch(
+                "check_pronunciation_candidates.actual_workbook_global_exact_dependencies",
+                return_value=(),
+            ),
+        ]
+        for patcher in cls._global_dependency_patches:
+            patcher.start()
         cls.runtime_root = cls.fixture_root / "runtime-current"
         cls.runtime_root.mkdir()
         cls.pdf_path = cls.fixture_root / PDF_NAME
@@ -168,6 +186,9 @@ class ProjectRepairIntegrationV562Tests(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
+        for patcher in reversed(cls._global_dependency_patches):
+            patcher.stop()
+        cls._localapp_patch.stop()
         cls._temporary.cleanup()
 
     @classmethod
@@ -361,12 +382,17 @@ class ProjectRepairIntegrationV562Tests(unittest.TestCase):
         candidate_dir.mkdir(parents=True)
         dynamic_root = proof.initialize_project_actual_evidence(output, cls.runtime_root)
         dependencies = {"ttf_glyph_sha256": [RELEVANT_GLYPH_SHA], "cff_glyph_keys": []}
+        global_snapshot = GlobalExactGlyphRepository.resolved().load_snapshot()
         fingerprint = compute_actual_asset_fingerprint(
             cls.runtime_root,
             cls.pdf_path,
             validation,
             decoder_version=proof.ACTUAL_DECODER_VERSION,
             source_files=proof.ACTUAL_DECODER_SOURCE_FILES,
+            global_exact_glyph_evidence_hashes=global_exact_glyph_evidence_hashes(
+                global_snapshot,
+                (),
+            ),
             dynamic_dependencies=dependencies,
             dynamic_evidence_root=dynamic_root,
         )
@@ -385,6 +411,7 @@ class ProjectRepairIntegrationV562Tests(unittest.TestCase):
             cls.runtime_root / DEFAULT_CONTEXT_OVERRIDES.name,
             dynamic_root,
             runtime_root=cls.runtime_root,
+            global_snapshot=global_snapshot,
         )
         manifest = proof.collect_manifest(
             [cls.pdf_path],

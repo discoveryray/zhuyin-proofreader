@@ -10,6 +10,17 @@ from cross_version_compat import (
 from runtime_source_validation import compute_actual_asset_fingerprint, compute_expected_asset_fingerprint
 
 
+GLOBAL_EXACT_COMPONENT = {
+    "dependency_contract_version": "1.0",
+    "identity_contract_version": "1.0",
+    "promotion_policy_version": "1.0",
+    "scope_mode": "per_pdf_exact_identity_v1",
+    "ttf_subset_sha256": "1" * 64,
+    "cff_subset_sha256": "2" * 64,
+    "conflict_subset_sha256": "3" * 64,
+}
+
+
 def test_schema_patch_family_is_compatible_but_minor_break_is_not():
     assert schema_compatible("2.6.0", "2.6.9")
     assert not schema_compatible("2.5.9", "2.6.0")
@@ -21,9 +32,9 @@ def test_actual_tool_and_source_code_drift_do_not_change_reuse_fingerprint(tmp_p
     decoder = tmp_path / "decoder.py"
     decoder.write_text("print(1)", encoding="utf-8")
     report = {"ok": True, "manifest_schema_version": "2.6.0", "assets": [{"name": "map", "chain": "actual", "ok": True, "sha256": "1" * 64}]}
-    first = compute_actual_asset_fingerprint(tmp_path, pdf, report, decoder_version="5.5.1", source_files=["decoder.py"])
+    first = compute_actual_asset_fingerprint(tmp_path, pdf, report, decoder_version="5.5.1", source_files=["decoder.py"], global_exact_glyph_evidence_hashes=GLOBAL_EXACT_COMPONENT)
     decoder.write_text("print(2)", encoding="utf-8")
-    second = compute_actual_asset_fingerprint(tmp_path, pdf, report, decoder_version="5.6.0", source_files=["decoder.py"])
+    second = compute_actual_asset_fingerprint(tmp_path, pdf, report, decoder_version="5.6.0", source_files=["decoder.py"], global_exact_glyph_evidence_hashes=GLOBAL_EXACT_COMPONENT)
     assert first["fingerprint"] == second["fingerprint"]
     assert first["components"]["actual_decoder_source_hashes"] != second["components"]["actual_decoder_source_hashes"]
 
@@ -38,7 +49,7 @@ def test_expected_tool_and_source_code_drift_do_not_change_reuse_fingerprint(tmp
     assert first["fingerprint"] == second["fingerprint"]
 
 
-def test_v551_style_actual_components_are_semantically_compatible_with_v56_payload():
+def test_v551_style_actual_components_have_no_adapter_to_v58_phase3_payload():
     old = {
         "fingerprint_schema_version": "2.8.0",
         "pdf_sha256": "a" * 64,
@@ -52,14 +63,15 @@ def test_v551_style_actual_components_are_semantically_compatible_with_v56_paylo
         "fingerprint": "new",
         "components": {
             **old,
-            "fingerprint_schema_version": "2.9.0",
-            "reuse_policy": "evidence_assets_v1",
+            "fingerprint_schema_version": "3.0.0",
+            "reuse_policy": "evidence_assets_with_global_exact_v1",
             "actual_decoder_semantics_epoch": ACTUAL_DECODER_SEMANTICS_EPOCH,
+            "global_exact_glyph_evidence_hashes": GLOBAL_EXACT_COMPONENT,
             "decoder_version": "5.6.0",
             "actual_decoder_source_hashes": {"decoder.py": "9" * 64},
         },
     }
-    assert fingerprint_compatible("old", json.dumps(old), current, chain="actual")
+    assert not fingerprint_compatible("old", json.dumps(old), current, chain="actual")
 
 
 def test_v551_style_expected_components_are_semantically_compatible_with_v56_payload():

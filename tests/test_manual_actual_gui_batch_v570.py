@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import actual_review
+import global_exact_glyph_library as global_library
 import review_gui
 import standalone_proofread as sp
 from actual_review import (
@@ -398,6 +399,20 @@ class ManualActualGuiBatchOrchestrationTests(unittest.TestCase):
                 "regression_gate": {"ok": True},
             })
             reconciliation = SimpleNamespace(ok=True, as_dict=lambda: {"ok": True})
+            snapshot = global_library.GlobalExactGlyphRepository.resolved(
+                base / "absent-global-store"
+            ).load_snapshot()
+            snapshot_repository = SimpleNamespace(
+                load_snapshot=MagicMock(return_value=snapshot)
+            )
+            fingerprint_snapshots = []
+
+            def global_component(snapshot_arg, dependencies):
+                fingerprint_snapshots.append(snapshot_arg)
+                return global_library.global_exact_glyph_evidence_hashes(
+                    snapshot_arg,
+                    dependencies,
+                )
 
             def fingerprint(_root, pdf, *_args, **_kwargs):
                 return {"fingerprint": "fp-" + Path(pdf).name, "components": {}}
@@ -408,12 +423,26 @@ class ManualActualGuiBatchOrchestrationTests(unittest.TestCase):
             def analyze_once(*args, **_kwargs):
                 Path(args[3]).write_bytes(b"new candidate workbook")
 
+            repository_patcher = patch.object(
+                sp.GlobalExactGlyphRepository,
+                "resolved",
+                return_value=snapshot_repository,
+            )
+            repository_patcher.start()
+            self.addCleanup(repository_patcher.stop)
+            component_patcher = patch.object(
+                sp,
+                "global_exact_glyph_evidence_hashes",
+                side_effect=global_component,
+            )
+            component_patcher.start()
+            self.addCleanup(component_patcher.stop)
             with (
                 patch.object(sp, "initialize_project_actual_evidence", return_value=dynamic_root),
                 patch.object(sp, "validate_asset_manifest", return_value=source_validation),
                 patch.object(sp, "load_reuse_baseline_manifest", return_value={"session_id": "session"}),
                 patch.object(sp, "compute_expected_asset_fingerprint", return_value=expected_fingerprint),
-                patch.object(sp, "actual_workbook_dynamic_dependencies", return_value={}),
+                patch.object(sp, "actual_workbook_global_exact_dependencies", return_value=()),
                 patch.object(sp, "compute_actual_asset_fingerprint", side_effect=fingerprint),
                 patch.object(
                     sp,
@@ -449,11 +478,16 @@ class ManualActualGuiBatchOrchestrationTests(unittest.TestCase):
                 )
 
             self.assertEqual(actual_reuse.call_count, 2)
+            snapshot_repository.load_snapshot.assert_called_once_with()
+            self.assertTrue(fingerprint_snapshots)
+            self.assertTrue(all(item is snapshot for item in fingerprint_snapshots))
             decode.assert_called_once()
             self.assertEqual(Path(decode.call_args.args[0]), affected.resolve())
+            self.assertIs(decode.call_args.kwargs["global_snapshot"], snapshot)
             candidate_reuse.assert_called_once()
             analyze.assert_called_once()
             self.assertEqual(Path(analyze.call_args.args[4]), affected.resolve())
+            self.assertIs(analyze.call_args.kwargs["global_snapshot"], snapshot)
             cff_batch.assert_called_once()
             command = cff_batch.call_args.args[0]
             write_index = command.index("--write-only-workbooks")
