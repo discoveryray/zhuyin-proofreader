@@ -38,6 +38,15 @@ from global_exact_glyph_library import (
     canonical_global_exact_identity,
 )
 
+from global_glyph_promotion import (
+    GLOBAL_PROMOTION_OUTBOX_FILE,
+    assert_project_actual_readable,
+    direct_visual_project_transaction,
+    post_commit_recovery_plan_from_results,
+    direct_visual_intents,
+    enqueue_promotion_intents,
+)
+
 ACTUAL_REVIEW_SCHEMA_VERSION = "1.1"
 MANUAL_ACTUAL_STAGING_SCHEMA_VERSION = "1.1"
 LEGACY_MANUAL_ACTUAL_STAGING_SCHEMA_VERSION = "1.0"
@@ -697,7 +706,7 @@ def _snapshot_dynamic_actual_evidence(root: Path) -> dict[Path, bytes | None]:
     root = Path(root)
     return {
         root / name: (root / name).read_bytes() if (root / name).exists() else None
-        for name in _AUTHORITATIVE_DYNAMIC_ACTUAL_FILES
+        for name in (*_AUTHORITATIVE_DYNAMIC_ACTUAL_FILES, GLOBAL_PROMOTION_OUTBOX_FILE)
     }
 
 
@@ -713,6 +722,7 @@ def _restore_dynamic_actual_evidence(backups: Mapping[Path, bytes | None]) -> No
 
 
 def validate_dynamic_actual_evidence(root: Path) -> dict[str, Any]:
+    assert_project_actual_readable(root)
     root = Path(root)
     ensure_user_evidence_files(root)
     result = {"ok": True, "errors": [], "hashes": {}}
@@ -1937,9 +1947,67 @@ def _empty_manual_actual_batch_result() -> dict[str, Any]:
     }
 
 
+def apply_direct_visual_actual_batch(
+    root: Path, decisions: Sequence[Mapping[str, Any]], *,
+    source_context: Mapping[str, Any] | None = None,
+    acknowledge=None, apply_function=None, initialize_evidence=None,
+) -> dict[str, Any]:
+    """Shared project commit; Global delivery belongs to the post-commit controller.
+
+    Low-level callers without a sealed session remain project-local and receive
+    explicit NON_GLOBAL_ELIGIBLE admissions. They cannot synthesize provenance.
+    """
+    if not decisions:
+        return {
+            "group_results": [], "acknowledgement": {},
+            "project_actual_commit": "NO_CHANGES",
+            "global_promotion_delivery": {"status": "NOT_ATTEMPTED"},
+            "project_refresh": "NOT_STARTED",
+        }
+    apply_function = apply_function or apply_verified_actual_group
+    prepared = []
+    all_intents = []
+    for decision in decisions:
+        group = decision["group"]
+        reading = _canon(decision["reading"])
+        if not reading:
+            raise ValueError("invalid direct actual reading")
+        checked = list(decision["checked_occurrence_ids"])
+        intents, admissions = direct_visual_intents(group, reading, checked, source_context)
+        all_intents.extend(intents)
+        prepared.append((decision, reading, checked, admissions))
+    results = []
+    with direct_visual_project_transaction(root) as bind_recovery_plan:
+        if initialize_evidence is not None:
+            initialize_evidence()
+        for decision, reading, checked, admissions in prepared:
+            group = decision["group"]
+            applied = apply_function(
+                root, group, reading, checked_occurrence_ids=checked,
+                source=decision["source"], note=decision.get("note", ""),
+            )
+            if not isinstance(applied, Mapping):
+                raise ValueError("invalid project actual apply result")
+            results.append({
+                **dict(applied), "group_id": group["group_id"],
+                "group_snapshot": group.get("group_snapshot", ""),
+                "global_admissions": admissions,
+            })
+        bind_recovery_plan(post_commit_recovery_plan_from_results(results))
+        enqueue_promotion_intents(root, all_intents)
+        acknowledgement = acknowledge() if acknowledge else {}
+    return {
+        "group_results": results, "acknowledgement": acknowledgement,
+        "project_actual_commit": "COMMITTED",
+        "global_promotion_delivery": {"status": "NOT_ATTEMPTED"},
+        "project_refresh": "NOT_STARTED",
+    }
+
+
 def apply_staged_manual_actual_batch(
     root: Path,
     live_groups: Sequence[Mapping[str, Any]],
+    *, source_context: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Apply one frozen staged-manual-actual queue as a transaction.
 
@@ -1977,47 +2045,31 @@ def apply_staged_manual_actual_batch(
     current_staging = load_manual_actual_staging(root)
     _validate_manual_actual_staging_ack_tokens(current_staging, tokens)
 
-    backups = _snapshot_dynamic_actual_evidence(root)
-    group_results: list[dict[str, Any]] = []
-    affected_occurrence_ids: set[str] = set()
-    reopened_occurrence_ids: set[str] = set()
-    quarantined_group_ids: set[str] = set()
-    try:
-        for staged, live_group in selected:
-            applied = apply_verified_actual_group(
-                root,
-                live_group,
-                staged["reading"],
-                checked_occurrence_ids=staged["checked_occurrence_ids"],
-                source=staged["source"],
-                note=staged["note"],
-            )
-            if not isinstance(applied, Mapping):
-                raise ValueError(
-                    f"manual actual batch apply result 無效：{staged['group_id']}"
-                )
-            item = {
-                **dict(applied),
-                "group_id": staged["group_id"],
-                "group_snapshot": staged["group_snapshot"],
-            }
-            group_results.append(item)
-            affected_occurrence_ids.update(
-                _text(value) for value in (applied.get("affected_occurrence_ids") or []) if _text(value)
-            )
-            reopened_occurrence_ids.update(
-                _text(value) for value in (applied.get("reopened_occurrence_ids") or []) if _text(value)
-            )
-            if applied.get("quarantined") or applied.get("glyph_truth_conflict"):
-                quarantined_group_ids.add(staged["group_id"])
-
-        acknowledgement = remove_staged_manual_actual_groups(root, frozen)
-    except Exception:
-        _restore_dynamic_actual_evidence(backups)
-        raise
+    transaction_result = apply_direct_visual_actual_batch(
+        root,
+        [{"group": live, "reading": staged["reading"],
+          "checked_occurrence_ids": staged["checked_occurrence_ids"],
+          "source": staged["source"], "note": staged["note"]}
+         for staged, live in selected],
+        source_context=source_context,
+        acknowledge=lambda: remove_staged_manual_actual_groups(root, frozen),
+    )
+    group_results = transaction_result["group_results"]
+    acknowledgement = transaction_result["acknowledgement"]
+    affected_occurrence_ids = {
+        str(value) for item in group_results for value in item.get("affected_occurrence_ids", []) if value
+    }
+    reopened_occurrence_ids = {
+        str(value) for item in group_results for value in item.get("reopened_occurrence_ids", []) if value
+    }
+    quarantined_group_ids = {
+        item["group_id"] for item in group_results
+        if item.get("quarantined") or item.get("glyph_truth_conflict")
+    }
 
     affected_ids = sorted(affected_occurrence_ids)
     return {
+        **transaction_result,
         "applied_group_count": len(group_results),
         "group_results": group_results,
         "affected_occurrence_ids": affected_ids,
@@ -2038,6 +2090,8 @@ def import_actual_review_workbook(
     groups: Sequence[Mapping[str, Any]],
     *,
     expected_metadata: Mapping[str, Any],
+    source_context: Mapping[str, Any] | None = None,
+    initialize_evidence=None,
 ) -> dict[str, Any]:
     meta, rows = _load_sheet_rows(Path(xlsx), "actual待判定")
     required_meta = dict(expected_metadata)
@@ -2113,25 +2167,16 @@ def import_actual_review_workbook(
     if errors:
         raise ValueError("actual GPT 匯入整批拒絕；未寫入任何一列：\n" + "\n".join(errors[:100]))
 
-    # v5.5.1: reusable glyph-truth conflicts are no longer batch-fatal.
-    # Occurrence-local visual corrections must still commit; the promotion layer
-    # will quarantine contradictory exact SHA evidence during apply.
-    ensure_user_evidence_files(root)
+    transaction_result = apply_direct_visual_actual_batch(
+        root,
+        [{"group": group, "reading": reading, "checked_occurrence_ids": ids,
+          "source": "GPT actual 視覺證據匯入", "note": note}
+         for group, reading, ids, note in staged],
+        source_context=source_context, initialize_evidence=initialize_evidence,
+    )
+    results = transaction_result["group_results"]
+    return {**transaction_result, "imported_groups": len(results), "results": results}
 
-    # Transactional write: if any late occurrence-level validation fails,
-    # restore all dynamic actual evidence files byte-for-byte.
-    backups = _snapshot_dynamic_actual_evidence(root)
-    results = []
-    try:
-        for group, reading, ids, note in staged:
-            results.append(apply_verified_actual_group(
-                root, group, reading, checked_occurrence_ids=ids,
-                source="GPT actual 視覺證據匯入", note=note,
-            ))
-    except Exception:
-        _restore_dynamic_actual_evidence(backups)
-        raise
-    return {"imported_groups": len(results), "results": results}
 
 
 def load_user_verified_glyf(path: Path) -> dict[str, dict[str, str]]:

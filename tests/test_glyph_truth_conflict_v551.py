@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import tempfile
 from pathlib import Path
 
@@ -18,6 +19,11 @@ from actual_review import (
     load_glyph_truth_quarantine,
     load_user_verified_glyf,
 )
+
+O1 = "occ_" + hashlib.sha256(b"o1").hexdigest()
+O2 = "occ_" + hashlib.sha256(b"o2").hexdigest()
+O3 = "occ_" + hashlib.sha256(b"o3").hexdigest()
+O4 = "occ_" + hashlib.sha256(b"o4").hexdigest()
 
 SHA = "5adfc5e3" + "0" * 56
 
@@ -66,15 +72,15 @@ def test_conflicting_global_truth_does_not_block_occurrence_local_correction():
         pdf = root / "book.pdf"
         make_pdf(pdf)
         members = [
-            entry("o1", "r1", pdf, 40),
-            entry("o2", "r2", pdf, 80),
-            entry("o3", "r3", pdf, 120),
-            entry("o4", "r4", pdf, 160),
+            entry(O1, "r1", pdf, 40),
+            entry(O2, "r2", pdf, 80),
+            entry(O3, "r3", pdf, 120),
+            entry(O4, "r4", pdf, 160),
         ]
         group = build_actual_review_groups(members)[0]
 
         first = apply_verified_actual_group(
-            root, group, "ㄩㄝˋ", checked_occurrence_ids=["o1", "o2"],
+            root, group, "ㄩㄝˋ", checked_occurrence_ids=[O1, O2],
             source="old visual review", note="old truth",
         )
         assert first["learning_level"] == "VERIFIED_EXACT_GLYPH"
@@ -82,14 +88,14 @@ def test_conflicting_global_truth_does_not_block_occurrence_local_correction():
         assert len(read_csv(root / OCCURRENCE_OVERRIDE_FILE)) == 4
 
         second = apply_verified_actual_group(
-            root, group, "ㄌㄜˋ", checked_occurrence_ids=["o1", "o2"],
+            root, group, "ㄌㄜˋ", checked_occurrence_ids=[O1, O2],
             source="new direct visual review", note="new evidence",
         )
         assert second["learning_level"] == "GLYPH_TRUTH_CONFLICT"
         assert second["glyph_truth_conflict"] is True
         assert second["propagated_to_group"] is False
-        assert set(second["reopened_occurrence_ids"]) == {"o3", "o4"}
-        assert set(second["affected_occurrence_ids"]) == {"o1", "o2", "o3", "o4"}
+        assert set(second["reopened_occurrence_ids"]) == {O3, O4}
+        assert set(second["affected_occurrence_ids"]) == {O1, O2, O3, O4}
 
         # Only the newly/directly checked positions remain occurrence-pinned.
         overrides = read_csv(root / OCCURRENCE_OVERRIDE_FILE)
@@ -140,10 +146,10 @@ def test_gpt_import_conflict_is_not_batch_fatal_and_local_override_commits():
         ensure_user_evidence_files(root)
         pdf = root / "book.pdf"
         make_pdf(pdf)
-        members = [entry("o1", "r1", pdf, 40), entry("o2", "r2", pdf, 80), entry("o3", "r3", pdf, 120)]
+        members = [entry(O1, "r1", pdf, 40), entry(O2, "r2", pdf, 80), entry(O3, "r3", pdf, 120)]
         group = build_actual_review_groups(members)[0]
         # Establish the old reusable truth first, including propagated overrides.
-        apply_verified_actual_group(root, group, "ㄩㄝˋ", checked_occurrence_ids=["o1", "o2"], source="old", note="old")
+        apply_verified_actual_group(root, group, "ㄩㄝˋ", checked_occurrence_ids=[O1, O2], source="old", note="old")
 
         meta = {
             "version": "5.5.1",
@@ -170,7 +176,7 @@ def test_gpt_import_conflict_is_not_batch_fatal_and_local_override_commits():
         assert result["imported_groups"] == 1
         item = result["results"][0]
         assert item["learning_level"] == "GLYPH_TRUTH_CONFLICT"
-        assert set(item["reopened_occurrence_ids"]) == {"o3"}
+        assert set(item["reopened_occurrence_ids"]) == {O3}
         overrides = read_csv(root / OCCURRENCE_OVERRIDE_FILE)
         assert len(overrides) == 2
         assert {row["actual_reading"] for row in overrides} == {"ㄌㄜˋ"}

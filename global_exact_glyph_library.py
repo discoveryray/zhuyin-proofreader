@@ -2573,3 +2573,311 @@ def backup_global_exact_glyph_library(
         environ=environ,
         busy_timeout_ms=busy_timeout_ms,
     ).backup(destination)
+
+# Phase 4 write services. These are explicit operations; snapshot/decoder paths
+# never call them. Operational intent/receipt bytes are not decoder evidence.
+GLOBAL_DIRECT_INTENT_SCHEMA_VERSION = "1.0"
+
+
+def _exact_fields(value: Any, fields: Iterable[str], label: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping) or set(value) != set(fields):
+        raise GlobalLibraryValidationError(f"{label}: missing or unknown fields")
+    return dict(value)
+
+
+def make_direct_evidence_intent(
+    identity: Mapping[str, Any], *, reading: str, source_project_id: str,
+    source_pdf_sha256: str, source_font_program_sha256: str,
+    source_occurrence_id: str, source_review_id: str,
+    decision_snapshot_sha256: str,
+) -> dict[str, Any]:
+    raw = _exact_fields(identity, (
+        "kind", "style_group", "glyph_sha256", "identity_eligibility",
+    ), "direct identity")
+    exact = canonical_global_exact_identity(
+        raw["kind"], raw["style_group"], raw["glyph_sha256"], raw["identity_eligibility"],
+    )
+    if raw != {
+        "kind": exact.kind, "style_group": exact.style_group,
+        "glyph_sha256": exact.glyph_sha256, "identity_eligibility": exact.identity_eligibility,
+    }:
+        raise GlobalLibraryValidationError("direct identity is not canonical")
+    glyph_id = compute_global_glyph_id(
+        exact.kind, exact.style_group, exact.glyph_sha256,
+        identity_eligibility=exact.identity_eligibility,
+    )
+    evidence = canonical_source_evidence_id_payload(
+        glyph_id=glyph_id, reading=reading, evidence_class=DIRECT_VISUAL_ACTUAL,
+        source_project_id=source_project_id, source_pdf_sha256=source_pdf_sha256,
+        source_font_program_sha256=source_font_program_sha256,
+        source_occurrence_id=source_occurrence_id, source_review_id=source_review_id,
+        decision_snapshot_sha256=decision_snapshot_sha256, confirmation_channel=PDF_PAGE_VISUAL,
+    )
+    payload = {
+        "schema_version": GLOBAL_DIRECT_INTENT_SCHEMA_VERSION,
+        "promotion_policy_version": GLOBAL_PROMOTION_POLICY_VERSION,
+        "identity": raw, "evidence": evidence,
+    }
+    digest = _canonical_sha256(payload)
+    return {"intent_id": "gpi_" + _canonical_sha256(evidence),
+            "payload_digest": digest, "payload": payload}
+
+
+def canonical_direct_evidence_intent(value: Any) -> dict[str, Any]:
+    item = _exact_fields(value, ("intent_id", "payload_digest", "payload"), "intent")
+    payload = _exact_fields(item["payload"], (
+        "schema_version", "promotion_policy_version", "identity", "evidence",
+    ), "intent payload")
+    if (payload["schema_version"] != GLOBAL_DIRECT_INTENT_SCHEMA_VERSION
+            or payload["promotion_policy_version"] != GLOBAL_PROMOTION_POLICY_VERSION):
+        raise GlobalLibraryValidationError("unsupported direct intent contract")
+    evidence = _exact_fields(payload["evidence"], (
+        "evidence_id_schema_version", "glyph_id", "reading", "evidence_class",
+        "source_project_id", "source_pdf_sha256", "source_font_program_sha256",
+        "source_occurrence_id", "source_review_id", "decision_snapshot_sha256",
+        "confirmation_channel",
+    ), "direct evidence")
+    canonical = make_direct_evidence_intent(
+        payload["identity"], **{key: evidence[key] for key in (
+            "reading", "source_project_id", "source_pdf_sha256", "source_font_program_sha256",
+            "source_occurrence_id", "source_review_id", "decision_snapshot_sha256",
+        )},
+    )
+    if item != canonical:
+        raise GlobalLibraryValidationError("intent ID/payload/evidence is not canonical")
+    return canonical
+
+
+def canonical_direct_evidence_batch(values: Any) -> list[dict[str, Any]]:
+    if not isinstance(values, (list, tuple)):
+        raise GlobalLibraryValidationError("intent batch must be a sequence")
+    result, seen = [], {}
+    for value in values:
+        item = canonical_direct_evidence_intent(value)
+        old = seen.get(item["intent_id"])
+        if old is not None:
+            raise GlobalLibraryIntentConflictError("duplicate intent ID in delivery batch")
+        seen[item["intent_id"]] = item["payload_digest"]
+        result.append(item)
+    return sorted(result, key=lambda item: item["intent_id"])
+
+
+def independent_direct_quorum(rows: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
+    """Choose a deterministic pair with all five independence axes distinct.
+
+    Reuse the repository's project/PDF/font independence algorithm; occurrence
+    and review identity are additional gates, never alternative independence.
+    """
+    direct = sorted(
+        (row for row in rows if row["evidence_class"] == DIRECT_VISUAL_ACTUAL
+         and int(row["counts_toward_global_quorum"]) == 1),
+        key=lambda row: row["evidence_id"],
+    )
+    for index, first in enumerate(direct):
+        for second in direct[index + 1:]:
+            if (first["reading"] == second["reading"]
+                    and first["source_occurrence_id"] != second["source_occurrence_id"]
+                    and first["source_review_id"] != second["source_review_id"]
+                    and _maximum_independent_source_count((first, second)) == 2):
+                return (str(first["evidence_id"]), str(second["evidence_id"]))
+    return ()
+
+
+def _write_provenance(connection, item, event_type, *, approval_id=None):
+    source = item["payload"]["evidence"]
+    event = {
+        "transaction_id": item["intent_id"], "glyph_id": source["glyph_id"],
+        "event_type": event_type, "reading": source["reading"],
+        "evidence_id": _canonical_sha256(source) if event_type == "SOURCE_EVIDENCE_RECORDED" else None,
+        "approval_id": approval_id, "payload_digest": item["payload_digest"],
+    }
+    event["event_id"] = compute_provenance_event_id(**event)
+    event["created_at"] = _utc_now()
+    columns = _REQUIRED_COLUMNS["provenance_event"]
+    connection.execute(
+        "INSERT INTO provenance_event (" + ",".join(columns) + ") VALUES (" +
+        ",".join("?" for _ in columns) + ")", tuple(event[key] for key in columns),
+    )
+
+
+def _revoke_current_approvals(connection, glyph_id):
+    rows = [dict(row) for row in connection.execute(
+        "SELECT * FROM promotion_approval WHERE glyph_id=? AND status=?",
+        (glyph_id, APPROVED),
+    )]
+    for row in rows:
+        args = {key: row[key] for key in (
+            "glyph_id", "reading", "quorum_digest", "promotion_policy_version",
+            "glyph_revision", "approval_source",
+        )}
+        revoked_id = compute_promotion_approval_id(**args, status=REVOKED)
+        if connection.execute(
+            "SELECT 1 FROM promotion_approval WHERE approval_id=?", (revoked_id,),
+        ).fetchone() is not None:
+            continue
+        row.update(approval_id=revoked_id, status=REVOKED, approved_at=_utc_now())
+        columns = _REQUIRED_COLUMNS["promotion_approval"]
+        connection.execute(
+            "INSERT INTO promotion_approval (" + ",".join(columns) + ") VALUES (" +
+            ",".join("?" for _ in columns) + ")", tuple(row[key] for key in columns),
+        )
+
+
+def _ingest_direct_evidence(transaction: GlobalWriteTransaction, item: Mapping[str, Any]) -> bool:
+    connection = transaction._connection
+    payload, now = item["payload"], _utc_now()
+    source = payload["evidence"]
+    glyph_id, evidence_id = source["glyph_id"], _canonical_sha256(source)
+    if connection.execute("SELECT 1 FROM source_evidence WHERE evidence_id=?", (evidence_id,)).fetchone():
+        return False
+    old = connection.execute("SELECT * FROM glyph_truth WHERE glyph_id=?", (glyph_id,)).fetchone()
+    if old is None:
+        transaction.insert_candidate_identity(payload["identity"])
+        _write_provenance(connection, item, "CANDIDATE_CREATED")
+        old = connection.execute("SELECT * FROM glyph_truth WHERE glyph_id=?", (glyph_id,)).fetchone()
+    evidence = {key: value for key, value in source.items() if key != "evidence_id_schema_version"}
+    evidence.update(evidence_id=evidence_id, counts_toward_global_quorum=1,
+                    confirmed_at=now, ingested_at=now)
+    columns = _REQUIRED_COLUMNS["source_evidence"]
+    connection.execute(
+        "INSERT INTO source_evidence (" + ",".join(columns) + ") VALUES (" +
+        ",".join("?" for _ in columns) + ")", tuple(evidence[key] for key in columns),
+    )
+    rows = [dict(row) for row in connection.execute(
+        "SELECT * FROM source_evidence WHERE glyph_id=? ORDER BY evidence_id", (glyph_id,),
+    )]
+    readings = {row["reading"] for row in rows if row["evidence_class"] == DIRECT_VISUAL_ACTUAL}
+    conflict = len(readings) > 1 or old["state"] == QUARANTINED_CONFLICT
+    if conflict:
+        _revoke_current_approvals(connection, glyph_id)
+        opened = connection.execute(
+            "SELECT * FROM glyph_conflict WHERE glyph_id=? AND status=?", (glyph_id, OPEN),
+        ).fetchone()
+        if opened:
+            readings.update(json.loads(opened["conflicting_readings_json"]))
+            conflict_id = compute_glyph_conflict_id(glyph_id, readings, int(opened["opened_generation"]))
+            connection.execute(
+                "UPDATE glyph_conflict SET conflict_id=?, conflicting_readings_json=?, last_event_at=? "
+                "WHERE conflict_id=?",
+                (conflict_id, _canonical_json(sorted(readings)), now, opened["conflict_id"]),
+            )
+        else:
+            generation = transaction.generation + 1
+            conflict_id = compute_glyph_conflict_id(glyph_id, readings, generation)
+            connection.execute(
+                "INSERT INTO glyph_conflict VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)",
+                (conflict_id, glyph_id, OPEN, _canonical_json(sorted(readings)), now, now, generation),
+            )
+        state, active = QUARANTINED_CONFLICT, None
+        _write_provenance(connection, item, "CONFLICT_OPENED")
+    elif old["state"] == VERIFIED_GLOBAL:
+        # Matching source growth is audit-only; preserve the approved revision.
+        state, active = VERIFIED_GLOBAL, old["active_reading"]
+    else:
+        state = PROMOTION_READY if independent_direct_quorum(rows) else CANDIDATE
+        active = None
+    revision = int(old["revision"]) + (0 if state == VERIFIED_GLOBAL else 1)
+    connection.execute(
+        "UPDATE glyph_truth SET state=?, active_reading=?, direct_source_count=?, "
+        "independent_source_count=?, revision=?, updated_at=? WHERE glyph_id=? AND revision=?",
+        (state, active, sum(int(row["counts_toward_global_quorum"]) for row in rows),
+         _maximum_independent_source_count(rows), revision, now, glyph_id, old["revision"]),
+    )
+    _write_provenance(connection, item, "SOURCE_EVIDENCE_RECORDED")
+    return True
+
+
+def deliver_global_direct_evidence(
+    repository: GlobalExactGlyphRepository, intents: Sequence[Mapping[str, Any]],
+) -> tuple[ProcessedIntentReceipt, ...]:
+    """Validate first, explicitly initialize, then commit one all-or-none batch."""
+    batch = canonical_direct_evidence_batch(intents)
+    if not batch:
+        return ()
+    repository.initialize()
+    with repository.write_transaction() as transaction:
+        old_receipts, new_items = {}, []
+        # Check every replay before the first mutation.
+        for item in batch:
+            old = transaction.lookup_processed_intent(item["intent_id"])
+            if old is not None:
+                if old["payload_digest"] != item["payload_digest"]:
+                    raise GlobalLibraryIntentConflictError("same intent ID / different stored payload")
+                old_receipts[item["intent_id"]] = ProcessedIntentReceipt(
+                    old["intent_id"], old["payload_digest"], int(old["committed_generation"]),
+                    old["result_state"], old["receipt_digest"], True,
+                )
+            else:
+                new_items.append(item)
+        changed = {item["intent_id"]: _ingest_direct_evidence(transaction, item) for item in new_items}
+        generation = transaction.bump_generation() if any(changed.values()) else transaction.generation
+        for item in new_items:
+            state = INTENT_COMMITTED if changed[item["intent_id"]] else INTENT_NO_EFFECT
+            digest = transaction.record_processed_intent(
+                intent_id=item["intent_id"], payload_digest=item["payload_digest"],
+                committed_generation=generation, result_state=state,
+            )
+            old_receipts[item["intent_id"]] = ProcessedIntentReceipt(
+                item["intent_id"], item["payload_digest"], generation, state, digest, False,
+            )
+        return tuple(old_receipts[item["intent_id"]] for item in batch)
+
+
+def approve_global_exact_glyph(
+    repository: GlobalExactGlyphRepository, *, glyph_id: str, reading: str,
+    glyph_revision: int, quorum_evidence_ids: Sequence[str], quorum_digest: str,
+    promotion_policy_version: str, approval_source: str,
+) -> dict[str, Any]:
+    """Explicit manual approval; evidence delivery never invokes this service."""
+    glyph_id = _sha256_text(glyph_id, "glyph_id")
+    reading = _canonical_reading(reading)
+    revision = _nonnegative_int(glyph_revision, "glyph_revision")
+    if (promotion_policy_version != GLOBAL_PROMOTION_POLICY_VERSION
+            or approval_source != EXPLICIT_MANUAL_APPROVAL):
+        raise GlobalLibraryValidationError("approval policy/source incompatible")
+    if not isinstance(quorum_evidence_ids, (list, tuple)):
+        raise GlobalLibraryValidationError("quorum roster must be a sequence")
+    ids = [_sha256_text(value, "quorum evidence ID") for value in quorum_evidence_ids]
+    if ids != sorted(set(ids)) or len(ids) < 2:
+        raise GlobalLibraryValidationError("quorum roster must be canonical")
+    if _sha256_text(quorum_digest, "quorum_digest") != compute_quorum_digest(glyph_id, reading, ids):
+        raise GlobalLibraryValidationError("stale quorum digest")
+    with repository.write_transaction() as transaction:
+        connection = transaction._connection
+        glyph = connection.execute("SELECT * FROM glyph_truth WHERE glyph_id=?", (glyph_id,)).fetchone()
+        if glyph is None or glyph["state"] != PROMOTION_READY or int(glyph["revision"]) != revision:
+            raise GlobalLibraryValidationError("stale revision or non-promotion-ready glyph")
+        rows = [dict(row) for row in connection.execute(
+            "SELECT * FROM source_evidence WHERE glyph_id=? AND evidence_class=? ORDER BY evidence_id",
+            (glyph_id, DIRECT_VISUAL_ACTUAL),
+        )]
+        if (ids != [row["evidence_id"] for row in rows]
+                or any(row["reading"] != reading for row in rows)
+                or not independent_direct_quorum(rows)):
+            raise GlobalLibraryValidationError("stale/invalid approval evidence roster or reading")
+        approved_revision = revision + 1
+        approval = {
+            "glyph_id": glyph_id, "reading": reading, "quorum_digest": quorum_digest,
+            "promotion_policy_version": promotion_policy_version, "glyph_revision": approved_revision,
+            "approval_source": approval_source, "status": APPROVED,
+        }
+        approval_id = compute_promotion_approval_id(**approval)
+        approval.update(approval_id=approval_id, quorum_evidence_ids_json=_canonical_json(ids),
+                        approved_at=_utc_now())
+        columns = _REQUIRED_COLUMNS["promotion_approval"]
+        connection.execute(
+            "INSERT INTO promotion_approval (" + ",".join(columns) + ") VALUES (" +
+            ",".join("?" for _ in columns) + ")", tuple(approval[key] for key in columns),
+        )
+        connection.execute(
+            "UPDATE glyph_truth SET state=?, active_reading=?, revision=?, updated_at=? "
+            "WHERE glyph_id=? AND revision=?",
+            (VERIFIED_GLOBAL, reading, approved_revision, _utc_now(), glyph_id, revision),
+        )
+        event = {"intent_id": "approval_" + approval_id, "payload_digest": _canonical_sha256(approval),
+                 "payload": {"evidence": {"glyph_id": glyph_id, "reading": reading}}}
+        _write_provenance(connection, event, "PROMOTION_APPROVED", approval_id=approval_id)
+        _write_provenance(connection, event, "TRUTH_VERIFIED", approval_id=approval_id)
+        generation = transaction.bump_generation()
+        return {"approval_id": approval_id, "glyph_id": glyph_id, "state": VERIFIED_GLOBAL,
+                "glyph_revision": approved_revision, "generation": generation}
