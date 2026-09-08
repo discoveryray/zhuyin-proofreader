@@ -29,6 +29,7 @@ GLOBAL_LIBRARY_SQLITE_USER_VERSION = 1
 GLOBAL_IDENTITY_CONTRACT_VERSION = "1.0"
 GLOBAL_PROMOTION_POLICY_VERSION = "1.0"
 GLOBAL_SOURCE_EVIDENCE_ID_SCHEMA_VERSION = "1.0"
+GLOBAL_MIGRATION_IMPORT_CONTRACT_VERSION = "1.0"
 GLOBAL_EXACT_DEPENDENCY_CONTRACT_VERSION = "1.0"
 GLOBAL_LIBRARY_FILENAME = "library.sqlite3"
 GLOBAL_LIBRARY_DEFAULT_BUSY_TIMEOUT_MS = 500
@@ -588,7 +589,7 @@ def compute_processed_intent_receipt(
     })
 
 
-def compute_migration_import_id(
+def _legacy_v0_migration_import_id(
     *,
     glyph_id: Any,
     reading: Any,
@@ -598,7 +599,7 @@ def compute_migration_import_id(
     old_verification_level: Any,
 ) -> str:
     return _canonical_sha256({
-        "migration_schema_version": GLOBAL_LIBRARY_SCHEMA_VERSION,
+        "migration_schema_version": "1.0",  # Frozen Phase 2 draft algorithm.
         "glyph_id": _sha256_text(glyph_id, "glyph_id"),
         "reading": _canonical_reading(reading),
         "legacy_project_id": _strict_text(legacy_project_id, "legacy_project_id"),
@@ -614,6 +615,33 @@ def compute_migration_import_id(
             old_verification_level,
             "old_verification_level",
         ),
+    })
+
+
+def compute_legacy_row_key(*, glyph_id: Any, reading: Any, old_verification_level: Any) -> str:
+    level = _strict_text(old_verification_level, "old_verification_level")
+    if level not in LEGACY_VERIFICATION_LEVELS:
+        raise GlobalLibraryValidationError("unknown legacy verification level")
+    return _canonical_sha256({
+        "glyph_id": _sha256_text(glyph_id, "glyph_id"),
+        "reading": _canonical_reading(reading), "old_verification_level": level,
+    })
+
+
+def compute_migration_import_id(
+    *, glyph_id: Any, reading: Any, legacy_project_id: Any,
+    legacy_project_sha256: Any, legacy_evidence_sha256: Any, old_verification_level: Any,
+) -> str:
+    return _canonical_sha256({
+        "migration_import_contract_version": GLOBAL_MIGRATION_IMPORT_CONTRACT_VERSION,
+        "glyph_id": _sha256_text(glyph_id, "glyph_id"),
+        "reading": _canonical_reading(reading),
+        "legacy_project_id": _strict_text(legacy_project_id, "legacy_project_id"),
+        "legacy_project_sha256": _sha256_text(legacy_project_sha256, "legacy_project_sha256"),
+        "legacy_evidence_sha256": _sha256_text(legacy_evidence_sha256, "legacy_evidence_sha256"),
+        "old_verification_level": _strict_text(old_verification_level, "old_verification_level"),
+        "legacy_row_key": compute_legacy_row_key(
+            glyph_id=glyph_id, reading=reading, old_verification_level=old_verification_level),
     })
 
 
@@ -1494,6 +1522,8 @@ def _validate_rows(connection: sqlite3.Connection, path: Path) -> dict[str, Any]
         _validate_timestamp(row["processed_at"], "processed_intent.processed_at")
 
     migrations = [dict(row) for row in connection.execute("SELECT * FROM migration_candidate ORDER BY import_id")]
+    migration_by_id = {row["import_id"]: row for row in migrations}
+    intent_by_id = {row["intent_id"]: row for row in intents}
     for row in migrations:
         import_id = _sha256_text(row["import_id"], "migration_candidate.import_id")
         glyph_id = _sha256_text(row["glyph_id"], "migration_candidate.glyph_id")
@@ -1508,15 +1538,57 @@ def _validate_rows(connection: sqlite3.Connection, path: Path) -> dict[str, Any]
         if old_level not in LEGACY_VERIFICATION_LEVELS or status not in MIGRATION_STATUSES:
             raise GlobalLibraryValidationError("migration_candidate enum 未知", path=path)
         _validate_timestamp(row["imported_at"], "migration_candidate.imported_at")
-        if compute_migration_import_id(
+        identity_args = dict(
             glyph_id=glyph_id,
             reading=reading,
             legacy_project_id=row["legacy_project_id"],
             legacy_project_sha256=row["legacy_project_sha256"],
             legacy_evidence_sha256=row["legacy_evidence_sha256"],
             old_verification_level=old_level,
-        ) != import_id:
+        )
+        if import_id not in {compute_migration_import_id(**identity_args),
+                             _legacy_v0_migration_import_id(**identity_args)}:
             raise GlobalLibraryValidationError("migration import_id 無法重算", path=path)
+        if import_id == compute_migration_import_id(**identity_args):
+            # Current imports are complete auditable transactions. The exact
+            # legacy-v0 adapter predates this workflow and requires no receipts.
+            identity = glyphs[glyph_id]["identity"]
+            exact = {key: getattr(identity, key) for key in (
+                "kind", "style_group", "glyph_sha256", "identity_eligibility")}
+            initial_statuses = ((MIGRATION_CONFLICT,) if old_level == QUARANTINED_CONFLICT else
+                                ((MIGRATION_CANDIDATE, MIGRATION_INSUFFICIENT)
+                                 if row["status"] == MIGRATION_CONFLICT else (row["status"],)))
+            digests = {make_migration_intent(
+                exact, **{key: value for key, value in identity_args.items() if key != "glyph_id"},
+                status=status)["payload_digest"] for status in initial_statuses}
+            receipt = intent_by_id.get("gmi_" + import_id)
+            events = [event for event in provenance if event["transaction_id"] == "gmi_" + import_id
+                      and event["event_type"] == "MIGRATION_CANDIDATE_IMPORTED"]
+            if (receipt is None or receipt["payload_digest"] not in digests or
+                    receipt["result_state"] != INTENT_COMMITTED or len(events) != 1 or
+                    events[0]["payload_digest"] != receipt["payload_digest"] or
+                    events[0]["glyph_id"] != glyph_id or events[0]["reading"] != reading or
+                    events[0]["evidence_id"] is not None or events[0]["approval_id"] is not None):
+                raise GlobalLibraryValidationError("migration import/receipt/provenance mismatch", path=path)
+    for item in [*intents, *provenance]:
+        transaction_id = str(item.get("intent_id", item.get("transaction_id", "")))
+        if transaction_id.startswith("gmi_") and transaction_id[4:] not in migration_by_id:
+            raise GlobalLibraryValidationError("orphan migration receipt/provenance", path=path)
+
+    # Legacy readings are safety constraints, never promotion sources. Enforce
+    # this on strict reads too, so a hand-edited DB cannot bypass the write gate.
+    for glyph_id, glyph in glyphs.items():
+        legacy_rows = [row for row in migrations if row["glyph_id"] == glyph_id]
+        readings = direct_readings_by_glyph[glyph_id] | {row["reading"] for row in legacy_rows}
+        if (len(readings) > 1 or any(row["old_verification_level"] == QUARANTINED_CONFLICT
+                                     or row["status"] == MIGRATION_CONFLICT for row in legacy_rows)):
+            if glyph["state"] != QUARANTINED_CONFLICT:
+                raise GlobalLibraryValidationError("migration contradiction requires quarantine", path=path)
+        if glyph["state"] == QUARANTINED_CONFLICT:
+            if not readings.issubset(set(open_conflicts[glyph_id][0])):
+                raise GlobalLibraryValidationError("open conflict omits migration reading", path=path)
+        elif glyph["state"] == VERIFIED_GLOBAL and any(r != glyph["active_reading"] for r in readings):
+            raise GlobalLibraryValidationError("verified truth contradicts migration", path=path)
 
     return {
         "meta": meta,
@@ -2747,6 +2819,8 @@ def _ingest_direct_evidence(transaction: GlobalWriteTransaction, item: Mapping[s
         "SELECT * FROM source_evidence WHERE glyph_id=? ORDER BY evidence_id", (glyph_id,),
     )]
     readings = {row["reading"] for row in rows if row["evidence_class"] == DIRECT_VISUAL_ACTUAL}
+    readings.update(row[0] for row in connection.execute(
+        "SELECT reading FROM migration_candidate WHERE glyph_id=?", (glyph_id,)))
     conflict = len(readings) > 1 or old["state"] == QUARANTINED_CONFLICT
     if conflict:
         _revoke_current_approvals(connection, glyph_id)
@@ -2769,6 +2843,8 @@ def _ingest_direct_evidence(transaction: GlobalWriteTransaction, item: Mapping[s
                 (conflict_id, glyph_id, OPEN, _canonical_json(sorted(readings)), now, now, generation),
             )
         state, active = QUARANTINED_CONFLICT, None
+        connection.execute("UPDATE migration_candidate SET status=? WHERE glyph_id=? AND status<>?",
+                           (MIGRATION_CONFLICT, glyph_id, MIGRATION_CONFLICT))
         _write_provenance(connection, item, "CONFLICT_OPENED")
     elif old["state"] == VERIFIED_GLOBAL:
         # Matching source growth is audit-only; preserve the approved revision.
@@ -2881,3 +2957,166 @@ def approve_global_exact_glyph(
         generation = transaction.bump_generation()
         return {"approval_id": approval_id, "glyph_id": glyph_id, "state": VERIFIED_GLOBAL,
                 "glyph_revision": approved_revision, "generation": generation}
+
+
+def make_migration_intent(identity: Mapping[str, Any], *, reading: str,
+                          legacy_project_id: str, legacy_project_sha256: str,
+                          legacy_evidence_sha256: str, old_verification_level: str,
+                          status: str) -> dict[str, Any]:
+    exact = _exact_fields(identity, ("kind", "style_group", "glyph_sha256", "identity_eligibility"),
+                          "migration identity")
+    canonical = canonical_global_exact_identity(**exact)
+    glyph_id = compute_global_glyph_id(**exact)
+    if exact != {key: getattr(canonical, key) for key in exact}:
+        raise GlobalLibraryValidationError("noncanonical migration identity")
+    args = dict(glyph_id=glyph_id, reading=_canonical_reading(reading),
+                legacy_project_id=_strict_text(legacy_project_id, "legacy_project_id"),
+                legacy_project_sha256=_sha256_text(legacy_project_sha256, "legacy_project_sha256"),
+                legacy_evidence_sha256=_sha256_text(legacy_evidence_sha256, "legacy_evidence_sha256"),
+                old_verification_level=_strict_text(old_verification_level, "old_verification_level"))
+    # Session identifiers are opaque tokens, never filesystem paths.
+    if any(c in args["legacy_project_id"] for c in ("/", "\\", ":")):
+        raise GlobalLibraryValidationError("project ID must not contain a path")
+    if status not in MIGRATION_STATUSES or (old_verification_level == QUARANTINED_CONFLICT
+                                           and status != MIGRATION_CONFLICT):
+        raise GlobalLibraryValidationError("invalid migration status")
+    if old_verification_level != QUARANTINED_CONFLICT and status == MIGRATION_CONFLICT:
+        raise GlobalLibraryValidationError("ordinary import status is derived by the Global conflict gate")
+    import_id = compute_migration_import_id(**args)
+    payload = dict(args, identity=exact, import_id=import_id, status=status,
+                   migration_import_contract_version=GLOBAL_MIGRATION_IMPORT_CONTRACT_VERSION,
+                   legacy_row_key=compute_legacy_row_key(
+                       glyph_id=glyph_id, reading=reading, old_verification_level=old_verification_level))
+    return {"intent_id": "gmi_" + import_id, "payload": payload,
+            "payload_digest": _canonical_sha256(payload)}
+
+
+def canonical_migration_batch(values: Any) -> list[dict[str, Any]]:
+    if not isinstance(values, (list, tuple)):
+        raise GlobalLibraryValidationError("migration batch must be a sequence")
+    result, seen, projects = [], set(), set()
+    for raw in values:
+        item = _exact_fields(raw, ("intent_id", "payload", "payload_digest"), "migration intent")
+        payload = _exact_fields(item["payload"], (
+            "glyph_id", "reading", "legacy_project_id", "legacy_project_sha256",
+            "legacy_evidence_sha256", "old_verification_level", "identity", "import_id",
+            "status", "migration_import_contract_version", "legacy_row_key"), "migration payload")
+        canonical = make_migration_intent(**{key: payload[key] for key in (
+            "identity", "reading", "legacy_project_id", "legacy_project_sha256",
+            "legacy_evidence_sha256", "old_verification_level", "status")})
+        if canonical != item or item["intent_id"] in seen:
+            raise GlobalLibraryValidationError("noncanonical or duplicate migration intent")
+        seen.add(item["intent_id"])
+        projects.add((payload["legacy_project_id"], payload["legacy_project_sha256"]))
+        result.append(canonical)
+    if len(projects) > 1:
+        raise GlobalLibraryValidationError("one selected project per migration batch")
+    # An explicit conflict cannot be submitted as a partial one-reading batch.
+    conflicts: dict[tuple[str, str], set[str]] = {}
+    for item in result:
+        p = item["payload"]
+        if p["old_verification_level"] == QUARANTINED_CONFLICT:
+            conflicts.setdefault((p["glyph_id"], p["legacy_evidence_sha256"]), set()).add(p["reading"])
+    if any(len(readings) < 2 for readings in conflicts.values()):
+        raise GlobalLibraryValidationError("incomplete project conflict migration")
+    return sorted(result, key=lambda item: item["intent_id"])
+
+
+def _migration_provenance(connection, item, event_type):
+    p = item["payload"]
+    # Use the common audit writer; no source_evidence row is fabricated.
+    audit = dict(item, payload={"evidence": {"glyph_id": p["glyph_id"], "reading": p["reading"]}})
+    _write_provenance(connection, audit, event_type)
+
+
+def _ingest_migration(transaction: GlobalWriteTransaction, item: Mapping[str, Any]) -> bool:
+    connection, p, now = transaction._connection, item["payload"], _utc_now()
+    glyph_id = p["glyph_id"]
+    old = connection.execute("SELECT * FROM glyph_truth WHERE glyph_id=?", (glyph_id,)).fetchone()
+    if old is None:
+        transaction.insert_candidate_identity(p["identity"])
+        _migration_provenance(connection, item, "CANDIDATE_CREATED")
+    columns = _REQUIRED_COLUMNS["migration_candidate"]
+    row = {key: p[key] for key in columns if key != "imported_at"}
+    row["imported_at"] = now
+    connection.execute("INSERT INTO migration_candidate (" + ",".join(columns) + ") VALUES (" +
+                       ",".join("?" for _ in columns) + ")", tuple(row[key] for key in columns))
+    _migration_provenance(connection, item, "MIGRATION_CANDIDATE_IMPORTED")
+    return True
+
+
+def _migration_conflict_gate(transaction: GlobalWriteTransaction, item: Mapping[str, Any]) -> None:
+    connection, p, now = transaction._connection, item["payload"], _utc_now()
+    glyph_id = p["glyph_id"]
+    old = connection.execute("SELECT * FROM glyph_truth WHERE glyph_id=?", (glyph_id,)).fetchone()
+    migrations = list(connection.execute("SELECT * FROM migration_candidate WHERE glyph_id=?", (glyph_id,)))
+    readings = {row["reading"] for row in migrations}
+    readings.update(row[0] for row in connection.execute(
+        "SELECT reading FROM source_evidence WHERE glyph_id=? AND evidence_class=?",
+        (glyph_id, DIRECT_VISUAL_ACTUAL)))
+    if old["active_reading"]:
+        readings.add(old["active_reading"])
+    conflict = (len(readings) > 1 or old["state"] == QUARANTINED_CONFLICT or
+                any(row["status"] == MIGRATION_CONFLICT for row in migrations))
+    if not conflict:
+        return  # Matching audit growth preserves state, approval, and revision.
+    _revoke_current_approvals(connection, glyph_id)
+    opened = connection.execute("SELECT * FROM glyph_conflict WHERE glyph_id=? AND status=?",
+                                (glyph_id, OPEN)).fetchone()
+    if opened:
+        readings.update(json.loads(opened["conflicting_readings_json"]))
+        generation = int(opened["opened_generation"])
+        connection.execute(
+            "UPDATE glyph_conflict SET conflict_id=?, conflicting_readings_json=?, last_event_at=? WHERE conflict_id=?",
+            (compute_glyph_conflict_id(glyph_id, readings, generation), _canonical_json(sorted(readings)),
+             now, opened["conflict_id"]))
+    else:
+        if len(readings) < 2:
+            raise GlobalLibraryValidationError("conflict requires retained contradictory readings")
+        generation = transaction.generation + 1
+        connection.execute("INSERT INTO glyph_conflict VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)",
+                           (compute_glyph_conflict_id(glyph_id, readings, generation), glyph_id, OPEN,
+                            _canonical_json(sorted(readings)), now, now, generation))
+    connection.execute("UPDATE migration_candidate SET status=? WHERE glyph_id=? AND status<>?",
+                       (MIGRATION_CONFLICT, glyph_id, MIGRATION_CONFLICT))
+    connection.execute("UPDATE glyph_truth SET state=?, active_reading=NULL, revision=revision+1, updated_at=? WHERE glyph_id=?",
+                       (QUARANTINED_CONFLICT, now, glyph_id))
+    _migration_provenance(connection, item, "CONFLICT_OPENED")
+
+
+def deliver_global_migration(repository: GlobalExactGlyphRepository, intents: Sequence[Mapping[str, Any]]
+                             ) -> tuple[ProcessedIntentReceipt, ...]:
+    """Explicit apply: one project, one write transaction, no project outbox."""
+    batch = canonical_migration_batch(intents)
+    if not batch:
+        return ()
+    repository.initialize()
+    with repository.write_transaction() as transaction:
+        receipts, pending = {}, []
+        for item in batch:
+            old = transaction.lookup_processed_intent(item["intent_id"])
+            if old is not None:
+                if old["payload_digest"] != item["payload_digest"]:
+                    raise GlobalLibraryIntentConflictError("same migration ID / different payload")
+                receipts[item["intent_id"]] = ProcessedIntentReceipt(
+                    old["intent_id"], old["payload_digest"], int(old["committed_generation"]),
+                    old["result_state"], old["receipt_digest"], True)
+            else:
+                # Existing rows without a matching receipt cannot be overwritten.
+                if transaction._connection.execute("SELECT 1 FROM migration_candidate WHERE import_id=?",
+                                                    (item["payload"]["import_id"],)).fetchone():
+                    raise GlobalLibraryIntentConflictError("migration import exists without receipt")
+                pending.append(item)
+        for item in pending:
+            _ingest_migration(transaction, item)
+        representatives = {item["payload"]["glyph_id"]: item for item in pending}
+        for glyph_id in sorted(representatives):
+            _migration_conflict_gate(transaction, representatives[glyph_id])
+        generation = transaction.bump_generation() if pending else transaction.generation
+        for item in pending:
+            digest = transaction.record_processed_intent(
+                intent_id=item["intent_id"], payload_digest=item["payload_digest"],
+                committed_generation=generation, result_state=INTENT_COMMITTED)
+            receipts[item["intent_id"]] = ProcessedIntentReceipt(
+                item["intent_id"], item["payload_digest"], generation, INTENT_COMMITTED, digest, False)
+        return tuple(receipts[item["intent_id"]] for item in batch)
