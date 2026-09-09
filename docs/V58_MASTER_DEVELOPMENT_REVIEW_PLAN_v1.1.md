@@ -16,8 +16,8 @@ Repository：`discoveryray/zhuyin-proofreader`
 
 正式 reviewer 可以是 Work，或符合本文件相同獨立性、scope、證據與 verdict 契約的獨立審查代理；Work 不再是唯一正式 reviewer。角色分工如下：
 
-- 協調者：鎖定任務範圍及 baseline，安排代理、核對證據、保存紀錄，執行已授權的下一步。
-- 實作代理：修改受授權的程式、文件、設定及測試，執行驗證與新增 corrective commits。
+- 協調者：鎖定任務範圍及 baseline，安排代理、核對原始證據與 BLOCKED 分類、保存補審歷史，執行已授權的下一步。
+- 實作代理：修改受授權的程式、文件、設定及測試，執行驗證；只有 confirmed code defects 需要新增 corrective commits，non-code 缺口依第 8 節補證據或 STOP。
 - 第一輪 reviewer：獨立審查 task baseline → feature HEAD 的完整 cumulative diff。
 - 第二輪 reviewer：另一個獨立 agent session，親自審查 PR 完整差異、base / head / merge-base、整合情境及適用 CI。
 
@@ -301,7 +301,7 @@ GUI 只能呼叫既有安全 service / API，不能另造 approval、quorum、id
 3. 第一輪 reviewer 對固定 baseline → feature HEAD 進行完整 cumulative review，回傳 exact SHA、scope、verdict 及原始證據。`READY FOR REVIEW` 是中間交接狀態，不是要求使用者接力的停點。
 4. 第一輪 PASS 後，先查詢同 repository / base / compare 的 PR；無 PR 才建立，已有唯一 PR 就更新。已合併則驗證原 merge；closed-unmerged 或多個不明匹配先停止，不另建重複 PR。
 5. 等待必要 PR CI，第二輪 reviewer 獨立核對 PR 全部差異、整合情境及 CI。CI event、run attempt、tested SHA、全部必要 jobs / steps 均須匹配；synthetic merge 必須核對 base / head parents 及檔案樹。
-6. 任一輪 BLOCKED：協調者直接交回實作代理新增 corrective commit，重跑必要測試，重新取得兩輪對最新版本的完整 PASS。原 review 可保留作歷史證據，不可套用新 HEAD。每個 task 最多三輪自動 corrective implementation；第三輪後仍有 blocker 或須再修正時，停止並回報原因及下一步。計數跨重啟保存，不能藉另開 session 重設。
+6. 任一輪 BLOCKED 先依第 8 節核對 `blocker_kind`：只有 confirmed `code` finding 交回實作代理新增 corrective commit、重跑必要測試並使用一輪 corrective implementation；新 HEAD 必須重新取得兩輪完整適用 PASS。`evidence` 先補證據，`capability`／`contract` 先 STOP；解決後保留原 HEAD 與計數，以 append-only 完整補審接續，不能新增空 commit。所有舊報告都保留。每個 task 最多三輪自動程式修正，第三輪後仍需程式修正則停止回報，不藉另開 session／task 重設；合法 non-code 補證據不消耗此上限。
 7. 代理不可用、report 缺失／不完整、CI pending／failed／cancelled／必要 job 被 skip 時，不得合併。可自動補證據或調查故障，但不能偽裝 PASS 或改驗證規則。
 8. 兩輪適用 PASS、必要 CI 全通過且授權有效後，立即重讀 PR、base、head、findings、GitHub 保護規則及最新 CI。以 merge API 的 expected head SHA 綁定 reviewed HEAD，只使用 Create a merge commit；不用 squash、rebase、auto-merge，不降低保護規則。不代 reviewer approve、不自行 resolve discussions 或刪除 branch。
 9. 不確定 API 是否成功時先讀遠端狀態，不盲目重送副作用。核對實際 merge SHA、兩個 parents、預期檔案樹；不能假設它等於 synthetic SHA。Fetch 並核對 develop，再驗證實際 merge SHA 觸發的 develop push CI（Windows Python 3.12／3.13 及當次必要 gates），不得拿 PR CI 代替。
@@ -318,6 +318,8 @@ Phase N 只有 implementation、兩輪 independent review、必要 PR CI、merge
 首次 Phase review：指定 Phase baseline → reviewed feature HEAD。
 
 Corrective commit 後：仍審 Phase baseline → latest authorized feature HEAD 的完整 cumulative diff，不能只審上一個 HEAD → corrective commit。可沿用未受影響且仍有效的證據，但必須重新檢查修正對整體契約的影響。
+
+純 non-code 補證據且 HEAD／base 未變時，依第 8 節 append 完整適用補審與 resolution 原始證據；不以空 commit 改 HEAD，也不覆寫原 BLOCKED。第二輪補審仍須綁定其親自核對的最新適用 CI；未連結的 PASS 或 CI rerun 不構成 blocker resolution。
 
 PR review：核對當前 PR base、head、merge-base 與 GitHub 實際顯示的 cumulative diff。明確記錄比較方式；develop 已前進時，不得把單純兩棵 tree 的差異錯當 PR diff。
 
@@ -360,17 +362,22 @@ Post-merge 必須核對 merge commit 與 develop push CI 的對應版本。Devel
 
 PASS：沒有 blocker / high correctness issue，且當次必需的安全驗證門檻已具備證據。不得將 PASS 描述成新 write authorization 或整個 Phase 已完成。
 
-BLOCKED：分清已證實的程式缺陷、需決定的契約衝突，以及尚未完成的必要驗證。一般命名、可讀性或個人重構偏好不得冒充 blocker。
+BLOCKED：必須有非空 findings 及明確 `blocker_kind`，依原始證據分類，不從 verdict 或 CI failure 猜測原因。`code` 是已有可重現／可交叉核對證據、違反已明確採納契約的程式、測試、設定或指令缺陷；`evidence` 是必要驗證／原始證據不足；`capability` 是代理、平台或權限能力不可用；`contract` 是尚待釐清或決定的契約限制。已證實 code finding 同時伴隨證據缺口時分類為 code，原報告仍列出所有限制。一般命名、可讀性或個人重構偏好不得冒充 blocker。
 
-每個 blocker 必須包含 exact file / function / code region、具體 failure scenario、violated contract、現有 tests 為何未抓到、minimum fix 及 regression test requirement。
+Code blocker 必須包含 exact file / function / code region、具體 failure scenario、violated contract、現有 tests 為何未抓到、minimum fix 及 regression test requirement。Non-code blocker 改列缺失的原始證據／能力／契約依據、對必要門檻的影響、可回查 reference，以及解除限制和重新驗證的條件；不得捏造程式錯誤或強迫修改尚未證實有錯的檔案。
 
 報告先說 verdict 與最重要影響，再提供足夠 Git / architecture / tests 證據。採繁體中文，技術名詞與識別字保留原文。使用者指定格式時依指定格式。
 
-**每輪 reviewer 必須提供自足的下一步交接紀錄，由協調者直接接續，不要求使用者逐次轉貼。只有能力、授權或三輪修正上限形成實際阻礙時，才交回使用者。**
+**每輪 reviewer 必須提供自足的分類與下一步交接紀錄，由協調者直接接續，不要求使用者逐次轉貼。只有能力、授權、尚未釐清的契約或三輪程式修正上限形成實際阻礙時，才交回使用者。**
 
-- BLOCKED：Corrective Implementation Prompt，列出全部有效 blockers、最小修正、安全與 scope 限制、必要 regression、同 branch 新 corrective commit，以及交回 cumulative review 的條件。
+- `BLOCKED / code`：Corrective Implementation Prompt，列出全部 confirmed code findings、最小修正、安全與 scope 限制、必要 regression、同 branch 新 corrective commit，以及新 HEAD 兩輪完整適用審查的條件。只有此類使用同 task 三輪 corrective count。
+- `BLOCKED / evidence`：`REFRESH_EVIDENCE` 交接，列出補證據／重現指令與原始來源；保持 HEAD、baseline、count，補齊後進行完整適用補審。
+- `BLOCKED / capability` 或 `contract`：STOP 交接，列出具體限制與解除條件；解決後同 HEAD 補審，不耗修正輪次、不新增空 commit。三輪程式修正用盡也不阻止合法 non-code 補證據。
 - PASS：依實際已達階段提供下一個 workflow action，例如準備 PR、核對 PR / CI、執行已授權 merge，或核對 post-merge CI。不能跳過尚未完成的門檻。
-- 驗證受阻：提供具體補證據 / 重現指令，不強迫實作者改動尚未證實有錯的 production code。
+
+所有報告都須有唯一 `report_ref`；PASS 的 `blocker_kind=null` 且 findings 為空。未補審的 `supersedes_report_ref`、`resolution_evidence_ref` 均為 null。補審必須保留舊原文，append 新的獨立 full-diff 報告，明確指向較早、尚未被取代、相同 round／baseline／base／head／scope 的 non-code BLOCKED，並附協調者已核對、留存的原始 resolution artifact reference。原／新報告均須符合 reviewer 獨立性；第二輪 reviewer 不得參與同 code scope 的第一輪，補審 PASS 仍須核對最新適用 CI run／attempt／tested SHA。
+
+依 [gate v2 契約](PR_REVIEW_GATE.md) 保存單向 append-only 補審鏈；未知／較晚／自身 target、叉分、跨 scope、缺 resolution 或不合法 reviewer 均 fail closed。Code BLOCKED 不可同 HEAD supersede，不能以 CI rerun 或無關 PASS 清除，須新增 corrective commit 後重新審查。Reference、分類或自行填入的 PASS 本身不認證真實性；協調者必須讀取原始報告與 resolution。第二輪僅 non-code BLOCKED 可在 CI metadata 不可得時暫列 ci=null，不據此放行。
 
 交接 prompt 必須自足：repository、phase、branch、baseline / reviewed SHA、任務、authorization scope、禁止事項、必要測試、停止條件與交回資料。尚未獲授權的 write 必須清楚標為待授權，不能在 prompt 中偽造已授權。
 
@@ -378,7 +385,7 @@ BLOCKED：分清已證實的程式缺陷、需決定的契約衝突，以及尚�
 
 ### 證據保存與恢復
 
-每個 task 保存唯一 task ID、原始需求／授權、固定 baseline、目前 base/head、全部實作者與 reviewer session IDs、每輪 scope / verdict / findings / 原始 report、測試命令與結果／限制、CI URL / run ID / attempt / event / tested SHA / parents / jobs / steps、corrective round 計數、PR URL、merge API 結果、實際 parents / tree / develop HEAD、post-merge CI 及下一步。
+每個 task 保存唯一 task ID、原始需求／授權、固定 baseline、目前 base/head、全部實作者與 reviewer session IDs、每輪 scope / verdict / blocker_kind / findings / report_ref / 原始 report、補審 relation／resolution／完整歷史、測試命令與結果／限制、CI URL / run ID / attempt / event / tested SHA / parents / jobs / steps、corrective round 計數、PR URL、merge API 結果、實際 parents / tree / develop HEAD、post-merge CI 及下一步。
 
 紀錄置於明確 task evidence 目錄；兩輪完整 report 與 CI、merge 證據摘要同步保存至既有 PR description 的 evidence 區，保留舊 BLOCKED 紀錄供稽核。可更新 evidence metadata，不可偷偷更換需求、scope、findings 或 SHA。不得為了把目前 SHA 的 PASS 放進受審 commit，再新增 commit 造成自我引用循環；受審程式碼、測試、設定或規範改動均須重新審查。
 

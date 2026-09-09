@@ -6,7 +6,9 @@
 
 由協調者自動安排實作代理、第一輪 cumulative reviewer、第二輪 PR reviewer。Work 或符合完整契約的獨立代理均可正式審查。兩位 reviewer 必須是不同 session、均與所有實作者分離、不修改受審檔案，親自審查完整差異及安全契約；不能用實作摘要、另一輪 PASS 或 CI 綠燈代替審查。
 
-第一輪 PASS 後查找並建立／更新唯一 PR；第二輪 PASS 且必要 CI 全通過才 merge。BLOCKED 交回實作代理新增 corrective commit，重跑必要測試，重新取得兩輪完整 cumulative PASS；同一 task 最多自動修正三輪，跨重啟保留計數。HEAD／base 改變時舊 PASS 不適用，保留 task baseline、重新完成受影響審查與整合驗證。
+第一輪 PASS 後查找並建立／更新唯一 PR；第二輪 PASS 且必要 CI 全通過才 merge。BLOCKED 明確分類：code 是已證實的程式／設定／指令缺陷，才新增 corrective commit、使用同 task 最多三輪修正並重跑測試、重做新 HEAD 兩輪完整審查；evidence 先補證據，capability／contract 先 STOP。解決 non-code 限制後原 HEAD 完整補審，不耗次數、不新增空 commit；三輪用完仍可合法補證據，不能重設 task／count。HEAD／base 改變時舊 PASS 不適用，保留 task baseline，重做受影響審查與整合驗證。
+
+每份 review 保留唯一 report_ref、blocker_kind、findings 及原文；PASS 的 kind=null、findings為空。Non-code 補審依 gate v2 以 supersedes_report_ref 指向同 round／baseline／base／head／scope 的較早未取代 BLOCKED，附原始 resolution_evidence_ref；無補審時兩欄null。保留單向 append-only 歷史，原／新 reviewer 仍獨立 full-diff，第二輪補審核對最新適用 CI。Code BLOCKED 不可同 HEAD supersede，也不能只靠 CI rerun 或無關 PASS 清除。
 
 合併前重新核對遠端、findings、保護規則、CI event／attempt／tested SHA／必要 jobs，綁定 reviewed HEAD。合併後查實際 merge SHA、parents、tree、develop HEAD，並核對該 merge SHA 的 develop push CI；不能以 PR CI 代替。保存兩輪 SHA／scope／verdict／證據及交接紀錄；所有門檻通過才宣告完成。
 
