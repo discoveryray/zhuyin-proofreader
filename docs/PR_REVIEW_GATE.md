@@ -50,19 +50,31 @@ Task ledger 必須保留所有舊 review 與 corrective round，不得刪除 BLO
 | `ENSURE_PR` | 第一輪已 PASS；先依 repository＋base/head branch pair 查找既有 PR，再建立或採用既有 PR。 |
 | `WAIT_PR_CI` | 等待並取得 current scope 的 PR CI，不能使用舊 SHA 綠燈。 |
 | `REQUEST_REVIEW_2` | 委派另一位独立 reviewer，直接審查 cumulative diff、PR 完整差異及指定 CI run/attempt/logs。 |
-| `CORRECT_IMPLEMENTATION` | 已確認 review／新 finding 為 blocker；交回實作代理，新增 corrective commit；保留計數後重新取得兩輪適用 PASS。 |
+| `CORRECT_IMPLEMENTATION` | 未合併的目前 scope 已確認 review／新 finding 為 blocker；即使 CI failed／pending 也交回實作代理，新增 corrective commit；保留計數後重新取得兩輪適用 PASS。 |
 | `REFRESH_EVIDENCE` | 補齊／重新取得遠端證據。SHA、run、attempt、job／step 證據不符本身不是程式 bug。 |
 | `INVESTIGATE_CI` | 調查實際 CI failure／cancelled／skipped；未證實程式問題前不要求 corrective commit、不消耗修正輪次。 |
 | `MERGE_PROPOSAL` | 核對有效 merge 授權、遠端 base/head、最新 findings／CI／保護規則後，才可呼叫 merge API。 |
 | `VERIFY_MERGE` | PR 已 merged，僅讀取實際 merge commit、parents、tree；不可再次 merge。 |
 | `WAIT_PUSH_CI` | 等待實際 merge SHA 的 develop push CI。 |
-| `COMPLETE` | 兩輪 review、PR CI、實際 merge 驗證及該 merge 的 push CI 全部具備；分開回報 merge SHA 與最新 develop HEAD。 |
+| `COMPLETE` | 兩輪 review、PR CI、實際 merge 驗證、該 merge 的 push CI 及目前適用 findings 查核全部具備，且無未解除 blocker；分開回報 merge SHA 與最新 develop HEAD。 |
 | `STOP` | 缺乏授權、違反契約、第三次修正仍 BLOCKED、post-merge 證據不符等；回報具體原因。 |
 
 CI 調查確認程式 blocker 後，應取得可回查的 finding（例如 reviewer 的 BLOCKED，
 或經協調者查明並記錄到 `pr.new_blockers` 的問題），再進入修正輪。
+Gate 先核對 branch pair 與 current base/head，再讀取適用且獨立性／scope／原始報告
+欄位合法的 BLOCKED；此修正路徑不以 CI success 為前提。`pr.new_blockers` 必須屬於
+本筆已核對的 PR snapshot，且 `findings_checked` 為 true；scope drift 先補證據，
+不能把舊 finding 文字直接移貼到新 base/head。Failed CI 沒有 confirmed code finding
+時仍是調查，不自動要求 corrective commit，更不放行 merge。
 CI 環境或權限問題不能以偽造資產、關閉驗證、新增 skip、反覆空 commit 解決。
 三輪限制是同一任務的 corrective cycle，涵蓋兩輪 reviewer，並非各自三輪。
+
+已合併 scope 的新 blocker 或有效 BLOCKED 一律 `STOP`，附明確 post-merge handoff，
+保留 `task_id`、原始 `baseline`、已知的實際 `merge_sha`、`corrections_used` 及
+`correction_limit: 3`；不能再次 merge 舊 PR、直接 push develop 或自動 revert。
+已用完三輪時回報上限耗盡，不能另開同義 task 重設計數。若 findings 尚未查核，
+先 `REFRESH_EVIDENCE`；即使歷史 PASS 與所有 CI 都成功，也不宣告 COMPLETE。
+這些 decision 不修改原始 merge、review 或 corrective ledger。
 
 `MERGE_PROPOSAL` 包含 `merge_method: "merge"`、`expected_base_sha`、
 `expected_head_sha` 及 PR number。GitHub merge API 的 HEAD compare-and-swap

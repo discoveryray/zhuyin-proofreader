@@ -231,6 +231,19 @@ def _correct(state, reason):
     return _decision(state, "CORRECT_IMPLEMENTATION", reason, correction_round=count + 1)
 
 
+def _post_merge_blocked(state, reason):
+    if len(state["corrections"]) >= 3:
+        reason += "; three corrective rounds exhausted"
+    return _decision(
+        state, "STOP", "post-merge blocker: " + reason,
+        handoff="retain this task ledger and correction limit; do not reset the task; "
+                "do not re-merge, push develop, or revert",
+        task_id=state["task"]["id"], baseline=state["task"]["baseline"],
+        merge_sha=state["merge"]["sha"] if state["merge"] is not None else None,
+        corrections_used=len(state["corrections"]), correction_limit=3,
+    )
+
+
 def _review(state, number, base, head):
     matches = [r for r in state["reviews"] if r["round"] == number and
                (r["baseline"], r["base"], r["head"]) == (state["task"]["baseline"], base, head)]
@@ -320,8 +333,26 @@ def next_action(state):
             return _decision(state, "STOP", "existing PR is closed without merge; do not duplicate it")
         if not merged and (pr["base_sha"], pr["head_sha"]) != (base, head):
             return _decision(state, "REFRESH_EVIDENCE", "remote PR base/head changed; invalidate stale reviews")
+        if not pr["findings_checked"]:
+            return _decision(state, "REFRESH_EVIDENCE", "check the latest findings for this PR scope")
+        if pr["new_blockers"]:
+            return _post_merge_blocked(state, "unresolved PR findings") if merged else _correct(
+                state, "confirmed PR blockers require correction and both reviews")
     for number in (1, 2):
-        # Round two follows an existing PR and its completed matching CI.
+        # A valid confirmed blocker remains actionable while CI is failed/pending.
+        # Successful CI is required for advancement, not for reaching correction.
+        review = _review(state, number, base, head)
+        if review is not None:
+            problem = _review_problem(state, review, number)
+            if problem:
+                return _decision(state, "STOP", problem)
+            if number == 2:
+                first = _review(state, 1, base, head)
+                if review["reviewer"] == first["reviewer"] or review["report_ref"] == first["report_ref"]:
+                    return _decision(state, "STOP", "two separately produced independent reviews are required")
+            if review["verdict"] == "BLOCKED":
+                return _post_merge_blocked(state, f"round {number} is BLOCKED") if merged else _correct(
+                    state, f"round {number} is BLOCKED; re-review both full scopes after correction")
         if number == 2:
             if pr is None:
                 return _decision(state, "ENSURE_PR", "round one passed; look up the branch pair before creation",
@@ -332,21 +363,10 @@ def next_action(state):
             problem = _ci_problem(ci, "pull_request", state["task"]["head_branch"], head, [base, head])
             if problem:
                 return _decision(state, "STOP", problem[1]) if merged else _decision(state, *problem)
-        review = _review(state, number, base, head)
         if review is None:
             if merged or number in state["unavailable_review_rounds"]:
                 return _decision(state, "STOP", f"round {number} review evidence is unavailable")
             return _decision(state, f"REQUEST_REVIEW_{number}", "no review for the exact current scope")
-        problem = _review_problem(state, review, number)
-        if problem:
-            return _decision(state, "STOP", problem)
-        if number == 2:
-            first = _review(state, 1, base, head)
-            if review["reviewer"] == first["reviewer"] or review["report_ref"] == first["report_ref"]:
-                return _decision(state, "STOP", "two separately produced independent reviews are required")
-        if review["verdict"] == "BLOCKED":
-            return _decision(state, "STOP", "merged scope has a BLOCKED review") if merged else _correct(
-                state, f"round {number} is BLOCKED; re-review both full scopes after correction")
     if merged:
         if merge is None:
             return _decision(state, "VERIFY_MERGE", "obtain the actual merge commit; never merge again")
@@ -362,10 +382,6 @@ def next_action(state):
             return _decision(state, "STOP", problem[1] if problem else "push CI tree does not match the actual merge")
         return _decision(state, "COMPLETE", "both reviews, PR CI, actual merge and post-merge CI verified",
                          merge_sha=merge["sha"], develop_head=merge["develop_head"])
-    if not pr["findings_checked"]:
-        return _decision(state, "REFRESH_EVIDENCE", "check the latest PR findings before merge")
-    if pr["new_blockers"]:
-        return _correct(state, "new PR blockers require correction and both reviews")
     if not pr["mergeable"] or not pr["protection_satisfied"]:
         return _decision(state, "STOP", "mergeability or repository protection requirements are not satisfied")
     return _decision(state, "MERGE_PROPOSAL", "recheck remote base/head and protection immediately before write",
