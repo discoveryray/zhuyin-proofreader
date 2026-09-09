@@ -40,6 +40,18 @@ visible simple-glyf contract; CFF requires the complete recording SHA and style.
 Unsupported TTF structure produces `NON_GLOBAL_ELIGIBLE` diagnostics without Global
 rows. Missing, mismatched or unprovable sources block the entire selected project.
 
+Reconfirmation targets use the complete bbox from the uniquely matched current
+PDF text trace. All four workbook coordinates must be present, finite, and form
+a positive-width/positive-height rectangle. The existing character/font/glyph,
+page and unique x0/y0 locator checks remain in place with their original 0.8-point
+tolerance; all four coordinates must then match that one PDF bbox within the
+same tolerance. This does not use x1/y1 to disambiguate a previously ambiguous
+x0/y0 locator. Rounding within tolerance is allowed, but the reported bbox is the
+PDF trace's exact full range, not the recorded workbook rectangle. Matching
+workbook/manifest coordinates and a recomputed seal alone cannot prove the bbox.
+Invalid locations block during planning, before any Global initialization or
+mutation. Source workbook/manifest bytes are never repaired or rewritten.
+
 Required CSVs are the TTF learning file, CFF learning file, and conflict registry
 under `_專案證據/actual`. Headers, canonical readings, identities, levels and source
 counts are validated. Duplicate canonical rows fail. Optional override/provenance
@@ -306,3 +318,67 @@ semantics epochs, runtime assets and fingerprint scope remain unchanged. No whol
 DB hash or generation cache key is introduced. No PR, merge, tag, release,
 main/develop mutation or Phase 6 work belongs to this correction. Implementation
 completion is `READY FOR REVIEW`; independent review remains the merge gate.
+
+## PR #19 complete-bbox correction
+
+Reviewed parent: `4a8b896c87e99fb70bf70ea5f7207abe0a4dee84`. B1/B2/B3 remain
+resolved; this correction addresses the separate reconfirmation-target locator
+blocker. After fetch, local/remote feature HEAD and PR #19 head matched that SHA;
+PR base/develop remained Phase baseline `d2d558808bd2902857fad30f824d8bdc352beb73`,
+and the working tree was clean. The reviewed parent chain is preserved.
+
+`_current_identity()` now validates a complete finite rectangle, preserves the
+original unique locator check, checks the full bbox against that one PDF trace,
+and returns its PDF bbox separately from the glyph identity proof.
+`_occurrence_index()` uses that PDF bbox for the target. It does not copy an
+unverified recorded lower-right corner or change source artifacts. No Global,
+transaction, quorum, fingerprint, v0 compatibility or decoder contracts changed.
+
+Isolated execution of the actual reviewed module reproduced acceptance of TTF
+and CFF workbook/manifest/source-record x1=y1=9999 with a receipt, after resealing
+the source while keeping PDF bytes unchanged. The corrected implementation
+rejects those same sources with `current PDF bbox mismatch` before initialization.
+The regression matrix checks normal/rounded PDF-proven output, each false lower
+right coordinate, missing/blank/nonfinite/nonnumeric/boolean coordinates, invalid
+extents, unchanged tolerance for every coordinate, duplicate real PDF text
+traces, and character/font/glyph/page checks. Each invalid source is exercised
+in dry-run and apply against absent and nonempty Global stores; no source/DB
+bytes or tables may change. A valid first sample plus invalid second sample
+checks whole-project admission before any partial delivery.
+
+Executed locally on Windows/Python 3.13.5 with UTF-8 mode:
+
+```text
+python -m unittest discover -s tests -p test_global_legacy_migration_review_v580.py -k ReconfirmationBBoxTests -v
+  6 tests passed (24.232s).
+python -m unittest discover -s tests -p "test_global_legacy_migration*_v580.py" -v
+  72 tests passed (50.007s), including unchanged B1/B2/B3 regressions.
+python -m pytest -q tests/test_exact_glyph_identity_v580.py tests/test_global_exact_glyph_repository_v580.py tests/test_global_exact_glyph_read_reuse_v580.py tests/test_global_promotion_v580.py tests/test_actual_post_commit_recovery_v580.py tests/test_cross_version_compat_v560.py -o cache_dir=tmp/phase5-pr19-bbox/cache
+  180 passed, 74 subtests passed (29.07s); 5 existing SWIG warnings.
+python -m unittest discover -s tests -v
+  468 tests passed (235.003s), no failures, errors or skips.
+python -m pytest -q tests -o cache_dir=C:/Work/phase5-pr19-bbox-20260909-desktop/pytest-cache
+  535 passed, 449 subtests passed (235.48s); no skips; 5 existing SWIG warnings.
+python -c "from pathlib import Path; import runtime_source_validation as r; import json; v=r.validate_asset_manifest(Path.cwd()); print(json.dumps(v,ensure_ascii=False,indent=2)); raise SystemExit(0 if v['ok'] else 1)"
+  All 20 assets valid; no errors/warnings; assets and manifest unchanged.
+python -m compileall -q .
+  Exit 0; PYTHONPYCACHEPREFIX=tmp/phase5-pr19-bbox/compile-cache (absolute path).
+git diff --check d2d558808bd2902857fad30f824d8bdc352beb73
+  Passed before commit; the full baseline-to-new-HEAD range is rechecked after commit.
+```
+
+Full desktop suites use isolated TEMP/LOCALAPPDATA under
+`C:\Work\phase5-pr19-bbox-20260909-desktop` so existing Tcl/Tk tests run. All
+tracked test files are under `tests/`; the explicit full pytest target avoids
+collecting sandbox-generated temporary directories. No skip was added.
+Updated PR CI must verify the new commit on Windows/Python 3.12 and 3.13. For
+synthetic merge checkout, its base/head parents are checked against the specified
+baseline and new feature HEAD; exact SHAs, run and results are recorded in the
+handoff. Earlier green SHAs are not evidence for this correction.
+
+Deferred advisory: provenance lookup/index performance is a separate future
+objective. No index, performance refactor or benchmark change is included here.
+No real-user project or live DB is mutated; real-textbook acceptance and Linux
+are not part of this isolated locator validation. No PR approval, discussion
+resolution, merge/auto-merge, history rewrite, release, main/develop mutation or
+Phase 6 work is performed. Review scope remains Phase baseline to latest PR HEAD.

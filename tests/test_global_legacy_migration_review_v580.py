@@ -14,6 +14,7 @@ import types
 import unittest
 from unittest.mock import patch
 
+import fitz
 from openpyxl import load_workbook
 
 import actual_review as review
@@ -200,6 +201,162 @@ class MigrationReviewTests(unittest.TestCase):
                             self.assertEqual(store_evidence_bytes(repo), global_before)
                     if tables_before is not None:
                         self.assertEqual({name: sql_rows(repo, name) for name in lib._REQUIRED_COLUMNS}, tables_before)
+
+
+class ReconfirmationBBoxTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="migration-bbox-")
+        self.addCleanup(temporary.cleanup)
+        self.base = Path(temporary.name)
+
+    def change_source(self, project, changes, *, row_index=0, remove=()):
+        """Reseal mutually agreeing source records without changing the PDF."""
+        book = load_workbook(project.actual)
+        sheet = book["實際注音"]
+        headers = [cell.value for cell in sheet[1]]
+        record = project.manifest["records"][row_index]
+        for field, value in changes.items():
+            sheet.cell(row_index + 2, headers.index(field) + 1).value = value
+            project.rows[row_index][field] = value
+            record["source_record"][field] = value
+            if field in ("x0", "y0", "x1", "y1"):
+                record[field] = value
+            elif field in ("字元", "實體頁碼"):
+                record[{"字元": "char", "實體頁碼": "physical_page"}[field]] = value
+        for field in remove:
+            sheet.delete_cols(headers.index(field) + 1)
+            headers.remove(field)
+            project.rows[row_index].pop(field, None)
+            record.pop(field, None)
+            record["source_record"].pop(field, None)
+        book.save(project.actual)
+        book.close()
+        project.manifest["pdfs"][0]["actual_workbook_sha256"] = sha(project.actual.read_bytes())
+        seal(project)
+
+    def assert_blocked_before_global_write(self, project):
+        source_before = tree_bytes(project.root)
+        for existing in (False, True):
+            with self.subTest(existing=existing):
+                repo = lib.GlobalExactGlyphRepository.resolved(self.base / (project.root.name + str(existing)))
+                if existing:
+                    lib.deliver_global_direct_evidence(repo, [intent()])
+                before = store_evidence_bytes(repo) if existing else {}
+                tables = {name: sql_rows(repo, name) for name in lib._REQUIRED_COLUMNS} if existing else {}
+                for apply in (False, True):
+                    out, error = io.StringIO(), io.StringIO()
+                    with redirect_stdout(out), redirect_stderr(error), \
+                         patch.object(lib, "deliver_global_migration", side_effect=AssertionError), \
+                         patch.object(lib.GlobalExactGlyphRepository, "initialize", side_effect=AssertionError), \
+                         patch.object(lib.GlobalExactGlyphRepository, "write_transaction", side_effect=AssertionError):
+                        code = cli.main(["--project-output", str(project.root), "--global-library-root", str(repo.path.parent)]
+                                        + (["--apply"] if apply else []))
+                    self.assertEqual(code, 1)
+                    self.assertEqual(out.getvalue(), "")
+                    report = json.loads(error.getvalue())
+                    self.assertEqual(report["status"], "BLOCKED")
+                    self.assertEqual(report["error_type"], "MigrationValidationError")
+                    self.assertEqual(tree_bytes(project.root), source_before)
+                    if existing:
+                        self.assertEqual(store_evidence_bytes(repo), before)
+                        self.assertEqual({name: sql_rows(repo, name) for name in lib._REQUIRED_COLUMNS}, tables)
+                    else:
+                        self.assertFalse(repo.path.parent.exists())
+
+    def test_ttf_cff_targets_use_complete_pdf_bbox_including_tolerated_rounding(self):
+        for cff in (False, True):
+            for offset in (0, 0.5):
+                with self.subTest(cff=cff, offset=offset):
+                    project = Project(self.base / f"valid-{cff}-{offset}", cff=cff, count=2)
+                    with fitz.open(project.pdf) as document:
+                        boxes = [tuple(char[3]) for span in document[0].get_texttrace() for char in span["chars"]]
+                    for index, box in enumerate(boxes):
+                        self.change_source(project, {field: value + offset for field, value in
+                            zip(("x0", "y0", "x1", "y1"), box)}, row_index=index)
+                    before = tree_bytes(project.root)
+                    repo = lib.GlobalExactGlyphRepository.resolved(self.base / f"valid-global-{cff}-{offset}")
+                    for apply in (False, True):
+                        result = migration.migrate_project(project.root, global_library_root=repo.path.parent, apply=apply)
+                        targets = {item["occurrence_id"]: item for item in result["reconfirmation_targets"]}
+                        self.assertEqual(len(targets), 2)
+                        for row, box in zip(project.rows, boxes):
+                            target = targets[row["occurrence_id"]]
+                            self.assertEqual(target["bbox"], list(box))
+                            self.assertEqual(target["identity"], project.exact)
+                        self.assertEqual(tree_bytes(project.root), before)
+                        if apply:
+                            self.assertEqual(len(result["receipts"]), 1)
+
+    def test_resealed_wrong_right_bottom_bbox_blocks_whole_project_before_write(self):
+        for cff in (False, True):
+            for index, changes in enumerate(({"x1": 9999}, {"y1": 9999}, {"x1": 9999, "y1": 9999})):
+                with self.subTest(cff=cff, changes=changes):
+                    project = Project(self.base / f"forged-{cff}-{index}", cff=cff, count=2)
+                    pdf_before = project.pdf.read_bytes()
+                    # First sample is valid: no partial import may precede rejection of the second.
+                    self.change_source(project, changes, row_index=1)
+                    self.assertEqual(project.pdf.read_bytes(), pdf_before)
+                    self.assert_blocked_before_global_write(project)
+
+    def test_missing_nonfinite_and_invalid_bbox_coordinates_block_before_write(self):
+        for cff in (False, True):
+            for field in ("x0", "y0", "x1", "y1"):
+                for index, value in enumerate((None, "", "NaN", "Infinity", "-Infinity", True, "not-a-number")):
+                    with self.subTest(cff=cff, field=field, value=value):
+                        project = Project(self.base / f"invalid-{cff}-{field}-{index}", cff=cff)
+                        self.change_source(project, {field: value})
+                        self.assert_blocked_before_global_write(project)
+            project = Project(self.base / f"missing-columns-{cff}", cff=cff)
+            self.change_source(project, {}, remove=("x1", "y1"))
+            self.assert_blocked_before_global_write(project)
+            for index, changes in enumerate(({"x1": 60}, {"x1": 59}, {"y0": 90, "y1": 90},
+                                               {"y0": 90, "y1": 89}, {"x0": -9999, "y0": -9999})):
+                project = Project(self.base / f"extent-{cff}-{index}", cff=cff)
+                self.change_source(project, changes)
+                self.assert_blocked_before_global_write(project)
+
+    def test_existing_locator_tolerance_is_not_widened_for_any_coordinate(self):
+        for cff in (False, True):
+            for field in ("x0", "y0", "x1", "y1"):
+                with self.subTest(cff=cff, field=field):
+                    project = Project(self.base / f"tolerance-{cff}-{field}", cff=cff)
+                    self.change_source(project, {field: project.rows[0][field] + 0.801})
+                    self.assert_blocked_before_global_write(project)
+
+    def test_duplicate_pdf_text_trace_still_blocks_unique_locator(self):
+        for cff in (False, True):
+            with self.subTest(cff=cff):
+                project = Project(self.base / f"duplicate-{cff}", cff=cff)
+                with fitz.open(project.pdf) as document:
+                    contents = document[0].get_contents()[0]
+                    raw = document.xref_stream(contents)
+                    document.update_stream(contents, raw + b"\n" + raw)
+                    pdf = document.tobytes()
+                project.pdf.write_bytes(pdf)
+                digest = sha(pdf)
+                project.manifest["pdfs"][0]["pdf_sha256"] = digest
+                project.manifest["records"][0]["pdf_sha256"] = digest
+                book = load_workbook(project.actual)
+                meta = book["v5.2中繼資料"]
+                for row in meta:
+                    if row[0].value == "pdf_sha256":
+                        row[1].value = digest
+                book.save(project.actual)
+                book.close()
+                project.manifest["pdfs"][0]["actual_workbook_sha256"] = sha(project.actual.read_bytes())
+                seal(project)
+                with fitz.open(project.pdf) as document:
+                    self.assertEqual(sum(len(span["chars"]) for span in document[0].get_texttrace()), 2)
+                self.assert_blocked_before_global_write(project)
+
+    def test_full_bbox_does_not_bypass_character_font_glyph_or_page_checks(self):
+        for cff in (False, True):
+            for index, changes in enumerate(({"字元": "另"}, {"font_xref": 1},
+                                               {"glyph_id_字形索引": 0}, {"實體頁碼": 0})):
+                with self.subTest(cff=cff, changes=changes):
+                    project = Project(self.base / f"locator-{cff}-{index}", cff=cff)
+                    self.change_source(project, changes)
+                    self.assert_blocked_before_global_write(project)
 
 
 class FrozenV0CompatibilityTests(unittest.TestCase):

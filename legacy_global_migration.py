@@ -84,9 +84,19 @@ def _integer(value, name, minimum=0):
 
 def _number(value):
     _require(not isinstance(value, bool), "invalid bbox")
-    result = float(value)
+    try:
+        result = float(value)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise MigrationValidationError("invalid bbox") from exc
     _require(math.isfinite(result), "invalid bbox")
     return result
+
+
+def _bbox(values):
+    _require(len(values) == 4, "complete bbox required")
+    box = tuple(_number(value) for value in values)
+    _require(box[0] < box[2] and box[1] < box[3], "invalid bbox extent")
+    return box
 
 
 def _absolute(value, name):
@@ -223,8 +233,9 @@ def _workbook(raw, pdf_sha):
 
 
 def _current_identity(document, row, key):
-    """Reparse exact embedded bytes and prove the locator belongs to this PDF."""
+    """Return exact identity and the uniquely located, validated PDF trace bbox."""
     kind, style, digest = key
+    recorded_bbox = _bbox([row.get(field) for field in ("x0", "y0", "x1", "y1")])
     page_index = _integer(row["實體頁碼"], "physical page", 1) - 1
     xref = _integer(row["font_xref"], "font xref", 1)
     root_gid = _integer(row["glyph_id_字形索引"], "root glyph")
@@ -240,10 +251,13 @@ def _current_identity(document, row, key):
             continue
         for codepoint, printed_gid, _origin, bbox in span.get("chars", ()):
             if (chr(codepoint) == row["字元"] and printed_gid == root_gid and
-                    abs(float(bbox[0]) - _number(row["x0"])) <= 0.8 and
-                    abs(float(bbox[1]) - _number(row["y0"])) <= 0.8):
-                matches.append(printed_gid)
+                    abs(float(bbox[0]) - recorded_bbox[0]) <= 0.8 and
+                    abs(float(bbox[1]) - recorded_bbox[1]) <= 0.8):
+                matches.append(_bbox(bbox))
     _require(len(matches) == 1, "current occurrence locator unprovable")
+    current_bbox = matches[0]
+    _require(all(abs(current - recorded) <= 0.8 for current, recorded in zip(current_bbox, recorded_bbox)),
+             "current PDF bbox mismatch")
     name, extension, _, data = document.extract_font(xref)
     _require(bool(data), "embedded font missing")
     if kind == library.TTF_GLYF_SHA256:
@@ -257,7 +271,7 @@ def _current_identity(document, row, key):
         identity = CFFZhuyinInspector(data, normalize_basefont(name), {}).global_exact_identity(gid)
         _require(identity["style_group"] == style, "CFF current style mismatch")
     _require(identity.get("glyph_sha256") == digest, "current glyph SHA mismatch")
-    return identity
+    return identity, current_bbox
 
 
 def _occurrence_index(manifest, pdf_data, workbook_rows, required_keys):
@@ -305,7 +319,7 @@ def _occurrence_index(manifest, pdf_data, workbook_rows, required_keys):
                 for field in ("font_xref", "glyph_id_字形索引") + (("注音元件ID",) if ttf else ()):
                     _require(_integer(source.get(field), field) == _integer(row.get(field), field),
                              "sealed/current actual source mismatch: " + field)
-                proof = _current_identity(document, row, key)
+                proof, current_bbox = _current_identity(document, row, key)
                 if key in proofs:
                     _require(proofs[key] == proof, "inconsistent exact identity proof")
                 proofs[key] = proof
@@ -313,7 +327,7 @@ def _occurrence_index(manifest, pdf_data, workbook_rows, required_keys):
                               "pdf_name": name, "pdf_sha256": pdf_sha,
                               "physical_page": _integer(row["實體頁碼"], "page", 1),
                               "character": row["字元"],
-                              "bbox": [row.get(field) for field in ("x0", "y0", "x1", "y1")]}
+                              "bbox": list(current_bbox)}
     _require(seen == set(by_id), "sealed/current occurrence roster mismatch")
     _require(required_keys.issubset(proofs), "current source cannot prove legacy exact identity")
     return index, proofs, set(by_id)
