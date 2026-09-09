@@ -433,8 +433,12 @@ def migrate_project(project_output, *, pdf_roots=(), global_library_root=None, a
     repository = library.GlobalExactGlyphRepository.resolved(global_library_root)
     _require(not repository.path.resolve().is_relative_to(_absolute(project_output, "project-output")),
              "Global library must be outside the read-only source project")
-    if apply:
+    if apply and plan["intents"]:
         receipts = library.deliver_global_migration(repository, plan["intents"])
         return {**plan, "mode": "APPLIED", "receipts": [asdict(receipt) for receipt in receipts]}
     snapshot = repository.load_snapshot()  # Strict, read-only; absence stays absent.
-    return {**plan, "mode": "DRY_RUN", "global_store_status": snapshot.store_status}
+    result = {**plan, "mode": "APPLIED" if apply else "DRY_RUN", "global_store_status": snapshot.store_status,
+              "global_read_side_conflicts": [asdict(conflict) for conflict in snapshot.read_side_conflicts]}
+    if apply:
+        result["receipts"] = []
+    return result

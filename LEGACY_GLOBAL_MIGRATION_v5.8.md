@@ -77,15 +77,20 @@ Current-contract rows must retain a matching committed receipt and import
 provenance. Missing or inconsistent links fail strict loading. This requirement
 does not retroactively invent receipts for the exact legacy-v0 draft format.
 
-### Frozen v0 state compatibility boundary
+### Bounded historical-candidate compatibility (adopted v1.1 section 5.6)
 
-The reference is the actual `global_exact_glyph_library.py` and architecture audit
-at baseline `d2d558808bd2902857fad30f824d8bdc352beb73`. Audit section 16 requires
-disagreeing candidates and explicit project conflicts to quarantine immediately;
-section 7.2 requires an open conflict and no active reusable reading. Phase 2's
-validator checked migration IDs/fields but omitted the relationship between
-migration readings and glyph/conflict state. Acceptance by that validator alone
-does not establish conformance to the frozen safety contract.
+The controlling exception is section 5.6 of the adopted v1.1 specification,
+available as [V58_MASTER_DEVELOPMENT_REVIEW_PLAN_v1.1.md](https://github.com/discoveryray/zhuyin-proofreader/blob/f8bcb7f6a86e645b598715f0fd0ba198c2d0ccc1/docs/V58_MASTER_DEVELOPMENT_REVIEW_PLAN_v1.1.md).
+It takes precedence over the baseline audit's general candidate-quarantine rule.
+The actual library at baseline `d2d558808bd2902857fad30f824d8bdc352beb73` remains
+the frozen schema/ID/validator/reader reference. Baseline `VALID` alone cannot
+exempt a store from evidence, reference, count, identity or approval validation.
+
+The exception is finite: exact `legacy-v0` import ID, old verification level
+`USER_VERIFIED_SINGLE` or `VERIFIED_EXACT_GLYPH`, and historical row status
+`CANDIDATE` or `INSUFFICIENT`. All fields and all other strict validations still
+apply. Explicit legacy conflicts and current-contract imports retain their
+durable conflict requirements. No legacy row contributes to independent quorum.
 
 | Historical state (otherwise valid schema/fields/IDs) | Current strict read |
 |---|---|
@@ -93,15 +98,44 @@ does not establish conformance to the frozen safety contract.
 | v0 `INSUFFICIENT` candidate with no contradiction | Valid; no sample, receipt or direct evidence invented |
 | Contradictory v0 readings with durable `QUARANTINED_CONFLICT` and one open conflict covering every reading | Valid; historical migration statuses may remain `CANDIDATE` unchanged |
 | Explicit v0 conflict with the same complete durable quarantine | Valid; never reusable |
-| Contradictory candidates or explicit conflict while glyph remains `CANDIDATE` | Blocked, even though baseline validator returned `VALID` |
-| Open conflict omits a retained migration reading, or verified truth contradicts a v0 reading | Blocked; no partial read or automatic DB repair |
+| Ordinary v0 candidates disagree while stored glyph is `CANDIDATE` or `PROMOTION_READY` | Strict-readable; effective conflict suppresses exact reuse immediately |
+| Ordinary v0 reading contradicts otherwise valid direct/active reading, including stored `VERIFIED_GLOBAL` | Strict-readable; suppress this identity's trusted reuse immediately |
+| Explicit legacy conflict without durable quarantine, or contradictions among non-exempt current/direct/active readings without durable quarantine | Blocked |
+| Durable open conflict omits a retained migration reading | Blocked; no partial read or automatic DB repair |
+| Contradictory retained direct evidence, invalid/stale approval, invalid counts/references/schema | Blocked; the ordinary v0 exception cannot hide these errors |
 | Unknown or forged import ID | Blocked by the finite ID adapter |
 
-All accepted states still satisfy strict source counts, approval, schema and
-conflict validation. There is no read-time synthetic quarantine and no weakening
-of the common conflict gate. Admitting an unquarantined contradictory historical
-DB would require a separate audited repair/contract decision; this migration does
-not authorize that state. Safe historical states require no such decision.
+`GlobalExactGlyphSnapshot.read_side_conflicts` contains immutable diagnostics with
+the stored state, all applicable union readings and exact historical import IDs.
+Affected records are excluded from `trusted_identities`. They are not reported as
+durably quarantined in `quarantined_identities`. Pure read, snapshot, dry-run and
+empty apply never alter old rows/IDs/status, add receipts, persist quarantine or
+revoke an approval. Dry-run/empty-apply reports expose `global_read_side_conflicts`.
+
+The existing logical dependency contract represents both kinds of effective
+conflict as `QUARANTINED_CONFLICT` with the union readings and no active reading;
+this is an effective reuse state, not a claim about persisted storage. The
+existing exact union conflict gate then suppresses project/Global/static exact
+donors. Independently gated decoders and occurrence-specific direct overrides
+keep their original precedence. Only relevant per-PDF dependencies change;
+diagnostics, IDs, generation, whole DB bytes and audit growth are not cache keys.
+
+New direct delivery and new migration continue through the existing whole-batch
+transaction and include every retained v0 reading. Even an incoming reading
+matching one historical row must preserve the other row as counterevidence.
+They atomically persist quarantine, clear active reading, revoke applicable
+approval and retain all readings, while every v0 row column stays unchanged.
+
+Explicit approval validates the request policy, revision, exact direct-evidence
+roster and quorum first. A valid request against a compatible historical conflict
+in `PROMOTION_READY` or `VERIFIED_GLOBAL` commits the same conflict transaction
+and returns `approval_granted=false`, empty `approval_id`, state
+`QUARANTINED_CONFLICT`, and a receipt. It does not raise an approval rejection
+inside the transaction and inadvertently roll back quarantine. Invalid/stale
+requests remain rejected without mutation. The `approval_conflict_` receipt binds
+the new request, with linked `CONFLICT_OPENED` provenance; these are not retroactive
+v0 import receipts. Exact retry returns the original receipt without another
+generation bump, revocation or event. A transaction failure rolls back everything.
 
 `tests/test_global_legacy_migration_review_v580.py` executes the pinned baseline
 implementation's actual schema creation, ID calculation, transaction validator
@@ -137,10 +171,16 @@ stage corrections or generate direct evidence. Operators must visually confirm
 again through the existing Phase 4 workflow; only those new events can count.
 
 The report's `intents` preserve the original canonical import payload/status;
-stored migration statuses may subsequently become `CONFLICT`. Receipts identify
-the committed transaction and are stable across retries.
+stored current-contract migration statuses may subsequently become `CONFLICT`.
+Historical v0 statuses remain unchanged. Receipts identify the committed
+transaction and are stable across retries.
 
-## Independent-review corrections: validation on 2026-09-09
+## Prior correction validation (superseded for B2)
+
+The following results belong to reviewed HEAD
+`3ac6d72bd581d1e57b215d1d2076566cf094a3b1`. Independent review confirmed B1/B3 but
+blocked B2 because ordinary historical candidates were incorrectly rejected.
+They are historical execution evidence, not validation of the correction below.
 
 Correction base: reviewed commit `7b59a7aa1a0e163f99f2bac5bca083bb5ad31bc6`,
 whose sole parent is baseline `d2d558808bd2902857fad30f824d8bdc352beb73`.
@@ -187,6 +227,82 @@ Global DB mutation or real-textbook acceptance. This task prohibits real project
 and live DB writes; the migration fixtures use embedded-font synthetic PDFs.
 Runtime assets, manifest, fingerprint contracts, semantics epochs, decoder
 precedence, SQLite tables/columns and occurrence/review identities are unchanged.
-No unresolved implementation blocker or new contract decision remains within this
-scope. Independent review of the cumulative diff is still required; these results
-are implementation validation, not merge approval.
+That prior implementation did not satisfy the adopted section 5.6 exception.
+Independent review of the latest cumulative diff is still required.
+
+## B2 corrective implementation validation
+
+Correction parent: `3ac6d72bd581d1e57b215d1d2076566cf094a3b1`, followed by
+`7b59a7aa1a0e163f99f2bac5bca083bb5ad31bc6` and Phase baseline
+`d2d558808bd2902857fad30f824d8bdc352beb73`. Local and remote feature HEAD and
+this parent chain were checked after fetch before implementation and again
+before committing. No reviewed commit was amended or rebased. Review scope
+remains the entire Phase baseline to latest feature HEAD.
+
+The B2 fixtures execute the real pinned baseline schema creator, ID algorithm,
+transaction validator and reader. They cover ordinary v0 `ㄅ`/`ㄆ` rows in
+`CANDIDATE`, `PROMOTION_READY` and `VERIFIED_GLOBAL`, including a single contrary
+v0 reading against valid direct quorum. Reads, dry-run and empty apply keep all
+tables unchanged; a held baseline WAL read transaction verifies preservation of
+the main DB and nonempty WAL bytes. Effective diagnostics remain separate from
+durable quarantine. An unrelated verified identity still resolves and keeps its
+baseline subset/hash, while only relevant dependencies become conflicted.
+
+Fresh direct delivery, fresh migration and valid explicit approval each persist
+the union conflict even when their reading matches one v0 row. Tests assert
+cleared active reading, applicable revocation, no new approval or legacy quorum,
+unchanged v0 columns, linked audit records, stable receipt replay and one
+transaction generation increment. Injected failure after conflict/revocation and
+receipt creation rolls everything back. Windows spawn races cover direct versus
+migration and duplicate approval requests. Tests also retain matching verified
+digest, style-scoped CFF dependencies, independent decoder fallback and
+occurrence-local direct override precedence.
+
+True unsafe stores remain negative tests: explicit legacy conflict without
+quarantine, incomplete conflict readings, contradictory direct evidence,
+invalid approval/counts/schema/IDs, and missing current import or approval-conflict
+receipts/provenance. B1 TTF/CFF retained-reading/reconfirmation and B3 empty-apply
+matrices still run unchanged.
+
+Local validation environment: Windows, Python 3.13.5, UTF-8 mode. Complete suites
+run outside the sandbox so installed Tcl/Tk GUI tests execute, with isolated
+TEMP and LOCALAPPDATA under `C:\Work\phase5-b2-20260909-desktop`. The full pytest
+target is `tests/`, containing all 39 tracked test files; its cache is outside the
+sandbox-generated temporary directories. No new skip or replacement dictionary
+was introduced.
+
+Executed commands and results:
+
+```text
+python -m unittest discover -s tests -p "test_global_legacy_migration*_v580.py" -v
+  66 tests passed (27.501s).
+python -m pytest -q tests/test_exact_glyph_identity_v580.py tests/test_global_exact_glyph_repository_v580.py tests/test_global_exact_glyph_read_reuse_v580.py tests/test_global_promotion_v580.py tests/test_actual_post_commit_recovery_v580.py tests/test_cross_version_compat_v560.py -o cache_dir=tmp/phase5-b2/cache
+  180 passed, 74 subtests passed (29.16s); 5 existing SWIG warnings.
+python -m unittest discover -s tests -v
+  462 tests passed (239.384s), no failures, errors or skips.
+python -m pytest -q tests -o cache_dir=C:/Work/phase5-b2-20260909-desktop/pytest-cache
+  529 passed, 181 subtests passed (235.83s); no skips; 5 existing SWIG warnings.
+python -c "from pathlib import Path; import runtime_source_validation as r; import json; v=r.validate_asset_manifest(Path.cwd()); print(json.dumps(v,ensure_ascii=False,indent=2)); raise SystemExit(0 if v['ok'] else 1)"
+  All 20 runtime assets valid, no errors/warnings; manifest and assets unchanged.
+python -m compileall -q .
+  Exit 0, with PYTHONPYCACHEPREFIX in the isolated test cache.
+git diff --check d2d558808bd2902857fad30f824d8bdc352beb73
+  Passed before commit; baseline-to-committed-HEAD is rechecked for handoff.
+```
+
+The first expanded Phase 5 run found a fixture setup error: the WAL holder had
+not started a read transaction, so SQLite removed the WAL before the byte check.
+Starting that baseline read transaction made the intended nonempty WAL fixture
+real; the final run above passed without weakening its assertions.
+
+Local Python 3.12 is unavailable. The existing `ci.yml` workflow supplies Windows
+3.12/3.13 through `workflow_dispatch`; final commit SHA and CI results are recorded
+in the handoff after push. Live DB and real-user project mutations, real-textbook
+acceptance and Linux are not executed. Synthetic embedded-font fixtures provide
+the isolated migration/decoder verification for this bounded objective.
+
+SQLite `1.0`/`user_version=1`, actual/expected separation, identities, quorum,
+semantics epochs, runtime assets and fingerprint scope remain unchanged. No whole
+DB hash or generation cache key is introduced. No PR, merge, tag, release,
+main/develop mutation or Phase 6 work belongs to this correction. Implementation
+completion is `READY FOR REVIEW`; independent review remains the merge gate.

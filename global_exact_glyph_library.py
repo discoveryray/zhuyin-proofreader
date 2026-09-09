@@ -205,6 +205,18 @@ class GlobalGlyphSnapshotRecord:
 
 
 @dataclass(frozen=True)
+class LegacyCandidateReadConflict:
+    """Validated historical candidates suppress reuse without changing storage."""
+
+    glyph_id: str
+    identity: GlobalExactGlyphIdentity
+    stored_state: str
+    conflicting_readings: tuple[str, ...]
+    legacy_import_ids: tuple[str, ...]
+    diagnostic: str = "LEGACY_V0_READ_CONFLICT: reuse suppressed; durable quarantine/revocation not performed"
+
+
+@dataclass(frozen=True)
 class GlobalExactGlyphSnapshot:
     store_status: str
     schema_version: str
@@ -216,6 +228,7 @@ class GlobalExactGlyphSnapshot:
     database_path: str
     loaded_at: str
     provenance_event_count: int
+    read_side_conflicts: tuple[LegacyCandidateReadConflict, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -1538,6 +1551,7 @@ def _validate_rows(connection: sqlite3.Connection, path: Path) -> dict[str, Any]
     migrations = [dict(row) for row in connection.execute("SELECT * FROM migration_candidate ORDER BY import_id")]
     migration_by_id = {row["import_id"]: row for row in migrations}
     intent_by_id = {row["intent_id"]: row for row in intents}
+    historical_candidate_ids: set[str] = set()
     for row in migrations:
         import_id = _sha256_text(row["import_id"], "migration_candidate.import_id")
         glyph_id = _sha256_text(row["glyph_id"], "migration_candidate.glyph_id")
@@ -1561,6 +1575,9 @@ def _validate_rows(connection: sqlite3.Connection, path: Path) -> dict[str, Any]
             old_verification_level=old_level,
         )
         contract = _stored_migration_contract(import_id, **identity_args)
+        if (contract == "legacy-v0" and old_level in {"USER_VERIFIED_SINGLE", "VERIFIED_EXACT_GLYPH"}
+                and status in {MIGRATION_CANDIDATE, MIGRATION_INSUFFICIENT}):
+            historical_candidate_ids.add(import_id)
         if contract == GLOBAL_MIGRATION_IMPORT_CONTRACT_VERSION:
             # Current imports are complete auditable transactions. The exact
             # legacy-v0 adapter predates this workflow and requires no receipts.
@@ -1587,28 +1604,52 @@ def _validate_rows(connection: sqlite3.Connection, path: Path) -> dict[str, Any]
         if transaction_id.startswith("gmi_") and transaction_id[4:] not in migration_by_id:
             raise GlobalLibraryValidationError("orphan migration receipt/provenance", path=path)
 
-    # Legacy readings are safety constraints, never promotion sources. Enforce
-    # this on strict reads too, including legacy-v0. Frozen audit section 16
-    # requires quarantine for disagreeing candidates; the old validator omitted
-    # that check. Historical row statuses need not be rewritten when the durable
-    # glyph quarantine and open conflict already cover every retained reading.
+    # Adopted v1.1 section 5.6 permits ordinary frozen-v0 historical candidates
+    # to remain readable. Only their candidate-conflict invariant is adapted;
+    # all direct/approval/schema validation above and current import links stay
+    # strict. Every retained reading still participates in effective reuse safety.
+    read_side_conflicts: dict[str, LegacyCandidateReadConflict] = {}
     for glyph_id, glyph in glyphs.items():
         legacy_rows = [row for row in migrations if row["glyph_id"] == glyph_id]
-        readings = direct_readings_by_glyph[glyph_id] | {row["reading"] for row in legacy_rows}
-        if (len(readings) > 1 or any(row["old_verification_level"] == QUARANTINED_CONFLICT
+        strict_rows = [row for row in legacy_rows if row["import_id"] not in historical_candidate_ids]
+        strict_readings = direct_readings_by_glyph[glyph_id] | {row["reading"] for row in strict_rows}
+        if glyph["active_reading"] is not None:
+            strict_readings.add(glyph["active_reading"])
+        readings = strict_readings | {row["reading"] for row in legacy_rows}
+        if (len(strict_readings) > 1 or any(row["old_verification_level"] == QUARANTINED_CONFLICT
                                      or row["status"] == MIGRATION_CONFLICT for row in legacy_rows)):
             if glyph["state"] != QUARANTINED_CONFLICT:
                 raise GlobalLibraryValidationError("migration contradiction requires quarantine", path=path)
         if glyph["state"] == QUARANTINED_CONFLICT:
             if not readings.issubset(set(open_conflicts[glyph_id][0])):
                 raise GlobalLibraryValidationError("open conflict omits migration reading", path=path)
-        elif glyph["state"] == VERIFIED_GLOBAL and any(r != glyph["active_reading"] for r in readings):
-            raise GlobalLibraryValidationError("verified truth contradicts migration", path=path)
+        elif len(readings) > 1:
+            read_side_conflicts[glyph_id] = LegacyCandidateReadConflict(
+                glyph_id, glyph["identity"], glyph["state"], tuple(sorted(readings)),
+                tuple(sorted(row["import_id"] for row in legacy_rows
+                             if row["import_id"] in historical_candidate_ids)))
+
+    # These receipts describe a new, explicitly requested safety transaction,
+    # never retroactive receipts/provenance for v0 imports.
+    for transaction_id in {str(item.get("intent_id", item.get("transaction_id", "")))
+                           for item in [*intents, *provenance]}:
+        if not transaction_id.startswith("approval_conflict_"):
+            continue
+        receipt = intent_by_id.get(transaction_id)
+        events = [event for event in provenance if event["transaction_id"] == transaction_id]
+        if (receipt is None or transaction_id != "approval_conflict_" + receipt["payload_digest"]
+                or receipt["result_state"] != INTENT_COMMITTED or len(events) != 1
+                or events[0]["event_type"] != "CONFLICT_OPENED"
+                or events[0]["payload_digest"] != receipt["payload_digest"]
+                or events[0]["evidence_id"] is not None or events[0]["approval_id"] is not None
+                or glyphs[events[0]["glyph_id"]]["state"] != QUARANTINED_CONFLICT):
+            raise GlobalLibraryValidationError("approval conflict receipt/provenance mismatch", path=path)
 
     return {
         "meta": meta,
         "glyphs": glyphs,
         "open_conflicts": open_conflicts,
+        "read_side_conflicts": read_side_conflicts,
         "provenance_event_count": len(provenance),
     }
 
@@ -1659,6 +1700,8 @@ def _load_snapshot_from_path(path: Path, busy_timeout_ms: int) -> GlobalExactGly
         quarantined: list[GlobalGlyphSnapshotRecord] = []
         for glyph_id, row in sorted(validated["glyphs"].items()):
             identity = row["identity"]
+            if glyph_id in validated["read_side_conflicts"]:
+                continue  # Stored VERIFIED_GLOBAL is insufficient for effective reuse.
             if row["state"] == VERIFIED_GLOBAL:
                 trusted.append(GlobalGlyphSnapshotRecord(
                     glyph_id=glyph_id,
@@ -1696,6 +1739,7 @@ def _load_snapshot_from_path(path: Path, busy_timeout_ms: int) -> GlobalExactGly
             database_path=str(path),
             loaded_at=_utc_now(),
             provenance_event_count=int(validated["provenance_event_count"]),
+            read_side_conflicts=tuple(value for _, value in sorted(validated["read_side_conflicts"].items())),
         )
     except BaseException as exc:
         if connection is not None and connection.in_transaction:
@@ -1714,6 +1758,9 @@ def canonical_logical_subset_digest(
         raise GlobalLibraryValidationError("logical subset 只接受 ABSENT 或 VALID immutable snapshot")
     trusted = {record.identity.tuple: record for record in snapshot.trusted_identities}
     quarantined = {record.identity.tuple: record for record in snapshot.quarantined_identities}
+    # Reuse/dependency semantics are the existing union conflict gate. Storage
+    # diagnostics remain distinct; no schema, scope, epoch or generation key.
+    quarantined.update({record.identity.tuple: record for record in snapshot.read_side_conflicts})
     canonical_requests: dict[tuple[str, str, str], GlobalExactGlyphIdentity] = {}
     for raw in requested_identities:
         if isinstance(raw, GlobalExactGlyphIdentity):
@@ -1781,12 +1828,12 @@ def canonical_logical_subset_digest(
         conflicts: tuple[str, ...] = ()
         if request.identity_eligibility == NON_GLOBAL_ELIGIBLE:
             state = NON_GLOBAL_ELIGIBLE
-        elif snapshot.store_status == VALID and identity_tuple in trusted:
-            state = VERIFIED_GLOBAL
-            reading = trusted[identity_tuple].active_reading
         elif snapshot.store_status == VALID and identity_tuple in quarantined:
             state = QUARANTINED_CONFLICT
             conflicts = quarantined[identity_tuple].conflicting_readings
+        elif snapshot.store_status == VALID and identity_tuple in trusted:
+            state = VERIFIED_GLOBAL
+            reading = trusted[identity_tuple].active_reading
         rows.append(LogicalSubsetRow(
             identity_contract_version=snapshot.identity_contract_version,
             promotion_policy_version=snapshot.promotion_policy_version,
@@ -2932,10 +2979,27 @@ def approve_global_exact_glyph(
         raise GlobalLibraryValidationError("quorum roster must be canonical")
     if _sha256_text(quorum_digest, "quorum_digest") != compute_quorum_digest(glyph_id, reading, ids):
         raise GlobalLibraryValidationError("stale quorum digest")
+    request = {"glyph_id": glyph_id, "reading": reading, "glyph_revision": revision,
+               "quorum_evidence_ids": ids, "quorum_digest": quorum_digest,
+               "promotion_policy_version": promotion_policy_version, "approval_source": approval_source}
+    request_digest = _canonical_sha256(request)
+    conflict_intent_id = "approval_conflict_" + request_digest
+
+    def conflict_result(generation, receipt_digest, replay):
+        return {"approval_id": "", "approval_granted": False, "glyph_id": glyph_id,
+                "state": QUARANTINED_CONFLICT, "glyph_revision": revision + 1,
+                "generation": generation, "reason": "LEGACY_V0_READ_CONFLICT",
+                "receipt_digest": receipt_digest, "already_processed": replay}
+
     with repository.write_transaction() as transaction:
         connection = transaction._connection
+        receipt = transaction.lookup_processed_intent(conflict_intent_id)
+        if receipt is not None:
+            if receipt["payload_digest"] != request_digest:
+                raise GlobalLibraryIntentConflictError("same approval conflict request / different payload")
+            return conflict_result(int(receipt["committed_generation"]), receipt["receipt_digest"], True)
         glyph = connection.execute("SELECT * FROM glyph_truth WHERE glyph_id=?", (glyph_id,)).fetchone()
-        if glyph is None or glyph["state"] != PROMOTION_READY or int(glyph["revision"]) != revision:
+        if glyph is None or int(glyph["revision"]) != revision:
             raise GlobalLibraryValidationError("stale revision or non-promotion-ready glyph")
         rows = [dict(row) for row in connection.execute(
             "SELECT * FROM source_evidence WHERE glyph_id=? AND evidence_class=? ORDER BY evidence_id",
@@ -2945,6 +3009,24 @@ def approve_global_exact_glyph(
                 or any(row["reading"] != reading for row in rows)
                 or not independent_direct_quorum(rows)):
             raise GlobalLibraryValidationError("stale/invalid approval evidence roster or reading")
+        retained = {row["reading"] for row in rows}
+        retained.update(row[0] for row in connection.execute(
+            "SELECT reading FROM migration_candidate WHERE glyph_id=?", (glyph_id,)))
+        if glyph["active_reading"]:
+            retained.add(glyph["active_reading"])
+        if len(retained) > 1 and glyph["state"] in {PROMOTION_READY, VERIFIED_GLOBAL}:
+            # The prevalidation admits only the bounded historical exception.
+            # Commit its safety transition instead of raising a rejection inside
+            # this transaction (which would roll back quarantine/revocation).
+            event = {"intent_id": conflict_intent_id, "payload": request, "payload_digest": request_digest}
+            _migration_conflict_gate(transaction, event)
+            generation = transaction.bump_generation()
+            digest = transaction.record_processed_intent(
+                intent_id=conflict_intent_id, payload_digest=request_digest,
+                committed_generation=generation, result_state=INTENT_COMMITTED)
+            return conflict_result(generation, digest, False)
+        if glyph["state"] != PROMOTION_READY:
+            raise GlobalLibraryValidationError("stale revision or non-promotion-ready glyph")
         approved_revision = revision + 1
         approval = {
             "glyph_id": glyph_id, "reading": reading, "quorum_digest": quorum_digest,
