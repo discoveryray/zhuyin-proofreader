@@ -1,5 +1,23 @@
 # zhuyin-proofreader Codex 專案規範
 
+## 0. 完整規範入口與任務角色
+
+v5.8 完整開發／獨立審查規範：
+[V58_MASTER_DEVELOPMENT_REVIEW_PLAN_v1.1.md](docs/V58_MASTER_DEVELOPMENT_REVIEW_PLAN_v1.1.md)。
+
+這是使用者採納的「zhuyin-proofreader_v5.8_完整規範_v1.1.md」之 repository 副本。
+新的相關任務開始時，先讀此完整文件與當次適用條款；同一任務已讀且未改版的內容不必反覆全文重讀。
+完整文件不會因為被連結就等同已讀取，必須實際開啟。若文件缺失或讀取不完整，明確回報缺口，完成不依賴缺口的工作，不得假裝已讀或給無證據的 PASS。
+
+在 CLI / IDE 使用時，完整文件所稱「專案來源／Sources」由上述 repository 路徑提供，不要求存取另一個 ChatGPT 專案。
+文件附錄的階段狀態、SHA、PR 與測試數量都是歷史快照；執行前以當次指定範圍及實際 GitHub 狀態核對。
+
+依當次任務決定角色：implementation agent 負責實作與自我驗證，完成後交付 `READY FOR REVIEW`；independent reviewer 負責獨立審查，不能自行修改受審程式。使用者本次明確要求的文件修改可以實作，但實作者不得同時充當該修改的唯一獨立審查者。
+
+使用者最新明確指示優先於專案文件；本文件與完整規範共同適用。若有實質契約衝突，指出衝突與影響，不得暗中弱化安全邊界。
+
+---
+
 ## 1. 專案目的
 
 本 repository 是臺灣國小教材 PDF 注音校對工具。
@@ -374,6 +392,8 @@ Codex 不得僅依自己的 implementation、tests 或自我 code review
 ## 15. Codex 回覆方式
 
 - 回報以繁體中文為主。
+- 回覆精簡，先說結果與影響，再給必要證據。
+- 內容若需要程式、Excel 技術結構或自動化邏輯知識才能理解，先提供不懂代碼的文編也能看懂的白話說明，再提供技術內容。
 - 程式名稱、branch、commit、function、field、status 等保留原始英文。
 - 不要用模糊的「應該沒問題」「看起來通過」代替實際驗證結果。
 - 不得把沒有執行的測試描述為已通過。
@@ -396,3 +416,59 @@ Codex 不得僅依自己的 implementation、tests 或自我 code review
 應把它視為獨立 architecture objective，先確認設計、migration、compatibility 與 regression plan。
 
 不得把一般 bug fix 當成理由默默突破永久安全邊界。
+
+---
+
+## 17. v5.8 必要安全與審查補充
+
+本節保留完整規範中最容易誤用的門檻；未列出細節不表示解除完整規範。
+
+### Global actual truth
+
+- 有效的 occurrence-specific direct actual 優先於 reusable truth；reusable conflict 不抹除該直接確認，傳播 reading 不得冒充 fresh direct evidence。
+- TTF Global exact identity 只接受合法、完整、可見且 `numberOfContours > 0` 的 simple raw glyf SHA-256，排除 composite / malformed / truncated。CFF 使用 canonical style_group 加 complete resolved glyph recording SHA-256。
+- 先通過 union exact conflict gate，再套用 project / Global / static reusable precedence。同 identity disagreement suppression 全部相關 reusable exact donors。
+- 只有 `VERIFIED_GLOBAL` 可以 Global reuse；candidate、legacy、source_count 或 provenance 都不能代替 trusted truth。
+- 只有 fresh `DIRECT_VISUAL_ACTUAL` 能計 Global quorum；實際合格 sources 必須同時通過 project/session、PDF SHA、font-program SHA、occurrence、review 的獨立性驗證。Legacy 永不計 quorum，也不自動 promotion / approval。
+- Conflict 禁止 last-writer-wins；durable quarantine 清除 active reading、撤銷適用 approval、保留所有相關 evidence / readings 及稽核歷史，不自動解除。
+- 區分 absent、corrupt、incompatible 與 unreadable DB；唯讀不得初始化、修復或改寫正式 DB。Empty migration APPLY 仍需 strict validate existing Global DB。
+- Per-PDF fingerprint 僅涵蓋實際依賴的 logical Global subset；generation 僅供 audit，不作 cache key。Matching legacy 若不改有效結果，不應改變 logical digest。
+
+### Legacy-v0 可讀取與可重用
+
+- 相容性只適用 frozen v0 non-reusable migration candidates。Exact 舊演算法 ID 與完整 frozen v0 contract 都要驗證；僅有 structural schema 或舊 validator VALID 不足。
+- 合法歷史 candidates 不得僅因互斥候選讀音，就被新增 invariant 判定整個 DB corrupt；strict-readable 不等於 reusable。
+- Pure read / snapshot 不 mutation、不 rewrite、不改 ID、不偽造 receipt 或 durable quarantine。所有適用 retained v0 readings 必須立即參與 read-side conflict gate，有矛盾就不能 trusted Global reuse，不能等下一次寫入才檢查。
+- 新 direct evidence、migration mutation 或 explicit approval 處理同 glyph 時，納入所有適用 retained v0 readings。有 contradiction 就經安全交易流程 quarantine / revoke，不授予新 approval；只吻合互斥候選之一仍是 conflict。
+- 不得藉相容性接受 contradictory direct evidence 未 quarantine、verified 與 retained direct 矛盾、invalid approval、corrupt schema 或 fabricated source evidence。不批次改寫 live DB。
+- Phase 5 對所選 project 完全 read-only；禁止 broad scan、expected/dictionary inference 或有寫入副作用的 validator。Quarantined learning row 仍須完成適用 reading、mapping 與 identity validation。
+
+### 授權與階段流程
+
+- 既有授權只在原 operation、repository、branch、scope 與階段內持續有效；同一授權範圍不重複確認。原授權明確涵蓋多項操作或階段時，依其原範圍執行。
+- 不把一次 implementation / push / PR / merge / tag / release 授權擴張為其他操作或後續階段。Review PASS、流程規劃與產生 prompt 本身不構成新的 write authorization。
+- 每個 major objective 獨立 branch；corrective commit 不改寫已審歷史。禁止 squash / rebase merge。
+- Phase N 必須完成 implementation、independent review PASS、PR cumulative review PASS、必要 CI PASS、merge commit 與 develop post-merge CI PASS，才正式開始 Phase N+1。
+- Phase 6 GUI 只使用既有安全 service/API，不另造 truth、approval、quorum 或 conflict 邏輯。
+
+### 審查範圍與 HEAD 變動
+
+- 審查記錄 repository、baseline、reviewed SHA、parents、branch HEAD 與 cumulative scope。Code、tests、新文件及 implementation summary 都是待核對的證據。
+- Corrective 複審仍審 Phase baseline → 最新受審 HEAD 的完整 cumulative diff，不能只審 corrective diff。
+- 固定 SHA 任務：完成指定版本的審查，branch / develop 前進如實回報，不擅改 scope。就此類唯讀審查，第 2、10、12 節的 branch/base 停止條件適用於受審對象與指定 scope 不符；不因 develop 單純前進就中止對指定 baseline / SHA 的既定審查。
+- Latest HEAD 任務：更新 cumulative review 並補受影響檢查。舊完整 review 對舊 SHA 仍有效；未完成 review 只屬 partial evidence。兩者都不能套用新 SHA。
+- 結論前重新核對 target HEAD；`REVIEW: PASS` 必須綁定 exact reviewed SHA / baseline / scope，不表示未審新 HEAD 或整個 Phase 通過。
+- PR 核對實際 base、head、merge-base 與 GitHub diff。CI 核對 workflow、required jobs、event、attempt 與 tested SHA；synthetic merge SHA 須核對 base / head。舊綠燈、skip、cancel、pending 或 missing 不當 PASS。
+- 明確區分本次執行、閱讀既有 tests、GitHub CI、實作者回報及未驗證。Linux 不冒充 Windows；缺資產與環境限制不冒充 correctness bug，但必要安全門檻缺證據不能無條件 PASS。
+
+### 每次正式審核後的交接
+
+正式 verdict 使用 `REVIEW: PASS` 或 `REVIEW: BLOCKED`，綁定 reviewed SHA / baseline / scope。
+BLOCKED 區分確定缺陷、契約衝突與必要驗證缺口；每項提供 exact file / function / region、failure scenario、violated contract、test gap、minimum fix 及 regression requirement。
+
+每次正式審核完成後，直接附上可複製交給 Codex 的完整下一步指令，不必再問使用者是否需要：
+
+- BLOCKED：corrective implementation 或補證據 prompt。
+- PASS：當前已達門檻下的下一個 workflow action。
+- Prompt 包含 repository、phase/objective、branch、SHA、scope、授權範圍、禁止事項、必要驗證、停止條件與交回資料。
+- 不偽造 write 授權，不跳過必要門檻；實作者自我檢查不冒充 independent review。
