@@ -50,8 +50,23 @@ def review_evidence(number):
         "scope": "baseline_to_head" if number == 1 else "cumulative_and_full_pr_with_ci",
         "verdict": "PASS", "independent": True, "full_diff_reviewed": True,
         "findings": [], "report_ref": f"fixture://independent-report/{number}",
+        "blocker_kind": None, "supersedes_report_ref": None, "resolution_evidence_ref": None,
         "ci": None if number == 1 else {"run_id": 100, "attempt": 1, "tested_sha": SYNTHETIC},
     }
+
+
+def block_review(review, kind="code"):
+    review.update(verdict="BLOCKED", blocker_kind=kind, findings=[f"confirmed {kind} finding; original report retained"])
+
+
+def supplement(review, suffix="supplement"):
+    result = deepcopy(review)
+    result.update(verdict="PASS", blocker_kind=None, findings=[],
+                  reviewer=review["reviewer"] + "-" + suffix,
+                  report_ref=review["report_ref"] + "/" + suffix,
+                  supersedes_report_ref=review["report_ref"],
+                  resolution_evidence_ref="fixture://original-resolution/" + suffix)
+    return result
 
 
 def evidence_state():
@@ -152,13 +167,13 @@ class ReviewGateTests(unittest.TestCase):
         for number in (1, 2):
             with self.subTest(round=number):
                 state = evidence_state()
-                state["reviews"][number - 1]["verdict"] = "BLOCKED"
+                block_review(state["reviews"][number - 1])
                 state["reviews"][number - 1]["findings"] = ["blocking finding"]
                 self.assertAction(state, "CORRECT_IMPLEMENTATION")
 
     def test_three_corrections_are_a_task_wide_limit(self):
         state = evidence_state()
-        state["reviews"][0]["verdict"] = "BLOCKED"
+        block_review(state["reviews"][0])
         chain = ["1" * 40, "2" * 40, "3" * 40, HEAD]
         for count in range(4):
             state["corrections"] = [{"number": n + 1, "from_head": chain[n], "to_head": chain[n + 1],
@@ -172,6 +187,7 @@ class ReviewGateTests(unittest.TestCase):
         self.assertAction(state, "REQUEST_REVIEW_1")
         first = review_evidence(1)
         first["head"] = NEW
+        first["report_ref"] += "/new-head"
         state["reviews"].append(first)
         state["pr_ci"]["head_sha"] = NEW
         state["pr_ci"]["parents"] = [BASE, NEW]
@@ -258,13 +274,14 @@ class ReviewGateTests(unittest.TestCase):
 
     def test_rerun_ci_does_not_erase_blocked_review_against_unchanged_code(self):
         state = evidence_state()
-        state["reviews"][1]["verdict"] = "BLOCKED"
+        block_review(state["reviews"][1])
         state["reviews"][1]["findings"] = ["unchanged code blocker"]
         state["pr_ci"]["attempt"] = state["pr_ci"]["latest_attempt"] = 2
         for job in state["pr_ci"]["jobs"]:
             job["attempt"] = 2
         fresh = review_evidence(2)
         fresh["ci"]["attempt"] = 2
+        fresh["report_ref"] += "/new-ci"
         state["reviews"].append(fresh)
         self.assertAction(state, "CORRECT_IMPLEMENTATION")
 
@@ -312,7 +329,7 @@ class ReviewGateTests(unittest.TestCase):
         state["authorization"]["operations"].remove("pr")
         self.assertAction(state, "STOP")
         state = evidence_state()
-        state["reviews"][0]["verdict"] = "BLOCKED"
+        block_review(state["reviews"][0])
         state["authorization"]["operations"].remove("commit")
         self.assertAction(state, "STOP")
         state = evidence_state()
@@ -337,7 +354,7 @@ class ReviewGateTests(unittest.TestCase):
         self.assertEqual(state["corrections"], original)
         # Only a confirmed review finding calls for a code correction, now exhausted.
         state["pr_ci"] = ci_evidence()
-        state["reviews"][0]["verdict"] = "BLOCKED"
+        block_review(state["reviews"][0])
         self.assertAction(state, "STOP")
 
     def test_confirmed_blockers_reach_correction_before_ci_success_with_one_task_limit(self):
@@ -356,7 +373,7 @@ class ReviewGateTests(unittest.TestCase):
                             state["reviews"] = [state["reviews"][0]]
                             state["pr"]["new_blockers"] = ["confirmed current-scope code failure; raw logs retained"]
                         else:
-                            state["reviews"][1]["verdict"] = "BLOCKED"
+                            block_review(state["reviews"][1])
                             state["reviews"][1]["findings"] = ["confirmed current-scope code failure"]
                         chain = ["1" * 40, "2" * 40, "3" * 40, HEAD]
                         state["corrections"] = [{"number": n + 1, "from_head": chain[n], "to_head": chain[n + 1],
@@ -376,7 +393,7 @@ class ReviewGateTests(unittest.TestCase):
                 state["reviews"] = [state["reviews"][0]]
                 state["pr"]["new_blockers"] = ["confirmed CI code defect"]
             else:
-                state["reviews"][1]["verdict"] = "BLOCKED"
+                block_review(state["reviews"][1])
                 state["reviews"][1]["findings"] = ["confirmed CI code defect"]
             for operation in ("implement", "test", "commit", "push", "delegate"):
                 restricted = deepcopy(state)
@@ -398,7 +415,7 @@ class ReviewGateTests(unittest.TestCase):
             state = evidence_state()
             state["pr_ci"]["conclusion"] = "failure"
             state["pr"]["new_blockers"] = ["finding bound to old PR snapshot"]
-            state["reviews"][1]["verdict"] = "BLOCKED"
+            block_review(state["reviews"][1])
             state["reviews"][1]["findings"] = ["finding against old review scope"]
             state["current"][changed] = NEW
             self.assertAction(state, "REFRESH_EVIDENCE")
@@ -408,6 +425,7 @@ class ReviewGateTests(unittest.TestCase):
             self.assertAction(state, "REQUEST_REVIEW_1")
             fresh_first = review_evidence(1)
             fresh_first[changed] = NEW
+            fresh_first["report_ref"] += "/new-scope"
             state["reviews"].append(fresh_first)
             # The old second-round BLOCKED cannot request correction for new code.
             self.assertAction(state, "REFRESH_EVIDENCE")
@@ -418,6 +436,189 @@ class ReviewGateTests(unittest.TestCase):
         state["pr_ci"]["conclusion"] = "failure"
         self.assertAction(state, "INVESTIGATE_CI")
         self.assertEqual(state["corrections"], [])
+
+    def test_non_code_blocked_never_requests_a_corrective_commit(self):
+        for number in (1, 2):
+            for kind in ("evidence", "capability", "contract"):
+                for status in ("failure", "queued", "in_progress", "success"):
+                    with self.subTest(round=number, kind=kind, ci=status):
+                        state = evidence_state()
+                        block_review(state["reviews"][number - 1], kind)
+                        if status in ("failure", "success"):
+                            state["pr_ci"]["conclusion"] = status
+                        else:
+                            state["pr_ci"].update(status=status, conclusion=None, jobs=[])
+                        before = deepcopy(state)
+                        result = self.assertAction(state, "REFRESH_EVIDENCE" if kind == "evidence" else "STOP")
+                        self.assertNotIn("correction_round", result)
+                        self.assertEqual(state, before)
+
+    def test_append_only_non_code_supplement_can_resume_at_unchanged_head(self):
+        for number in (1, 2):
+            for kind in ("evidence", "capability", "contract"):
+                for attempt in (1, 2):
+                    with self.subTest(round=number, kind=kind, attempt=attempt):
+                        state = evidence_state()
+                        old = state["reviews"][number - 1]
+                        block_review(old, kind)
+                        original = deepcopy(old)
+                        fresh = supplement(old)
+                        if number == 2:
+                            state["pr_ci"]["attempt"] = state["pr_ci"]["latest_attempt"] = attempt
+                            for job in state["pr_ci"]["jobs"]:
+                                job["attempt"] = attempt
+                            fresh["ci"]["attempt"] = attempt
+                        state["reviews"].append(fresh)
+                        self.assertAction(state, "MERGE_PROPOSAL")
+                        self.assertEqual(state["reviews"][number - 1], original)
+                        self.assertEqual((state["current"]["head"], state["task"]["baseline"], state["corrections"]),
+                                         (HEAD, BASE, []))
+                        self.assertEqual(len(state["reviews"]), 3)
+
+    def test_evidence_blocked_can_record_unavailable_ci_then_supplement_real_attestation(self):
+        state = evidence_state()
+        old = state["reviews"][1]
+        block_review(old, "evidence")
+        old["ci"] = None
+        state["pr_ci"] = None
+        self.assertAction(state, "REFRESH_EVIDENCE")
+        fresh = supplement(old)
+        fresh["ci"] = {"run_id": 100, "attempt": 1, "tested_sha": SYNTHETIC}
+        state["reviews"].append(fresh)
+        self.assertAction(state, "WAIT_PR_CI")
+        state["pr_ci"] = ci_evidence()
+        self.assertAction(state, "MERGE_PROPOSAL")
+
+    def test_unlinked_pass_or_ci_rerun_does_not_resolve_non_code_blocked(self):
+        for number in (1, 2):
+            state = evidence_state()
+            old = state["reviews"][number - 1]
+            block_review(old, "evidence")
+            fresh = review_evidence(number)
+            fresh["report_ref"] += "/unlinked"
+            state["reviews"].append(fresh)
+            self.assertAction(state, "STOP")  # ambiguous same-scope reports
+            if number == 2:
+                fresh["ci"]["attempt"] = 2
+                state["pr_ci"]["attempt"] = state["pr_ci"]["latest_attempt"] = 2
+                for job in state["pr_ci"]["jobs"]:
+                    job["attempt"] = 2
+                self.assertAction(state, "REFRESH_EVIDENCE")  # old BLOCKED still active
+
+    def test_supersession_rejects_missing_resolution_scope_changes_and_invalid_reviewers(self):
+        mutations = (("supersedes_report_ref", "fixture://missing-report"),
+                     ("resolution_evidence_ref", None), ("resolution_evidence_ref", ""),
+                     ("reviewer", "implementation-agent"), ("independent", False),
+                     ("full_diff_reviewed", False), ("scope", "summary_only"),
+                     ("head", NEW), ("base", NEW), ("baseline", NEW))
+        for number in (1, 2):
+            for field, value in mutations:
+                with self.subTest(round=number, field=field):
+                    state = evidence_state()
+                    old = state["reviews"][number - 1]
+                    block_review(old, "evidence")
+                    fresh = supplement(old)
+                    fresh[field] = value
+                    state["reviews"].append(fresh)
+                    self.assertAction(state, "STOP")
+            state = evidence_state()
+            old = state["reviews"][number - 1]
+            block_review(old, "evidence")
+            fresh = supplement(old)
+            # A late definition, self-reference, and two children are all rejected.
+            state["reviews"].insert(0, fresh)
+            self.assertAction(state, "STOP")
+            state["reviews"].pop(0)
+            fresh["supersedes_report_ref"] = fresh["report_ref"]
+            state["reviews"].append(fresh)
+            self.assertAction(state, "STOP")
+            state["reviews"][-1] = supplement(old)
+            state["reviews"].append(supplement(old, "fork"))
+            self.assertAction(state, "STOP")
+
+    def test_invalid_predecessor_or_cross_round_supersession_cannot_hide_independence_failure(self):
+        for field, value in (("reviewer", "implementation-agent"), ("independent", False),
+                             ("full_diff_reviewed", False), ("reviewer", "independent-agent-1")):
+            state = evidence_state()
+            old = state["reviews"][1]
+            block_review(old, "evidence")
+            fresh = supplement(old)
+            old[field] = value
+            state["reviews"].append(fresh)
+            self.assertAction(state, "STOP")
+        state = evidence_state()
+        block_review(state["reviews"][0], "evidence")
+        state["reviews"][1].update(supersedes_report_ref=state["reviews"][0]["report_ref"],
+                                   resolution_evidence_ref="fixture://resolution")
+        self.assertAction(state, "STOP")
+
+    def test_supplement_does_not_bypass_current_ci_or_clear_confirmed_code(self):
+        for number in (1, 2):
+            state = evidence_state()
+            old = state["reviews"][number - 1]
+            block_review(old)
+            state["reviews"].append(supplement(old))
+            self.assertAction(state, "STOP")
+        state = evidence_state()
+        old = state["reviews"][1]
+        block_review(old, "evidence")
+        state["reviews"].append(supplement(old))
+        state["pr_ci"]["conclusion"] = "failure"
+        self.assertAction(state, "INVESTIGATE_CI")
+        state["pr_ci"]["conclusion"] = "success"
+        state["pr_ci"]["attempt"] = state["pr_ci"]["latest_attempt"] = 2
+        for job in state["pr_ci"]["jobs"]:
+            job["attempt"] = 2
+        self.assertAction(state, "REQUEST_REVIEW_2")
+
+    def test_supplement_chain_preserves_exhausted_budget_merge_and_replay(self):
+        state = merged_state()
+        old = state["reviews"][1]
+        block_review(old, "evidence")
+        chain = ["1" * 40, "2" * 40, "3" * 40, HEAD]
+        state["corrections"] = [{"number": n + 1, "from_head": chain[n], "to_head": chain[n + 1],
+                                 "evidence_ref": f"fixture://correction/{n + 1}"} for n in range(3)]
+        before_merge, before_history = deepcopy(state["merge"]), deepcopy(state["corrections"])
+        self.assertAction(state, "REFRESH_EVIDENCE")
+        middle = supplement(old)
+        block_review(middle, "capability")
+        state["reviews"].append(middle)
+        result = self.assertAction(state, "STOP")
+        self.assertNotIn("exhausted", result["reason"])
+        state["reviews"].append(supplement(middle, "resolved"))
+        self.assertAction(state, "COMPLETE")
+        service = FakeService()
+        service.pr = deepcopy(state["pr"])
+        service.reconcile(state)
+        service.reconcile(state)
+        self.assertEqual((service.creations, service.merges), (0, 0))
+        self.assertEqual((state["merge"], state["corrections"]), (before_merge, before_history))
+        self.assertEqual((state["task"]["baseline"], len(state["reviews"])), (BASE, 4))
+
+    def test_blocker_classification_is_explicit_and_schema_one_is_not_guessed(self):
+        for kind in (None, "unknown", "code", "evidence"):
+            state = evidence_state()
+            state["reviews"][0].update(verdict="BLOCKED", blocker_kind=kind, findings=[])
+            self.assertAction(state, "STOP")
+        state = evidence_state()
+        state["reviews"][0]["blocker_kind"] = "code"
+        self.assertAction(state, "STOP")
+        state = evidence_state()
+        block_review(state["reviews"][0], "unknown")
+        self.assertAction(state, "STOP")
+        for field in ("blocker_kind", "supersedes_report_ref", "resolution_evidence_ref"):
+            state = evidence_state()
+            del state["reviews"][0][field]
+            self.assertAction(state, "STOP")
+        state = evidence_state()
+        state["reviews"][0]["resolution_evidence_ref"] = "fixture://unlinked-resolution"
+        self.assertAction(state, "STOP")
+        state = evidence_state()
+        state["reviews"].append(supplement(state["reviews"][0]))
+        self.assertAction(state, "STOP")  # an existing PASS is not a non-code BLOCKED target
+        state = evidence_state()
+        state["schema"] = "zhuyin-pr-review-gate/1"
+        self.assertAction(state, "STOP")
 
     def test_actual_merge_must_have_reviewed_parents_tree_and_ancestry(self):
         for field, value in (("parents", [HEAD, BASE]), ("parents", [BASE]), ("tree", NEW),
@@ -453,7 +654,7 @@ class ReviewGateTests(unittest.TestCase):
                         state["pr"]["new_blockers"] = ["confirmed defect in actual merged scope"]
                     else:
                         review = state["reviews"][int(source[-1]) - 1]
-                        review["verdict"] = "BLOCKED"
+                        block_review(review)
                         review["findings"] = ["confirmed defect in actual merged scope"]
                     chain = ["1" * 40, "2" * 40, "3" * 40, HEAD]
                     state["corrections"] = [{"number": n + 1, "from_head": chain[n], "to_head": chain[n + 1],

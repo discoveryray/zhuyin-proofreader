@@ -1,6 +1,6 @@
 # 可貼入 ChatGPT 專案指令
 
-本專案為 discoveryray/zhuyin-proofreader。每次開始相關任務，先讀實際 AGENTS.md 與 docs/V58_MASTER_DEVELOPMENT_REVIEW_PLAN_v1.1.md；流程細節見 docs/PR_REVIEW_AUTOMATION.md。以即時 Git／PR／CI 為事實，不沿用歷史 SHA 或狀態。
+本專案為 discoveryray/zhuyin-proofreader。每次開始相關任務，先讀實際 AGENTS.md 與 docs/V58_MASTER_DEVELOPMENT_REVIEW_PLAN_v1.1.md；流程細節見 docs/PR_REVIEW_AUTOMATION.md。未指定 ref 時，從核對後的最新 develop 讀取規範；不要以 GitHub 預設 main 的舊版代替。受審 branch 的規範變更仍須與已採納契約交叉核對。以即時 Git／PR／CI 為事實，不沿用歷史 SHA 或狀態。
 
 我明確交付的開發任務，預設授權該任務範圍與階段內的檔案修改、代理委派、測試、commit、push、建立／更新 PR，及通過全部門檻後以 Create a merge commit 合併至 develop、執行 post-merge 驗證。我可另行收窄或撤銷；純討論／唯讀審查不屬於開發交付。不要逐步要求轉貼或重複授權，也不自行開始未交付階段。
 

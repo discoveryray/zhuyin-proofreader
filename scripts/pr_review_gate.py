@@ -13,7 +13,7 @@ import re
 import sys
 
 
-SCHEMA = "zhuyin-pr-review-gate/1"
+SCHEMA = "zhuyin-pr-review-gate/2"
 REPOSITORY = "discoveryray/zhuyin-proofreader"
 WORKFLOW = ".github/workflows/ci.yml"
 PYTHONS = ("3.12", "3.13")
@@ -105,7 +105,7 @@ def _ci_schema(ci, where):
 
 
 def validate_state(state):
-    """Validate the closed v1 input schema. This does not grant permission."""
+    """Validate the closed input schema. This does not grant permission."""
     _fields(state, "schema task authorization current implementers corrections reviews "
             "unavailable_review_rounds pr pr_ci merge push_ci handoffs", "state")
     _require(state["schema"] == SCHEMA, "unsupported schema")
@@ -152,10 +152,10 @@ def validate_state(state):
             _require(previous == correction["from_head"], "correction history is discontinuous")
         previous = correction["to_head"]
     _require(type(state["reviews"]) is list, "reviews: expected list")
-    seen = set()
     for review in state["reviews"]:
         _fields(review, "round reviewer baseline base head scope verdict independent "
-                "full_diff_reviewed findings report_ref ci", "review")
+                "full_diff_reviewed findings report_ref ci blocker_kind "
+                "supersedes_report_ref resolution_evidence_ref", "review")
         _require(type(review["round"]) is int and review["round"] in (1, 2), "invalid review round")
         for field in ("reviewer", "scope", "report_ref"):
             _text(review[field], f"review.{field}")
@@ -165,17 +165,26 @@ def validate_state(state):
             _boolean(review[field], f"review.{field}")
         _texts(review["findings"], "review.findings")
         _require(review["verdict"] in ("PASS", "BLOCKED"), "unknown review verdict")
+        if review["verdict"] == "PASS":
+            _require(review["blocker_kind"] is None and not review["findings"],
+                     "PASS cannot contain a blocker")
+        else:
+            _require(review["blocker_kind"] in ("code", "evidence", "capability", "contract")
+                     and bool(review["findings"]), "BLOCKED needs an explicit kind and findings")
+        for field in ("supersedes_report_ref", "resolution_evidence_ref"):
+            if review[field] is not None:
+                _text(review[field], f"review.{field}")
         if review["round"] == 1:
             _require(review["ci"] is None, "round 1 does not attest PR CI")
-        else:
+        elif review["ci"] is not None:
             _fields(review["ci"], "run_id attempt tested_sha", "review.ci")
             _integer(review["ci"]["run_id"], "review.ci.run_id")
             _integer(review["ci"]["attempt"], "review.ci.attempt")
             _sha(review["ci"]["tested_sha"], "review.ci.tested_sha")
-        key = (review["round"], review["baseline"], review["base"], review["head"],
-               json.dumps(review["ci"], sort_keys=True))
-        _require(key not in seen, "ambiguous duplicate review for the same scope")
-        seen.add(key)
+        else:
+            _require(review["verdict"] == "BLOCKED" and review["blocker_kind"] != "code",
+                     "round 2 without CI metadata must remain a non-code BLOCKED")
+    _validate_review_history(state)
     pr = state["pr"]
     if pr is not None:
         _fields(pr, "number url state base_branch head_branch base_sha head_sha mergeable "
@@ -231,8 +240,8 @@ def _correct(state, reason):
     return _decision(state, "CORRECT_IMPLEMENTATION", reason, correction_round=count + 1)
 
 
-def _post_merge_blocked(state, reason):
-    if len(state["corrections"]) >= 3:
+def _post_merge_blocked(state, reason, *, code=True):
+    if code and len(state["corrections"]) >= 3:
         reason += "; three corrective rounds exhausted"
     return _decision(
         state, "STOP", "post-merge blocker: " + reason,
@@ -244,14 +253,48 @@ def _post_merge_blocked(state, reason):
     )
 
 
+def _review_scope(review):
+    return tuple(review[field] for field in ("round", "baseline", "base", "head", "scope"))
+
+
+def _validate_review_history(state):
+    """Resolve only explicit, append-only supplements backed by retained evidence."""
+    reports, superseded = {}, set()
+    for review in state["reviews"]:
+        ref, prior = review["report_ref"], review["supersedes_report_ref"]
+        _require(ref not in reports, "report_ref must uniquely identify an original report")
+        if prior is None:
+            _require(review["resolution_evidence_ref"] is None, "resolution needs a supersession target")
+        else:
+            _require(prior in reports and prior not in superseded,
+                     "supersession target must be earlier, retained, and not already superseded")
+            old = reports[prior]
+            _require(old["verdict"] == "BLOCKED" and old["blocker_kind"] != "code",
+                     "only non-code BLOCKED reports may be supplemented at unchanged HEAD")
+            _require(_review_scope(review) == _review_scope(old), "supersession must retain the exact code scope")
+            _text(review["resolution_evidence_ref"], "supersession resolution evidence")
+            for candidate in (old, review):
+                problem = _review_problem(state, candidate, candidate["round"])
+                _require(problem is None, "invalid supersession review: " + str(problem))
+            superseded.add(prior)
+        reports[ref] = review
+    seen = set()
+    for ref, review in reports.items():
+        if ref not in superseded:
+            key = (*_review_scope(review), json.dumps(review["ci"], sort_keys=True))
+            _require(key not in seen, "ambiguous unlinked review for the same scope")
+            seen.add(key)
+
+
 def _review(state, number, base, head):
-    matches = [r for r in state["reviews"] if r["round"] == number and
+    superseded = {r["supersedes_report_ref"] for r in state["reviews"]}
+    matches = [r for r in state["reviews"] if r["report_ref"] not in superseded and r["round"] == number and
                (r["baseline"], r["base"], r["head"]) == (state["task"]["baseline"], base, head)]
+    # Unresolved blockers survive CI reruns and unrelated PASS records.
+    blockers = [r for r in matches if r["verdict"] == "BLOCKED"]
+    if blockers:
+        return min(blockers, key=lambda r: r["blocker_kind"] != "code")
     if number == 2 and state["pr_ci"] is not None:
-        # Re-running CI does not repair a finding against unchanged code.
-        blockers = [r for r in matches if r["verdict"] == "BLOCKED"]
-        if blockers:
-            return blockers[0]
         ci = state["pr_ci"]
         expected = {field: ci[field] for field in ("run_id", "attempt", "tested_sha")}
         matches = [r for r in matches if r["ci"] == expected]
@@ -266,6 +309,11 @@ def _review_problem(state, review, number):
     scope = "baseline_to_head" if number == 1 else "cumulative_and_full_pr_with_ci"
     if review["scope"] != scope:
         return "review scope is incomplete"
+    if number == 2 and any(
+            other["round"] == 1 and (other["baseline"], other["base"], other["head"]) ==
+            (review["baseline"], review["base"], review["head"]) and other["reviewer"] == review["reviewer"]
+            for other in state["reviews"]):
+        return "round two reviewer participated in round one for this code scope"
     if review["verdict"] == "PASS" and review["findings"]:
         return "PASS contains unresolved blocking findings"
     return None
@@ -351,8 +399,16 @@ def next_action(state):
                 if review["reviewer"] == first["reviewer"] or review["report_ref"] == first["report_ref"]:
                     return _decision(state, "STOP", "two separately produced independent reviews are required")
             if review["verdict"] == "BLOCKED":
-                return _post_merge_blocked(state, f"round {number} is BLOCKED") if merged else _correct(
-                    state, f"round {number} is BLOCKED; re-review both full scopes after correction")
+                kind = review["blocker_kind"]
+                reason = f"round {number} is BLOCKED ({kind})"
+                if kind == "code":
+                    return _post_merge_blocked(state, reason) if merged else _correct(
+                        state, reason + "; re-review both full scopes after correction")
+                if kind == "evidence":
+                    return _decision(state, "REFRESH_EVIDENCE", reason + "; retain report and obtain a supplement",
+                                     blocked_report_ref=review["report_ref"])
+                return _post_merge_blocked(state, reason, code=False) if merged else _decision(
+                    state, "STOP", reason + "; resolve the non-code limitation and obtain a supplement")
         if number == 2:
             if pr is None:
                 return _decision(state, "ENSURE_PR", "round one passed; look up the branch pair before creation",

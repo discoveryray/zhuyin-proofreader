@@ -50,30 +50,34 @@ Task ledger 必須保留所有舊 review 與 corrective round，不得刪除 BLO
 | `ENSURE_PR` | 第一輪已 PASS；先依 repository＋base/head branch pair 查找既有 PR，再建立或採用既有 PR。 |
 | `WAIT_PR_CI` | 等待並取得 current scope 的 PR CI，不能使用舊 SHA 綠燈。 |
 | `REQUEST_REVIEW_2` | 委派另一位独立 reviewer，直接審查 cumulative diff、PR 完整差異及指定 CI run/attempt/logs。 |
-| `CORRECT_IMPLEMENTATION` | 未合併的目前 scope 已確認 review／新 finding 為 blocker；即使 CI failed／pending 也交回實作代理，新增 corrective commit；保留計數後重新取得兩輪適用 PASS。 |
+| `CORRECT_IMPLEMENTATION` | 未合併的目前 scope 有 confirmed code finding；即使 CI failed／pending 也交回實作代理，新增 corrective commit；保留計數後重新取得兩輪適用 PASS。 |
 | `REFRESH_EVIDENCE` | 補齊／重新取得遠端證據。SHA、run、attempt、job／step 證據不符本身不是程式 bug。 |
 | `INVESTIGATE_CI` | 調查實際 CI failure／cancelled／skipped；未證實程式問題前不要求 corrective commit、不消耗修正輪次。 |
 | `MERGE_PROPOSAL` | 核對有效 merge 授權、遠端 base/head、最新 findings／CI／保護規則後，才可呼叫 merge API。 |
 | `VERIFY_MERGE` | PR 已 merged，僅讀取實際 merge commit、parents、tree；不可再次 merge。 |
 | `WAIT_PUSH_CI` | 等待實際 merge SHA 的 develop push CI。 |
 | `COMPLETE` | 兩輪 review、PR CI、實際 merge 驗證、該 merge 的 push CI 及目前適用 findings 查核全部具備，且無未解除 blocker；分開回報 merge SHA 與最新 develop HEAD。 |
-| `STOP` | 缺乏授權、違反契約、第三次修正仍 BLOCKED、post-merge 證據不符等；回報具體原因。 |
+| `STOP` | 缺乏授權、違反契約、能力／契約限制、第三次修正仍有 code blocker、post-merge 證據不符等；回報具體原因。 |
 
-CI 調查確認程式 blocker 後，應取得可回查的 finding（例如 reviewer 的 BLOCKED，
+CI 調查確認程式 blocker 後，應取得可回查的 finding（例如 reviewer 明確分類為 code 的 BLOCKED，
 或經協調者查明並記錄到 `pr.new_blockers` 的問題），再進入修正輪。
 Gate 先核對 branch pair 與 current base/head，再讀取適用且獨立性／scope／原始報告
-欄位合法的 BLOCKED；此修正路徑不以 CI success 為前提。`pr.new_blockers` 必須屬於
-本筆已核對的 PR snapshot，且 `findings_checked` 為 true；scope drift 先補證據，
+欄位合法的 code BLOCKED；此修正路徑不以 CI success 為前提。`pr.new_blockers` 只放
+經協調者查明的 confirmed code findings，必須屬於本筆已核對的 PR snapshot，且
+`findings_checked` 為 true；evidence／capability／contract 缺口留在分類的正式 review。
+Scope drift 先補證據，
 不能把舊 finding 文字直接移貼到新 base/head。Failed CI 沒有 confirmed code finding
 時仍是調查，不自動要求 corrective commit，更不放行 merge。
 CI 環境或權限問題不能以偽造資產、關閉驗證、新增 skip、反覆空 commit 解決。
 三輪限制是同一任務的 corrective cycle，涵蓋兩輪 reviewer，並非各自三輪。
 
-已合併 scope 的新 blocker 或有效 BLOCKED 一律 `STOP`，附明確 post-merge handoff，
+已合併 scope 的 confirmed code blocker 一律 `STOP`，附明確 post-merge handoff，
 保留 `task_id`、原始 `baseline`、已知的實際 `merge_sha`、`corrections_used` 及
 `correction_limit: 3`；不能再次 merge 舊 PR、直接 push develop 或自動 revert。
-已用完三輪時回報上限耗盡，不能另開同義 task 重設計數。若 findings 尚未查核，
-先 `REFRESH_EVIDENCE`；即使歷史 PASS 與所有 CI 都成功，也不宣告 COMPLETE。
+已用完三輪時回報上限耗盡，不能另開同義 task 重設計數。Evidence BLOCKED 或 findings
+尚未查核時先 `REFRESH_EVIDENCE`；capability／contract BLOCKED 仍 STOP 並保留交接。
+補證據不消耗 corrective count，已用三輪也不妨礙合法補證據及同 HEAD 補審。
+即使歷史 PASS 與所有 CI 都成功，未解決的 BLOCKED 也不能宣告 COMPLETE。
 這些 decision 不修改原始 merge、review 或 corrective ledger。
 
 `MERGE_PROPOSAL` 包含 `merge_method: "merge"`、`expected_base_sha`、
@@ -90,7 +94,7 @@ Merge 前重新查 PR 是否已 merged；回應不明先查遠端結果，不盲
 Gate 本身不能防止協調者忽略查詢或直接呼叫寫入工具；隔離 fake-service tests
 驗證的是協調者遵守此查詢／重核對契約時的 replay 與競態處理。
 
-## Closed schema v1
+## Closed schema v2
 
 Top-level 與列出的 nested objects 必須恰好包含指定欄位。未知欄位、未知 schema、
 缺欄位、重複 JSON keys、NaN／Infinity、短 SHA、零 SHA、boolean 冒充整數均拒絕。
@@ -100,7 +104,7 @@ Top-level 與列出的 nested objects 必須恰好包含指定欄位。未知欄
 
 ```json
 {
-  "schema": "zhuyin-pr-review-gate/1",
+  "schema": "zhuyin-pr-review-gate/2",
   "task": {
     "id": "example-task",
     "repository": "discoveryray/zhuyin-proofreader",
@@ -155,20 +159,65 @@ Review record 欄位：
   "head": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
   "scope": "baseline_to_head",
   "verdict": "BLOCKED",
+  "blocker_kind": "evidence",
   "independent": true,
   "full_diff_reviewed": true,
   "findings": ["REPLACE_WITH_ACTUAL_FINDING"],
   "report_ref": "REPLACE_WITH_ORIGINAL_REVIEW_REPORT",
+  "supersedes_report_ref": null,
+  "resolution_evidence_ref": null,
   "ci": null
 }
 ```
 
-第二輪 `scope` 必須為 `cumulative_and_full_pr_with_ci`，`ci` 必須包含 `run_id`、
-`attempt`、`tested_sha` 並與本次 PR CI 相同。兩輪 reviewer 與 report_ref 均須不同，
-reviewer 不得存在於 implementers。PASS 的 findings 必須是空陣列；此陣列只放尚未解除的
-blockers，nonblocking 建議另留在原始報告。舊 run/attempt 的第二輪 PASS 不適用新 CI。
-同一 code scope 的 BLOCKED 不會因 CI rerun 而消失；必須處理 finding，不能只換 run/attempt。
-同一 round／baseline／base／head／CI 不允許多份互相衝突的報告。
+第二輪 `scope` 必須為 `cumulative_and_full_pr_with_ci`，`ci` 包含 `run_id`、
+`attempt`、`tested_sha` 並與本次 PR CI 相同。第二輪僅在 non-code BLOCKED 且 CI metadata
+不可得時允許 `ci: null`；不據此放行。第一輪 `ci` 一律 null。
+Reviewer 不得存在於 implementers，第二輪 reviewer 也不得參與同 code scope 的第一輪。
+`report_ref` 全域唯一，必須指向各自原始報告。PASS 的 `blocker_kind` 必須是 null，
+findings 必須空；BLOCKED 必須有非空 findings 並明確分類：
+
+| `blocker_kind` | 意義與動作 |
+|---|---|
+| `code` | 已證實需要程式修正；只有此類使用三輪 corrective implementation 上限。 |
+| `evidence` | 必要驗證／原始證據不足；補證據，保留 BLOCKED，不能要求空 commit。 |
+| `capability` | 代理／平台／權限能力不可用；STOP，解決能力缺口後補審。 |
+| `contract` | 尚未釐清的契約限制；STOP，取得明確依據後補審，不能猜測需修改程式。 |
+
+Nonblocking 建議另留原始報告。未知分類、空 BLOCKED、PASS 同時帶 blocker 均 fail closed。
+若確定存在 code finding 且同時缺部分證據，分類為 code 並在原始報告列出兩者；
+不得將未證實的問題升格為 code 以消耗修正輪次。
+
+### 同 HEAD 補審與 append-only 歷史
+
+未補審的報告兩個 relation 欄位均為 null。補齊非 code 缺口後，獨立 reviewer 必須重新
+審查完整適用差異及原始 resolution 證據，產生新報告並 append，不覆寫／刪除舊報告：
+
+```json
+{
+  "supersedes_report_ref": "ORIGINAL_NON_CODE_BLOCKED_REPORT_REF",
+  "resolution_evidence_ref": "RETAINED_ORIGINAL_RESOLUTION_ARTIFACT_REF"
+}
+```
+
+這是附加到新完整 review record 的兩個欄位，不是可單獨宣告 PASS 的資料。
+Target 必須是 list 中更早、尚未被取代的 non-code BLOCKED；round、baseline、base、
+head、scope 必須完全相同，原／新報告均需有效獨立性及 full-diff 審查。
+第二輪補審可以 attestation 同一或新的 CI run/attempt，但其 PASS 仍須匹配最新適用 CI。
+Resolution 必須是協調者從原始平台驗證、logs、代理能力或契約依據取得並留存的 artifact；
+任意自填 reference 不證明缺口已解除，gate 不認證文字或 URL 的真實性。
+
+不存在／較晚／自身 target、同一 target 叉分兩份補審、跨 scope 或跨 round、
+缺 resolution、非獨立或未 full-diff 的原／新報告均拒絕。合法補審可形成單向 append-only
+鏈；每份舊原文持續保留。沒有明確 relation 的同 scope／CI 新報告是歧義，拒絕接受；
+只換 CI attempt 的無關 PASS 也不清除任何尚未解決的 BLOCKED。
+Confirmed code BLOCKED 不允許同 HEAD supersession，必須新增 corrective commit 並對
+新 HEAD 取得完整兩輪適用審查；CI rerun 不會修復 code finding。
+
+舊 `zhuyin-pr-review-gate/1` 不自動相容。協調者須保留全部原 v1 snapshots 與原始報告，
+另建 v2 snapshot，逐份核對原報告後明確分類；PASS 加入三個 null 欄位，BLOCKED
+不得從 verdict 或 CI failure 猜成 code。既有三輪計數、task ID、baseline、merge 歷史
+逐項保留；沒有原始分類／resolution 證據時，留在補證據／STOP，不生成新 PASS。
 
 PR record 欄位：`number`、`url`、`state`（open/closed/merged）、`base_branch`、
 `head_branch`、`base_sha`、`head_sha`、`mergeable`、`protection_satisfied`、
