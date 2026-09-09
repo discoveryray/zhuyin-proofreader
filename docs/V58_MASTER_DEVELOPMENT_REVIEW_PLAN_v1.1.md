@@ -1,7 +1,9 @@
 # zhuyin-proofreader v5.8 Master Development & Independent Review Plan
 
-文件版本：1.2（保留既有檔名以維持引用）  
-修訂日期：2026-09-09  
+文件版本：1.2（保留既有檔名以維持引用）
+
+修訂日期：2026-09-09
+
 Repository：`discoveryray/zhuyin-proofreader`
 
 本文件供使用者採納為專案長期規範；階段狀態與 SHA 另列於附錄，均不得當作即時 GitHub 狀態。本次修訂加入兩輪獨立審查、自動接續及使用者採納的持續授權；第 3～4 節的 actual / expected、identity、quorum、交易、legacy-v0、fingerprint 安全契約原文保留。文件修訂本身不代表程式碼已修正或重新通過審查。
