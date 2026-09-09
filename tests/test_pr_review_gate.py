@@ -1,0 +1,458 @@
+"""Isolated contract tests: synthetic evidence never authorizes real writes."""
+from __future__ import annotations
+
+from copy import deepcopy
+import json
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import unittest
+
+from scripts import pr_review_gate as gate
+
+
+ROOT = Path(__file__).resolve().parents[1]
+BASE = "a" * 40
+HEAD = "b" * 40
+SYNTHETIC = "c" * 40
+TREE = "d" * 40
+MERGE = "e" * 40
+NEW = "f" * 40
+
+
+def ci_evidence(event="pull_request"):
+    """Artificial CI record for tests only; not evidence of any real CI run."""
+    tested = SYNTHETIC if event == "pull_request" else MERGE
+    whitespace = "pull request" if event == "pull_request" else "push"
+    return {
+        "event": event, "branch": "feat/example" if event == "pull_request" else "develop",
+        "workflow": gate.WORKFLOW, "run_id": 100, "attempt": 1,
+        "latest_run_id": 100, "latest_attempt": 1,
+        "head_sha": HEAD if event == "pull_request" else MERGE,
+        "tested_sha": tested, "parents": [BASE, HEAD], "tree": TREE,
+        "status": "completed", "conclusion": "success", "url": "fixture://ci/100",
+        "evidence_ref": "fixture://raw-run-and-git-metadata",
+        "jobs": [{
+            "name": f"Python {version}", "runner": "windows-2025", "python_version": version + ".10",
+            "run_id": 100, "attempt": 1, "tested_sha": tested, "conclusion": "success",
+            "steps": {step: "success" for step in (*gate.COMMON_STEPS,
+                       f"Check committed whitespace ({whitespace})")},
+            "evidence_ref": f"fixture://job-log/{version}",
+        } for version in gate.PYTHONS],
+    }
+
+
+def review_evidence(number):
+    return {
+        "round": number, "reviewer": f"independent-agent-{number}",
+        "baseline": BASE, "base": BASE, "head": HEAD,
+        "scope": "baseline_to_head" if number == 1 else "cumulative_and_full_pr_with_ci",
+        "verdict": "PASS", "independent": True, "full_diff_reviewed": True,
+        "findings": [], "report_ref": f"fixture://independent-report/{number}",
+        "ci": None if number == 1 else {"run_id": 100, "attempt": 1, "tested_sha": SYNTHETIC},
+    }
+
+
+def evidence_state():
+    """Return a synthetic merge-ready state for adversarial contract tests."""
+    return {
+        "schema": gate.SCHEMA,
+        "task": {"id": "isolated-test", "repository": gate.REPOSITORY, "baseline": BASE,
+                 "base_branch": "develop", "head_branch": "feat/example"},
+        "authorization": {"task_id": "isolated-test", "active": True,
+                          "operations": sorted(gate.OPERATIONS), "source_ref": "fixture://user-task"},
+        "current": {"base": BASE, "head": HEAD, "working_tree_clean": True, "evidence_ref": "fixture://fetch"},
+        "implementers": ["implementation-agent", "coordinator-who-edited-docs"],
+        "corrections": [], "reviews": [review_evidence(1), review_evidence(2)],
+        "unavailable_review_rounds": [],
+        "pr": {"number": 20, "url": "fixture://pr/20", "state": "open", "base_branch": "develop",
+               "head_branch": "feat/example", "base_sha": BASE, "head_sha": HEAD,
+               "mergeable": True, "protection_satisfied": True, "findings_checked": True,
+               "new_blockers": [], "evidence_ref": "fixture://fresh-pr-query"},
+        "pr_ci": ci_evidence(), "merge": None, "push_ci": None,
+        "handoffs": [{"from": "implementation-agent", "to": "independent-agent-1",
+                      "head": HEAD, "evidence_ref": "fixture://delegation-log"}],
+    }
+
+
+def merged_state():
+    state = evidence_state()
+    state["pr"]["state"] = "merged"
+    state["current"]["base"] = MERGE
+    state["merge"] = {"sha": MERGE, "parents": [BASE, HEAD], "tree": TREE,
+                      "develop_head": MERGE, "develop_contains_merge": True,
+                      "evidence_ref": "fixture://actual-merge-object-and-fetch"}
+    state["push_ci"] = ci_evidence("push")
+    return state
+
+
+class FakeService:
+    """The coordinator's lookup/recheck contract, with no external effects."""
+
+    def __init__(self):
+        self.pr = None
+        self.creations = 0
+        self.merges = 0
+
+    def reconcile(self, state):
+        decision = gate.next_action(state)
+        if decision["action"] == "ENSURE_PR":
+            # Search even if local evidence is absent (including crash recovery).
+            if self.pr is None:
+                self.pr = evidence_state()["pr"]
+                self.creations += 1
+            state["pr"] = deepcopy(self.pr)
+        elif decision["action"] == "MERGE_PROPOSAL":
+            # Real coordinator must repeat these checks against the server.
+            if self.pr is not None and self.pr["state"] == "merged":
+                state["pr"] = deepcopy(self.pr)
+                return
+            if self.pr is None:
+                self.pr = deepcopy(state["pr"])
+            if (self.pr["base_sha"], self.pr["head_sha"]) != (
+                    decision["expected_base_sha"], decision["expected_head_sha"]):
+                raise RuntimeError("remote scope changed")
+            self.pr["state"] = "merged"
+            self.merges += 1
+            state["pr"] = deepcopy(self.pr)
+
+
+class ReviewGateTests(unittest.TestCase):
+    def assertAction(self, state, expected):
+        decision = gate.next_action(state)
+        self.assertEqual(decision["action"], expected, decision)
+        return decision
+
+    def test_pass_progresses_through_both_reviews_and_post_merge(self):
+        state = evidence_state()
+        state.update(pr=None, pr_ci=None, reviews=[])
+        self.assertAction(state, "REQUEST_REVIEW_1")
+        state["reviews"].append(review_evidence(1))
+        self.assertAction(state, "ENSURE_PR")
+        state["pr"] = evidence_state()["pr"]
+        self.assertAction(state, "WAIT_PR_CI")
+        state["pr_ci"] = ci_evidence()
+        self.assertAction(state, "REQUEST_REVIEW_2")
+        state["reviews"].append(review_evidence(2))
+        decision = self.assertAction(state, "MERGE_PROPOSAL")
+        self.assertEqual((decision["merge_method"], decision["expected_base_sha"],
+                          decision["expected_head_sha"]), ("merge", BASE, HEAD))
+        state["pr"]["state"] = "merged"
+        self.assertAction(state, "VERIFY_MERGE")
+        state = merged_state()
+        state["push_ci"] = None
+        self.assertAction(state, "WAIT_PUSH_CI")
+        state["push_ci"] = ci_evidence("push")
+        decision = self.assertAction(state, "COMPLETE")
+        self.assertEqual(decision["merge_sha"], MERGE)
+        self.assertNotEqual(MERGE, SYNTHETIC)
+
+    def test_blocked_either_round_prevents_merge(self):
+        for number in (1, 2):
+            with self.subTest(round=number):
+                state = evidence_state()
+                state["reviews"][number - 1]["verdict"] = "BLOCKED"
+                state["reviews"][number - 1]["findings"] = ["blocking finding"]
+                self.assertAction(state, "CORRECT_IMPLEMENTATION")
+
+    def test_three_corrections_are_a_task_wide_limit(self):
+        state = evidence_state()
+        state["reviews"][0]["verdict"] = "BLOCKED"
+        chain = ["1" * 40, "2" * 40, "3" * 40, HEAD]
+        for count in range(4):
+            state["corrections"] = [{"number": n + 1, "from_head": chain[n], "to_head": chain[n + 1],
+                                     "evidence_ref": f"fixture://correction/{n + 1}"}
+                                    for n in range(count)]
+            self.assertAction(state, "STOP" if count == 3 else "CORRECT_IMPLEMENTATION")
+
+    def test_corrective_head_requires_two_fresh_full_reviews(self):
+        state = evidence_state()
+        state["current"]["head"] = state["pr"]["head_sha"] = NEW
+        self.assertAction(state, "REQUEST_REVIEW_1")
+        first = review_evidence(1)
+        first["head"] = NEW
+        state["reviews"].append(first)
+        state["pr_ci"]["head_sha"] = NEW
+        state["pr_ci"]["parents"] = [BASE, NEW]
+        self.assertAction(state, "REQUEST_REVIEW_2")
+
+    def test_base_change_invalidates_old_passes_without_changing_baseline(self):
+        state = evidence_state()
+        state["current"]["base"] = state["pr"]["base_sha"] = NEW
+        self.assertAction(state, "REQUEST_REVIEW_1")
+        self.assertEqual(state["task"]["baseline"], BASE)
+
+    def test_remote_head_or_base_drift_cannot_merge(self):
+        for field in ("base_sha", "head_sha"):
+            state = evidence_state()
+            state["pr"][field] = NEW
+            self.assertAction(state, "REFRESH_EVIDENCE")
+
+    def test_review_must_cover_original_cumulative_baseline(self):
+        state = evidence_state()
+        state["reviews"][0]["baseline"] = NEW
+        self.assertAction(state, "REQUEST_REVIEW_1")
+
+    def test_unavailable_or_missing_review_never_becomes_pass(self):
+        for number in (1, 2):
+            state = evidence_state()
+            state["reviews"] = [r for r in state["reviews"] if r["round"] != number]
+            self.assertAction(state, f"REQUEST_REVIEW_{number}")
+            state["unavailable_review_rounds"] = [number]
+            self.assertAction(state, "STOP")
+
+    def test_review_separation_and_direct_review_are_required(self):
+        changes = [
+            (0, "reviewer", "implementation-agent"), (1, "reviewer", "coordinator-who-edited-docs"),
+            (1, "reviewer", "independent-agent-1"), (1, "report_ref", "fixture://independent-report/1"),
+            (0, "independent", False), (1, "full_diff_reviewed", False),
+            (0, "scope", "implementation_summary"), (1, "scope", "CI_green_only"),
+            (0, "findings", ["unresolved blocker"]),
+        ]
+        for index, field, value in changes:
+            with self.subTest(index=index, field=field, value=value):
+                state = evidence_state()
+                state["reviews"][index][field] = value
+                self.assertAction(state, "STOP")
+
+    def test_pr_ci_failure_or_missing_step_never_merges(self):
+        for version_index in (0, 1):
+            for step in (*gate.COMMON_STEPS, "Check committed whitespace (pull request)"):
+                for outcome in (None, "failure", "skipped", "cancelled"):
+                    with self.subTest(job=version_index, step=step, outcome=outcome):
+                        state = evidence_state()
+                        state["pr_ci"]["jobs"][version_index]["steps"][step] = outcome
+                        self.assertAction(state, "INVESTIGATE_CI")
+        state = evidence_state()
+        state["pr_ci"]["conclusion"] = "failure"
+        self.assertAction(state, "INVESTIGATE_CI")
+
+    def test_ci_requires_exact_run_event_attempt_checkout_and_parents(self):
+        for field, value in (("event", "push"), ("branch", "develop"), ("workflow", "other.yml"),
+                             ("head_sha", NEW), ("tested_sha", HEAD), ("parents", [HEAD, BASE]),
+                             ("latest_run_id", 101), ("latest_attempt", 2)):
+            with self.subTest(field=field):
+                state = evidence_state()
+                state["pr_ci"][field] = value
+                self.assertAction(state, "REFRESH_EVIDENCE")
+
+    def test_each_job_requires_its_own_matching_checkout_attempt_and_windows_python(self):
+        for field, value in (("runner", "ubuntu-latest"), ("python_version", "3.11.10"),
+                             ("run_id", 99), ("attempt", 2), ("tested_sha", HEAD),
+                             ("conclusion", "skipped")):
+            with self.subTest(field=field):
+                state = evidence_state()
+                state["pr_ci"]["jobs"][1][field] = value
+                self.assertAction(state, "INVESTIGATE_CI" if field == "conclusion" else "REFRESH_EVIDENCE")
+        state = evidence_state()
+        state["pr_ci"]["jobs"].pop()
+        self.assertAction(state, "REFRESH_EVIDENCE")
+
+    def test_new_ci_attempt_requires_new_round_two_attestation(self):
+        state = evidence_state()
+        state["pr_ci"]["attempt"] = state["pr_ci"]["latest_attempt"] = 2
+        for job in state["pr_ci"]["jobs"]:
+            job["attempt"] = 2
+        self.assertAction(state, "REQUEST_REVIEW_2")
+
+    def test_rerun_ci_does_not_erase_blocked_review_against_unchanged_code(self):
+        state = evidence_state()
+        state["reviews"][1]["verdict"] = "BLOCKED"
+        state["reviews"][1]["findings"] = ["unchanged code blocker"]
+        state["pr_ci"]["attempt"] = state["pr_ci"]["latest_attempt"] = 2
+        for job in state["pr_ci"]["jobs"]:
+            job["attempt"] = 2
+        fresh = review_evidence(2)
+        fresh["ci"]["attempt"] = 2
+        state["reviews"].append(fresh)
+        self.assertAction(state, "CORRECT_IMPLEMENTATION")
+
+    def test_pending_ci_is_not_success(self):
+        for event in ("pull_request", "push"):
+            state = evidence_state() if event == "pull_request" else merged_state()
+            ci = state["pr_ci"] if event == "pull_request" else state["push_ci"]
+            ci.update(status="in_progress", conclusion=None, jobs=[])
+            self.assertAction(state, "WAIT_PR_CI" if event == "pull_request" else "WAIT_PUSH_CI")
+
+    def test_pr_findings_and_protection_are_checked(self):
+        for field in ("mergeable", "protection_satisfied"):
+            state = evidence_state()
+            state["pr"][field] = False
+            self.assertAction(state, "STOP")
+        state = evidence_state()
+        state["pr"]["findings_checked"] = False
+        self.assertAction(state, "REFRESH_EVIDENCE")
+        state["pr"]["findings_checked"] = True
+        state["pr"]["new_blockers"] = ["new substantive finding"]
+        self.assertAction(state, "CORRECT_IMPLEMENTATION")
+
+    def test_authorization_scope_and_clean_tree_are_required(self):
+        state = evidence_state()
+        state["authorization"]["active"] = False
+        self.assertAction(state, "STOP")
+        state = evidence_state()
+        state["authorization"]["task_id"] = "another-task"
+        self.assertAction(state, "STOP")
+        state = evidence_state()
+        state["current"]["working_tree_clean"] = False
+        self.assertAction(state, "STOP")
+        for field, value in (("base_branch", "main"), ("head_branch", "develop"),
+                             ("repository", "other/repo")):
+            state = evidence_state()
+            state["task"][field] = value
+            self.assertAction(state, "STOP")
+
+    def test_authorization_only_through_pr_cannot_expand_to_merge_or_correction(self):
+        state = evidence_state()
+        state["authorization"]["operations"].remove("merge")
+        self.assertAction(state, "STOP")
+        state.update(pr=None, pr_ci=None, reviews=[review_evidence(1)])
+        self.assertAction(state, "ENSURE_PR")
+        state["authorization"]["operations"].remove("pr")
+        self.assertAction(state, "STOP")
+        state = evidence_state()
+        state["reviews"][0]["verdict"] = "BLOCKED"
+        state["authorization"]["operations"].remove("commit")
+        self.assertAction(state, "STOP")
+        state = evidence_state()
+        state["reviews"] = []
+        state["authorization"]["operations"].remove("delegate")
+        self.assertAction(state, "STOP")
+
+    def test_ci_evidence_problems_do_not_consume_or_bypass_correction_budget(self):
+        state = evidence_state()
+        chain = ["1" * 40, "2" * 40, "3" * 40, HEAD]
+        state["corrections"] = [{"number": n + 1, "from_head": chain[n], "to_head": chain[n + 1],
+                                 "evidence_ref": f"fixture://correction/{n + 1}"} for n in range(3)]
+        original = deepcopy(state["corrections"])
+        state["pr_ci"]["latest_attempt"] = 2
+        self.assertAction(state, "REFRESH_EVIDENCE")
+        state["pr_ci"]["latest_attempt"] = 1
+        del state["pr_ci"]["jobs"][0]["steps"]["Run full unittest suite"]
+        self.assertAction(state, "REFRESH_EVIDENCE")
+        state["pr_ci"] = ci_evidence()
+        state["pr_ci"]["conclusion"] = "failure"
+        self.assertAction(state, "INVESTIGATE_CI")
+        self.assertEqual(state["corrections"], original)
+        # Only a confirmed review finding calls for a code correction, now exhausted.
+        state["pr_ci"] = ci_evidence()
+        state["reviews"][0]["verdict"] = "BLOCKED"
+        self.assertAction(state, "STOP")
+
+    def test_actual_merge_must_have_reviewed_parents_tree_and_ancestry(self):
+        for field, value in (("parents", [HEAD, BASE]), ("parents", [BASE]), ("tree", NEW),
+                             ("develop_head", HEAD), ("develop_contains_merge", False)):
+            with self.subTest(field=field, value=value):
+                state = merged_state()
+                state["merge"][field] = value
+                self.assertAction(state, "STOP")
+
+    def test_pr_ci_cannot_substitute_for_actual_merge_push_ci(self):
+        state = merged_state()
+        state["push_ci"] = deepcopy(state["pr_ci"])
+        self.assertAction(state, "STOP")
+        for field, value in (("head_sha", SYNTHETIC), ("tested_sha", SYNTHETIC),
+                             ("event", "workflow_dispatch"), ("tree", NEW), ("conclusion", "failure")):
+            state = merged_state()
+            state["push_ci"][field] = value
+            self.assertAction(state, "STOP")
+
+    def test_develop_advancement_is_reported_separately_from_verified_merge(self):
+        state = merged_state()
+        state["merge"]["develop_head"] = state["current"]["base"] = NEW
+        result = self.assertAction(state, "COMPLETE")
+        self.assertEqual(result["merge_sha"], MERGE)
+        self.assertEqual(result["develop_head"], NEW)
+
+    def test_replay_and_uncertain_response_do_not_duplicate_pr_or_merge(self):
+        state = evidence_state()
+        state.update(pr=None, pr_ci=None, reviews=[review_evidence(1)])
+        service = FakeService()
+        service.reconcile(state)
+        service.reconcile(state)
+        self.assertEqual(service.creations, 1)
+        # Simulate a crash losing the local acknowledgement, with remote PR kept.
+        state["pr"] = None
+        service.reconcile(state)
+        self.assertEqual(service.creations, 1)
+        state["pr_ci"] = ci_evidence()
+        state["reviews"].append(review_evidence(2))
+        before_merge = deepcopy(state)
+        service.reconcile(state)
+        service.reconcile(state)
+        service.reconcile(before_merge)  # stale local state after uncertain response
+        self.assertEqual(service.merges, 1)
+        self.assertAction(state, "VERIFY_MERGE")
+
+    def test_coordinator_must_recheck_remote_base_and_head_before_merge(self):
+        for field in ("base_sha", "head_sha"):
+            state = evidence_state()
+            service = FakeService()
+            service.pr = deepcopy(state["pr"])
+            service.pr[field] = NEW
+            with self.assertRaisesRegex(RuntimeError, "remote scope changed"):
+                service.reconcile(state)
+            self.assertEqual(service.merges, 0)
+
+    def test_closed_pr_or_mismatched_pair_does_not_create_replacement(self):
+        for field, value in (("state", "closed"), ("head_branch", "feat/other"), ("base_branch", "main")):
+            state = evidence_state()
+            state["pr"][field] = value
+            self.assertAction(state, "STOP")
+
+    def test_decisions_are_deterministic_and_input_is_not_modified(self):
+        state = evidence_state()
+        before = deepcopy(state)
+        self.assertEqual(gate.next_action(state), gate.next_action(state))
+        self.assertEqual(state, before)
+
+    def test_closed_schema_rejects_missing_unknown_duplicate_or_malformed_data(self):
+        for field in evidence_state():
+            state = evidence_state()
+            del state[field]
+            self.assertAction(state, "STOP")
+        for item in (None, [], {}, {"schema": "future"}):
+            self.assertAction(item, "STOP")
+        for container in ("task", "authorization", "current"):
+            state = evidence_state()
+            state[container]["unknown"] = True
+            self.assertAction(state, "STOP")
+        state = evidence_state()
+        state["reviews"].append(deepcopy(state["reviews"][0]))
+        self.assertAction(state, "STOP")
+        state = evidence_state()
+        state["pr_ci"]["jobs"].append(deepcopy(state["pr_ci"]["jobs"][0]))
+        self.assertAction(state, "STOP")
+        state = evidence_state()
+        state["pr_ci"]["attempt"] = True
+        self.assertAction(state, "STOP")
+
+    def test_cli_is_read_only_and_schema_validation_is_not_attestation(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "evidence.json"
+            original = json.dumps(evidence_state()).encode()
+            path.write_bytes(original)
+            command = [sys.executable, str(ROOT / "scripts/pr_review_gate.py")]
+            result = subprocess.run([*command, "validate", str(path)], capture_output=True, text=True, check=True)
+            self.assertEqual(json.loads(result.stdout), {"schema_valid": True, "authenticity_verified": False})
+            result = subprocess.run([*command, "next-action", str(path)], capture_output=True, text=True, check=True)
+            self.assertEqual(json.loads(result.stdout)["action"], "MERGE_PROPOSAL")
+            self.assertEqual(path.read_bytes(), original)
+            for content in ('{"schema": 1, "schema": 1}', '{"schema": NaN}', '{"schema": Infinity}'):
+                path.write_text(content, encoding="utf-8")
+                result = subprocess.run([*command, "next-action", str(path)], capture_output=True, text=True)
+                self.assertEqual(result.returncode, 2)
+                self.assertEqual(json.loads(result.stdout)["action"], "STOP")
+
+    def test_gate_required_step_names_still_match_repository_workflow(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        for step in (*gate.COMMON_STEPS, "Check committed whitespace (pull request)",
+                     "Check committed whitespace (push)"):
+            self.assertIn(f"- name: {step}\n", workflow)
+        for version in gate.PYTHONS:
+            self.assertIn(f'- "{version}"', workflow)
+
+
+if __name__ == "__main__":
+    unittest.main()

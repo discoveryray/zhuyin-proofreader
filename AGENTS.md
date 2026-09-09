@@ -26,12 +26,13 @@
 - 發現 unrelated issue 時，只記錄，不得順手一起修。
 - 不得直接修改或 push 到 `main`。
 - 除非使用者明確要求，不得直接修改或 push 到 `develop`。
-- 不得自行 merge task branch。
+- 使用者明確交付的開發任務，預設授權該任務範圍及階段內的檔案修改、代理委派、測試、commit、push、建立／更新 PR，以及通過第 17 節全部門檻後以 Create a merge commit 合併至 `develop`、執行 post-merge 驗證。使用者可另行收窄或撤銷，不必逐次重問有效授權。
+- 上述授權不包含直接 push `develop`、修改 `main`、squash／rebase merge、force push、降低 GitHub 保護規則、tag／release、live DB mutation，或未交付的下一階段。
 - 不得自行建立 tag 或 release。
 - 不得自行 force push。
 - 已經提交給外部審查的 commit，不得自行 amend 或改寫歷史；修正應新增 commit，除非使用者明確要求其他方式。
 
-若任務指示與目前 branch/base 不一致，先停止並回報。
+若任務指示要求新 branch，先核對 working tree clean，再從指定基礎建立，不挪用其他任務分支。除此以外，branch/base 與任務不一致時停止寫入並回報。
 
 ---
 
@@ -365,7 +366,9 @@ Codex 不得僅依自己的 implementation、tests 或自我 code review
 - 另一個獨立 ChatGPT / Codex review workflow
 - 明確要求的 GitHub diff / PR review
 
-只有獨立審查明確判定通過後，才能進入 merge。
+依第 17 節取得兩輪適用的獨立 PASS 及必要 CI 後，協調者自動執行已授權的 merge 與 post-merge 驗證。`READY FOR REVIEW` 是中間狀態，不是要求使用者轉貼或逐步授權的停點。
+
+只有實際 merge 與對應 develop push CI 也通過，才可回報該任務 `COMPLETE`；pending／failed／缺失時不得宣稱完成。審查 PASS 本身不創造或擴大授權。
 
 實作者不得同時充當唯一 merge approver。
 
@@ -396,3 +399,21 @@ Codex 不得僅依自己的 implementation、tests 或自我 code review
 應把它視為獨立 architecture objective，先確認設計、migration、compatibility 與 regression plan。
 
 不得把一般 bug fix 當成理由默默突破永久安全邊界。
+
+---
+
+## 17. 兩輪獨立審查與 Codex 執行期間自動接續
+
+適用完整規範為 [v5.8 完整規範](docs/V58_MASTER_DEVELOPMENT_REVIEW_PLAN_v1.1.md)，其中第 1、5～8 節及 [執行手冊](docs/PR_REVIEW_AUTOMATION.md) 定義自動協調契約；安全契約仍依本文件及完整規範第 3～4 節。
+
+- 協調者必須委派實作代理與兩位獨立 reviewer，並收集結果、核對原始證據及接續下一步。Work 或符合相同契約的獨立代理均可擔任正式 reviewer，不再限定 Work。
+- 兩輪 reviewer 是不同 agent session，均不得為本任務實作者（包含修改文件、測試、設定的協調者），不得修改受審檔案。以乾淨 context 提供任務、規範、固定 SHA、範圍與證據位置，不能把實作摘要或前一輪 PASS 當審查依據。測試可在隔離 checkout 執行。
+- 第一輪實際審查固定 task baseline → feature HEAD 的完整 cumulative diff。PASS 後自動查找並建立／更新同 repo/base/compare 的唯一 PR。
+- 第二輪自行審查 PR 全部差異、當前 base/head/merge-base、整合情境與適用 CI。第二輪 PASS 且必要 CI 全通過才可提出 merge；立即重新核對遠端及 findings，綁定 reviewed HEAD 合併。
+- BLOCKED 交回實作代理，以新 corrective commit 修正並重跑必要測試；每次修正後兩輪均重新取得適用 PASS，不能只審最後一個 commit。同一任務最多三輪自動修正；仍未通過則回報 blockers、證據和下一步，不降低標準。重啟任務不得重設計數。
+- HEAD 或 PR base 改變會使當前兩輪結果失效；保留原 task baseline，重做受影響的完整審查與整合驗證。固定 SHA 任務不得自行改 scope；不自行 rebase 或改 baseline。Base 前進本身不授權合併 develop 到 feature。
+- 代理不可用、必要結果缺失／不完整、CI 失敗或未完成，一律不視為 PASS。已完成的測試與 CI 僅是審查證據，不能取代 reviewer 實際讀取差異及追蹤契約。
+- 協調者使用 `scripts/pr_review_gate.py` 核對已收集的狀態，再執行副作用；gate 不提供新授權、不證明輸入真實性。每次寫入前重新讀取遠端；不確定結果先查詢，不盲目重試建立 PR 或 merge。
+- 審查與交接紀錄保留 task、角色/session、baseline、base、head、scope、verdict、findings、測試、CI run/attempt/event/tested SHA、原始證據及下一步。放在任務 evidence 目錄，並將兩輪完整紀錄保存於 PR description 的 evidence 區，避免為記錄 PASS 新增 commit 再改 HEAD。
+- 合併後核對實際 merge SHA 的兩個 parents、預期檔案樹、fetch 後 develop HEAD，及該 merge SHA 的 `push` CI；PR CI 不可取代 post-merge CI。Develop 再前進時分開報告。
+- 此流程僅於 Codex 任務執行期間協調，不新增 GitHub Actions 背景 AI、外部 AI API、排程或額外計費設定。中斷後由同一 task evidence 恢復；無法執行時如實回報，不能偽稱背景仍在工作。
