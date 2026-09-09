@@ -645,6 +645,20 @@ def compute_migration_import_id(
     })
 
 
+def _stored_migration_contract(import_id: str, **identity_args: Any) -> str:
+    """Finite ID adapter; neither format is exempt from conflict validation.
+
+    legacy-v0 is exactly the frozen Phase 2 algorithm, without Phase 5 receipts.
+    Its original rows remain immutable, including status, after later deliveries.
+    Unknown IDs fail closed; baseline validator omissions are not a contract.
+    """
+    if import_id == compute_migration_import_id(**identity_args):
+        return GLOBAL_MIGRATION_IMPORT_CONTRACT_VERSION
+    if import_id == _legacy_v0_migration_import_id(**identity_args):
+        return "legacy-v0"
+    raise GlobalLibraryValidationError("migration import_id 無法重算")
+
+
 def _nonnegative_int(value: Any, field: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         raise GlobalLibraryValidationError(f"{field} 必須是 non-negative integer")
@@ -1546,10 +1560,8 @@ def _validate_rows(connection: sqlite3.Connection, path: Path) -> dict[str, Any]
             legacy_evidence_sha256=row["legacy_evidence_sha256"],
             old_verification_level=old_level,
         )
-        if import_id not in {compute_migration_import_id(**identity_args),
-                             _legacy_v0_migration_import_id(**identity_args)}:
-            raise GlobalLibraryValidationError("migration import_id 無法重算", path=path)
-        if import_id == compute_migration_import_id(**identity_args):
+        contract = _stored_migration_contract(import_id, **identity_args)
+        if contract == GLOBAL_MIGRATION_IMPORT_CONTRACT_VERSION:
             # Current imports are complete auditable transactions. The exact
             # legacy-v0 adapter predates this workflow and requires no receipts.
             identity = glyphs[glyph_id]["identity"]
@@ -1576,7 +1588,10 @@ def _validate_rows(connection: sqlite3.Connection, path: Path) -> dict[str, Any]
             raise GlobalLibraryValidationError("orphan migration receipt/provenance", path=path)
 
     # Legacy readings are safety constraints, never promotion sources. Enforce
-    # this on strict reads too, so a hand-edited DB cannot bypass the write gate.
+    # this on strict reads too, including legacy-v0. Frozen audit section 16
+    # requires quarantine for disagreeing candidates; the old validator omitted
+    # that check. Historical row statuses need not be rewritten when the durable
+    # glyph quarantine and open conflict already cover every retained reading.
     for glyph_id, glyph in glyphs.items():
         legacy_rows = [row for row in migrations if row["glyph_id"] == glyph_id]
         readings = direct_readings_by_glyph[glyph_id] | {row["reading"] for row in legacy_rows}
@@ -2843,8 +2858,7 @@ def _ingest_direct_evidence(transaction: GlobalWriteTransaction, item: Mapping[s
                 (conflict_id, glyph_id, OPEN, _canonical_json(sorted(readings)), now, now, generation),
             )
         state, active = QUARANTINED_CONFLICT, None
-        connection.execute("UPDATE migration_candidate SET status=? WHERE glyph_id=? AND status<>?",
-                           (MIGRATION_CONFLICT, glyph_id, MIGRATION_CONFLICT))
+        _mark_current_migrations_conflicted(connection, glyph_id)
         _write_provenance(connection, item, "CONFLICT_OPENED")
     elif old["state"] == VERIFIED_GLOBAL:
         # Matching source growth is audit-only; preserve the approved revision.
@@ -3045,6 +3059,18 @@ def _ingest_migration(transaction: GlobalWriteTransaction, item: Mapping[str, An
     return True
 
 
+def _mark_current_migrations_conflicted(connection: sqlite3.Connection, glyph_id: str) -> None:
+    """Update Phase 5 statuses only; retain every legacy-v0 row verbatim."""
+    current_ids = []
+    for row in connection.execute("SELECT * FROM migration_candidate WHERE glyph_id=?", (glyph_id,)):
+        args = {key: row[key] for key in (
+            "glyph_id", "reading", "legacy_project_id", "legacy_project_sha256",
+            "legacy_evidence_sha256", "old_verification_level")}
+        if _stored_migration_contract(row["import_id"], **args) == GLOBAL_MIGRATION_IMPORT_CONTRACT_VERSION:
+            current_ids.append((MIGRATION_CONFLICT, row["import_id"], MIGRATION_CONFLICT))
+    connection.executemany("UPDATE migration_candidate SET status=? WHERE import_id=? AND status<>?", current_ids)
+
+
 def _migration_conflict_gate(transaction: GlobalWriteTransaction, item: Mapping[str, Any]) -> None:
     connection, p, now = transaction._connection, item["payload"], _utc_now()
     glyph_id = p["glyph_id"]
@@ -3077,8 +3103,7 @@ def _migration_conflict_gate(transaction: GlobalWriteTransaction, item: Mapping[
         connection.execute("INSERT INTO glyph_conflict VALUES (?, ?, ?, ?, ?, ?, ?, NULL, NULL)",
                            (compute_glyph_conflict_id(glyph_id, readings, generation), glyph_id, OPEN,
                             _canonical_json(sorted(readings)), now, now, generation))
-    connection.execute("UPDATE migration_candidate SET status=? WHERE glyph_id=? AND status<>?",
-                       (MIGRATION_CONFLICT, glyph_id, MIGRATION_CONFLICT))
+    _mark_current_migrations_conflicted(connection, glyph_id)
     connection.execute("UPDATE glyph_truth SET state=?, active_reading=NULL, revision=revision+1, updated_at=? WHERE glyph_id=?",
                        (QUARANTINED_CONFLICT, now, glyph_id))
     _migration_provenance(connection, item, "CONFLICT_OPENED")
@@ -3089,6 +3114,7 @@ def deliver_global_migration(repository: GlobalExactGlyphRepository, intents: Se
     """Explicit apply: one project, one write transaction, no project outbox."""
     batch = canonical_migration_batch(intents)
     if not batch:
+        repository.load_snapshot()  # Strict read-only validation; ABSENT stays absent.
         return ()
     repository.initialize()
     with repository.write_transaction() as transaction:

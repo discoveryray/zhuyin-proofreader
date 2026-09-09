@@ -376,6 +376,19 @@ def build_migration_plan(project_output, *, pdf_roots=()):
         _artifact(info, "candidate_workbook", output, "02_候選報告", frozen)  # bytes/hash only
         workbook_rows[name] = _workbook(actual, info["pdf_sha256"])
     index, proofs, current_ids = _occurrence_index(manifest, pdf_data, workbook_rows, required_keys)
+    conflict_readings = {(row["key"], row["reading"]) for row in batches[-1][2]}
+    retained_samples = {}
+    # Even a row omitted from delivery remains source evidence to validate.
+    # Preserve its usable samples on the matching authoritative conflict import.
+    for name, _, rows in batches:
+        for row in rows:
+            key = row["key"]
+            _require(all(oid not in current_ids or (oid in index and index[oid]["key"] == key)
+                         for oid in row["ids"]), "source example points to a different current identity")
+            if row["level"] == library.QUARANTINED_CONFLICT and name != GLYPH_CONFLICT_FILE:
+                _require((key, row["reading"]) in conflict_readings,
+                         "quarantined learning retained reading missing from conflict authority")
+                retained_samples.setdefault((key, row["reading"]), set()).update(row["ids"])
     intents, targets, skipped = [], [], []
     for name, digest, rows in batches:
         for row in rows:
@@ -386,12 +399,11 @@ def build_migration_plan(project_output, *, pdf_roots=()):
                                 "status": library.NON_GLOBAL_ELIGIBLE, "reason": proof.get("reason", "")})
                 continue
             if row["level"] == library.QUARANTINED_CONFLICT and name != GLYPH_CONFLICT_FILE:
-                _require(any(other["key"] == key for _, _, items in batches[-1:] for other in items),
-                         "quarantined learning row lacks conflict authority")
                 continue
-            _require(all(oid not in current_ids or (oid in index and index[oid]["key"] == key)
-                         for oid in row["ids"]), "source example points to a different current identity")
-            mapped = [index[oid] for oid in row["ids"] if oid in index]
+            sample_ids = set(row["ids"])
+            if name == GLYPH_CONFLICT_FILE:
+                sample_ids.update(retained_samples.get((key, row["reading"]), ()))
+            mapped = [index[oid] for oid in sorted(sample_ids) if oid in index]
             status = library.MIGRATION_CONFLICT if name == GLYPH_CONFLICT_FILE else (
                 library.MIGRATION_CANDIDATE if mapped else library.MIGRATION_INSUFFICIENT)
             exact = {"kind": key[0], "style_group": key[1], "glyph_sha256": key[2],
