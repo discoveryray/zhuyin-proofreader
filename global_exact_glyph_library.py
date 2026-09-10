@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
 from unicodedata import normalize
 from uuid import uuid4
@@ -238,6 +239,39 @@ class GlobalLibraryDiagnostic:
     message: str
     schema_version: str = ""
     generation: int | None = None
+
+
+@dataclass(frozen=True)
+class GlobalGlyphInspectionRecord:
+    """Audit view only; never a decoder donor or an approval request."""
+
+    glyph_id: str
+    identity: GlobalExactGlyphIdentity
+    stored_state: str
+    stored_active_reading: str
+    readings: tuple[str, ...]
+    global_reuse_allowed: bool
+    reuse_block_reason: str
+    direct_source_count: int
+    independent_source_count: int
+    truth: Mapping[str, Any]
+    source_evidence: tuple[Mapping[str, Any], ...]
+    approvals: tuple[Mapping[str, Any], ...]
+    conflicts: tuple[Mapping[str, Any], ...]
+    legacy_candidates: tuple[Mapping[str, Any], ...]
+    provenance: tuple[Mapping[str, Any], ...]
+    read_side_conflict: LegacyCandidateReadConflict | None
+
+
+@dataclass(frozen=True)
+class GlobalLibraryInspectionSnapshot:
+    """One validated read transaction, including all candidate and audit rows."""
+
+    store_status: str
+    database_path: str
+    loaded_at: str
+    metadata: Mapping[str, Any]
+    records: tuple[GlobalGlyphInspectionRecord, ...]
 
 
 @dataclass(frozen=True)
@@ -2239,6 +2273,68 @@ class GlobalExactGlyphRepository:
 
     def load_snapshot(self) -> GlobalExactGlyphSnapshot:
         return _load_snapshot_from_path(self.path, self.busy_timeout_ms)
+
+    def load_inspection_snapshot(self) -> GlobalLibraryInspectionSnapshot:
+        """Read all states and audit details without initializing or repairing.
+
+        Validation, effective Global safety and audit rows share one SQLite
+        snapshot. The decoder's smaller snapshot and dependency contract stay
+        unchanged. SQLite itself remains the authority for live WAL reads.
+        """
+        if _path_is_absent(self.path):
+            return GlobalLibraryInspectionSnapshot(
+                ABSENT, str(self.path), _utc_now(), MappingProxyType({}), ())
+        connection: sqlite3.Connection | None = None
+        try:
+            connection = _connect_existing(
+                self.path, read_only=True, busy_timeout_ms=self.busy_timeout_ms)
+            connection.execute("BEGIN")
+            validated = _validate_connection(connection, self.path)
+            tables = {}
+            for table in ("source_evidence", "promotion_approval", "glyph_conflict",
+                          "migration_candidate", "provenance_event"):
+                grouped: dict[str, list[Mapping[str, Any]]] = {}
+                # Table and key names are a closed internal list, never GUI input.
+                key = _PRIMARY_KEYS[table][0]
+                for row in connection.execute(f"SELECT * FROM {table} ORDER BY {key}"):
+                    grouped.setdefault(row["glyph_id"], []).append(MappingProxyType(dict(row)))
+                tables[table] = grouped
+            records = []
+            for glyph_id, row in sorted(validated["glyphs"].items()):
+                evidence, approvals, conflicts, legacy, provenance = (
+                    tuple(tables[table].get(glyph_id, ())) for table in (
+                        "source_evidence", "promotion_approval", "glyph_conflict",
+                        "migration_candidate", "provenance_event"))
+                read_conflict = validated["read_side_conflicts"].get(glyph_id)
+                # Exactly the validated state/suppression gate used by load_snapshot;
+                # no quorum or approval inference from presentation counts.
+                allowed = row["state"] == VERIFIED_GLOBAL and read_conflict is None
+                reason = "" if allowed else (
+                    "LEGACY_V0_READ_CONFLICT" if read_conflict else row["state"])
+                readings = {item["reading"] for item in (*evidence, *legacy)}
+                if row["active_reading"] is not None:
+                    readings.add(row["active_reading"])
+                for conflict in conflicts:
+                    readings.update(json.loads(conflict["conflicting_readings_json"]))
+                records.append(GlobalGlyphInspectionRecord(
+                    glyph_id=glyph_id, identity=row["identity"], stored_state=row["state"],
+                    stored_active_reading=row["active_reading"] or "", readings=tuple(sorted(readings)),
+                    global_reuse_allowed=allowed, reuse_block_reason=reason,
+                    direct_source_count=row["direct_source_count"],
+                    independent_source_count=row["independent_source_count"],
+                    truth=MappingProxyType({key: value for key, value in row.items() if key != "identity"}),
+                    source_evidence=evidence, approvals=approvals, conflicts=conflicts,
+                    legacy_candidates=legacy, provenance=provenance, read_side_conflict=read_conflict))
+            connection.execute("COMMIT")
+            return GlobalLibraryInspectionSnapshot(
+                VALID, str(self.path), _utc_now(), MappingProxyType(dict(validated["meta"])), tuple(records))
+        except BaseException as exc:
+            if connection is not None and connection.in_transaction:
+                connection.execute("ROLLBACK")
+            raise _translated_error(exc, self.path) from exc
+        finally:
+            if connection is not None:
+                connection.close()
 
     def _load_after_initialization_serialization(self) -> GlobalExactGlyphSnapshot:
         """Validate a present target only after taking SQLite's writer lock."""

@@ -101,6 +101,11 @@ class App:
         self.q = queue.Queue()
         self.proc = None
 
+        self.global_library_window = None
+        library_bar = ttk.Frame(root)
+        library_bar.pack(fill="x", padx=12, pady=(8, 0))
+        ttk.Button(library_bar, text="全域字形庫", command=self.open_global_library).pack(side="right")
+
         self.notebook = ttk.Notebook(root)
         self.notebook.pack(fill="x", padx=12, pady=(10, 4))
         self.tab_proof = tk.Frame(self.notebook)
@@ -122,6 +127,14 @@ class App:
         self.log.pack(fill="both", expand=True, padx=6, pady=6)
         root.after(100, self.poll)
         root.after(500, self.poll_project_status)
+
+    def open_global_library(self):
+        from global_library_inspector import GlobalLibraryInspector
+
+        if self.global_library_window is not None and self.global_library_window.winfo_exists():
+            self.global_library_window.lift()
+            return
+        self.global_library_window = GlobalLibraryInspector(self.root)
 
     def _build_proof_tab(self):
         self.input = tk.StringVar()
