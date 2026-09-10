@@ -1,4 +1,4 @@
-"""Read-only Global library UI. Worker threads exchange data, never Tk calls."""
+"""Global library inspection and explicit approval. Workers never call Tk."""
 from __future__ import annotations
 
 import json
@@ -9,6 +9,7 @@ from tkinter import ttk
 from typing import Callable
 
 import global_exact_glyph_library as library
+import global_library_approval as approval_ui
 
 
 STATE_LABELS = {
@@ -220,16 +221,24 @@ def record_sections(record: library.GlobalGlyphInspectionRecord) -> dict[str, st
             "詳細資訊": json.dumps(raw, ensure_ascii=False, indent=2)}
 
 
-def _default_loader():
-    return library.GlobalExactGlyphRepository.resolved().load_inspection_snapshot()
-
-
 class GlobalLibraryInspector(tk.Toplevel):
-    def __init__(self, master, *, loader=None):
+    def __init__(self, master, *, loader=None, repository=None):
         super().__init__(master)
         self.title("全域字形庫｜狀態與證據查閱")
         self.geometry(f"{min(1120, self.winfo_screenwidth() - 80)}x{min(800, self.winfo_screenheight() - 100)}")
-        self.reader = InspectionReader(loader or _default_loader)
+        # Resolve once and retain the exact repository for reads and confirmation.
+        # A custom read-only loader must never acquire a live write target.
+        if repository is None and loader is None:
+            try:
+                repository = library.GlobalExactGlyphRepository.resolved()
+            except library.GlobalLibraryError as exc:
+                def failed_loader(error=exc):
+                    raise error
+                loader = failed_loader
+        self.repository = repository
+        self.reader = InspectionReader(loader or repository.load_inspection_snapshot)
+        self.approval_dialog = None
+        self._approval_refresh = None
         self._poll_id = None
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         self.bind("<Destroy>", self._on_destroy, add=True)
@@ -238,11 +247,13 @@ class GlobalLibraryInspector(tk.Toplevel):
         ttk.Label(top, text="全域字形庫", font=("Microsoft JhengHei UI", 16, "bold")).pack(side="left")
         self.refresh_button = ttk.Button(top, text="重新讀取", command=self.refresh)
         self.refresh_button.pack(side="right")
+        self.approval_button = ttk.Button(top, text="檢視並核准", command=self.open_approval, state="disabled")
+        self.approval_button.pack(side="right", padx=10)
         self.status_text = tk.StringVar(self)
         ttk.Label(self, textvariable=self.status_text, wraplength=950, justify="left").pack(fill="x", padx=12)
         self.last_read_text = tk.StringVar(self)
         ttk.Label(self, textvariable=self.last_read_text).pack(fill="x", padx=12, pady=4)
-        ttk.Label(self, text="唯讀查閱；重新讀取只更新本視窗。實際重用仍須通過解碼時的跨來源安全檢查。",
+        ttk.Label(self, text="開啟、搜尋與重新讀取維持唯讀；核准須另行檢視並明確確認。實際重用仍須通過跨來源安全檢查。",
                   wraplength=950).pack(fill="x", padx=12)
         filters = ttk.Frame(self, padding=(12, 8))
         filters.pack(fill="x")
@@ -330,6 +341,15 @@ class GlobalLibraryInspector(tk.Toplevel):
     def _select(self, _event=None):
         selected = self.tree.selection()
         record = self._visible.get(selected[0]) if selected else None
+        snapshot = self.reader.snapshot
+        bound = (self.repository is not None and snapshot is not None
+                 and snapshot.database_path == str(self.repository.path))
+        pending = self.repository is not None and approval_ui.pending_submission(self.repository) is not None
+        self.approval_button.configure(state="normal" if pending or (record is not None and bound) else "disabled")
+        dialog = self.approval_dialog
+        if dialog is not None and dialog.winfo_exists() and not dialog.session.attempted:
+            if record is None or record.glyph_id != dialog.session.glyph_id:
+                dialog.destroy()
         sections = record_sections(record) if record is not None else {}
         for name in self.texts:
             value = sections.get(name, "請選取一筆字形查看證據。" if self._visible else database_status(self.reader))
@@ -337,12 +357,50 @@ class GlobalLibraryInspector(tk.Toplevel):
                 value = self._database_details() + ("\n\n" + sections[name] if record is not None else "")
             self._set_text(name, value)
 
+    def open_approval(self):
+        if self.repository is None:
+            return
+        if self.approval_dialog is not None and self.approval_dialog.winfo_exists():
+            self.approval_dialog.lift()
+            return
+        # Recover even a closed in-flight/uncertain dialog using the original request.
+        session = approval_ui.pending_submission(self.repository)
+        if session is None:
+            selected = self.tree.selection()
+            snapshot = self.reader.snapshot
+            if (not selected or selected[0] not in self._visible or snapshot is None
+                    or snapshot.database_path != str(self.repository.path)):
+                return
+            session = approval_ui.ApprovalSession(self.repository, selected[0])
+        self.approval_dialog = approval_ui.ApprovalDialog(self, session, on_committed=self._approval_committed)
+
+    def _approval_committed(self, dialog):
+        self.refresh()
+        self._approval_refresh = (self.reader.request_id, dialog)
+
+    def _finish_approval_refresh(self, error=""):
+        if self._approval_refresh is None:
+            return
+        request_id, dialog = self._approval_refresh
+        if request_id != self.reader.request_id:
+            error = "核准後的讀取已被另一個讀取取代；請查看最新字形庫狀態。"
+        self._approval_refresh = None
+        if dialog.winfo_exists():
+            dialog.refresh_finished(error or self.reader.error_detail)
+
     def _poll(self):
         self._poll_id = None
         if self.reader.closed.is_set():
             return
         if self.reader.drain():
-            self._render()
+            try:
+                self._render()
+            except Exception as exc:
+                self._finish_approval_refresh(f"顯示失敗：{exc}")
+                if self.approval_dialog is None or not self.approval_dialog.winfo_exists():
+                    raise
+            else:
+                self._finish_approval_refresh()
         self._poll_id = self.after(50, self._poll)
 
     def _on_destroy(self, event):

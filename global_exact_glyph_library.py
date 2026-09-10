@@ -275,6 +275,56 @@ class GlobalLibraryInspectionSnapshot:
 
 
 @dataclass(frozen=True)
+class GlobalApprovalRequest:
+    """Fixed manual decision, including its repository; not fresh actual evidence."""
+
+    database_path: str
+    glyph_id: str
+    reading: str
+    glyph_revision: int
+    quorum_evidence_ids: tuple[str, ...]
+    quorum_digest: str
+    promotion_policy_version: str
+    approval_source: str
+
+    def service_arguments(self) -> dict[str, Any]:
+        return {"glyph_id": self.glyph_id, "reading": self.reading,
+                "glyph_revision": self.glyph_revision,
+                "quorum_evidence_ids": list(self.quorum_evidence_ids),
+                "quorum_digest": self.quorum_digest,
+                "promotion_policy_version": self.promotion_policy_version,
+                "approval_source": self.approval_source}
+
+    @property
+    def approval_id(self) -> str:
+        return compute_promotion_approval_id(
+            glyph_id=self.glyph_id, reading=self.reading, quorum_digest=self.quorum_digest,
+            promotion_policy_version=self.promotion_policy_version,
+            glyph_revision=self.glyph_revision + 1, approval_source=self.approval_source,
+            status=APPROVED)
+
+
+@dataclass(frozen=True)
+class GlobalApprovalPreview:
+    database_path: str
+    glyph_id: str
+    record: GlobalGlyphInspectionRecord | None
+    request: GlobalApprovalRequest | None
+    reason: str
+
+
+@dataclass(frozen=True)
+class GlobalApprovalOutcome:
+    """Durable request history is separate from current reuse eligibility."""
+
+    status: str
+    approval_id: str = ""
+    receipt_digest: str = ""
+    current_state: str = ""
+    current_reuse_allowed: bool = False
+
+
+@dataclass(frozen=True)
 class LogicalSubsetRow:
     identity_contract_version: str
     promotion_policy_version: str
@@ -2328,6 +2378,97 @@ class GlobalExactGlyphRepository:
             connection.execute("COMMIT")
             return GlobalLibraryInspectionSnapshot(
                 VALID, str(self.path), _utc_now(), MappingProxyType(dict(validated["meta"])), tuple(records))
+        except BaseException as exc:
+            if connection is not None and connection.in_transaction:
+                connection.execute("ROLLBACK")
+            raise _translated_error(exc, self.path) from exc
+        finally:
+            if connection is not None:
+                connection.close()
+
+    def load_approval_preview(self, glyph_id: str) -> GlobalApprovalPreview:
+        """Derive a decision from one validated read, never initialize or approve."""
+        glyph_id = _sha256_text(glyph_id, "glyph_id")
+        snapshot = self.load_inspection_snapshot()
+        record = next((row for row in snapshot.records if row.glyph_id == glyph_id), None)
+        request = None
+        if snapshot.store_status == ABSENT:
+            reason = "資料庫尚未建立；未建立任何資料。"
+        elif record is None:
+            reason = "目前資料庫沒有這筆字形；請重新讀取。"
+        elif record.read_side_conflict is not None:
+            reason = "讀取時發現 legacy 衝突，已停用重用；不可核准，尚未寫入隔離。"
+        elif record.stored_state == QUARANTINED_CONFLICT:
+            reason = "字形已衝突隔離，不可核准或自動解除隔離。"
+        elif record.stored_state == VERIFIED_GLOBAL:
+            reason = "字形已有核准，不可再次提交。"
+        else:
+            # Approval requires the ENTIRE direct roster, not just the independent pair.
+            direct = tuple(row for row in record.source_evidence
+                           if row["evidence_class"] == DIRECT_VISUAL_ACTUAL)
+            if not independent_direct_quorum(direct):
+                reason = "缺少同讀音且滿足全部獨立性條件的直接證據；legacy 永遠不計 quorum。"
+            elif record.stored_state != PROMOTION_READY:
+                reason = "目前狀態不是 PROMOTION_READY，不符合既有核准契約。"
+            elif len({row["reading"] for row in direct}) != 1:
+                reason = "直接證據讀音不一致，不可核准。"
+            else:
+                reading = _canonical_reading(direct[0]["reading"])
+                ids = tuple(sorted(row["evidence_id"] for row in direct))
+                policy = snapshot.metadata["promotion_policy_version"]
+                request = GlobalApprovalRequest(
+                    str(self.path), glyph_id, reading, record.truth["revision"], ids,
+                    compute_quorum_digest(glyph_id, reading, ids, promotion_policy_version=policy),
+                    policy, EXPLICIT_MANUAL_APPROVAL)
+                reason = "符合既有核准條件；仍須檢視這份固定資料並明確確認。"
+        return GlobalApprovalPreview(str(self.path), glyph_id, record, request, reason)
+
+    def lookup_approval_outcome(self, request: GlobalApprovalRequest) -> GlobalApprovalOutcome:
+        """Read the exact approval identity or existing conflict receipt, without retry.
+
+        NOT_OBSERVED is absence of proof, not a rollback assertion. Historical
+        approval remains committed even after later revocation or suppression.
+        """
+        if not isinstance(request, GlobalApprovalRequest) or request.database_path != str(self.path):
+            raise GlobalLibraryValidationError("approval request repository mismatch")
+        _nonnegative_int(request.glyph_revision, "glyph_revision")
+        args = request.service_arguments()
+        ids = args["quorum_evidence_ids"]
+        if (request.promotion_policy_version != GLOBAL_PROMOTION_POLICY_VERSION
+                or request.approval_source != EXPLICIT_MANUAL_APPROVAL
+                or ids != sorted(set(ids)) or len(ids) < 2
+                or request.quorum_digest != compute_quorum_digest(request.glyph_id, request.reading, ids)):
+            raise GlobalLibraryValidationError("invalid fixed approval request")
+        approval_id = request.approval_id
+        digest = _canonical_sha256(args)
+        if _path_is_absent(self.path):
+            return GlobalApprovalOutcome("NOT_OBSERVED")
+        connection = None
+        try:
+            connection = _connect_existing(self.path, read_only=True, busy_timeout_ms=self.busy_timeout_ms)
+            connection.execute("BEGIN")
+            validated = _validate_connection(connection, self.path)
+            receipt = connection.execute("SELECT * FROM processed_intent WHERE intent_id=?",
+                                         ("approval_conflict_" + digest,)).fetchone()
+            approval = connection.execute("SELECT * FROM promotion_approval WHERE approval_id=?",
+                                          (approval_id,)).fetchone()
+            glyph = validated["glyphs"].get(request.glyph_id)
+            state = glyph["state"] if glyph else ""
+            reusable = state == VERIFIED_GLOBAL and request.glyph_id not in validated["read_side_conflicts"]
+            outcome = GlobalApprovalOutcome("NOT_OBSERVED", current_state=state,
+                                            current_reuse_allowed=reusable)
+            if receipt is not None:
+                if receipt["payload_digest"] != digest or receipt["result_state"] != INTENT_COMMITTED:
+                    raise GlobalLibraryIntentConflictError("invalid persisted approval conflict receipt")
+                outcome = GlobalApprovalOutcome("CONFLICT_COMMITTED", receipt_digest=receipt["receipt_digest"],
+                                                current_state=state, current_reuse_allowed=reusable)
+            elif approval is not None:
+                if approval["quorum_evidence_ids_json"] != _canonical_json(ids):
+                    raise GlobalLibraryIntentConflictError("persisted approval roster mismatch")
+                outcome = GlobalApprovalOutcome("APPROVAL_COMMITTED", approval_id=approval_id,
+                                                current_state=state, current_reuse_allowed=reusable)
+            connection.execute("COMMIT")
+            return outcome
         except BaseException as exc:
             if connection is not None and connection.in_transaction:
                 connection.execute("ROLLBACK")

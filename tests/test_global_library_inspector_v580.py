@@ -501,7 +501,7 @@ class InspectorTkTests(unittest.TestCase):
             return None
         button = find(self.root)
         self.assertIsNotNone(button)
-        with patch.object(gui, "_default_loader", self.repo.load_inspection_snapshot):
+        with patch.object(lib.GlobalExactGlyphRepository, "resolved", return_value=self.repo):
             button.invoke()
             first = app.global_library_window
             self.settle(first)
