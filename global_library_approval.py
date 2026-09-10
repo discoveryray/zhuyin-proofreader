@@ -183,6 +183,8 @@ class ApprovalDialog(tk.Toplevel):
         self.on_committed = on_committed
         self.notified = False
         self.refresh_detail = ""
+        self.display_error = ""
+        self._displayed_request = None
         self._poll_id = None
         self.title("全域字形庫｜檢視並核准")
         self.geometry(f"{min(940, self.winfo_screenwidth() - 80)}x{min(740, self.winfo_screenheight() - 100)}")
@@ -202,7 +204,7 @@ class ApprovalDialog(tk.Toplevel):
             self.texts[name] = text
         buttons = ttk.Frame(self, padding=12)
         buttons.pack(fill="x")
-        self.confirm_button = ttk.Button(buttons, text="確認核准這一筆", command=self.confirm)
+        self.confirm_button = ttk.Button(buttons, text="確認核准這一筆", command=self.confirm, state="disabled")
         self.confirm_button.pack(side="right")
         self.cancel_button = ttk.Button(buttons, text="取消／關閉", command=self.destroy)
         self.cancel_button.pack(side="right", padx=10)
@@ -213,18 +215,41 @@ class ApprovalDialog(tk.Toplevel):
         self._poll_id = self.after(50, self._poll)
 
     def _render(self):
-        self.status_text.set(outcome_text(self.session) + self.refresh_detail)
-        self.confirm_button.configure(state="normal" if self.session.state == "READY" and not self.session.attempted else "disabled")
-        self.query_button.configure(state="normal" if self.session.state == "UNKNOWN" and not self.session.busy else "disabled")
-        if self.session.preview is not None:
-            for name, value in preview_sections(self.session.preview).items():
-                widget = self.texts[name]
-                widget.configure(state="normal")
-                widget.delete("1.0", "end")
-                widget.insert("1.0", value)
-                widget.configure(state="disabled")
+        # A ready backend request is not proof that its confirmation was shown.
+        # Invalidate the display binding BEFORE touching any required field.
+        self._displayed_request = None
+        self.confirm_button.configure(state="disabled")
+        try:
+            self.query_button.configure(state="normal" if self.session.state == "UNKNOWN" and not self.session.busy else "disabled")
+            if self.session.preview is not None:
+                sections = preview_sections(self.session.preview)
+                for name, widget in self.texts.items():
+                    try:
+                        widget.configure(state="normal")
+                        widget.delete("1.0", "end")
+                        widget.insert("1.0", sections[name])
+                    finally:
+                        widget.configure(state="disabled")
+                self._displayed_request = self.session.preview.request
+            self.display_error = ""
+            if (self._displayed_request is not None and self.session.state == "READY"
+                    and not self.session.busy and not self.session.attempted):
+                self.confirm_button.configure(state="normal")
+        except Exception as exc:
+            self._displayed_request = None
+            if not self.session.attempted:
+                self.display_error = f"\n固定資料顯示失敗；尚未提交。請關閉後重新檢視並確認：{exc}"
+            else:
+                self.display_error = f"\n固定資料顯示失敗；提交結果以上述固定請求狀態為準：{exc}"
+        self._update_status()
+
+    def _update_status(self):
+        self.status_text.set(outcome_text(self.session) + self.refresh_detail + self.display_error)
 
     def confirm(self):
+        if (self.session.preview is None or self._displayed_request is None
+                or self._displayed_request is not self.session.preview.request):
+            return
         self.session.confirm()
         self._render()
 
@@ -233,18 +258,19 @@ class ApprovalDialog(tk.Toplevel):
         self._render()
 
     def refresh_finished(self, error=""):
-        self.refresh_detail = ("\n已提交結果保留，但畫面重新讀取失敗：" + error if error
-                               else "\n全域字形庫畫面已重新讀取。")
-        self.status_text.set(outcome_text(self.session) + self.refresh_detail)
+        committed = self.session.state in {"APPROVAL_COMMITTED", "CONFLICT_COMMITTED"}
+        if error:
+            prefix = "已提交結果保留，但畫面重新讀取失敗：" if committed else "畫面重新讀取失敗："
+            self.refresh_detail = "\n" + prefix + error
+        else:
+            self.refresh_detail = "\n全域字形庫畫面已重新讀取。"
+        self._update_status()
 
     def _poll(self):
         self._poll_id = None
         changed = self.session.drain()
         if changed:
-            try:
-                self._render()
-            except Exception as exc:
-                self.refresh_finished(f"顯示失敗：{exc}")
+            self._render()
         if self.session.state in {"APPROVAL_COMMITTED", "CONFLICT_COMMITTED"} and not self.notified:
             self.notified = True
             try:

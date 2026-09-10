@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import closing
 from dataclasses import FrozenInstanceError, replace
+import gc
 import json
 import sqlite3
 import tempfile
@@ -368,7 +369,20 @@ class ApprovalTkTests(ApprovalFixture):
         self.root.withdraw()
         self.errors = []
         self.root.report_callback_exception = lambda *args: self.errors.append(args)
-        self.addCleanup(self.root.destroy)
+        self.addCleanup(self.destroy_root)
+
+    def destroy_root(self):
+        root, self.root = self.root, None
+        readers = [window.reader for window in root.winfo_children()
+                   if isinstance(window, inspector.GlobalLibraryInspector)]
+        root.destroy()
+        for reader in readers:
+            reader.worker.join(5)
+            self.assertFalse(reader.worker.is_alive())
+        del root
+        # Tests create multiple Tcl interpreters. Retire widget cycles on their
+        # owner thread before another test's data worker can trigger cyclic GC.
+        gc.collect()
 
     def settle(self, condition):
         deadline = time.monotonic() + 10
@@ -403,6 +417,59 @@ class ApprovalTkTests(ApprovalFixture):
         self.assertEqual(self.rows(), before)
         self.assertEqual(durable_bytes(self.repo), raw)
 
+    def test_initial_failure_in_each_required_tab_blocks_handler_until_complete_new_confirmation(self):
+        for tab in ("核准確認", "直接來源證據", "詳細資訊"):
+            with self.subTest(tab=tab):
+                self.repo = lib.GlobalExactGlyphRepository.resolved(self.base / tab)
+                self.ready()
+                window = self.window()
+                before, raw = self.rows(), durable_bytes(self.repo)
+                window.open_approval()
+                dialog = window.approval_dialog
+                with patch.object(lib, "approve_global_exact_glyph", wraps=lib.approve_global_exact_glyph) as submit:
+                    with patch.object(dialog.texts[tab], "insert", side_effect=tk.TclError("initial preview failure")):
+                        self.settle(lambda: not dialog.session.busy)
+                        self.assertTrue(dialog.confirm_button.instate(["disabled"]))
+                        dialog.confirm_button.invoke()
+                        dialog.confirm()
+                        self.assertFalse(dialog.session.attempted)
+                        self.assertIn("尚未提交", dialog.status_text.get())
+                        self.assertNotIn("已提交結果保留", dialog.status_text.get())
+                    # Removing the fault alone cannot authorize the original button/handler.
+                    dialog.confirm_button.invoke()
+                    dialog.confirm()
+                    self.assertFalse(dialog.session.attempted)
+                    self.assertEqual(submit.call_count, 0)
+                    self.assertEqual(self.rows(), before)
+                    self.assertEqual(durable_bytes(self.repo), raw)
+                    fixed = dialog.session.preview.request
+                    dialog.destroy()
+                    recovered = self.dialog(window)
+                    self.assertEqual(recovered.session.preview.request, fixed)
+                    self.assertTrue(all(text.get("1.0", "end").strip() for text in recovered.texts.values()))
+                    self.assertTrue(all(str(text.cget("state")) == "disabled" for text in recovered.texts.values()))
+                    self.assertEqual(submit.call_count, 0)
+                    self.assertEqual(self.rows(), before)
+                    recovered.confirm_button.invoke()
+                    self.settle(lambda: recovered.notified and not window.reader.loading)
+                    self.assertEqual(submit.call_count, 1)
+                    self.assertEqual(recovered.session.state, "APPROVAL_COMMITTED")
+                window.destroy()
+
+    def test_dialog_render_failure_during_submission_preserves_real_committed_outcome(self):
+        window = self.window()
+        dialog = self.dialog(window)
+        with patch.object(dialog.texts["直接來源證據"], "insert", side_effect=tk.TclError("post-confirm render failure")):
+            dialog.confirm_button.invoke()
+            self.settle(lambda: dialog.notified and not window.reader.loading)
+        self.assertEqual(dialog.session.state, "APPROVAL_COMMITTED")
+        self.assertTrue(dialog.session.attempted)
+        self.assertTrue(dialog.confirm_button.instate(["disabled"]))
+        self.assertIn("核准已成功提交", dialog.status_text.get())
+        self.assertIn("顯示失敗", dialog.status_text.get())
+        self.assertNotIn("尚未提交", dialog.status_text.get())
+        self.assertEqual(self.repo.lookup_approval_outcome(dialog.session.preview.request).status, "APPROVAL_COMMITTED")
+
     def test_custom_loader_alone_cannot_fall_through_to_live_database(self):
         with patch.object(lib.GlobalExactGlyphRepository, "resolved", side_effect=AssertionError("live lookup")):
             window = self.window(loader=self.repo.load_inspection_snapshot)
@@ -436,10 +503,11 @@ class ApprovalTkTests(ApprovalFixture):
             self.repo = lib.GlobalExactGlyphRepository.resolved(self.base / str(renderer))
             self.ready()
             fail = False
+            repository = self.repo
             def loader():
                 if fail and not renderer:
                     raise lib.GlobalLibraryPermissionError("fixture refresh denied")
-                return self.repo.load_inspection_snapshot()
+                return repository.load_inspection_snapshot()
             window = self.window(repository=self.repo, loader=loader)
             dialog = self.dialog(window)
             fail = True
