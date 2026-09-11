@@ -170,7 +170,7 @@ def _conflicts(rows):
     return result
 
 
-def _resolve_pdf(info, output, roots, frozen):
+def _resolve_pdf(info, output, roots, frozen, resolved_pdfs):
     name, digest = _filename(info["pdf_name"]), library._sha256_text(info["pdf_sha256"], "PDF SHA")
     candidates = [output / name, *(root / name for root in roots)]
     stored = Path(str(info.get("pdf") or ""))
@@ -181,6 +181,7 @@ def _resolve_pdf(info, output, roots, frozen):
             raw = path.read_bytes()
             if _sha(raw) == digest:
                 frozen[path] = digest
+                resolved_pdfs[name] = str(path)
                 return raw
     raise MigrationValidationError("PDF missing or SHA mismatch: " + name)
 
@@ -377,14 +378,14 @@ def build_migration_plan(project_output, *, pdf_roots=()):
             if row[reading_field]:
                 library._canonical_reading(row[reading_field])
     required_keys = {row["key"] for _, _, rows in batches for row in rows}
-    pdf_data, workbook_rows = {}, {}
+    pdf_data, workbook_rows, resolved_pdfs = {}, {}, {}
     roster = manifest.get("pdfs")
     _require(isinstance(roster, list) and bool(roster), "PDF roster required")
     for info in roster:
         _require(isinstance(info, dict), "invalid PDF roster item")
         name = _filename(info.get("pdf_name"))
         _require(name not in pdf_data, "duplicate PDF name")
-        raw = _resolve_pdf(info, output, roots, frozen)
+        raw = _resolve_pdf(info, output, roots, frozen, resolved_pdfs)
         pdf_data[name] = (info["pdf_sha256"], raw)
         actual = _artifact(info, "actual_workbook", output, "01_實際注音", frozen)
         _artifact(info, "candidate_workbook", output, "02_候選報告", frozen)  # bytes/hash only
@@ -403,7 +404,7 @@ def build_migration_plan(project_output, *, pdf_roots=()):
                 _require((key, row["reading"]) in conflict_readings,
                          "quarantined learning retained reading missing from conflict authority")
                 retained_samples.setdefault((key, row["reading"]), set()).update(row["ids"])
-    intents, targets, skipped = [], [], []
+    intents, targets, skipped, import_sources = [], [], [], {}
     for name, digest, rows in batches:
         for row in rows:
             proof, key = proofs[row["key"]], row["key"]
@@ -427,18 +428,34 @@ def build_migration_plan(project_output, *, pdf_roots=()):
                 legacy_project_sha256=_sha(manifest_raw), legacy_evidence_sha256=digest,
                 old_verification_level=row["level"], status=status)
             intents.append(item)
+            import_sources[item["payload"]["import_id"]] = name
             for occurrence in mapped:
                 targets.append({key: value for key, value in occurrence.items() if key != "key"} | {
                     "import_id": item["payload"]["import_id"], "glyph_id": item["payload"]["glyph_id"],
                     "identity": exact, "source_project_id": project_id, "legacy_status": status})
     # Freeze/recheck all bytes after parsing. No path enters the import payload.
-    for path, digest in frozen.items():
-        _require((not path.exists()) if digest is None else (path.is_file() and _sha(path.read_bytes()) == digest),
-                 "source changed during validation: " + path.name)
+    source_input_hashes = {str(path): digest for path, digest in frozen.items()}
+    validate_source_snapshot(source_input_hashes)
     return {"migration_import_contract_version": library.GLOBAL_MIGRATION_IMPORT_CONTRACT_VERSION,
             "source_project_id": project_id, "intents": library.canonical_migration_batch(intents),
             "reconfirmation_targets": sorted(targets, key=lambda item: (item["import_id"], item["occurrence_id"])),
-            "skipped": sorted(skipped, key=library._canonical_json)}
+            "skipped": sorted(skipped, key=library._canonical_json),
+            # Presentation/audit only. These paths never enter import identity,
+            # canonical intents, evidence, quorum or a runtime fingerprint.
+            "import_sources": import_sources, "resolved_pdfs": resolved_pdfs,
+            "source_input_hashes": source_input_hashes}
+
+
+def validate_source_snapshot(source_input_hashes):
+    """Recheck only the exact admitted inputs, including absent optional files.
+
+    A caller may invalidate a displayed dry-run on failure; this does not build
+    another plan, repair a source, or authorize any mutation.
+    """
+    for filename, digest in source_input_hashes.items():
+        path = Path(filename)
+        _require((not path.exists()) if digest is None else (path.is_file() and _sha(path.read_bytes()) == digest),
+                 "source changed during validation: " + path.name)
 
 
 def migrate_project(project_output, *, pdf_roots=(), global_library_root=None, apply=False):
@@ -451,8 +468,11 @@ def migrate_project(project_output, *, pdf_roots=(), global_library_root=None, a
         receipts = library.deliver_global_migration(repository, plan["intents"])
         return {**plan, "mode": "APPLIED", "receipts": [asdict(receipt) for receipt in receipts]}
     snapshot = repository.load_snapshot()  # Strict, read-only; absence stays absent.
+    validate_source_snapshot(plan["source_input_hashes"])
     result = {**plan, "mode": "APPLIED" if apply else "DRY_RUN", "global_store_status": snapshot.store_status,
-              "global_read_side_conflicts": [asdict(conflict) for conflict in snapshot.read_side_conflicts]}
+              "global_read_side_conflicts": [asdict(conflict) for conflict in snapshot.read_side_conflicts],
+              "global_quarantined_identities": [asdict(record) for record in snapshot.quarantined_identities],
+              "global_database_path": snapshot.database_path, "global_loaded_at": snapshot.loaded_at}
     if apply:
         result["receipts"] = []
     return result

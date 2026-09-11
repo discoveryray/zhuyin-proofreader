@@ -53,6 +53,30 @@ def tree_bytes(root):
     return {str(path.relative_to(root)): path.read_bytes() for path in root.rglob("*") if path.is_file()}
 
 
+def fixture_path_alias(path):
+    """Same isolated directory via a guaranteed alias, plus 8.3 when available.
+
+    The parent segment always exercises canonical path comparisons, including
+    on filesystems without short names. GetShortPathNameW is read-only and does
+    not enable 8.3 names, create links, or change any filesystem policy.
+    """
+    canonical = Path(path).resolve()
+    alias = canonical
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+        get_short_path = ctypes.WinDLL("kernel32", use_last_error=True).GetShortPathNameW
+        get_short_path.argtypes = (wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD)
+        get_short_path.restype = wintypes.DWORD
+        size = get_short_path(str(canonical), None, 0)
+        if size:
+            buffer = ctypes.create_unicode_buffer(size)
+            length = get_short_path(str(canonical), buffer, size)
+            if 0 < length < size:
+                alias = Path(buffer.value)
+    return alias / ".." / alias.name
+
+
 def seal(project):
     project.manifest["manifest_integrity_sha256"] = lib._canonical_sha256({
         key: value for key, value in project.manifest.items() if key != "manifest_integrity_sha256"})
@@ -416,11 +440,20 @@ class MigrationTests(unittest.TestCase):
 
     def test_copy_relocation_keeps_import_identity_and_project_identity(self):
         first = self.plan()
-        moved = self.base / "copied"
+        alias = fixture_path_alias(self.base)
+        self.assertNotEqual(str(alias), str(self.base.resolve()))
+        self.assertEqual(alias.resolve(), self.base.resolve())
+        moved = alias / "copied"
         shutil.copytree(self.project.root, moved)
         self.project.pdf.unlink()  # Original stored path no longer resolves.
         copied = migration.build_migration_plan(moved)
-        self.assertEqual(first, copied)
+        # Relocation changes presentation-only source paths, never the logical
+        # plan, canonical import payloads or deterministic import identity.
+        audit_paths = {"resolved_pdfs", "source_input_hashes"}
+        self.assertEqual({key: value for key, value in first.items() if key not in audit_paths},
+                         {key: value for key, value in copied.items() if key not in audit_paths})
+        self.assertEqual(copied["resolved_pdfs"]["book.pdf"], str((moved / "book.pdf").resolve()))
+        self.assertTrue(all(Path(path).is_relative_to(moved.resolve()) for path in copied["source_input_hashes"]))
 
     def test_insufficient_and_reconfirmation_do_not_create_decisions(self):
         plan = self.plan()
