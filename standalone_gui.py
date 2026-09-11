@@ -103,10 +103,12 @@ class App:
 
         self.global_library_window = None
         self.delivery_recovery_window = None
+        self.legacy_migration_window = None
         library_bar = ttk.Frame(root)
         library_bar.pack(fill="x", padx=12, pady=(8, 0))
         ttk.Button(library_bar, text="全域字形庫", command=self.open_global_library).pack(side="right")
         ttk.Button(library_bar, text="交付與恢復狀態", command=self.open_delivery_recovery).pack(side="right", padx=8)
+        ttk.Button(library_bar, text="舊資料匯入預檢", command=self.open_legacy_migration).pack(side="right")
 
         self.notebook = ttk.Notebook(root)
         self.notebook.pack(fill="x", padx=12, pady=(10, 4))
@@ -148,6 +150,16 @@ class App:
             self.delivery_recovery_window.lift()
             return
         self.delivery_recovery_window = DeliveryRecoveryInspector(self.root, project_output=project)
+
+    def open_legacy_migration(self):
+        from legacy_migration_inspector import LegacyMigrationInspector
+
+        project = self.output.get().strip() or None
+        if self.legacy_migration_window is not None and self.legacy_migration_window.winfo_exists():
+            self.legacy_migration_window.set_project(project)
+            self.legacy_migration_window.lift()
+            return
+        self.legacy_migration_window = LegacyMigrationInspector(self.root, project_output=project)
 
     def _build_proof_tab(self):
         self.input = tk.StringVar()

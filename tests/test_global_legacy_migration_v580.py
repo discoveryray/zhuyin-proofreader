@@ -420,7 +420,13 @@ class MigrationTests(unittest.TestCase):
         shutil.copytree(self.project.root, moved)
         self.project.pdf.unlink()  # Original stored path no longer resolves.
         copied = migration.build_migration_plan(moved)
-        self.assertEqual(first, copied)
+        # Relocation changes presentation-only source paths, never the logical
+        # plan, canonical import payloads or deterministic import identity.
+        audit_paths = {"resolved_pdfs", "source_input_hashes"}
+        self.assertEqual({key: value for key, value in first.items() if key not in audit_paths},
+                         {key: value for key, value in copied.items() if key not in audit_paths})
+        self.assertEqual(copied["resolved_pdfs"]["book.pdf"], str(moved / "book.pdf"))
+        self.assertTrue(all(Path(path).is_relative_to(moved) for path in copied["source_input_hashes"]))
 
     def test_insufficient_and_reconfirmation_do_not_create_decisions(self):
         plan = self.plan()
