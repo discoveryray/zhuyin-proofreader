@@ -397,6 +397,14 @@ class ProcessedIntentReceipt:
     mutation_value: str = ""
 
 
+@dataclass(frozen=True)
+class ProcessedIntentInspectionSnapshot:
+    """Only the requested receipt roster, from one validated SQLite read."""
+    store_status: str
+    database_path: str
+    receipts: tuple[ProcessedIntentReceipt, ...]
+
+
 def _canonical_json(value: Any) -> str:
     try:
         return json.dumps(
@@ -2781,6 +2789,40 @@ class GlobalExactGlyphRepository:
                 already_processed=False,
                 mutation_value=mutation.value,
             )
+
+    def load_processed_intent_snapshot(self, intent_ids: Sequence[str]) -> ProcessedIntentInspectionSnapshot:
+        """Read a fixed roster without initialization, delivery or acknowledgement.
+
+        Even an empty roster validates an existing store. All requested receipts
+        share the validation transaction; callers must separately bind payloads
+        and any project-local receipts to their frozen project inputs.
+        """
+        ids = tuple(sorted({_strict_text(value, "intent_id") for value in intent_ids}))
+        if _path_is_absent(self.path):
+            return ProcessedIntentInspectionSnapshot(ABSENT, str(self.path), ())
+        connection: sqlite3.Connection | None = None
+        try:
+            connection = _connect_existing(self.path, read_only=True, busy_timeout_ms=self.busy_timeout_ms)
+            connection.execute("BEGIN")
+            _validate_connection(connection, self.path)
+            receipts = []
+            for intent_id in ids:
+                row = connection.execute(
+                    "SELECT * FROM processed_intent WHERE intent_id = ?", (intent_id,)).fetchone()
+                if row is not None:
+                    receipts.append(ProcessedIntentReceipt(
+                        intent_id=row["intent_id"], payload_digest=row["payload_digest"],
+                        committed_generation=row["committed_generation"], result_state=row["result_state"],
+                        receipt_digest=row["receipt_digest"], already_processed=True))
+            connection.execute("COMMIT")
+            return ProcessedIntentInspectionSnapshot(VALID, str(self.path), tuple(receipts))
+        except BaseException as exc:
+            if connection is not None and connection.in_transaction:
+                connection.execute("ROLLBACK")
+            raise _translated_error(exc, self.path) from exc
+        finally:
+            if connection is not None:
+                connection.close()
 
     def lookup_processed_intent(
         self,

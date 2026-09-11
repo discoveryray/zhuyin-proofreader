@@ -102,9 +102,11 @@ class App:
         self.proc = None
 
         self.global_library_window = None
+        self.delivery_recovery_window = None
         library_bar = ttk.Frame(root)
         library_bar.pack(fill="x", padx=12, pady=(8, 0))
         ttk.Button(library_bar, text="全域字形庫", command=self.open_global_library).pack(side="right")
+        ttk.Button(library_bar, text="交付與恢復狀態", command=self.open_delivery_recovery).pack(side="right", padx=8)
 
         self.notebook = ttk.Notebook(root)
         self.notebook.pack(fill="x", padx=12, pady=(10, 4))
@@ -135,6 +137,17 @@ class App:
             self.global_library_window.lift()
             return
         self.global_library_window = GlobalLibraryInspector(self.root)
+
+    def open_delivery_recovery(self):
+        from delivery_recovery_inspector import DeliveryRecoveryInspector
+
+        # Only the explicitly selected output; do not search nearby projects.
+        project = self.output.get().strip() or None
+        if self.delivery_recovery_window is not None and self.delivery_recovery_window.winfo_exists():
+            self.delivery_recovery_window.set_project(project)
+            self.delivery_recovery_window.lift()
+            return
+        self.delivery_recovery_window = DeliveryRecoveryInspector(self.root, project_output=project)
 
     def _build_proof_tab(self):
         self.input = tk.StringVar()
