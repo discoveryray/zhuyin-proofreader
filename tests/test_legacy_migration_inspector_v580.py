@@ -23,7 +23,7 @@ import legacy_global_migration as migration
 import legacy_migration_inspection as service
 import legacy_migration_inspector as gui
 import standalone_gui
-from test_global_legacy_migration_v580 import Project, ROOT, tree_bytes
+from test_global_legacy_migration_v580 import Project, ROOT, fixture_path_alias, tree_bytes
 import test_global_legacy_migration_review_v580 as historic
 from test_global_promotion_v580 import FakeDocument, intent, sql_rows
 from test_exact_glyph_identity_v580 import composite_glyph, synthetic_sfnt
@@ -60,9 +60,12 @@ class MigrationInspectionTests(unittest.TestCase):
         self.assertTrue(report.details)
 
     def test_real_ttf_cff_mapping_sources_counts_and_relocation_keep_import_identity(self):
+        alias = fixture_path_alias(self.base)
+        self.assertNotEqual(str(alias), str(self.base.resolve()))
+        self.assertEqual(alias.resolve(), self.base.resolve())
         for cff in (False, True):
             with self.subTest(cff=cff):
-                project = Project(self.base / str(cff), count=2, cff=cff)
+                project = Project(alias / str(cff), count=2, cff=cff)
                 report = self.inspect(project)
                 self.assertEqual(report.status, "VALID", report.details)
                 self.assertEqual(report.counts, (1, 1, 2, 2, 0))
@@ -75,14 +78,15 @@ class MigrationInspectionTests(unittest.TestCase):
                                   for row in sorted(project.rows, key=lambda row: row["occurrence_id"])])
                 self.assertTrue(all(target["physical_page"] == 1 for target in targets))
                 self.assertTrue(all("reading" not in target for target in targets))
-                self.assertIn("原檔：" + str(project.pdf), report.items[0].targets_text)
-                moved = self.base / (str(cff) + "-moved")
+                original_pdf = project.pdf.resolve()
+                self.assertIn("原檔：" + str(original_pdf), report.items[0].targets_text)
+                moved = alias / (str(cff) + "-moved")
                 shutil.copytree(project.root, moved)
                 project.pdf.unlink()
                 relocated = service.inspect_legacy_migration(moved, global_library_root=self.repo.path.parent)
                 self.assertEqual(json.loads(relocated.items[0].details), detail)
-                self.assertIn(str(moved / "book.pdf"), relocated.items[0].targets_text)
-                self.assertNotIn(str(project.pdf), relocated.items[0].targets_text)
+                self.assertIn("原檔：" + str((moved / "book.pdf").resolve()), relocated.items[0].targets_text)
+                self.assertNotIn(str(original_pdf), relocated.items[0].targets_text)
         self.assertFalse(self.repo.path.parent.exists())
 
     def test_insufficient_conflict_and_noneligible_are_not_successful_imports_or_quorum(self):
@@ -113,16 +117,19 @@ class MigrationInspectionTests(unittest.TestCase):
         self.assertFalse(self.repo.path.parent.exists())
 
     def test_missing_pdf_explicit_root_only_and_wrong_sha(self):
-        moved = self.base / "book.pdf"
+        alias = fixture_path_alias(self.base)
+        self.assertNotEqual(str(alias), str(self.base.resolve()))
+        self.assertEqual(alias.resolve(), self.base.resolve())
+        moved = alias / "book.pdf"
         self.project.pdf.rename(moved)
         self.assert_blocked(self.inspect())
         with patch.object(Path, "rglob", side_effect=AssertionError("no scans")), \
              patch.object(Path, "glob", side_effect=AssertionError("no scans")):
-            report = self.inspect(roots=(self.base,))
+            report = self.inspect(roots=(alias,))
         self.assertEqual(report.status, "VALID", report.details)
-        self.assertIn(str(moved), report.items[0].targets_text)
+        self.assertIn("原檔：" + str(moved.resolve()), report.items[0].targets_text)
         moved.write_bytes(b"wrong PDF")
-        self.assert_blocked(self.inspect(roots=(self.base,)))
+        self.assert_blocked(self.inspect(roots=(alias,)))
 
     def test_invalid_duplicate_stale_missing_and_pending_block_whole_batch_without_repair(self):
         for defect in ("missing", "duplicate", "reading", "stale", "pending", "bbox"):
@@ -239,7 +246,10 @@ class MigrationInspectionTests(unittest.TestCase):
         self.assertEqual(historic.store_evidence_bytes(repo), before)
 
     def test_live_source_watch_invalidates_even_same_size_and_timestamp_without_new_plan(self):
-        path = self.project.evidence / review.GLYPH_PROVENANCE_FILE
+        alias = fixture_path_alias(self.project.evidence)
+        self.assertNotEqual(str(alias), str(self.project.evidence.resolve()))
+        self.assertEqual(alias.resolve(), self.project.evidence.resolve())
+        path = alias / review.GLYPH_PROVENANCE_FILE
         path.unlink()  # Optional absence is part of the exact snapshot.
         calls = []
         def load(project, *, pdf_roots):
@@ -252,7 +262,7 @@ class MigrationInspectionTests(unittest.TestCase):
         self.assertTrue(reader.start())
         wait_reader(reader)
         self.assertEqual(reader.report.status, "VALID", reader.report.details)
-        self.assertIsNone(dict(reader.report.source_input_hashes)[str(path)])
+        self.assertIsNone(dict(reader.report.source_input_hashes)[str(path.resolve())])
         path.write_text("new optional evidence", encoding="utf-8")
         deadline = time.monotonic() + 4
         while reader.report.status == "VALID" and time.monotonic() < deadline:
