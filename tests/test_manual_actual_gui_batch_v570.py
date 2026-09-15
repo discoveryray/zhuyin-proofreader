@@ -1010,7 +1010,7 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
             patch.object(review_gui, "apply_staged_manual_actual_corrections", return_value=result) as service,
             patch.object(review_gui.threading, "Thread", ImmediateThread),
             patch.object(review_gui.tk, "Toplevel", FakeProgressWidget),
-            patch.object(review_gui.tk, "Label", FakeProgressWidget),
+            patch.object(review_gui, "WrappedLabel", FakeProgressWidget),
             patch.object(review_gui.ttk, "Progressbar", FakeProgressWidget),
             patch.object(review_gui, "apply_screen_safe_geometry"),
             patch.object(review_gui, "json_load_strict", return_value={"manifest": "refreshed"}),
@@ -1082,7 +1082,7 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
     def test_actual_dialog_uses_staging_label_and_explains_no_immediate_refresh(self):
         current = entry("dialog", "1" * 64)
         group = group_for([current])
-        with patch.object(review_gui, "render_occurrence_png", side_effect=RuntimeError("no preview fixture")):
+        with patch("review_display.occurrence_preview", side_effect=RuntimeError("no preview fixture")):
             dialog = review_gui.ActualReadingDialog(
                 self.root,
                 current,

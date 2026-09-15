@@ -10,6 +10,9 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+from occurrence_ledger import ALL_STATES, NON_TERMINAL_STATES, EXCLUDED_STATES
+from review_display import ActionRows, WrappedLabel, scrollable_entry
+
 VERSION = "5.7.0"
 
 
@@ -42,55 +45,102 @@ def normalize_existing_project_folder(folder: Path) -> Path:
     return unique[0] if len(unique) == 1 else folder
 
 
-def project_status_text(folder: Path) -> str:
-    """Return the best current project status, even before a sealed session exists."""
+# Presentation categories only; completion is always the producer's gate result.
+_PROGRESS_CAUSES = {
+    "目前注音尚未辨識的文字": {"actual_coverage_100", "decode_error_zero"},
+    "應標注音尚待確認的文字": {"expected_coverage_100", "expected_unresolved_zero", "expected_ambiguous_zero", "rule_conflict_zero"},
+    "待逐筆確認的項目": {"pending_zero", "all_in_scope_terminal"},
+    "來源或工作資料檢查異常": {"source_validation", "runtime_fatal_error_zero", "ledger_reconciliation", "data_integrity_error_zero", "source_invalid_zero"},
+    "尚未找到本次需校對的文字": {"in_scope_occurrence_count_positive"},
+    "必要回歸檢查尚未通過": {"regression_gate"},
+}
+_KNOWN_GATES = set().union(*_PROGRESS_CAUSES.values())
+_UNKNOWN_PROGRESS = "目前無法確認進度。請按『重新讀取專案狀態』，並查看『進度詳細資訊』；必要時使用『修復／更新報告』。"
+
+
+def summarize_project_status(data, *, has_session=False):
+    if not isinstance(data, dict):
+        return _UNKNOWN_PROGRESS
+    status = data.get("status")
+    if status == "PROCESSING":
+        phases = {"1/3": "讀取課本目前注音", "2/3": "核對語境與應標注音", "3/3": "整理報告與校對清單"}
+        phase = data.get("phase")
+        stage = f" [{phase}] {phases[phase]}" if isinstance(phase, str) and phase in phases else ""
+        return f"正在處理教材{stage}。請等候處理結束；詳細紀錄可從『更多…』查看。" + ("首次分析中，工作階段尚未建立。" if not has_session else "")
+    if status == "PIPELINE_BLOCKED":
+        return "處理被阻擋：來源或工作資料發生異常，校對尚未完成。請查看『進度詳細資訊』，修正來源後按『修復／更新報告』。" + ("工作階段尚未建立。" if not has_session else "")
+    if status not in {"PROCESSING_FINISHED", "PROOFREAD_COMPLETE"}:
+        return _UNKNOWN_PROGRESS
+    gate = data.get("completion_gate")
+    if not isinstance(gate, dict):
+        return _UNKNOWN_PROGRESS
+    counts = gate.get("state_counts")
+    failed = gate.get("failed_gates", [])
+    if (not isinstance(counts, dict) or not counts or not set(counts) <= ALL_STATES
+            or any(type(value) is not int or value < 0 for value in counts.values())
+            or not isinstance(failed, list) or any(not isinstance(key, str) or key not in _KNOWN_GATES for key in failed)):
+        return _UNKNOWN_PROGRESS
+    hard = gate.get("hard_gates")
+    if hard is not None and (not isinstance(hard, dict) or set(hard) != _KNOWN_GATES
+                             or any(type(value) is not bool for value in hard.values())
+                             or set(failed) != {key for key, value in hard.items() if not value}):
+        return _UNKNOWN_PROGRESS
+    if status == "PROOFREAD_COMPLETE":
+        in_scope = sum(value for key, value in counts.items() if key not in EXCLUDED_STATES)
+        if (has_session and gate.get("status") == status and gate.get("complete") is True and failed == []
+                and isinstance(hard, dict) and set(hard) == _KNOWN_GATES
+                and all(value is True for value in hard.values())
+                and in_scope > 0
+                and all(type(gate.get(key)) is int and gate[key] == in_scope
+                        for key in ("in_scope_total", "actual_covered", "expected_covered"))
+                and not any(counts.get(key, 0) for key in NON_TERMINAL_STATES)):
+            return "全冊校對完成：現有完成檢查全部通過。請按『查看報告』檢視結果。"
+        return _UNKNOWN_PROGRESS
+    if gate.get("complete") is True or gate.get("status", status) != status:
+        return _UNKNOWN_PROGRESS
+    # State counts partition occurrences. Dimension/gate counts overlap and must
+    # never be added to this number (one row may need both actual and expected).
+    pending = sum(value for key, value in counts.items() if key in NON_TERMINAL_STATES)
+    failed_set = set(failed)
+    causes = [label for label, gates in _PROGRESS_CAUSES.items() if failed_set & gates
+              and label != "待逐筆確認的項目"]
+    if not causes and pending:
+        causes = ["需逐筆核對的注音"]
+    text = "本次處理已結束，校對尚未完成。"
+    if pending:
+        text += f"還有待處理 {pending} 筆" + ("，包含" + "、".join(causes) if causes else "") + "。"
+        text += "請按『繼續校對』處理。"
+    else:
+        text += ("、".join(causes) + "。") if causes else "仍需確認完整檢查結果。"
+        text += "請按『修復／更新報告』，並查看『進度詳細資訊』。"
+    return text
+
+
+def project_status_details(folder: Path) -> tuple[str, str]:
     folder = Path(folder)
     status_path = folder / "pipeline_status.json"
     session_path = folder / "校對工作階段.json"
+    try:
+        has_session = session_path.is_file()
+        if status_path.exists():
+            raw = status_path.read_text(encoding="utf-8")
+            try:
+                data = json.loads(raw)
+            except Exception as exc:
+                return _UNKNOWN_PROGRESS, f"{status_path}\n{exc}\n\n{raw}"
+            diagnostics = f"{status_path}\n\n{json.dumps(data, ensure_ascii=False, indent=2)}"
+            if not has_session:
+                diagnostics += f"\n\n缺少工作階段檔案：{session_path}"
+            return summarize_project_status(data, has_session=has_session), diagnostics
+        if not has_session:
+            return "這是新的校對專案資料夾；尚未建立工作階段。請選擇教材後按『開始新校對』。", str(folder)
+        return _UNKNOWN_PROGRESS, f"已有工作階段，但找不到 {status_path}"
+    except Exception as exc:
+        return _UNKNOWN_PROGRESS, f"{status_path}\n{exc}"
 
-    if status_path.exists():
-        try:
-            data = json.loads(status_path.read_text(encoding="utf-8"))
-            status = str(data.get("status") or "")
-            status_text = str(data.get("status_text") or "").strip()
-            if status_text:
-                text = status_text
-            else:
-                text = STATUS_TEXT.get(status, status or "已有校對處理紀錄")
 
-            gate = data.get("completion_gate") or {}
-            state_counts = gate.get("state_counts") or {}
-            terminal = {"PASS", "TEXTBOOK_ERROR_CONFIRMED", "EXCLUDED_NONINDEPENDENT_LAYER", "EXCLUDED_OUT_OF_SCOPE"}
-            pending = sum(int(v or 0) for k, v in state_counts.items() if k not in terminal)
-            if pending:
-                text += f"；待處理 {pending} 筆"
-            failed_gates = [str(value) for value in (gate.get("failed_gates") or []) if str(value).strip()]
-            if status == "PROCESSING_FINISHED" and failed_gates:
-                text += "；未通過門檻：" + "、".join(failed_gates)
-
-            # A runtime failure can happen before the sealed session manifest is
-            # written.  Surface that state instead of incorrectly calling the
-            # folder a brand-new project.
-            if status == "PIPELINE_BLOCKED":
-                source_validation = data.get("source_validation") or {}
-                errors = source_validation.get("errors") or []
-                if errors:
-                    last_error = str(errors[-1]).strip()
-                    if last_error:
-                        text += f"；{last_error}"
-                if not session_path.exists():
-                    text += "；工作階段尚未建立"
-            elif status == "PROCESSING" and not session_path.exists():
-                text += "；首次分析中，完成第 3 階段後建立工作階段"
-            return text
-        except Exception:
-            if session_path.exists():
-                return "已有校對工作階段；狀態檔無法讀取，可直接按『繼續校對』。"
-            return "已有處理紀錄，但狀態檔無法讀取；工作階段尚未建立。"
-
-    if not session_path.exists():
-        return "這是新的校對專案資料夾；尚未建立工作階段。"
-    return "已有校對工作階段；尚未產生狀態摘要，可直接按『繼續校對』。"
+def project_status_text(folder: Path) -> str:
+    return project_status_details(folder)[0]
 
 
 class App:
@@ -104,13 +154,16 @@ class App:
         self.global_library_window = None
         self.delivery_recovery_window = None
         self.legacy_migration_window = None
-        library_bar = ttk.Frame(root)
+        from review_gui import create_scrollable_body
+        body, self.body_canvas = create_scrollable_body(root)
+        self.body = body
+        library_bar = ActionRows(body)
         library_bar.pack(fill="x", padx=12, pady=(8, 0))
-        ttk.Button(library_bar, text="全域字形庫", command=self.open_global_library).pack(side="right")
-        ttk.Button(library_bar, text="交付與恢復狀態", command=self.open_delivery_recovery).pack(side="right", padx=8)
-        ttk.Button(library_bar, text="舊資料匯入預檢", command=self.open_legacy_migration).pack(side="right")
+        library_bar.set_items([tk.Button(library_bar, text="全域字形庫", command=self.open_global_library),
+                               tk.Button(library_bar, text="交付與恢復狀態", command=self.open_delivery_recovery),
+                               tk.Button(library_bar, text="舊資料匯入預檢", command=self.open_legacy_migration)])
 
-        self.notebook = ttk.Notebook(root)
+        self.notebook = ttk.Notebook(body)
         self.notebook.pack(fill="x", padx=12, pady=(10, 4))
         self.tab_proof = tk.Frame(self.notebook)
         self.tab_diff = tk.Frame(self.notebook)
@@ -120,13 +173,13 @@ class App:
         self._build_proof_tab()
         self._build_diff_tab()
 
-        self.run_status = tk.Label(root, text="就緒", anchor="w", justify="left", fg="#555555")
+        self.run_status = WrappedLabel(body, text="就緒", anchor="w", justify="left", fg="#555555")
         self.run_status.pack(fill="x", padx=14, pady=(2, 8))
 
         # Detailed process output is useful for troubleshooting, but it is not a
         # normal proofreading task. Keep collecting it while hiding it by default.
         self.log_visible = False
-        self.log_frame = tk.LabelFrame(root, text="執行紀錄（進階）")
+        self.log_frame = tk.LabelFrame(body, text="執行紀錄（進階）")
         self.log = tk.Text(self.log_frame, wrap="word", font=("Microsoft JhengHei UI", 10), height=10)
         self.log.pack(fill="both", expand=True, padx=6, pady=6)
         root.after(100, self.poll)
@@ -167,43 +220,38 @@ class App:
 
         header = tk.Frame(self.tab_proof)
         header.pack(fill="x", padx=12, pady=(12, 4))
-        tk.Label(header, text="教材注音校對", font=("Microsoft JhengHei UI", 14, "bold")).pack(anchor="w")
-        tk.Label(
+        WrappedLabel(header, text="教材注音校對", font=("Microsoft JhengHei UI", 14, "bold")).pack(fill="x", anchor="w")
+        WrappedLabel(
             header,
             text="選擇 PDF／整冊資料夾後開始新校對；舊版既有專案可按『修復／更新報告』直接接續，不會強制重解碼 actual。",
             fg="#555555", justify="left",
-        ).pack(anchor="w", pady=(3, 0))
+        ).pack(fill="x", anchor="w", pady=(3, 0))
 
         frm = tk.Frame(self.tab_proof)
         frm.pack(fill="x", padx=12, pady=8)
-        tk.Label(frm, text="教材 PDF／資料夾：").grid(row=0, column=0, sticky="w")
-        tk.Entry(frm, textvariable=self.input, width=76).grid(row=0, column=1, padx=5)
-        tk.Button(frm, text="選 PDF", command=self.pick_pdf).grid(row=0, column=2, padx=2)
-        tk.Button(frm, text="選資料夾", command=self.pick_dir).grid(row=0, column=3, padx=2)
-
-        tk.Label(frm, text="校對專案資料夾：").grid(row=1, column=0, sticky="w", pady=8)
-        out_entry = tk.Entry(frm, textvariable=self.output, width=76)
-        out_entry.grid(row=1, column=1, padx=5)
-        out_entry.bind("<FocusOut>", lambda _e: self.refresh_project_status())
-        tk.Button(frm, text="選擇", command=self.pick_out).grid(row=1, column=2, padx=2)
+        for label, variable, choices in [
+            ("教材 PDF／資料夾：", self.input, [("選 PDF", self.pick_pdf), ("選資料夾", self.pick_dir)]),
+            ("校對專案資料夾：", self.output, [("選擇", self.pick_out)]),
+        ]:
+            self._path_field(frm, label, variable, choices)
 
         status_box = tk.LabelFrame(self.tab_proof, text="目前專案")
         status_box.pack(fill="x", padx=12, pady=(2, 8))
-        self.project_status = tk.Label(status_box, text="尚未選擇校對專案資料夾", justify="left", anchor="w")
+        self.project_status = WrappedLabel(status_box, text="尚未選擇校對專案資料夾", justify="left", anchor="w")
         self.project_status.pack(fill="x", padx=10, pady=8)
 
-        buttons = tk.Frame(self.tab_proof)
+        buttons = ActionRows(self.tab_proof)
         buttons.pack(fill="x", padx=12, pady=(2, 10))
         self.runbtn = tk.Button(buttons, text="開始新校對", height=2, width=16, command=self.run)
-        self.runbtn.pack(side="left")
-        tk.Button(buttons, text="繼續校對", height=2, width=16, command=self.review).pack(side="left", padx=6)
-        tk.Button(buttons, text="修復／更新報告", height=2, width=16, command=self.report).pack(side="left", padx=6)
-        tk.Button(buttons, text="查看報告", height=2, width=14, command=self.open_user_report).pack(side="left", padx=6)
+
+        review = tk.Button(buttons, text="繼續校對", command=self.review)
+        repair = tk.Button(buttons, text="修復／更新報告", command=self.report)
+        report = tk.Button(buttons, text="查看報告", command=self.open_user_report)
 
         more = tk.Menubutton(buttons, text="更多…", width=12, height=2, relief="raised")
         menu = tk.Menu(more, tearoff=False)
         more.config(menu=menu)
-        more.pack(side="left", padx=6)
+        buttons.set_items([self.runbtn, review, repair, report, more])
         menu.add_command(label="輸出 expected／差異 GPT 證據表", command=self.export_gpt)
         menu.add_command(label="匯入 GPT 判定檔／單檔判定包（一鍵）", command=self.import_gpt_auto)
         menu.add_separator()
@@ -213,15 +261,18 @@ class App:
         menu.add_command(label="開啟技術稽核報告", command=self.open_technical_report)
         menu.add_command(label="顯示／隱藏執行紀錄", command=self.toggle_log)
         menu.add_command(label="重新讀取專案狀態", command=self.refresh_project_status)
+        menu.add_command(label="進度詳細資訊（可複製）", command=self.show_project_details)
+        status_actions = ActionRows(status_box)
+        status_actions.pack(fill="x", padx=10)
+        status_actions.set_items([tk.Button(status_actions, text="進度詳細資訊（可複製）", command=self.show_project_details),
+                                  tk.Button(status_actions, text="重新讀取專案狀態", command=self.refresh_project_status)])
 
     def toggle_log(self):
         self.log_visible = not self.log_visible
         if self.log_visible:
             self.log_frame.pack(fill="both", expand=True, padx=12, pady=(0, 10))
-            self.root.geometry("1080x760")
         else:
             self.log_frame.pack_forget()
-            self.root.geometry("1080x560")
 
     def _build_diff_tab(self):
         self.prev_input = tk.StringVar()
@@ -230,26 +281,49 @@ class App:
         frm = tk.Frame(self.tab_diff)
         frm.pack(fill="x", padx=12, pady=12)
 
-        tk.Label(frm, text="上一審 PDF／資料夾：").grid(row=0, column=0, sticky="w")
-        tk.Entry(frm, textvariable=self.prev_input, width=72).grid(row=0, column=1, padx=5)
-        tk.Button(frm, text="選 PDF", command=lambda: self.pick_revision("prev", False)).grid(row=0, column=2, padx=2)
-        tk.Button(frm, text="選資料夾", command=lambda: self.pick_revision("prev", True)).grid(row=0, column=3, padx=2)
+        for label, variable, choices in [
+            ("上一審 PDF／資料夾：", self.prev_input, [("選 PDF", lambda: self.pick_revision("prev", False)), ("選資料夾", lambda: self.pick_revision("prev", True))]),
+            ("本審 PDF／資料夾：", self.curr_input, [("選 PDF", lambda: self.pick_revision("curr", False)), ("選資料夾", lambda: self.pick_revision("curr", True))]),
+            ("差異報告資料夾：", self.diff_output, [("選擇", self.pick_diff_out)]),
+        ]:
+            self._path_field(frm, label, variable, choices)
+        buttons = ActionRows(self.tab_diff)
+        buttons.pack(fill="x", padx=12)
+        self.diff_runbtn = tk.Button(buttons, text="開始差異檢查", command=self.run_diff)
+        buttons.set_items([self.diff_runbtn, tk.Button(buttons, text="開啟差異報告", command=self.open_diff_report)])
+        WrappedLabel(self.tab_diff, text="中文字相同但注音改變會優先列出；無法安全解碼時不硬判。", fg="#555555").pack(fill="x", padx=12)
 
-        tk.Label(frm, text="本審 PDF／資料夾：").grid(row=1, column=0, sticky="w", pady=8)
-        tk.Entry(frm, textvariable=self.curr_input, width=72).grid(row=1, column=1, padx=5)
-        tk.Button(frm, text="選 PDF", command=lambda: self.pick_revision("curr", False)).grid(row=1, column=2, padx=2)
-        tk.Button(frm, text="選資料夾", command=lambda: self.pick_revision("curr", True)).grid(row=1, column=3, padx=2)
+    def _path_field(self, parent, label, variable, choices):
+        WrappedLabel(parent, text=label).pack(fill="x")
+        field = scrollable_entry(parent, variable)
+        field.pack(fill="x")
+        if variable is getattr(self, "output", None):
+            field.entry.bind("<FocusOut>", lambda _e: self.refresh_project_status())
+        buttons = ActionRows(parent)
+        buttons.pack(fill="x", pady=(0, 6))
+        buttons.set_items([tk.Button(buttons, text=title, command=command) for title, command in choices])
 
-        tk.Label(frm, text="差異報告資料夾：").grid(row=2, column=0, sticky="w")
-        tk.Entry(frm, textvariable=self.diff_output, width=72).grid(row=2, column=1, padx=5)
-        tk.Button(frm, text="選擇", command=self.pick_diff_out).grid(row=2, column=2, padx=2)
-
-        b = tk.Frame(self.tab_diff)
-        b.pack(fill="x", padx=12, pady=(0, 10))
-        self.diff_runbtn = tk.Button(b, text="開始差異檢查", height=2, width=18, command=self.run_diff)
-        self.diff_runbtn.pack(side="left")
-        tk.Button(b, text="開啟差異報告", height=2, width=18, command=self.open_diff_report).pack(side="left", padx=6)
-        tk.Label(b, text="中文字相同但注音改變會優先列出；無法安全解碼時不硬判。", fg="#555555").pack(side="left", padx=12)
+    def show_project_details(self):
+        from review_gui import apply_screen_safe_geometry
+        self.refresh_project_status()
+        dialog = tk.Toplevel(self.root)
+        dialog.title("進度詳細資訊（可選取及複製）")
+        apply_screen_safe_geometry(dialog, 800, 600)
+        buttons = ActionRows(dialog)
+        buttons.pack(side="bottom", fill="x", padx=10)
+        details = getattr(self, "project_diagnostics", "尚未選擇校對專案資料夾")
+        def copy_all():
+            dialog.clipboard_clear()
+            dialog.clipboard_append(details)
+        buttons.set_items([tk.Button(buttons, text="複製全部詳細資訊", command=copy_all),
+                           tk.Button(buttons, text="關閉", command=dialog.destroy)])
+        text = tk.Text(dialog, wrap="word", width=1)
+        bar = ttk.Scrollbar(dialog, command=text.yview)
+        text.configure(yscrollcommand=bar.set)
+        bar.pack(side="right", fill="y")
+        text.pack(fill="both", expand=True)
+        text.insert("1.0", details)
+        text.configure(state="disabled")
 
     def pick_pdf(self):
         p = filedialog.askopenfilename(filetypes=[("PDF", "*.pdf")])
@@ -277,21 +351,33 @@ class App:
     def refresh_project_status(self):
         out = self.output.get().strip()
         if not out:
-            self.project_status.config(text="尚未選擇校對專案資料夾")
+            self.project_diagnostics = "尚未選擇校對專案資料夾"
+            self.project_status.config(text="尚未選擇校對專案資料夾。請先選擇專案或教材。")
             return
         requested = Path(out)
-        normalized = normalize_existing_project_folder(requested)
+        try:
+            normalized = normalize_existing_project_folder(requested)
+        except Exception as exc:
+            self.project_status.config(text=_UNKNOWN_PROGRESS)
+            self.project_diagnostics = f"{requested}\n{exc}"
+            return
         if normalized != requested:
             self.output.set(str(normalized))
             out = str(normalized)
             self.run_status.config(text=f"已自動修正校對專案資料夾：{normalized}")
-        self.project_status.config(text=project_status_text(Path(out)))
+        summary, self.project_diagnostics = project_status_details(Path(out))
+        self.project_status.config(text=summary)
 
     def poll_project_status(self):
         # Keep 「目前專案」 synchronized with pipeline_status.json while the
         # subprocess is running, not only after it exits.
-        self.refresh_project_status()
-        self.root.after(500, self.poll_project_status)
+        try:
+            self.refresh_project_status()
+        except Exception as exc:
+            self.project_status.config(text=_UNKNOWN_PROGRESS)
+            self.project_diagnostics = str(exc)
+        finally:
+            self.root.after(500, self.poll_project_status)
 
     def pick_revision(self, side: str, is_dir: bool):
         p = filedialog.askdirectory() if is_dir else filedialog.askopenfilename(filetypes=[("PDF", "*.pdf")])
@@ -491,11 +577,9 @@ class App:
                 else:
                     self.log.insert("end", x)
                     self.log.see("end")
-                    line = str(x).strip()
-                    if line:
-                        if len(line) > 120:
-                            line = line[:117] + "…"
-                        self.run_status.config(text=line)
+                    # Raw subprocess lines stay in the copyable execution log.
+                    # They may contain exceptions or internal gate names.
+
         except queue.Empty:
             pass
         self.root.after(100, self.poll)

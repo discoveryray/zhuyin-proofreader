@@ -493,7 +493,7 @@ class InspectorTkTests(unittest.TestCase):
         self.assertEqual(app.output.get(), "")
         def find(widget):
             for child in widget.winfo_children():
-                if isinstance(child, ttk.Button) and child.cget("text") == "全域字形庫":
+                if isinstance(child, (tk.Button, ttk.Button)) and child.cget("text") == "全域字形庫":
                     return child
                 found = find(child)
                 if found is not None:

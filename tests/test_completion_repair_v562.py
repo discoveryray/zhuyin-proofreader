@@ -19,7 +19,7 @@ from check_pronunciation_candidates import (  # noqa: E402
     historical_regression_applicability,
 )
 from pronunciation_rule_engine import load_rules, resolve_rules  # noqa: E402
-from standalone_gui import project_status_text  # noqa: E402
+from standalone_gui import project_status_text, project_status_details  # noqa: E402
 
 
 class CompletionRepairV562Tests(unittest.TestCase):
@@ -96,7 +96,9 @@ class CompletionRepairV562Tests(unittest.TestCase):
                 },
             }
             (root / "pipeline_status.json").write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
-            self.assertIn("regression_gate", project_status_text(root))
+            self.assertIn("必要回歸檢查尚未通過", project_status_text(root))
+            self.assertNotIn("regression_gate", project_status_text(root))
+            self.assertIn("regression_gate", project_status_details(root)[1])
 
 
 if __name__ == "__main__":
