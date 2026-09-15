@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import json
 import re
 import sys
@@ -12,7 +11,6 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
-import fitz
 
 from occurrence_ledger import (
     CONFIRMATION_GATES, NON_TERMINAL_STATES, HARD_BLOCKING_STATES, EXCLUDED_STATES,
@@ -38,7 +36,8 @@ from standalone_proofread import (
     validate_manifest_integrity,
     validate_output_artifact_hashes,
 )
-from actual_review import build_actual_group_for_entry, render_occurrence_png
+from actual_review import build_actual_group_for_entry
+from review_display import ActionRows, OccurrencePreview, WrappedLabel, scrollable_entry, wrap_checkbutton
 
 
 STATE_HELP = {
@@ -151,10 +150,11 @@ class ExpectedDialog(tk.Toplevel):
         self.grab_set()
 
         # Footer is packed first and stays visible even when the form itself must scroll.
-        buttons = tk.Frame(self, bd=1, relief="groove")
+        buttons = ActionRows(self, bd=1, relief="groove")
         buttons.pack(side="bottom", fill="x", padx=0, pady=0)
-        tk.Button(buttons, text="取消", width=12, command=self.destroy).pack(side="right", padx=8, pady=10)
-        tk.Button(buttons, text="儲存本筆應標判定", width=18, command=self.submit, default="active").pack(side="right", padx=4, pady=10)
+        cancel = tk.Button(buttons, text="取消", command=self.destroy)
+        save = tk.Button(buttons, text="儲存本筆應標判定", command=self.submit, default="active")
+        buttons.set_items([save, cancel])
 
         body, self.body_canvas = create_scrollable_body(self)
 
@@ -164,12 +164,12 @@ class ExpectedDialog(tk.Toplevel):
 
         intro = tk.Frame(body)
         intro.pack(fill="x", padx=16, pady=(14, 8))
-        tk.Label(intro, text="請判定本句的應標讀音", font=("Microsoft JhengHei UI", 12, "bold")).pack(anchor="w")
-        tk.Label(
+        WrappedLabel(intro, text="請判定本句的應標讀音", font=("Microsoft JhengHei UI", 12, "bold")).pack(fill="x", anchor="w")
+        WrappedLabel(
             intro,
             text="請看原文與語境後輸入應標注音。程式會保存本筆人工判定並重新比較；文字依據可以留白。只適用此位置，可重用規則須另外建立。",
             justify="left", wraplength=670, fg="#555555",
-        ).pack(anchor="w", pady=(4, 0))
+        ).pack(fill="x", anchor="w", pady=(4, 0))
 
         summary = tk.LabelFrame(body, text="目前位置")
         summary.pack(fill="x", padx=16, pady=6)
@@ -179,7 +179,7 @@ class ExpectedDialog(tk.Toplevel):
             f"所在句：{sentence}\n"
             f"課本目前注音：{entry.get('actual', '')}"
         )
-        tk.Label(summary, text=text, justify="left", anchor="w", wraplength=660).pack(fill="x", padx=10, pady=8)
+        WrappedLabel(summary, text=text, justify="left", anchor="w", wraplength=660).pack(fill="x", padx=10, pady=8)
 
         form = tk.Frame(body)
         form.pack(fill="x", padx=16, pady=4)
@@ -195,9 +195,9 @@ class ExpectedDialog(tk.Toplevel):
             ("補充說明（可空白）", self.reason, "例如：另一個讀音屬不同義項，本句不適用"),
         ]
         for row, (label, var, hint) in enumerate(labels):
-            tk.Label(form, text=label).grid(row=row * 2, column=0, sticky="w", pady=(7, 1))
-            tk.Entry(form, textvariable=var, width=64, state="readonly" if var is self.context else "normal").grid(row=row * 2, column=1, sticky="ew", padx=(10, 0), pady=(7, 1))
-            tk.Label(form, text=hint, fg="#666666", justify="left", wraplength=520).grid(row=row * 2 + 1, column=1, sticky="w", padx=(10, 0))
+            WrappedLabel(form, text=label).grid(row=row * 2, column=0, sticky="w", pady=(7, 1))
+            scrollable_entry(form, var, readonly=var is self.context).grid(row=row * 2, column=1, sticky="ew", padx=(10, 0), pady=(7, 1))
+            WrappedLabel(form, text=hint, fg="#666666", justify="left", wraplength=520).grid(row=row * 2 + 1, column=1, sticky="ew", padx=(10, 0))
         form.columnconfigure(1, weight=1)
 
         self.protocol("WM_DELETE_WINDOW", self.destroy)
@@ -249,16 +249,18 @@ class ActualReadingDialog(tk.Toplevel):
         apply_screen_safe_geometry(self, 980, 760, min_width=720, min_height=520)
         self.transient(parent)
         self.grab_set()
-        self.photos = []
+        self.previews = []
+        self.sample_available = []
 
-        footer = tk.Frame(self, bd=1, relief="groove")
+        footer = ActionRows(self, bd=1, relief="groove")
         footer.pack(side="bottom", fill="x")
-        tk.Button(footer, text="取消", width=12, command=self.destroy).pack(side="right", padx=8, pady=10)
-        tk.Button(footer, text="暫存這筆 actual", width=20, command=self.submit).pack(side="right", padx=4, pady=10)
+        cancel = tk.Button(footer, text="取消", command=self.destroy)
+        save = tk.Button(footer, text="暫存這筆 actual", command=self.submit)
+        footer.set_items([save, cancel])
         body, _canvas = create_scrollable_body(self)
 
-        tk.Label(body, text="只看 PDF 原頁，確認實際印出的注音", font=("Microsoft JhengHei UI", 13, "bold")).pack(anchor="w", padx=16, pady=(14,4))
-        tk.Label(
+        WrappedLabel(body, text="只看 PDF 原頁，確認實際印出的注音", font=("Microsoft JhengHei UI", 13, "bold")).pack(fill="x", anchor="w", padx=16, pady=(14,4))
+        WrappedLabel(
             body,
             text=(
                 "這個視窗不提供 expected／字典答案，請只依原頁可見字形輸入 actual。"
@@ -266,49 +268,43 @@ class ActualReadingDialog(tk.Toplevel):
                 "最後由主畫面的「套用 actual 修正」一次處理。"
             ),
             fg="#555555", justify="left", wraplength=900,
-        ).pack(anchor="w", padx=16, pady=(0,8))
+        ).pack(fill="x", anchor="w", padx=16, pady=(0,8))
 
         members = list(group.get("members") or [])
         target_id = str(entry.get("occurrence_id") or "")
         members.sort(key=lambda m: 0 if str(m.get("occurrence_id") or "") == target_id else 1)
         self.samples = members[:2]
         self.checked_vars = []
-        tmp_dir = self.output_dir / ".actual_review_preview"
         for i, sample in enumerate(self.samples, 1):
             frame = tk.LabelFrame(body, text=f"樣本 {chr(64+i)}")
             frame.pack(fill="x", padx=16, pady=6)
             info = f"{sample.get('pdf_name','')}  課本頁 {sample.get('printed_page','')}  字：{sample.get('char','')}  occurrence：{sample.get('occurrence_id','')}"
-            tk.Label(frame, text=info, anchor="w", justify="left").pack(fill="x", padx=8, pady=(6,2))
-            try:
-                img_path = tmp_dir / f"manual_{group.get('group_id','group')}_{i}.png"
-                render_occurrence_png(sample, img_path, context=True, output_dir=self.output_dir)
-                photo = tk.PhotoImage(file=str(img_path))
-                factor = max(1, (photo.width() + 720 - 1) // 720)
-                if factor > 1:
-                    photo = photo.subsample(factor, factor)
-                self.photos.append(photo)
-                tk.Label(frame, image=photo, bg="white").pack(padx=8, pady=5)
-            except Exception as exc:
-                tk.Label(frame, text=f"無法顯示圖片：{exc}", fg="#aa0000").pack(anchor="w", padx=8, pady=6)
-            var = tk.BooleanVar(value=(i == 1))
+            WrappedLabel(frame, text=info).pack(fill="x", padx=8, pady=(6, 2))
+            preview = OccurrencePreview(frame, height=220)
+            preview.pack(fill="x", padx=8, pady=5)
+            available = preview.load(sample, padding=(95, 60), output_dir=self.output_dir)
+            self.previews.append(preview)
+            self.sample_available.append(available)
+            var = tk.BooleanVar(value=(i == 1 and available))
             self.checked_vars.append(var)
-            tk.Checkbutton(frame, text="我已直接核對這張 PDF 原頁", variable=var).pack(anchor="w", padx=8, pady=(2,7))
+            wrap_checkbutton(tk.Checkbutton(frame, text="我已直接核對這張 PDF 原頁", variable=var,
+                                            state="normal" if available else "disabled")).pack(fill="x", padx=8, pady=(2, 7))
 
         form = tk.LabelFrame(body, text="實際注音")
         form.pack(fill="x", padx=16, pady=8)
         self.reading = tk.StringVar(value="")
         self.note = tk.StringVar(value="")
-        tk.Label(form, text=f"程式目前 actual：{entry.get('actual') or '尚未辨識'}").grid(row=0,column=0,columnspan=2,sticky="w",padx=8,pady=(8,4))
-        tk.Label(form, text="原頁真正 actual：").grid(row=1,column=0,sticky="w",padx=8,pady=4)
-        tk.Entry(form, textvariable=self.reading, width=36).grid(row=1,column=1,sticky="ew",padx=8,pady=4)
-        tk.Label(form, text="備註（可空白）：").grid(row=2,column=0,sticky="w",padx=8,pady=4)
-        tk.Entry(form, textvariable=self.note, width=60).grid(row=2,column=1,sticky="ew",padx=8,pady=(4,8))
+        WrappedLabel(form, text=f"程式目前 actual：{entry.get('actual') or '尚未辨識'}").grid(row=0,column=0,columnspan=2,sticky="w",padx=8,pady=(8,4))
+        WrappedLabel(form, text="原頁真正 actual：").grid(row=1,column=0,sticky="w",padx=8,pady=4)
+        scrollable_entry(form, self.reading).grid(row=1,column=1,sticky="ew",padx=8,pady=4)
+        WrappedLabel(form, text="備註（可空白）：").grid(row=2,column=0,sticky="w",padx=8,pady=4)
+        scrollable_entry(form, self.note).grid(row=2,column=1,sticky="ew",padx=8,pady=(4,8))
         form.columnconfigure(1, weight=1)
         kind = str(group.get("kind") or "")
         if len(self.samples) > 1 and kind in {"TTF_GLYF_SHA256", "CFF_GLYPH_SHA256"}:
-            tk.Label(body, text="若 A、B 都勾選且讀音相同，批次套用時這個 exact 字形可升格為跨位置重用真值；只勾 A 則只修正本位置。", fg="#555555").pack(anchor="w", padx=18, pady=(0,10))
+            WrappedLabel(body, text="若 A、B 都勾選且讀音相同，批次套用時這個 exact 字形可升格為跨位置重用真值；只勾 A 則只修正本位置。", fg="#555555").pack(fill="x", anchor="w", padx=18, pady=(0,10))
         else:
-            tk.Label(body, text="目前沒有第二個可交叉核對的 exact glyph；本次會先暫存 occurrence-specific actual 修正。", fg="#555555").pack(anchor="w", padx=18, pady=(0,10))
+            WrappedLabel(body, text="目前沒有第二個可交叉核對的 exact glyph；本次會先暫存 occurrence-specific actual 修正。", fg="#555555").pack(fill="x", anchor="w", padx=18, pady=(0,10))
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         if wait:
             self.wait_window(self)
@@ -318,7 +314,7 @@ class ActualReadingDialog(tk.Toplevel):
         if not reading:
             messagebox.showerror("注音格式不合法", "請輸入單一合法注音；聲調可放音節最前或最後。", parent=self)
             return
-        checked = [str(sample.get("occurrence_id") or "") for sample, var in zip(self.samples, self.checked_vars) if var.get()]
+        checked = [str(sample.get("occurrence_id") or "") for sample, var, available in zip(self.samples, self.checked_vars, self.sample_available) if var.get() and available]
         target_id = str(self.entry.get("occurrence_id") or "")
         if target_id not in checked:
             messagebox.showerror("尚未核對目前位置", "樣本 A（目前位置）必須勾選已直接核對。", parent=self)
@@ -338,10 +334,11 @@ class ConfirmationDialog(tk.Toplevel):
         self.transient(parent)
         self.grab_set()
 
-        buttons = tk.Frame(self, bd=1, relief="groove")
+        buttons = ActionRows(self, bd=1, relief="groove")
         buttons.pack(side="bottom", fill="x")
-        tk.Button(buttons, text="取消", width=12, command=self.destroy).pack(side="right", padx=8, pady=10)
-        tk.Button(buttons, text="確認為教材錯誤", width=18, command=self.submit, default="active").pack(side="right", padx=4, pady=10)
+        cancel = tk.Button(buttons, text="取消", command=self.destroy)
+        save = tk.Button(buttons, text="確認為教材錯誤", command=self.submit, default="active")
+        buttons.set_items([save, cancel])
 
         body, self.body_canvas = create_scrollable_body(self)
 
@@ -350,7 +347,7 @@ class ConfirmationDialog(tk.Toplevel):
         sentence = str(source.get("所在行") or "").strip()
         expected_text = " | ".join(entry.get("expected_set") or [])
 
-        tk.Label(body, text="確認教材錯誤", font=("Microsoft JhengHei UI", 14, "bold")).pack(anchor="w", padx=18, pady=(16, 6))
+        WrappedLabel(body, text="確認教材錯誤", font=("Microsoft JhengHei UI", 14, "bold")).pack(fill="x", anchor="w", padx=18, pady=(16, 6))
         summary = tk.LabelFrame(body, text="本筆證據")
         summary.pack(fill="x", padx=18, pady=6)
         lines = (
@@ -364,13 +361,13 @@ class ConfirmationDialog(tk.Toplevel):
             decision = entry["manual_expected_decision"]
             operation = "確認目前注音就是應標注音" if decision.get("operation") == "CONFIRM_CURRENT_AS_EXPECTED" else "人工輸入應標注音"
             lines += f"\n本筆人工判定：{operation}；{decision.get('decided_at', '')}"
-        tk.Label(summary, text=lines, justify="left", anchor="w", wraplength=700).pack(fill="x", padx=10, pady=10)
+        WrappedLabel(summary, text=lines, justify="left", anchor="w", wraplength=700).pack(fill="x", padx=10, pady=10)
 
-        tk.Label(
+        WrappedLabel(
             body,
             text="思考模式 2.5 的六閘門全部保留，但集中在同一個視窗。只有六項都確認才會正式列為教材錯誤。",
             justify="left", wraplength=700, fg="#555555",
-        ).pack(anchor="w", padx=18, pady=(4, 8))
+        ).pack(fill="x", anchor="w", padx=18, pady=(4, 8))
 
         gate_texts = [
             "我已回原頁確認課本現標注音。",
@@ -386,7 +383,7 @@ class ConfirmationDialog(tk.Toplevel):
         for text in gate_texts:
             var = tk.BooleanVar(value=False)
             self.vars.append(var)
-            tk.Checkbutton(gate_frame, text=text, variable=var, anchor="w", justify="left", wraplength=680).pack(fill="x", anchor="w", pady=5)
+            wrap_checkbutton(tk.Checkbutton(gate_frame, text=text, variable=var)).pack(fill="x", anchor="w", pady=5)
 
         note_frame = tk.LabelFrame(body, text="補充說明（可空白）")
         note_frame.pack(fill="x", padx=18, pady=6)
@@ -438,43 +435,42 @@ class ReviewApp:
         root.title(f"注音校對－人工確認 v{VERSION}")
         apply_screen_safe_geometry(root, 1180, 850, min_width=760, min_height=520)
 
-        top = tk.Frame(root)
+        actions = tk.Frame(root)
+        actions.pack(side="bottom", fill="x", padx=12, pady=(4, 10))
+        body, self.body_canvas = create_scrollable_body(root)
+        top = tk.Frame(body)
         top.pack(fill="x", padx=12, pady=(10, 4))
-        self.status = tk.Label(top, text="", font=("Microsoft JhengHei UI", 11, "bold"))
-        self.status.pack(side="left")
-        self.revisit_button = tk.Button(top, text="重新查看稍後處理（0）", command=self.revisit_deferred, state="disabled")
-        self.revisit_button.pack(side="right", padx=3)
-        tk.Button(top, text="上一筆", command=self.prev).pack(side="right", padx=3)
-        tk.Button(top, text="下一筆", command=self.next).pack(side="right", padx=3)
+        self.status = WrappedLabel(top, text="", font=("Microsoft JhengHei UI", 11, "bold"))
+        self.status.pack(fill="x")
+        navigation = ActionRows(top)
+        navigation.pack(fill="x")
+        self.revisit_button = tk.Button(navigation, text="重新查看稍後處理（0）", command=self.revisit_deferred, state="disabled")
+        navigation.set_items([tk.Button(navigation, text="上一筆", command=self.prev),
+                              tk.Button(navigation, text="下一筆", command=self.next), self.revisit_button])
+        self.navigation = navigation
 
-        self.summary = tk.LabelFrame(root, text="這一筆要確認什麼")
+        self.summary = tk.LabelFrame(body, text="這一筆要確認什麼")
         self.summary.pack(fill="x", padx=12, pady=5)
-        self.summary_text = tk.Label(self.summary, text="", justify="left", anchor="w", wraplength=1120, font=("Microsoft JhengHei", 11))
+        self.summary_text = WrappedLabel(self.summary, text="", justify="left", anchor="w", wraplength=1120, font=("Microsoft JhengHei", 11))
         self.summary_text.pack(fill="x", padx=10, pady=8)
 
-        self.image = tk.Label(root, bg="white")
-        self.image.pack(fill="both", expand=True, padx=12, pady=6)
+        self.image = OccurrencePreview(body, height=260)
+        self.image.pack(fill="x", padx=12, pady=6)
 
-        self.tech_frame = tk.LabelFrame(root, text="技術資訊")
+        self.tech_frame = tk.LabelFrame(body, text="技術資訊")
         self.tech_text = tk.Text(self.tech_frame, height=8, wrap="word", font=("Consolas", 9))
         self.tech_text.pack(fill="x", padx=8, pady=6)
 
-        actions = tk.Frame(root)
-        # Reserve the entire decision/batch footer before the expandable image.
-        actions.pack(side="bottom", fill="x", padx=12, pady=(4, 10), before=self.image)
-        decision_actions = tk.Frame(actions)
+        decision_actions = ActionRows(actions)
         decision_actions.pack(fill="x")
+        self.decision_actions = decision_actions
         self.primary = tk.Button(decision_actions, text="", width=18, height=2)
-        self.primary.pack(side="left", padx=(0, 6))
         self.secondary = tk.Button(decision_actions, text="", width=18, height=2)
-        self.secondary.pack(side="left", padx=6)
         self.later = tk.Button(decision_actions, text="稍後處理", width=14, height=2, command=self.defer_current)
-        self.later.pack(side="left", padx=6)
 
         self.more_button = tk.Menubutton(decision_actions, text="更多…", width=12, height=2, relief="raised")
         self.more_menu = tk.Menu(self.more_button, tearoff=False)
         self.more_button.config(menu=self.more_menu)
-        self.more_button.pack(side="left", padx=6)
         self.more_menu.add_command(label="此處不需校對…", command=self.exclude)
         self.more_menu.add_command(label="實際注音辨識有誤…", command=self.correct_actual)
         self.more_menu.add_command(label="撤銷本筆人工判定", command=self.clear)
@@ -483,7 +479,8 @@ class ReviewApp:
         self.more_menu.add_command(label="查看／隱藏技術資訊", command=self.toggle_tech)
         self.more_menu.add_command(label="更新 Excel 報告", command=self.report)
 
-        batch_actions = tk.Frame(actions)
+        batch_actions = ActionRows(actions)
+        self.batch_actions = batch_actions
         batch_actions.pack(fill="x", pady=(6, 0))
         self.apply_actual_button = tk.Button(
             batch_actions,
@@ -493,13 +490,13 @@ class ReviewApp:
             state="disabled",
             command=self.apply_staged_actuals,
         )
-        self.apply_actual_button.pack(side="right")
-        tk.Label(
-            batch_actions,
+        batch_actions.set_items([self.apply_actual_button])
+        WrappedLabel(
+            actions,
             text="先逐筆暫存原頁 actual；確認完後再一次套用與增量更新。",
             fg="#555555",
             anchor="w",
-        ).pack(side="left", fill="x", expand=True)
+        ).pack(fill="x")
 
         self.reload_records()
         self.show()
@@ -517,8 +514,10 @@ class ReviewApp:
         index = int(getattr(self, "index", 0))
         old = previous[index] if 0 <= index < len(previous) else None
         lane = review_lane(old) if old else None
+        same_character = [item for item in previous[index:] + list(reversed(previous[:index]))
+                          if old and review_lane(item) == lane and item.get("char") == old.get("char")]
         following = [(review_lane(item), str(item.get("occurrence_id") or ""))
-                     for item in previous[index:] if review_lane(item) == lane]
+                     for item in same_character + previous[index:] if review_lane(item) == lane]
         checked = set(getattr(self, "staged_checked_occurrence_ids", set()))
         deferred = set(getattr(self, "deferred_items", set()))
         pending = [item for item in ledger if item.get("state") in NON_TERMINAL_STATES
@@ -534,17 +533,31 @@ class ReviewApp:
             except (TypeError, ValueError):
                 return 0.0
 
-        def order(item):
+        def source_order(item):
             pdf = str(item.get("pdf_name") or "")
-            return (LANE_ORDER[review_lane(item)], pdf_order.get(pdf, len(pdf_order)), pdf,
+            return (pdf_order.get(pdf, len(pdf_order)), pdf,
                     number(item.get("physical_page")), number(item.get("source_row_number")),
                     number(item.get("y0")), number(item.get("x0")), str(item.get("occurrence_id") or ""))
+
+        # Anchor groups to the full original roster, including completed/deferred
+        # rows. Refreshing the remaining queue must not move a character group.
+        if not hasattr(self, "_character_order"):
+            self._character_order = {}
+            for item in sorted(ledger, key=source_order):
+                self._character_order.setdefault(str(item.get("char") or ""), len(self._character_order))
+
+        def order(item):
+            item_lane = review_lane(item)
+            char_rank = self._character_order.get(str(item.get("char") or ""), len(self._character_order)) if item_lane != "other" else 0
+            return (LANE_ORDER[item_lane], char_rank, source_order(item))
 
         self.records = sorted([item for item in pending
                                if (review_lane(item), str(item.get("occurrence_id") or "")) not in self.deferred_items], key=order)
         if hasattr(self, "revisit_button"):
             count = len(self.deferred_items)
             self.revisit_button.config(text=f"重新查看稍後處理（{count}）", state="normal" if count else "disabled")
+            if hasattr(self, "navigation"):
+                self.navigation.refresh()
         indexes = {(review_lane(item), str(item.get("occurrence_id") or "")): n for n, item in enumerate(self.records)}
         for key in following:
             if key in indexes:
@@ -580,6 +593,8 @@ class ReviewApp:
             text=f"套用 actual 修正（{count}）",
             state="normal" if count > 0 else "disabled",
         )
+        if hasattr(self, "batch_actions"):
+            self.batch_actions.refresh()
         return self.staging_summary
 
     def _empty_actionable_state(self):
@@ -831,12 +846,12 @@ class ReviewApp:
         apply_screen_safe_geometry(progress, 560, 210, min_width=440, min_height=170)
         progress.transient(self.root)
         progress.grab_set()
-        tk.Label(
+        WrappedLabel(
             progress,
             text=f"正在一次套用 {count} 組 actual 修正",
             font=("Microsoft JhengHei UI", 11, "bold"),
         ).pack(padx=18, pady=(28, 8))
-        tk.Label(
+        WrappedLabel(
             progress,
             text="未受影響 PDF 將直接沿用 cache；請勿關閉程式。",
             fg="#555555",
@@ -951,15 +966,13 @@ class ReviewApp:
     def toggle_tech(self):
         self.tech_visible = not self.tech_visible
         if self.tech_visible:
-            self.tech_frame.pack(fill="x", padx=12, pady=(0, 6), before=self.root.winfo_children()[-1])
+            self.tech_frame.pack(fill="x", padx=12, pady=(0, 6))
         else:
             self.tech_frame.pack_forget()
 
     def configure_actions(self, entry):
         state = str(entry.get("state") or "")
         lane = review_lane(entry)
-        self.primary.pack_forget()
-        self.secondary.pack_forget()
         primary_text, secondary_text = review_action_labels(state)
         primary_command = secondary_command = None
         if lane == "expected":
@@ -978,10 +991,12 @@ class ReviewApp:
         elif state == "REVIEW_PENDING":
             primary_command = self.resolve_expected
         self.primary.config(text=primary_text, width=0, state="normal" if primary_command else "disabled", command=primary_command or (lambda: None))
-        self.primary.pack(side="left", padx=(0, 6), before=self.later)
+        buttons = [self.primary]
         if secondary_text and secondary_command:
             self.secondary.config(text=secondary_text, state="normal", command=secondary_command)
-            self.secondary.pack(side="left", padx=6, before=self.later)
+            buttons.append(self.secondary)
+        if hasattr(self, "decision_actions"):
+            self.decision_actions.set_items(buttons + [self.later, self.more_button])
 
     def show(self):
         entry = self.current()
@@ -989,11 +1004,12 @@ class ReviewApp:
             title, detail, primary_text = self._empty_actionable_state()
             self.status.config(text=title)
             self.summary_text.config(text=detail)
-            self.image.config(image="", text="")
+            self._rendered_review_id = None
+            self.image.clear()
             self.tech_text.delete("1.0", "end")
             self.primary.config(text=primary_text, state="disabled")
-            self.primary.pack(side="left", padx=(0, 6), before=self.later)
-            self.secondary.pack_forget()
+            if hasattr(self, "decision_actions"):
+                self.decision_actions.set_items([self.primary, self.later, self.more_button])
             return
 
         source = entry.get("source_record") or {}
@@ -1004,11 +1020,7 @@ class ReviewApp:
         lane = review_lane(entry)
         if lane == "actual":
             expected_text = "（actual 獨立辨識階段不顯示）"
-        group_key = (state, str(entry.get("char") or ""), phrase, tuple(entry.get("expected_set") or []))
-        group_count = Counter(
-            (str(r.get("state") or ""), str(r.get("char") or ""), str((r.get("source_record") or {}).get("局部詞境") or r.get("context_evidence") or "").strip(), tuple(r.get("expected_set") or []))
-            for r in self.records
-        )[group_key]
+        group_count = sum(review_lane(item) == lane and item.get("char") == entry.get("char") for item in self.records)
 
         is_staged = str(entry.get("occurrence_id") or "") in self.staged_checked_occurrence_ids
         staged_status = "｜actual 已暫存，等待批次套用" if is_staged else ""
@@ -1020,7 +1032,7 @@ class ReviewApp:
             help_text = "請先依原文與語境判定應標注音；目前注音待辨識時，儲存後再進第二組。依據選填。"
         staged_line = "\nactual 狀態：已暫存人工核對結果，等待批次套用。" if is_staged else ""
         summary = (
-            f"課本頁：{entry.get('printed_page', '')}　　目標字：{entry.get('char', '')}　　同類項目：{group_count} 筆\n"
+            f"課本頁：{entry.get('printed_page', '')}　　目標字：{entry.get('char', '')}　　本組此字剩餘 {group_count} 筆（含本筆，不含稍後處理）\n"
             f"詞語／局部詞境：{phrase}\n"
             f"所在句：{sentence}\n"
             f"課本目前注音：{entry.get('actual', '') or '尚未辨識'}　　應標注音：{expected_text}\n"
@@ -1046,30 +1058,10 @@ class ReviewApp:
 
     def render(self, entry):
         self._rendered_review_id = None
-        try:
-            page_number = int(entry.get("physical_page")) - 1
-            doc = fitz.open(entry["pdf"])
-            page = doc[page_number]
-            x0, y0, x1, y1 = [float(entry.get(key) or 0) for key in ("x0", "y0", "x1", "y1")]
-            if x1 > x0 and y1 > y0:
-                padding_x = 150
-                padding_y = 115
-                clip = fitz.Rect(
-                    max(0, x0 - padding_x), max(0, y0 - padding_y),
-                    min(page.rect.width, x1 + padding_x), min(page.rect.height, y1 + padding_y),
-                )
-            else:
-                clip = page.rect
-            pixmap = page.get_pixmap(matrix=fitz.Matrix(2.2, 2.2), clip=clip, alpha=False)
-            data = base64.b64encode(pixmap.tobytes("png"))
-            self.photo = tk.PhotoImage(data=data)
-            self.image.config(image=self.photo, text="")
-            doc.close()
+        if self.image.load(entry):
             self._rendered_review_id = entry.get("review_id")
-        except Exception as exc:
-            self.image.config(image="", text=f"無法顯示頁面：{exc}")
-            if can_confirm_current_expected(entry):
-                self.primary.config(state="disabled")
+        elif can_confirm_current_expected(entry):
+            self.primary.config(state="disabled")
 
 
 def main():

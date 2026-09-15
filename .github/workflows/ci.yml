@@ -56,11 +56,11 @@ jobs:
 
       - name: Run full pytest suite
         if: ${{ !cancelled() }}
-        run: python -m pytest -q -rs
+        run: python -m pytest tests/ -q -rs
 
       - name: Compile Python sources
         if: ${{ !cancelled() }}
-        run: python -m compileall -q .
+        run: python -m compileall -q -x "(^|[\\/])(\.venv|tmp)([\\/]|$)" .
 
       - name: Check committed whitespace (pull request)
         if: ${{ !cancelled() && github.event_name == 'pull_request' }}

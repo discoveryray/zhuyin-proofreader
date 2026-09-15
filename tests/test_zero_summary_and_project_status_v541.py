@@ -15,7 +15,7 @@ from standalone_proofread import (  # noqa: E402
     actual_workbook_path,
     candidate_workbook_path,
 )
-from standalone_gui import project_status_text  # noqa: E402
+from standalone_gui import project_status_text, project_status_details  # noqa: E402
 
 
 class ZeroSummaryAndProjectStatusV541Tests(unittest.TestCase):
@@ -52,7 +52,8 @@ class ZeroSummaryAndProjectStatusV541Tests(unittest.TestCase):
             }, ensure_ascii=False), encoding="utf-8")
             text = project_status_text(folder)
             self.assertIn("處理被阻擋", text)
-            self.assertIn("zero occurrence summary", text)
+            self.assertNotIn("zero occurrence summary", text)
+            self.assertIn("zero occurrence summary", project_status_details(folder)[1])
             self.assertIn("工作階段尚未建立", text)
 
     def test_processing_phase_is_visible_before_session_manifest(self):
