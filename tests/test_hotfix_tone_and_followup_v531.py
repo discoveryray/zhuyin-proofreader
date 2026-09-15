@@ -49,6 +49,7 @@ class ExpectedResolutionFollowupTests(unittest.TestCase):
         app.root = None
         original = {
             "review_id": "RID-1",
+            "occurrence_id": "OID-1",
             "state": "DIFFERENCE_PENDING_CONFIRMATION",
             "char": "西",
             "actual": "ㄒㄧ",
@@ -58,6 +59,7 @@ class ExpectedResolutionFollowupTests(unittest.TestCase):
         app.records = [updated_entry] if updated_entry is not None else []
 
         def save_event(_entry, _event):
+            app._last_event_saved = True
             app.records = [updated_entry] if updated_entry is not None else []
 
         app.save_event = save_event

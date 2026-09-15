@@ -40,7 +40,7 @@ def entry(
     *,
     pdf_name: str | None = None,
     actual: str = "",
-    expected: str = "SECRET_EXPECTED",
+    expected: str = "ㄓㄨㄢˇ",
     x0: float = 10.0,
 ) -> dict:
     return {

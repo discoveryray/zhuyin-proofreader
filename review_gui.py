@@ -5,6 +5,7 @@ import json
 import re
 import sys
 import threading
+import time
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -13,12 +14,17 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 import fitz
 
-from occurrence_ledger import CONFIRMATION_GATES, NON_TERMINAL_STATES, canonical_bopomofo
+from occurrence_ledger import (
+    CONFIRMATION_GATES, NON_TERMINAL_STATES, HARD_BLOCKING_STATES, EXCLUDED_STATES,
+    canonical_bopomofo, infer_actual_status, infer_expected_status,
+)
 from standalone_proofread import (
     ManualActualPostApplyError,
     VERSION,
     apply_staged_manual_actual_corrections,
+    actual_confirmation_snapshot,
     build_reusable_rule,
+    build_manual_expected_event,
     friendly_state,
     json_load,
     json_load_strict,
@@ -37,7 +43,7 @@ from actual_review import build_actual_group_for_entry, render_occurrence_png
 
 STATE_HELP = {
     "DIFFERENCE_PENDING_CONFIRMATION": "課本目前注音與應標注音不同，請確認是教材錯誤，或補充較高優先的正確讀音依據。",
-    "RULE_CONFLICT": "程式找到互相衝突的讀音規則，請選擇本句正確讀音並提供獨立依據。",
+    "RULE_CONFLICT": "程式找到互相衝突的讀音規則，請依原文與語境判定本句應標讀音。文字依據選填。",
     "EXPECTED_AMBIGUOUS": "目前有多個可能讀音，程式無法安全自動決定。",
     "EXPECTED_UNRESOLVED": "尚未找到足夠的正確讀音依據。",
     "REVIEW_PENDING": "目前證據不足，需要人工確認。",
@@ -109,6 +115,30 @@ def review_action_labels(state: str) -> tuple[str, str | None]:
     return "暫時無法人工處理", None
 
 
+LANE_LABELS = {"expected": "第一組：應標注音待確認", "actual": "第二組：課本目前注音待辨識", "other": "其他差異與待處理事項"}
+LANE_ORDER = {lane: index for index, lane in enumerate(LANE_LABELS)}
+
+
+def review_lane(entry):
+    if entry.get("state") in HARD_BLOCKING_STATES or entry.get("state") in EXCLUDED_STATES:
+        return "other"
+    if infer_expected_status(entry) in {"UNRESOLVED", "AMBIGUOUS", "CONFLICT"}:
+        return "expected"
+    if infer_actual_status(entry) in {"UNRESOLVED", "DECODE_ERROR"}:
+        return "actual"
+    return "other"
+
+
+def can_confirm_current_expected(entry):
+    return (
+        review_lane(entry) == "expected"
+        and entry.get("state") in NON_TERMINAL_STATES
+        and infer_actual_status(entry) == "RESOLVED"
+        and bool(canonical_bopomofo(entry.get("actual")))
+        and bool(str(entry.get("actual_evidence") or "").strip())
+    )
+
+
 class ExpectedDialog(tk.Toplevel):
     def __init__(self, parent, entry, title: str, *, wait: bool = True):
         super().__init__(parent)
@@ -124,7 +154,7 @@ class ExpectedDialog(tk.Toplevel):
         buttons = tk.Frame(self, bd=1, relief="groove")
         buttons.pack(side="bottom", fill="x", padx=0, pady=0)
         tk.Button(buttons, text="取消", width=12, command=self.destroy).pack(side="right", padx=8, pady=10)
-        tk.Button(buttons, text="套用這筆證據", width=16, command=self.submit, default="active").pack(side="right", padx=4, pady=10)
+        tk.Button(buttons, text="儲存本筆應標判定", width=18, command=self.submit, default="active").pack(side="right", padx=4, pady=10)
 
         body, self.body_canvas = create_scrollable_body(self)
 
@@ -134,10 +164,10 @@ class ExpectedDialog(tk.Toplevel):
 
         intro = tk.Frame(body)
         intro.pack(fill="x", padx=16, pady=(14, 8))
-        tk.Label(intro, text="請建立「應標讀音」的獨立依據", font=("Microsoft JhengHei UI", 12, "bold")).pack(anchor="w")
+        tk.Label(intro, text="請判定本句的應標讀音", font=("Microsoft JhengHei UI", 12, "bold")).pack(anchor="w")
         tk.Label(
             intro,
-            text="這裡不會直接把課本判成正確；程式會把你提供的應標讀音與課本目前注音重新比較。應標讀音必須有獨立依據，不能照著課本現標倒推。",
+            text="請看原文與語境後輸入應標注音。程式會保存本筆人工判定並重新比較；文字依據可以留白。只適用此位置，可重用規則須另外建立。",
             justify="left", wraplength=670, fg="#555555",
         ).pack(anchor="w", pady=(4, 0))
 
@@ -158,58 +188,23 @@ class ExpectedDialog(tk.Toplevel):
         default_context = f"完整詞／局部詞境：{phrase}；所在句：{sentence}；目標字：{entry.get('char', '')}"
         self.context = tk.StringVar(value=default_context)
         self.reason = tk.StringVar()
-        complete_word = str(source.get("完整詞語規則") or "").strip()
-        if complete_word.startswith("(") or len(complete_word) > 12 or str(entry.get("char") or "") not in complete_word:
-            complete_word = ""
-        self.promote = tk.BooleanVar(value=False)
-        self.rule_phrase = tk.StringVar(value=complete_word)
-
         labels = [
             ("應標注音", self.expected, "多個可接受音請用 | 分隔；聲調可前置或後置，例如：˙ㄒㄧ 或 ㄒㄧ˙ 會視為同音"),
-            ("依據", self.evidence, "例如：公司現行規定／統一用字手冊／《國語辭典簡編本》完整詞條"),
-            ("詞語與位置", self.context, "保留完整詞、所在句與目標字位置"),
+            ("依據（選填）", self.evidence, "可填實際參考來源或判斷理由，也可以留白；不需要填入代用或虛構來源"),
+            ("詞語與位置", self.context, "由程式保留原文、所在句與目標字位置"),
             ("補充說明（可空白）", self.reason, "例如：另一個讀音屬不同義項，本句不適用"),
         ]
         for row, (label, var, hint) in enumerate(labels):
             tk.Label(form, text=label).grid(row=row * 2, column=0, sticky="w", pady=(7, 1))
-            tk.Entry(form, textvariable=var, width=64).grid(row=row * 2, column=1, sticky="ew", padx=(10, 0), pady=(7, 1))
+            tk.Entry(form, textvariable=var, width=64, state="readonly" if var is self.context else "normal").grid(row=row * 2, column=1, sticky="ew", padx=(10, 0), pady=(7, 1))
             tk.Label(form, text=hint, fg="#666666", justify="left", wraplength=520).grid(row=row * 2 + 1, column=1, sticky="w", padx=(10, 0))
         form.columnconfigure(1, weight=1)
-
-        reuse = tk.LabelFrame(body, text="減少未來重複人工確認（可選）")
-        reuse.pack(fill="x", padx=16, pady=(4, 2))
-        tk.Checkbutton(
-            reuse,
-            text="將這個應標讀音儲存為可重用規則；未來相同完整詞＋相同目標位置自動套用",
-            variable=self.promote,
-            anchor="w",
-            justify="left",
-            command=self.toggle_reuse_details,
-        ).pack(fill="x", anchor="w", padx=8, pady=(6, 6))
-        self.reuse_details = tk.Frame(reuse)
-        tk.Label(self.reuse_details, text="完整詞：").grid(row=0, column=0, sticky="w", padx=8, pady=(2, 6))
-        tk.Entry(self.reuse_details, textvariable=self.rule_phrase, width=48).grid(row=0, column=1, sticky="ew", padx=(0, 8), pady=(2, 6))
-        tk.Label(
-            self.reuse_details,
-            text="只建立 exact 完整詞規則，不會擴張成單字通用音。",
-            fg="#666666",
-            wraplength=500,
-            justify="left",
-        ).grid(row=1, column=1, sticky="w", padx=(0, 8), pady=(0, 6))
-        self.reuse_details.columnconfigure(1, weight=1)
 
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         self.bind("<Escape>", lambda _event: self.destroy())
         self.bind("<Control-Return>", lambda _event: self.submit())
         if wait:
             self.wait_window(self)
-
-    def toggle_reuse_details(self):
-        if self.promote.get():
-            self.reuse_details.pack(fill="x", padx=0, pady=(0, 2))
-        else:
-            self.reuse_details.pack_forget()
-        self.body_canvas.configure(scrollregion=self.body_canvas.bbox("all"))
 
     def submit(self):
         expected_raw = self.expected.get().strip()
@@ -230,22 +225,14 @@ class ExpectedDialog(tk.Toplevel):
             return
         # Deduplicate equivalent spellings after canonicalization while preserving order.
         expected = "|".join(dict.fromkeys(canonical_readings))
-        if not evidence:
-            messagebox.showerror("缺少依據", "請輸入公司規定、手冊、辭典完整詞條等獨立來源。", parent=self)
-            return
         if not context:
             messagebox.showerror("缺少詞境", "請保留完整詞語、所在句與目標位置證據。", parent=self)
-            return
-        if self.promote.get() and not self.rule_phrase.get().strip():
-            messagebox.showerror("缺少完整詞", "要儲存可重用規則時，必須填寫完整詞。", parent=self)
             return
         self.result = {
             "expected_set": expected,
             "expected_evidence": evidence,
             "context_evidence": context,
             "resolution_reason": self.reason.get().strip(),
-            "promote_rule": bool(self.promote.get()),
-            "rule_phrase": self.rule_phrase.get().strip(),
         }
         self.destroy()
 
@@ -371,8 +358,12 @@ class ConfirmationDialog(tk.Toplevel):
             f"所在句：{sentence}\n"
             f"課本現標：{entry.get('char', '')}　{entry.get('actual', '')}\n"
             f"應標：{entry.get('char', '')}　{expected_text}\n"
-            f"應標依據：{entry.get('expected_evidence', '')}"
+            f"應標文字依據：{entry.get('expected_evidence') or '未填寫（選填）'}"
         )
+        if "manual_expected_decision" in entry:
+            decision = entry["manual_expected_decision"]
+            operation = "確認目前注音就是應標注音" if decision.get("operation") == "CONFIRM_CURRENT_AS_EXPECTED" else "人工輸入應標注音"
+            lines += f"\n本筆人工判定：{operation}；{decision.get('decided_at', '')}"
         tk.Label(summary, text=lines, justify="left", anchor="w", wraplength=700).pack(fill="x", padx=10, pady=10)
 
         tk.Label(
@@ -441,6 +432,8 @@ class ReviewApp:
         self.staging_summary = {}
         self.staged_member_occurrence_ids = set()
         self.staged_checked_occurrence_ids = set()
+        self.deferred_items = set()
+        self._save_in_progress = False
 
         root.title(f"注音校對－人工確認 v{VERSION}")
         apply_screen_safe_geometry(root, 1180, 850, min_width=760, min_height=520)
@@ -449,6 +442,8 @@ class ReviewApp:
         top.pack(fill="x", padx=12, pady=(10, 4))
         self.status = tk.Label(top, text="", font=("Microsoft JhengHei UI", 11, "bold"))
         self.status.pack(side="left")
+        self.revisit_button = tk.Button(top, text="重新查看稍後處理（0）", command=self.revisit_deferred, state="disabled")
+        self.revisit_button.pack(side="right", padx=3)
         tk.Button(top, text="上一筆", command=self.prev).pack(side="right", padx=3)
         tk.Button(top, text="下一筆", command=self.next).pack(side="right", padx=3)
 
@@ -465,14 +460,15 @@ class ReviewApp:
         self.tech_text.pack(fill="x", padx=8, pady=6)
 
         actions = tk.Frame(root)
-        actions.pack(fill="x", padx=12, pady=(4, 10))
+        # Reserve the entire decision/batch footer before the expandable image.
+        actions.pack(side="bottom", fill="x", padx=12, pady=(4, 10), before=self.image)
         decision_actions = tk.Frame(actions)
         decision_actions.pack(fill="x")
         self.primary = tk.Button(decision_actions, text="", width=18, height=2)
         self.primary.pack(side="left", padx=(0, 6))
         self.secondary = tk.Button(decision_actions, text="", width=18, height=2)
         self.secondary.pack(side="left", padx=6)
-        self.later = tk.Button(decision_actions, text="稍後處理", width=14, height=2, command=self.next)
+        self.later = tk.Button(decision_actions, text="稍後處理", width=14, height=2, command=self.defer_current)
         self.later.pack(side="left", padx=6)
 
         self.more_button = tk.Menubutton(decision_actions, text="更多…", width=12, height=2, relief="raised")
@@ -482,6 +478,7 @@ class ReviewApp:
         self.more_menu.add_command(label="此處不需校對…", command=self.exclude)
         self.more_menu.add_command(label="實際注音辨識有誤…", command=self.correct_actual)
         self.more_menu.add_command(label="撤銷本筆人工判定", command=self.clear)
+        self.more_menu.add_command(label="另行建立上筆應標可重用規則…", command=self.create_reusable_expected_rule)
         self.more_menu.add_separator()
         self.more_menu.add_command(label="查看／隱藏技術資訊", command=self.toggle_tech)
         self.more_menu.add_command(label="更新 Excel 報告", command=self.report)
@@ -516,36 +513,62 @@ class ReviewApp:
         self._set_actionable_records_from_ledger(ledger)
 
     def _set_actionable_records_from_ledger(self, ledger):
-        previous_records = list(getattr(self, "records", []))
-        previous_index = int(getattr(self, "index", 0))
-        following_occurrence_ids = []
-        if 0 <= previous_index < len(previous_records):
-            following_occurrence_ids = [
-                str(item.get("occurrence_id") or "")
-                for item in previous_records[previous_index:]
-            ]
+        previous = list(getattr(self, "records", []))
+        index = int(getattr(self, "index", 0))
+        old = previous[index] if 0 <= index < len(previous) else None
+        lane = review_lane(old) if old else None
+        following = [(review_lane(item), str(item.get("occurrence_id") or ""))
+                     for item in previous[index:] if review_lane(item) == lane]
+        checked = set(getattr(self, "staged_checked_occurrence_ids", set()))
+        deferred = set(getattr(self, "deferred_items", set()))
+        pending = [item for item in ledger if item.get("state") in NON_TERMINAL_STATES
+                   and not (review_lane(item) == "actual" and str(item.get("occurrence_id") or "") in checked)]
+        live_keys = {(review_lane(item), str(item.get("occurrence_id") or "")) for item in pending}
+        self.deferred_items = deferred & live_keys
+        self.pending_lane_counts = Counter(review_lane(item) for item in pending)
+        pdf_order = {str(item.get("pdf_name") or ""): n for n, item in enumerate(getattr(self, "manifest", {}).get("pdfs", []))}
 
-        checked_ids = set(getattr(self, "staged_checked_occurrence_ids", set()))
-        self.records = [
-            entry
-            for entry in ledger
-            if entry.get("state") in NON_TERMINAL_STATES
-            and str(entry.get("occurrence_id") or "") not in checked_ids
-        ]
-        if not self.records:
-            self.index = 0
-            return
+        def number(value):
+            try:
+                return float(value or 0)
+            except (TypeError, ValueError):
+                return 0.0
 
-        current_indexes = {
-            str(item.get("occurrence_id") or ""): index
-            for index, item in enumerate(self.records)
-            if str(item.get("occurrence_id") or "")
-        }
-        for occurrence_id in following_occurrence_ids:
-            if occurrence_id in current_indexes:
-                self.index = current_indexes[occurrence_id]
+        def order(item):
+            pdf = str(item.get("pdf_name") or "")
+            return (LANE_ORDER[review_lane(item)], pdf_order.get(pdf, len(pdf_order)), pdf,
+                    number(item.get("physical_page")), number(item.get("source_row_number")),
+                    number(item.get("y0")), number(item.get("x0")), str(item.get("occurrence_id") or ""))
+
+        self.records = sorted([item for item in pending
+                               if (review_lane(item), str(item.get("occurrence_id") or "")) not in self.deferred_items], key=order)
+        if hasattr(self, "revisit_button"):
+            count = len(self.deferred_items)
+            self.revisit_button.config(text=f"重新查看稍後處理（{count}）", state="normal" if count else "disabled")
+        indexes = {(review_lane(item), str(item.get("occurrence_id") or "")): n for n, item in enumerate(self.records)}
+        for key in following:
+            if key in indexes:
+                self.index = indexes[key]
                 return
-        self.index = max(0, min(previous_index, len(self.records) - 1))
+        # Finish the current lane before a just-saved row moves to another lane.
+        same_lane = [n for n, item in enumerate(self.records) if review_lane(item) == lane]
+        self.index = min(same_lane, key=lambda n: abs(n - index)) if same_lane else 0
+
+    def defer_current(self):
+        entry = self.current()
+        if not entry:
+            return
+        self.deferred_items = set(getattr(self, "deferred_items", set()))
+        self.deferred_items.add((review_lane(entry), str(entry.get("occurrence_id") or "")))
+        self.reload_records()
+        self.show()
+
+    def revisit_deferred(self):
+        self.deferred_items = set()
+        self.records = []
+        self.index = 0
+        self.reload_records()
+        self.show()
 
     def reload_staging_summary(self):
         summary = manual_actual_staging_summary(self.output_dir)
@@ -560,6 +583,13 @@ class ReviewApp:
         return self.staging_summary
 
     def _empty_actionable_state(self):
+        deferred = len(getattr(self, "deferred_items", set()))
+        if deferred:
+            return (
+                "這輪待辦已走完，仍有稍後處理項目",
+                f"仍有 {deferred} 筆待處理，未視為完成。請按「重新查看稍後處理（{deferred}）」。actual 暫存仍須另行批次套用。",
+                "請重新查看稍後處理",
+            )
         count = int(self.staging_summary.get("staged_group_count") or 0)
         if count > 0:
             return (
@@ -578,24 +608,28 @@ class ReviewApp:
         return self.records[self.index] if self.records else None
 
     def save_event(self, entry, event):
-        review_id = entry["review_id"]
-        staged = json.loads(json.dumps(self.db, ensure_ascii=False))
-        staged.setdefault("events", {})[review_id] = event
+        if getattr(self, "_save_in_progress", False):
+            return False
+        self._save_in_progress = True
+        self._last_event_saved = False
         try:
+            review_id = entry["review_id"]
+            staged = json.loads(json.dumps(self.db, ensure_ascii=False))
+            staged.setdefault("events", {})[review_id] = event
             staged_ledger = materialize_ledger(self.manifest, staged)
+            resolved_entry = next((item for item in staged_ledger if item.get("review_id") == review_id), None)
+            if resolved_entry is None:
+                raise ValueError("儲存後找不到本筆 review_id，已取消寫入。")
+            json_save(self.output_dir / "人工判定資料庫.json", staged)
         except Exception as exc:
-            # Do not leave the operator on an apparently unchanged row with only
-            # a console traceback.  A failed event must remain unsaved and visible.
             messagebox.showerror("無法儲存人工判定", str(exc), parent=self.root)
             return False
-
-        resolved_entry = next((item for item in staged_ledger if item.get("review_id") == review_id), None)
-        if resolved_entry is None:
-            messagebox.showerror("無法儲存人工判定", "儲存後找不到本筆 review_id，已取消寫入。", parent=self.root)
-            return False
-
-        json_save(self.output_dir / "人工判定資料庫.json", staged)
+        finally:
+            self._save_in_progress = False
         self.db = staged
+        self._last_event_saved = True
+        if "manual_expected_decision" in event:
+            self.last_saved_expected = resolved_entry
         self._set_actionable_records_from_ledger(staged_ledger)
         self.show()
         return resolved_entry.get("state") not in NON_TERMINAL_STATES
@@ -610,87 +644,74 @@ class ReviewApp:
         self.index = min(len(self.records) - 1, self.index + 1)
         self.show()
 
+    def confirm_current_expected(self, review_id=None):
+        if time.monotonic() < getattr(self, "_shortcut_cooldown_until", 0):
+            return
+        entry = self.current()
+        if not entry or (review_id is not None and entry.get("review_id") != review_id):
+            return
+        if not can_confirm_current_expected(entry):
+            return
+        if getattr(self, "_rendered_review_id", None) != entry.get("review_id"):
+            return
+        try:
+            event = build_manual_expected_event(entry, operation="CONFIRM_CURRENT_AS_EXPECTED")
+        except Exception as exc:
+            messagebox.showerror("無法儲存人工判定", str(exc), parent=self.root)
+            return
+        self.save_event(entry, event)
+        if getattr(self, "_last_event_saved", False):
+            self._shortcut_cooldown_until = time.monotonic() + 0.5
+
     def resolve_expected(self):
         entry = self.current()
-        if not entry:
+        if not entry or review_lane(entry) not in {"expected", "other"} or entry.get("state") in HARD_BLOCKING_STATES:
             return
-        if entry.get("state") not in {
-            "EXPECTED_UNRESOLVED", "EXPECTED_AMBIGUOUS", "REVIEW_PENDING",
-            "RULE_CONFLICT", "DIFFERENCE_PENDING_CONFIRMATION",
-        }:
-            messagebox.showinfo("這筆不需要補讀音", "目前這筆不適合用人工補充應標讀音。")
-            return
-        title = "課本其實正確－補充正確讀音依據" if entry.get("state") == "DIFFERENCE_PENDING_CONFIRMATION" else "選擇／補充正確讀音"
-        dialog = ExpectedDialog(self.root, entry, title)
+        dialog = ExpectedDialog(self.root, entry, "輸入其他應標注音")
         if not dialog.result:
             return
-        reusable_rule = None
-        if dialog.result.get("promote_rule"):
-            try:
-                reusable_rule = build_reusable_rule(
-                    entry,
-                    phrase=dialog.result.get("rule_phrase", ""),
-                    expected_set=dialog.result.get("expected_set", ""),
-                    evidence=dialog.result.get("expected_evidence", ""),
-                    note=dialog.result.get("resolution_reason", ""),
-                )
-            except Exception as exc:
-                messagebox.showerror("無法建立可重用規則", str(exc), parent=self.root)
-                return
-        event_payload = {
-            "action": "解決expected證據",
-            "expected_set": dialog.result.get("expected_set", ""),
-            "expected_evidence": dialog.result.get("expected_evidence", ""),
-            "context_evidence": dialog.result.get("context_evidence", ""),
-            "resolution_reason": dialog.result.get("resolution_reason", ""),
-            "source": "人工 GUI 現版 expected 證據",
-            "updated_at": datetime.now().isoformat(timespec="seconds"),
-            "note": dialog.result.get("resolution_reason", ""),
-        }
-        original_review_id = entry.get("review_id")
-        self.save_event(entry, event_payload)
-        if reusable_rule is not None:
-            try:
-                saved = save_reusable_expected_rule(reusable_rule)
-                messagebox.showinfo(
-                    "已儲存可重用規則",
-                    f"已儲存：{saved.get('phrase')}／{saved.get('target_char')} → {' | '.join(saved.get('expected_set') or [])}\n"
-                    "本筆已完成；按『更新 Excel 報告』後，本冊其他相同完整詞也會重新套用。未來新教材亦會使用此規則。",
+        try:
+            event = build_manual_expected_event(
+                entry, operation="ENTER_EXPECTED",
+                expected_set=dialog.result.get("expected_set", ""),
+                rationale=dialog.result.get("expected_evidence", ""),
+                note=dialog.result.get("resolution_reason", ""),
+            )
+        except Exception as exc:
+            messagebox.showerror("無法儲存人工判定", str(exc), parent=self.root)
+            return
+        self.save_event(entry, event)
+        if getattr(self, "_last_event_saved", False):
+            updated = next((item for item in self.records if item.get("review_id") == entry.get("review_id")), None)
+            if updated and updated.get("state") == "DIFFERENCE_PENDING_CONFIRMATION":
+                messagebox.showwarning(
+                    "仍有注音差異，尚未確認教材錯誤",
+                    f"本筆應標判定已保存。課本目前注音：{updated.get('actual')}；"
+                    f"應標注音：{' | '.join(updated.get('expected_set') or [])}。\\n"
+                    "仍保留差異待確認；需要時另按「確認教材錯誤」完成六閘門。",
                     parent=self.root,
                 )
-            except Exception as exc:
-                messagebox.showwarning("本筆已完成，但規則未儲存", str(exc), parent=self.root)
 
-        # Re-evaluate after applying the independent expected evidence.
-        # If it matches actual, save_event() has already turned the row into PASS
-        # and removed it from the pending list.  If it still mismatches, do NOT
-        # auto-open the six-gate textbook-error dialog: the operator explicitly
-        # chose "課本其實正確", so automatic escalation would contradict that
-        # intent and can cause accidental textbook-error confirmation.  Instead,
-        # keep the row pending and explain the canonical values.  The operator
-        # can either correct the expected evidence or explicitly press
-        # "確認教材錯誤" from the main screen.
-        updated_entry = next(
-            (item for item in self.records if item.get("review_id") == original_review_id),
-            None,
-        )
-        if updated_entry and updated_entry.get("state") == "DIFFERENCE_PENDING_CONFIRMATION":
-            actual_value = canonical_bopomofo(updated_entry.get("actual")) or str(updated_entry.get("actual") or "")
-            expected_values = [
-                canonical_bopomofo(item) or str(item)
-                for item in (updated_entry.get("expected_set") or [])
-                if str(item or "").strip()
-            ]
-            expected_text = " | ".join(dict.fromkeys(expected_values)) or "（未建立）"
-            messagebox.showwarning(
-                "仍有注音差異，尚未確認教材錯誤",
-                "已套用新的應標讀音依據，但課本現標與應標仍不同。\n\n"
-                f"課本目前注音：{actual_value or '（未辨識）'}\n"
-                f"應標注音：{expected_text}\n\n"
-                "因為你剛才選的是『課本其實正確』，程式不會自動進入『確認教材錯誤』流程。\n"
-                "若課本確實正確，請重新檢查應標注音與依據；只有確定教材有誤時，才從主畫面按『確認教材錯誤』。",
-                parent=self.root,
-            )
+    def create_reusable_expected_rule(self):
+        # A separate explicit operation, available even after the saved row left
+        # the current lane. Its stronger requirements cannot prevent item saving.
+        entry = getattr(self, "last_saved_expected", None)
+        if not entry:
+            messagebox.showinfo("請先保存本筆判定", "保存應標判定後，可另行建立可重用規則。", parent=self.root)
+            return
+        phrase = simpledialog.askstring("另行建立可重用規則", "請輸入適用的完整詞：", parent=self.root)
+        if not phrase:
+            return
+        evidence = simpledialog.askstring("可重用規則依據", "跨位置規則需提供實際來源依據：", parent=self.root)
+        if evidence is None:
+            return
+        try:
+            rule = build_reusable_rule(entry, phrase=phrase, expected_set=entry["expected_set"], evidence=evidence)
+            save_reusable_expected_rule(rule)
+        except Exception as exc:
+            messagebox.showerror("可重用規則未儲存", f"{exc}\n本筆已保存的人工判定仍保留。", parent=self.root)
+            return
+        messagebox.showinfo("已儲存可重用規則", "本規則會在更新報告及未來校對時套用相同完整詞與目標位置。", parent=self.root)
 
     def _confirm_difference_entry(self, entry):
         dialog = ConfirmationDialog(self.root, entry)
@@ -709,6 +730,8 @@ class ReviewApp:
             "expected_resolution_source": str(entry.get("expected_resolution_source") or entry.get("expected_evidence") or ""),
             "expected_resolution_reason": str(entry.get("expected_resolution_reason") or ""),
             "expected_resolution_note": str(entry.get("note") or ""),
+            "confirmation_actual_snapshot": actual_confirmation_snapshot(entry),
+            **({"manual_expected_decision": entry["manual_expected_decision"]} if "manual_expected_decision" in entry else {}),
             "source": "人工 GUI 現版六閘門",
             "updated_at": datetime.now().isoformat(timespec="seconds"),
         })
@@ -934,28 +957,27 @@ class ReviewApp:
 
     def configure_actions(self, entry):
         state = str(entry.get("state") or "")
-        # Never leave a disabled blank button on screen. Only legal actions are packed.
+        lane = review_lane(entry)
         self.primary.pack_forget()
         self.secondary.pack_forget()
         primary_text, secondary_text = review_action_labels(state)
-
-        if state == "DIFFERENCE_PENDING_CONFIRMATION":
+        primary_command = secondary_command = None
+        if lane == "expected":
+            primary_text = "輸入其他應標注音"
+            primary_command = self.resolve_expected
+            if can_confirm_current_expected(entry):
+                primary_text = "確認目前注音就是應標注音"
+                primary_command = lambda rid=entry["review_id"]: self.confirm_current_expected(rid)
+                secondary_text = "輸入其他應標注音"
+                secondary_command = self.resolve_expected
+        elif lane == "actual":
+            primary_command = self.correct_actual
+        elif state == "DIFFERENCE_PENDING_CONFIRMATION":
             primary_command = self.confirm_difference
             secondary_command = self.resolve_expected
-        elif state == "RULE_CONFLICT":
+        elif state == "REVIEW_PENDING":
             primary_command = self.resolve_expected
-            secondary_command = None
-        elif state in {"EXPECTED_AMBIGUOUS", "EXPECTED_UNRESOLVED", "REVIEW_PENDING"}:
-            primary_command = self.resolve_expected
-            secondary_command = None
-        elif state in {"ACTUAL_DECODE_ERROR", "ACTUAL_UNRESOLVED"}:
-            primary_command = self.correct_actual
-            secondary_command = None
-        else:
-            primary_command = None
-            secondary_command = None
-
-        self.primary.config(text=primary_text, state="normal" if primary_command else "disabled", command=primary_command or (lambda: None))
+        self.primary.config(text=primary_text, width=0, state="normal" if primary_command else "disabled", command=primary_command or (lambda: None))
         self.primary.pack(side="left", padx=(0, 6), before=self.later)
         if secondary_text and secondary_command:
             self.secondary.config(text=secondary_text, state="normal", command=secondary_command)
@@ -979,7 +1001,8 @@ class ReviewApp:
         phrase = str(source.get("局部詞境") or entry.get("context_evidence") or "").strip()
         sentence = str(source.get("所在行") or phrase).strip()
         expected_text = " | ".join(entry.get("expected_set") or []) or "尚未確定"
-        if state in {"ACTUAL_DECODE_ERROR", "ACTUAL_UNRESOLVED"}:
+        lane = review_lane(entry)
+        if lane == "actual":
             expected_text = "（actual 獨立辨識階段不顯示）"
         group_key = (state, str(entry.get("char") or ""), phrase, tuple(entry.get("expected_set") or []))
         group_count = Counter(
@@ -989,8 +1012,12 @@ class ReviewApp:
 
         is_staged = str(entry.get("occurrence_id") or "") in self.staged_checked_occurrence_ids
         staged_status = "｜actual 已暫存，等待批次套用" if is_staged else ""
-        self.status.config(text=f"第 {self.index + 1} / {len(self.records)} 筆待人工處理｜{friendly_state(state)}{staged_status}")
+        lane_count = sum(review_lane(item) == lane for item in self.records)
+        deferred = len(getattr(self, "deferred_items", set()))
+        self.status.config(text=f"{LANE_LABELS[lane]}｜本組剩餘 {lane_count} 筆｜稍後 {deferred} 筆{staged_status}")
         help_text = STATE_HELP.get(state, "這一筆需要人工處理。")
+        if lane == "expected":
+            help_text = "請先依原文與語境判定應標注音；目前注音待辨識時，儲存後再進第二組。依據選填。"
         staged_line = "\nactual 狀態：已暫存人工核對結果，等待批次套用。" if is_staged else ""
         summary = (
             f"課本頁：{entry.get('printed_page', '')}　　目標字：{entry.get('char', '')}　　同類項目：{group_count} 筆\n"
@@ -1018,6 +1045,7 @@ class ReviewApp:
         self.render(entry)
 
     def render(self, entry):
+        self._rendered_review_id = None
         try:
             page_number = int(entry.get("physical_page")) - 1
             doc = fitz.open(entry["pdf"])
@@ -1037,8 +1065,11 @@ class ReviewApp:
             self.photo = tk.PhotoImage(data=data)
             self.image.config(image=self.photo, text="")
             doc.close()
+            self._rendered_review_id = entry.get("review_id")
         except Exception as exc:
             self.image.config(image="", text=f"無法顯示頁面：{exc}")
+            if can_confirm_current_expected(entry):
+                self.primary.config(state="disabled")
 
 
 def main():

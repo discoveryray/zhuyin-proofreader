@@ -107,7 +107,7 @@ class ReviewGuiVisibleFooterTests(unittest.TestCase):
         dialog = ExpectedDialog(self.root, dict(ENTRY), "選擇／補充正確讀音", wait=False)
         try:
             _wait_for_dialog_layout(dialog)
-            self._assert_button_inside_dialog(dialog, "套用這筆證據")
+            self._assert_button_inside_dialog(dialog, "儲存本筆應標判定")
             self._assert_button_inside_dialog(dialog, "取消")
         finally:
             dialog.grab_release()

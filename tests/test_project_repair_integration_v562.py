@@ -562,6 +562,37 @@ class ProjectRepairIntegrationV562Tests(unittest.TestCase):
         })
         _write_csv(path, USER_GLYF_HEADERS, rows)
 
+    def test_optional_manual_expected_survives_real_repair_and_report_regeneration(self):
+        output, _pdf = self._clone_case("manual-optional-expected")
+        manifest = proof.json_load_strict(output / "校對工作階段.json")
+        db = proof.load_or_initialize_db(output)
+        target = next(row for row in manifest["records"] if row["char"] == "龘")
+        event = proof.build_manual_expected_event(
+            target, operation="ENTER_EXPECTED", expected_set="ㄉㄚˊ", rationale=" \t ",
+        )
+        db["events"][target["review_id"]] = event
+        proof.json_save(output / "人工判定資料庫.json", db)
+        actual = Path(manifest["pdfs"][0]["actual_workbook"])
+        actual_before = _actual_payload_sha256(actual)
+        with patch.object(proof, "decode", side_effect=AssertionError("actual must be reused")):
+            proof.repair_project_state(output, runtime_root=self.runtime_root)
+        # Regeneration's production runtime lookup points at the already
+        # validated isolated runtime fixture; all collect/replay/report paths run.
+        with patch.object(proof, "__file__", str(self.runtime_root / "standalone_proofread.py")):
+            report = proof.regenerate_report(output)
+        self.assertTrue(report.is_file())
+        latest = proof.json_load_strict(output / "校對工作階段.json")
+        reopened = proof.load_or_initialize_db(output)
+        proof.validate_manifest_integrity(latest)
+        proof.validate_output_artifact_hashes(latest)
+        saved = next(row for row in proof.materialize_ledger(latest, reopened) if row["review_id"] == target["review_id"])
+        self.assertEqual(saved["state"], "PASS")
+        self.assertEqual(saved["expected_evidence"], "")
+        self.assertEqual(saved["manual_expected_decision"], event["manual_expected_decision"])
+        self.assertEqual(reopened["events"][target["review_id"]], event)
+        self.assertEqual(_actual_payload_sha256(actual), actual_before)
+        self.assertEqual(saved["occurrence_id"], target["occurrence_id"])
+
     def test_repair_reuses_actual_rebuilds_expected_replays_events_and_recomputes_completion(self):
         output, pdf = self._clone_case("success")
         manifest_before = proof.json_load_strict(output / "校對工作階段.json")
