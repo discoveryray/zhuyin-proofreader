@@ -55,6 +55,8 @@ expected 只能來自 project rules、統一用字手冊、國語辭典簡編本
 
 Actual / expected fingerprint 與依賴也必須維持隔離，禁止透過 cache 或 import chain 偷渡另一方的答案。
 
+教材驗收人工操作的明確例外：使用者看過本筆原文與語境後，主動按「確認目前注音就是應標注音」，可將當次有效目前讀音另存為 occurrence-local 人工 expected 判定；未操作不得產生判定。人工輸入 expected 的文字依據選填，但必須保存嚴格可驗證的本筆識別、語境、選定讀音、操作類型與時間。日後 actual 更新只重新比較，不連動改寫判定。此例外不適用自動 resolver、外部缺證據匯入或缺少完整判定紀錄的舊資料，不產生 Global actual truth、quorum 或 approval。可重用規則須另行明確操作，仍遵循既有來源要求；不得阻擋本筆保存。
+
 ### 3.2 Occurrence-specific direct actual 優先
 
 有效且仍對應該 occurrence 的直接人工 actual 確認，優先於 reusable glyph truth。Reusable exact identity 發生 conflict 時，保留該 occurrence 的有效 direct override。

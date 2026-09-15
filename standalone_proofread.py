@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import hashlib
 import json
@@ -68,6 +69,9 @@ from occurrence_ledger import (
     validate_terminal_state,
     infer_actual_status,
     infer_expected_status,
+    has_expected_evidence,
+    manual_expected_target,
+    valid_manual_expected_decision,
     derive_comparison_result,
     derive_authoritative_state,
     refresh_derived_state,
@@ -2406,6 +2410,61 @@ def load_or_initialize_db(output_dir: Path) -> dict[str, Any]:
         return normalize_db({})
 
 
+def build_manual_expected_event(
+    entry: Mapping[str, Any], *, operation: str, expected_set: Any = None,
+    rationale: str = "", note: str = "",
+) -> dict[str, Any]:
+    """Called only for an explicit human GUI operation, never replay or import.
+
+    CONFIRM_CURRENT_AS_EXPECTED freezes the human-selected current reading now;
+    replay only consumes that saved expected value, regardless of later actual.
+    """
+    if entry.get("state") not in NON_TERMINAL_STATES or entry.get("state") in {
+        "SOURCE_INVALID", "DATA_INTEGRITY_ERROR", "REGRESSION_BLOCKED",
+    }:
+        raise InvalidTransitionError("此項目目前不可保存人工應標判定")
+    if operation == "CONFIRM_CURRENT_AS_EXPECTED":
+        reading = canonical_bopomofo(entry.get("actual"))
+        if (infer_expected_status(entry) not in {"UNRESOLVED", "AMBIGUOUS", "CONFLICT"}
+                or infer_actual_status(entry) != "RESOLVED" or not reading
+                or not str(entry.get("actual_evidence") or "").strip()):
+            raise InvalidTransitionError("目前注音尚未有效確定，不能快捷確認")
+        expected_set = [reading]
+    elif operation != "ENTER_EXPECTED":
+        raise InvalidTransitionError("未知的人工應標操作")
+    raw = re.split(r"[|；;]", expected_set) if isinstance(expected_set, str) else list(expected_set or [])
+    if not raw or any(not canonical_bopomofo(item) for item in raw):
+        raise InvalidTransitionError("人工應標必須是合法注音")
+    readings = list(normalize_expected_set(raw))
+    source = entry.get("source_record") or {}
+    context = (
+        f"完整詞／局部詞境：{source.get('局部詞境') or ''}；"
+        f"所在句：{source.get('所在行') or ''}；目標字：{entry.get('char') or ''}；"
+        f"課本頁：{entry.get('printed_page') or ''}"
+    )
+    timestamp = datetime.now().astimezone().isoformat(timespec="microseconds")
+    event = {
+        "action": "解決expected證據", "expected_set": readings,
+        "expected_evidence": str(rationale or "").strip(), "context_evidence": context,
+        "source": "人工 GUI 本筆應標判定", "updated_at": timestamp,
+        "resolution_reason": str(note or "").strip(), "note": str(note or "").strip(),
+        "manual_expected_decision": {
+            "version": 1, "operation": operation, "target": manual_expected_target(entry),
+            "expected_set": readings.copy(), "context_evidence": context, "decided_at": timestamp,
+        },
+    }
+    if not valid_manual_expected_decision({**entry, **event}):
+        raise InvalidTransitionError("人工應標判定缺少有效項目識別或語境")
+    return event
+
+
+def actual_confirmation_snapshot(entry: Mapping[str, Any]) -> dict[str, str]:
+    # This belongs only to the final comparison confirmation, never expected.
+    return {"actual": canonical_bopomofo(entry.get("actual")),
+            "actual_evidence": str(entry.get("actual_evidence") or ""),
+            "actual_status": infer_actual_status(entry)}
+
+
 def _apply_review_event(entry: dict[str, Any], event: Mapping[str, Any]) -> dict[str, Any]:
     action = str(event.get("action") or "").strip()
     if action == "保留待人工":
@@ -2415,9 +2474,15 @@ def _apply_review_event(entry: dict[str, Any], event: Mapping[str, Any]) -> dict
         # consult current actual to decide *what* expected should be, and they
         # never fail merely because the public composite state is ACTUAL_*.
         expected_set = list(normalize_expected_set(event.get("expected_set")))
+        if "manual_expected_decision" in event and event.get("expected_set") != expected_set:
+            raise InvalidTransitionError("人工 expected 判定必須保存完整合法 canonical 讀音集合")
         evidence = str(event.get("expected_evidence") or "").strip()
         context = str(event.get("context_evidence") or entry.get("context_evidence") or entry.get("char") or "").strip()
-        if not expected_set or not evidence or not context:
+        candidate = {**entry, "expected_set": expected_set, "expected_evidence": evidence, "context_evidence": context}
+        candidate.pop("manual_expected_decision", None)
+        if "manual_expected_decision" in event:
+            candidate["manual_expected_decision"] = event["manual_expected_decision"]
+        if not expected_set or not has_expected_evidence(candidate) or not context:
             raise InvalidTransitionError("expected 必須提供讀音、獨立來源證據與詞語／語境／位置證據")
 
         current_expected = list(normalize_expected_set(entry.get("expected_set")))
@@ -2445,6 +2510,9 @@ def _apply_review_event(entry: dict[str, Any], event: Mapping[str, Any]) -> dict
             return out
 
         out = dict(entry)
+        out.pop("manual_expected_decision", None)
+        if "manual_expected_decision" in event:
+            out["manual_expected_decision"] = copy.deepcopy(event["manual_expected_decision"])
         out.update({
             "previous_expected_set": list(entry.get("expected_set") or []),
             "previous_expected_evidence": str(entry.get("expected_evidence") or ""),
@@ -2474,6 +2542,19 @@ def _apply_review_event(entry: dict[str, Any], event: Mapping[str, Any]) -> dict
         # so the confirmation event must carry enough independent expected evidence
         # to reconstruct that intermediate DIFFERENCE state from the frozen manifest.
         working = dict(entry)
+        if "manual_expected_decision" in event:
+            # Reconstruct the explicitly reviewed expected lane before comparing.
+            # A later automatic resolver cannot silently replace a local human judgment.
+            working = _apply_review_event(working, {**event, "action": "解決expected證據"})
+            snapshot = event.get("confirmation_actual_snapshot")
+            if not isinstance(snapshot, dict) or set(snapshot) != {"actual", "actual_evidence", "actual_status"}:
+                raise InvalidTransitionError("人工差異確認缺少當次 actual 比較 snapshot")
+            if snapshot != actual_confirmation_snapshot(working):
+                working["review_event_replay_status"] = "INVALIDATED_ACTUAL_DRIFT"
+                return working
+            if working.get("state") != "DIFFERENCE_PENDING_CONFIRMATION":
+                working["review_event_replay_status"] = "INVALIDATED_COMPARISON_DRIFT"
+                return working
         event_expected = list(normalize_expected_set(event.get("expected_set")))
         current_expected = list(normalize_expected_set(working.get("expected_set")))
         if (
@@ -2832,6 +2913,7 @@ def _ledger_report_row(entry: Mapping[str, Any]) -> list[Any]:
         entry.get("canonical_occurrence_id"), entry.get("exclusion_reason"), entry.get("stable_key"),
         entry.get("font"), entry.get("font_xref"), entry.get("glyph_id"), entry.get("zhuyin_component_id"),
         entry.get("x0"), entry.get("y0"), entry.get("x1"), entry.get("y1"), entry.get("note"),
+        json.dumps(entry["manual_expected_decision"], ensure_ascii=False, sort_keys=True) if "manual_expected_decision" in entry else "",
     ]
 
 
@@ -2873,11 +2955,11 @@ def _friendly_issue(entry: Mapping[str, Any]) -> tuple[str, str]:
     if state == "DIFFERENCE_PENDING_CONFIRMATION":
         return "課本目前注音與應標注音不同。", "核對原頁與規範；確定有誤再確認教材錯誤，若課本其實正確則補充較高優先的應標讀音依據。"
     if state == "RULE_CONFLICT":
-        return "程式找到互相衝突的讀音規則。", "選擇本句正確讀音並提供規範／辭典／公司規定等獨立依據。"
+        return "程式找到互相衝突的讀音規則。", "看原文與語境後判定本句應標讀音，文字依據選填。"
     if state == "EXPECTED_AMBIGUOUS":
-        return "目前有多個可能讀音，證據不足以自動決定。", "有正式依據時補充正確讀音；沒有就保留待確認。"
+        return "目前有多個可能讀音，證據不足以自動決定。", "看原文與語境後判定應標讀音；尚無法判斷時保留待確認。"
     if state == "EXPECTED_UNRESOLVED":
-        return "尚未建立可獨立重現的應標注音。", "查完整詞條或公司規定後補充應標讀音；不能照著課本目前注音倒推。"
+        return "尚未建立可獨立重現的應標注音。", "看原文與語境後，可主動確認有效目前讀音為應標，或輸入其他應標讀音；文字依據選填。"
     if state == "ACTUAL_DECODE_ERROR":
         return "程式可能把課本現標注音辨識錯誤。", "回頁確認後以指定位置辨識修正處理，再重新解碼。"
     if state == "ACTUAL_UNRESOLVED":
@@ -3008,7 +3090,7 @@ def generate_report(
         "occurrence_id", "review_id", "state", "active_review", "actual_status", "expected_status", "PDF", "課本頁", "實體頁碼", "字元",
         "所在行", "局部詞境", "actual", "expected_set", "機械比較", "actual證據", "expected證據", "語境／位置證據",
         "來源view", "identity confidence", "row fallback", "canonical occurrence", "排除理由", "穩定注音鍵",
-        "font", "font_xref", "glyph_id", "注音元件ID", "x0", "y0", "x1", "y1", "備註",
+        "font", "font_xref", "glyph_id", "注音元件ID", "x0", "y0", "x1", "y1", "備註", "本筆人工應標判定紀錄",
     ]
     ws_ledger = wb.create_sheet("Occurrence Ledger")
     ws_ledger.append(headers)
@@ -3025,16 +3107,17 @@ def generate_report(
                 state_sheet.append(_ledger_report_row(entry))
 
     wr = wb.create_sheet("已補建預期音_稽核事件")
-    wr.append(["review_id", "occurrence_id", "action", "expected_set", "expected_evidence", "event_source", "updated_at", "note"])
+    wr.append(["review_id", "occurrence_id", "action", "expected_set", "expected_evidence", "event_source", "updated_at", "note", "manual_expected_decision"])
     by_review_id = {entry["review_id"]: entry for entry in ledger}
     for review_id, event in normalize_db(db).get("events", {}).items():
-        if event.get("action") != "補建expected證據":
+        if event.get("action") not in {"補建expected證據", "解決expected證據", "確認現版差異"}:
             continue
         entry = by_review_id.get(review_id, {})
         wr.append([
             review_id, entry.get("occurrence_id", ""), event.get("action", ""),
             "|".join(normalize_expected_set(event.get("expected_set"))), event.get("expected_evidence", ""),
             event.get("source", ""), event.get("updated_at", ""), event.get("note", ""),
+            json.dumps(event["manual_expected_decision"], ensure_ascii=False, sort_keys=True) if "manual_expected_decision" in event else "",
         ])
 
     wc = wb.create_sheet("集合對帳")
@@ -3055,7 +3138,7 @@ def generate_report(
         pdf_entries = [entry for entry in ledger if entry.get("pdf_name") == info.get("pdf_name")]
         in_scope = [entry for entry in pdf_entries if entry.get("state") not in EXCLUDED_STATES]
         actual_covered = sum(1 for entry in in_scope if canonical_bopomofo(entry.get("actual")) and entry.get("actual_evidence"))
-        expected_covered = sum(1 for entry in in_scope if normalize_expected_set(entry.get("expected_set")) and entry.get("expected_evidence"))
+        expected_covered = sum(1 for entry in in_scope if infer_expected_status(entry) == "RESOLVED" and has_expected_evidence(entry))
         wf.append([
             info.get("pdf_name"), info.get("pdf_sha256"), info.get("actual_asset_fingerprint"), len(pdf_entries), len(in_scope),
             actual_covered / len(in_scope) if in_scope else 0, expected_covered / len(in_scope) if in_scope else 0,
@@ -3167,7 +3250,7 @@ def generate_report(
         ])
 
     ur = user_wb.create_sheet("人工與公司規則")
-    ur.append(["來源類型", "PDF", "課本頁", "詞語／局部詞境", "字", "應標注音", "依據／來源", "適用範圍", "備註"])
+    ur.append(["來源類型", "PDF", "課本頁", "詞語／局部詞境", "字", "應標注音", "依據／來源（人工文字依據選填）", "適用範圍", "備註", "人工判定操作", "人工判定時間"])
 
     # Reusable rules are intentionally shown in the human-facing report because
     # they affect future expected evidence. Machine IDs/hashes remain confined to
@@ -3195,14 +3278,14 @@ def generate_report(
         if action in {"補建expected證據", "解決expected證據"}:
             label = "人工建立／解決應標讀音"
             expected_text = " | ".join(normalize_expected_set(event.get("expected_set")))
-            evidence_text = str(event.get("expected_evidence") or event.get("source") or "")
+            evidence_text = str(event.get("expected_evidence") or ("" if "manual_expected_decision" in event else event.get("source")) or "")
         elif action == "確認現版差異":
             if entry.get("review_event_replay_status") == "INVALIDATED_EXPECTED_DRIFT":
                 label = "舊確認已失效（expected 已變更）"
             else:
                 label = "確認教材錯誤"
             expected_text = " | ".join(entry.get("expected_set") or [])
-            evidence_text = str(entry.get("expected_evidence") or event.get("source") or "")
+            evidence_text = str(entry.get("expected_evidence") or ("" if "manual_expected_decision" in event else event.get("source")) or "")
         elif action == "確認非校對範圍":
             label = "確認不需校對"
             expected_text = ""
@@ -3219,6 +3302,8 @@ def generate_report(
                 or event.get("resolution_reason")
                 or ""
             ),
+            {"CONFIRM_CURRENT_AS_EXPECTED": "確認目前注音就是應標注音", "ENTER_EXPECTED": "人工輸入應標注音"}.get((event.get("manual_expected_decision") or {}).get("operation"), ""),
+            (event.get("manual_expected_decision") or {}).get("decided_at", ""),
         ])
 
     for sheet in user_wb.worksheets:
@@ -3416,7 +3501,8 @@ def _clear_actual_dependent_events(output_dir: Path, ledger: list[dict[str, Any]
             expected_set = list(normalize_expected_set(event.get("expected_set")))
             expected_evidence = str(event.get("expected_evidence") or "").strip()
             context_evidence = str(event.get("context_evidence") or "").strip()
-            if expected_set and expected_evidence and context_evidence:
+            retained = {**next((entry for entry in ledger if entry.get("review_id") == rid), {}), **event}
+            if expected_set and has_expected_evidence(retained) and context_evidence:
                 old_note = str(event.get("note") or "").strip()
                 events[rid] = {
                     "action": "解決expected證據",
@@ -3429,6 +3515,8 @@ def _clear_actual_dependent_events(output_dir: Path, ledger: list[dict[str, Any]
                     "updated_at": datetime.now().isoformat(timespec="seconds"),
                     "_safe_expected_rebase": True,
                 }
+                if "manual_expected_decision" in event:
+                    events[rid]["manual_expected_decision"] = copy.deepcopy(event["manual_expected_decision"])
             else:
                 events.pop(rid, None)
             removed += 1

@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from datetime import datetime
 from collections import Counter, defaultdict
 from copy import deepcopy
 from dataclasses import dataclass
@@ -337,6 +338,69 @@ def infer_actual_status(entry: Mapping[str, Any]) -> str:
     return "RESOLVED" if actual and entry.get("actual_evidence") else "UNRESOLVED"
 
 
+def manual_expected_target(entry: Mapping[str, Any]) -> dict[str, str]:
+    """Bind a local human judgment to its original occurrence and printed context.
+
+    This audit snapshot is not an occurrence identity or a cache fingerprint.
+    In particular, no actual reading/evidence belongs in this target.
+    """
+    source = entry.get("source_record") or {}
+    return {
+        **{key: str(entry.get(key) or "") for key in (
+            "occurrence_id", "review_id", "pdf_sha256", "pdf_name",
+            "printed_page", "char",
+        )},
+        **{key: _canonical_number(entry.get(key)) for key in ("physical_page", "x0", "y0", "x1", "y1")},
+        "line": str(source.get("所在行") or ""),
+        "local_context": str(source.get("局部詞境") or ""),
+    }
+
+
+def valid_manual_expected_decision(entry: Mapping[str, Any]) -> bool:
+    """Only the explicit, complete local human record permits optional rationale.
+
+    Neither old empty-evidence rows nor workbook imports are upgraded here.
+    The saved reading is checked against the expected lane, never current actual.
+    """
+    record = entry.get("manual_expected_decision")
+    if not isinstance(record, dict) or set(record) != {
+        "version", "operation", "target", "expected_set", "context_evidence", "decided_at",
+    }:
+        return False
+    if type(record["version"]) is not int or record["version"] != 1:
+        return False
+    if record["operation"] not in ("CONFIRM_CURRENT_AS_EXPECTED", "ENTER_EXPECTED"):
+        return False
+    target = manual_expected_target(entry)
+    if not all(target[key] for key in ("occurrence_id", "review_id", "char")):
+        return False
+    if record["target"] != target:
+        return False
+    readings = list(normalize_expected_set(entry.get("expected_set")))
+    if not readings or record["expected_set"] != readings:
+        return False
+    if record["operation"] == "CONFIRM_CURRENT_AS_EXPECTED" and len(readings) != 1:
+        return False
+    context = entry.get("context_evidence")
+    if not isinstance(context, str) or not context.strip() or record["context_evidence"] != context:
+        return False
+    timestamp = record["decided_at"]
+    try:
+        parsed = datetime.fromisoformat(timestamp) if isinstance(timestamp, str) else None
+        if parsed is None or parsed.tzinfo is None or parsed.isoformat(timespec="microseconds") != timestamp:
+            return False
+    except ValueError:
+        return False
+    return True
+
+
+def has_expected_evidence(entry: Mapping[str, Any]) -> bool:
+    if "manual_expected_decision" in entry:
+        # A malformed new record must not be disguised as legacy by adding text.
+        return valid_manual_expected_decision(entry)
+    return bool(str(entry.get("expected_evidence") or "").strip())
+
+
 def infer_expected_status(entry: Mapping[str, Any]) -> str:
     explicit = _text(entry.get("expected_status")).upper()
     if explicit in EXPECTED_STATUSES:
@@ -351,7 +415,7 @@ def infer_expected_status(entry: Mapping[str, Any]) -> str:
     if state == "EXPECTED_UNRESOLVED":
         return "UNRESOLVED"
     expected = normalize_expected_set(entry.get("expected_set"))
-    return "RESOLVED" if expected and entry.get("expected_evidence") else "UNRESOLVED"
+    return "RESOLVED" if expected and has_expected_evidence(entry) else "UNRESOLVED"
 
 
 def derive_comparison_result(entry: Mapping[str, Any]) -> str:
@@ -367,9 +431,9 @@ def derive_comparison_result(entry: Mapping[str, Any]) -> str:
 def derive_authoritative_state(entry: Mapping[str, Any], *, preserve_confirmed: bool = True) -> str:
     """Derive the public workflow state from independent evidence lanes.
 
-    Priority is deliberately asymmetric only at the *workflow* layer.  Actual
-    gaps can be shown first to the user while expected evidence remains intact
-    in its own lane.  Completion gates inspect both lane statuses directly.
+    The historical composite state retains actual-first projection priority.
+    GUI grouping and completion gates inspect both lane statuses independently;
+    the GUI can therefore process expected first without changing ledger state.
     """
     state = _text(entry.get("state"))
     excluded_state = _text(entry.get("exclusion_state"))
@@ -500,7 +564,7 @@ def validate_terminal_state(entry: Mapping[str, Any]) -> None:
         expected = set(normalize_expected_set(entry.get("expected_set")))
         if not actual or not entry.get("actual_evidence"):
             raise LedgerError("PASS 缺少合法 actual 或 actual 證據")
-        if not expected or not entry.get("expected_evidence"):
+        if not expected or not has_expected_evidence(entry):
             raise LedgerError("PASS 缺少 expected_set 或 expected 證據")
         if not entry.get("context_evidence"):
             raise LedgerError("PASS 缺少必要詞語／語境／位置證據")
@@ -510,7 +574,7 @@ def validate_terminal_state(entry: Mapping[str, Any]) -> None:
         actual = canonical_bopomofo(entry.get("actual"))
         expected = set(normalize_expected_set(entry.get("expected_set")))
         gates = entry.get("confirmation_gates") or {}
-        if not actual or not entry.get("actual_evidence") or not expected or not entry.get("expected_evidence"):
+        if not actual or not entry.get("actual_evidence") or not expected or not has_expected_evidence(entry):
             raise LedgerError("TEXTBOOK_ERROR_CONFIRMED 缺少現版 actual／expected 證據鏈")
         if not entry.get("context_evidence"):
             raise LedgerError("TEXTBOOK_ERROR_CONFIRMED 缺少語境／位置證據")
@@ -541,6 +605,12 @@ def validate_occurrence_ledger(ledger: Sequence[Mapping[str, Any]]) -> None:
             raise LedgerError(f"ledger row {index} state 無效：{state}")
         actual_status = infer_actual_status(entry)
         expected_status = infer_expected_status(entry)
+        if "manual_expected_decision" in entry and not valid_manual_expected_decision(entry):
+            raise LedgerError(f"ledger row {index} 人工 expected 判定紀錄無效")
+        if expected_status == "RESOLVED" and (
+            not normalize_expected_set(entry.get("expected_set")) or not has_expected_evidence(entry)
+        ):
+            raise LedgerError(f"ledger row {index} RESOLVED expected 缺少有效證據")
         if actual_status not in ACTUAL_STATUSES:
             raise LedgerError(f"ledger row {index} actual_status 無效：{actual_status}")
         if expected_status not in EXPECTED_STATUSES:
@@ -694,7 +764,10 @@ def completion_gate(
     actual_status_counts = Counter(infer_actual_status(row) for row in in_scope)
     expected_status_counts = Counter(infer_expected_status(row) for row in in_scope)
     actual_covered = actual_status_counts["RESOLVED"]
-    expected_covered = expected_status_counts["RESOLVED"]
+    expected_covered = sum(
+        infer_expected_status(row) == "RESOLVED" and bool(normalize_expected_set(row.get("expected_set")))
+        and has_expected_evidence(row) for row in in_scope
+    )
     state_counts = Counter(_text(row.get("state")) for row in ledger)
     nonterminal_count = sum(state_counts[state] for state in NON_TERMINAL_STATES)
     comparable_terminal_count = sum(state_counts[state] for state in COMPARABLE_TERMINAL_STATES)

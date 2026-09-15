@@ -745,6 +745,57 @@ class MigrationTests(unittest.TestCase):
 
 
 class MigrationArchitectureTests(unittest.TestCase):
+    PHASE5_BASELINE = "d2d558808bd2902857fad30f824d8bdc352beb73"
+
+    @staticmethod
+    def _standalone_fingerprint_contract(tree):
+        """Freeze Phase 5 cache boundaries, not unrelated manual/report code.
+
+        The producer/comparator modules remain byte-pinned below. Here retain
+        their wiring, dependency declaration and the two fail-closed reuse
+        guards. For larger application functions, compare only contract calls
+        and their arguments, allowing other human-review/report statements.
+        """
+        declarations = {"ACTUAL_DECODER_SOURCE_FILES", "COMPATIBLE_SESSION_VERSIONS"}
+        guards = {"output_is_reusable", "candidate_is_baseline_reusable"}
+        calls = {
+            "compute_actual_asset_fingerprint", "compute_expected_asset_fingerprint",
+            "rewrite_actual_workbook_fingerprint", "fingerprint_compatible",
+            "schema_compatible", "review_id_schema_compatible", "validate_asset_manifest",
+            "actual_workbook_dynamic_dependencies", "actual_workbook_global_exact_dependencies",
+            "global_exact_glyph_evidence_hashes",
+        }
+        imports = calls | {
+            "EXPECTED_RESOLVER_SOURCE_FILES", "LEDGER_SCHEMA_VERSION", "SESSION_SCHEMA_VERSION",
+            "WORKBOOK_SCHEMA_VERSION", "REVIEW_ID_SCHEMA_VERSION", "GlobalExactGlyphRepository",
+        }
+        return {
+            "declarations": [ast.dump(node) for node in tree.body if isinstance(node, ast.Assign)
+                             and any(isinstance(target, ast.Name) and target.id in declarations for target in node.targets)],
+            "imports": [(node.module, alias.name, alias.asname) for node in tree.body
+                        if isinstance(node, ast.ImportFrom) for alias in node.names if alias.name in imports],
+            "reuse_guards": {node.name: ast.dump(node) for node in tree.body
+                             if isinstance(node, ast.FunctionDef) and node.name in guards},
+            "contract_calls": {node.name: selected for node in tree.body if isinstance(node, ast.FunctionDef)
+                               if (selected := [ast.dump(call) for call in ast.walk(node)
+                                                if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+                                                and call.func.id in calls])},
+        }
+
+    @classmethod
+    def _historical_standalone(cls):
+        return ast.parse(subprocess.check_output(
+            ["git", "show", cls.PHASE5_BASELINE + ":standalone_proofread.py"], cwd=ROOT,
+        ).decode("utf-8"))
+
+    def _assert_contract_versions(self):
+        import cross_version_compat as compatibility
+        self.assertEqual((lib.GLOBAL_LIBRARY_SCHEMA_VERSION, lib.GLOBAL_LIBRARY_SQLITE_USER_VERSION), ("1.0", 1))
+        self.assertEqual(lib.GLOBAL_MIGRATION_IMPORT_CONTRACT_VERSION, "1.0")
+        self.assertEqual(lib.GLOBAL_EXACT_DEPENDENCY_CONTRACT_VERSION, "1.0")
+        self.assertEqual(compatibility.ACTUAL_DECODER_SEMANTICS_EPOCH, "1")
+        self.assertEqual(compatibility.EXPECTED_RESOLVER_SEMANTICS_EPOCH, "1")
+
     def test_import_chain_has_no_expected_resolver(self):
         code = "import legacy_global_migration, sys; assert 'standalone_proofread' not in sys.modules; assert 'check_pronunciation_candidates' not in sys.modules"
         result = subprocess.run([sys.executable, "-B", "-c", code], cwd=ROOT, capture_output=True, text=True)
@@ -760,15 +811,64 @@ class MigrationArchitectureTests(unittest.TestCase):
                 self.assertNotIn(node.value, {"expected_set", "expected_evidence", "reusable_expected_rules", "dictionary"})
 
     def test_schema_and_fingerprint_boundaries_unchanged(self):
-        import cross_version_compat as compatibility
         import runtime_source_validation as runtime
-        self.assertEqual((lib.GLOBAL_LIBRARY_SCHEMA_VERSION, lib.GLOBAL_LIBRARY_SQLITE_USER_VERSION), ("1.0", 1))
-        self.assertEqual(lib.GLOBAL_MIGRATION_IMPORT_CONTRACT_VERSION, "1.0")
-        self.assertEqual(lib.GLOBAL_EXACT_DEPENDENCY_CONTRACT_VERSION, "1.0")
-        self.assertEqual(compatibility.ACTUAL_DECODER_SEMANTICS_EPOCH, "1")
-        self.assertEqual(compatibility.EXPECTED_RESOLVER_SEMANTICS_EPOCH, "1")
+        self._assert_contract_versions()
         self.assertTrue(runtime.validate_asset_manifest(ROOT)["ok"])
         for name in ("runtime_asset_manifest.json", "runtime_source_validation.py", "cross_version_compat.py",
-                     "VERSION.txt", "standalone_proofread.py"):
-            committed = subprocess.check_output(["git", "show", "d2d558808bd2902857fad30f824d8bdc352beb73:" + name], cwd=ROOT)
+                     "VERSION.txt"):
+            committed = subprocess.check_output(["git", "show", self.PHASE5_BASELINE + ":" + name], cwd=ROOT)
             self.assertEqual((ROOT / name).read_bytes().replace(b"\r\n", b"\n"), committed.replace(b"\r\n", b"\n"))
+        current = ast.parse((ROOT / "standalone_proofread.py").read_text(encoding="utf-8"))
+        self.assertEqual(self._standalone_fingerprint_contract(current),
+                         self._standalone_fingerprint_contract(self._historical_standalone()))
+
+    def test_unrelated_manual_and_report_changes_do_not_change_contract(self):
+        historical = self._historical_standalone()
+        changed = copy.deepcopy(historical)
+        for node in changed.body:
+            if isinstance(node, ast.FunctionDef) and node.name in {"_apply_review_event", "generate_report"}:
+                node.body.append(ast.Pass())
+        changed.body.extend(ast.parse("def explicit_local_manual_judgment():\n    return 'human operation'\n").body)
+        self.assertNotEqual(ast.dump(changed), ast.dump(historical))
+        self.assertEqual(self._standalone_fingerprint_contract(changed),
+                         self._standalone_fingerprint_contract(historical))
+
+    def test_changed_dependencies_chain_and_fail_open_guard_are_detected(self):
+        historical = self._historical_standalone()
+        expected = self._standalone_fingerprint_contract(historical)
+        for mutation in ("source_dependency", "actual_chain", "per_pdf_dependency", "fail_open_guard", "import_origin"):
+            changed = copy.deepcopy(historical)
+            if mutation == "source_dependency":
+                declaration = next(node for node in changed.body if isinstance(node, ast.Assign)
+                                   and any(isinstance(target, ast.Name) and target.id == "ACTUAL_DECODER_SOURCE_FILES" for target in node.targets))
+                declaration.value.elts.pop()
+            elif mutation == "actual_chain":
+                call = next(node for node in ast.walk(changed) if isinstance(node, ast.Call)
+                            and isinstance(node.func, ast.Name) and node.func.id == "fingerprint_compatible"
+                            and any(kw.arg == "chain" and isinstance(kw.value, ast.Constant) and kw.value.value == "actual" for kw in node.keywords))
+                next(kw for kw in call.keywords if kw.arg == "chain").value = ast.Constant(value="expected")
+            elif mutation == "per_pdf_dependency":
+                call = next(node for node in ast.walk(changed) if isinstance(node, ast.Call)
+                            and isinstance(node.func, ast.Name) and node.func.id == "compute_actual_asset_fingerprint")
+                next(kw for kw in call.keywords if kw.arg == "global_exact_glyph_evidence_hashes").value = ast.Dict(keys=[], values=[])
+            elif mutation == "fail_open_guard":
+                guard = next(node for node in changed.body if isinstance(node, ast.FunctionDef) and node.name == "output_is_reusable")
+                guard.body = [ast.Return(value=ast.Constant(value=True))]
+            else:
+                imported = next(node for node in changed.body if isinstance(node, ast.ImportFrom)
+                                and any(alias.name == "compute_actual_asset_fingerprint" for alias in node.names))
+                imported.module = "unverified_fingerprint_provider"
+            with self.subTest(mutation=mutation), self.assertRaises(AssertionError):
+                self.assertEqual(self._standalone_fingerprint_contract(changed), expected)
+
+    def test_changed_schema_epoch_and_dependency_versions_are_detected(self):
+        import cross_version_compat as compatibility
+        cases = [(lib, "GLOBAL_LIBRARY_SCHEMA_VERSION", "2.0"),
+                 (lib, "GLOBAL_LIBRARY_SQLITE_USER_VERSION", 2),
+                 (lib, "GLOBAL_MIGRATION_IMPORT_CONTRACT_VERSION", "2.0"),
+                 (lib, "GLOBAL_EXACT_DEPENDENCY_CONTRACT_VERSION", "2.0"),
+                 (compatibility, "ACTUAL_DECODER_SEMANTICS_EPOCH", "2"),
+                 (compatibility, "EXPECTED_RESOLVER_SEMANTICS_EPOCH", "2")]
+        for module, field, value in cases:
+            with self.subTest(field=field), patch.object(module, field, value), self.assertRaises(AssertionError):
+                self._assert_contract_versions()
