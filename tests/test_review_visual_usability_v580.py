@@ -169,7 +169,7 @@ class ProgressPresentationTests(unittest.TestCase):
                  "expected_set": ["ㄅ"], "expected_evidence": "independent expected", "context_evidence": "context"}
         gate = ol.completion_gate([entry], {"ok": True}, REGRESSION)
         payload = {"status": gate["status"], "completion_gate": gate}
-        self.assertIn("全冊校對完成", standalone.summarize_project_status(payload))
+        self.assertIn("全冊校對完成", standalone.summarize_project_status(payload, has_session=True))
         for bad in (None, {}, {"status": "FUTURE"}, {"status": "PROOFREAD_COMPLETE"},
                     {**payload, "completion_gate": {**gate, "complete": False}},
                     {**payload, "completion_gate": {**gate, "state_counts": {"UNKNOWN": 1}}},
@@ -180,7 +180,7 @@ class ProgressPresentationTests(unittest.TestCase):
                     {**payload, "completion_gate": {**gate, "in_scope_total": None}},
                     {**payload, "completion_gate": {**gate, "expected_covered": 0}},
                     {**payload, "completion_gate": {**gate, "hard_gates": {}}}):
-            self.assertIn("目前無法確認進度", standalone.summarize_project_status(bad))
+            self.assertIn("目前無法確認進度", standalone.summarize_project_status(bad, has_session=True))
         with tempfile.TemporaryDirectory() as directory:
             folder = Path(directory)
             (folder / "pipeline_status.json").write_text("{broken raw detail", encoding="utf-8")

@@ -10,7 +10,9 @@ import fitz
 
 
 class WrappedLabel(tk.Label):
-    def __init__(self, master, **kwargs):
+    """Wrap only after the geometry manager allocates a stable horizontal slot."""
+    def __init__(self, master, *, width_fraction=1.0, **kwargs):
+        self._width_fraction = width_fraction
         kwargs.setdefault("anchor", "w")
         kwargs.setdefault("justify", "left")
         kwargs.setdefault("wraplength", 400)
@@ -18,7 +20,29 @@ class WrappedLabel(tk.Label):
         self.bind("<Configure>", self._wrap)
 
     def _wrap(self, event):
-        width = max(1, event.width - 12)
+        manager = self.winfo_manager()
+        if manager == "pack":
+            layout = self.pack_info()
+            if layout.get("fill") not in {"x", "both"}:
+                return
+        elif manager == "grid":
+            layout = self.grid_info()
+            sticky = layout.get("sticky", "")
+            if not ("e" in sticky and "w" in sticky):
+                return
+        else:
+            return
+        # Derive the wrap boundary from the externally allocated parent, never
+        # from this label's requested/actual width. Grid callers declare their
+        # proportional column share; widget padding stays outside that share.
+        padding = layout.get("padx", 0)
+        if not isinstance(padding, (tuple, list)):
+            padding = self.tk.splitlist(str(padding))
+        inset = sum(self.winfo_pixels(value) for value in padding)
+        if len(padding) == 1:
+            inset *= 2
+        border = self.master.winfo_pixels(self.master.cget("borderwidth"))
+        width = max(1, int((self.master.winfo_width() - 2 * border) * self._width_fraction) - inset - 12)
         if int(float(self.cget("wraplength"))) != width:
             self.configure(wraplength=width)
 
@@ -35,7 +59,19 @@ class ActionRows(tk.Frame):
         super().__init__(master, **kwargs)
         self.items = []
         self._scheduled = None
+        self._disposed = False
         self.bind("<Configure>", self.refresh)
+        self.bind("<Destroy>", self._dispose)
+
+    def _cancel_layout(self):
+        if self._scheduled is not None:
+            self.after_cancel(self._scheduled)
+            self._scheduled = None
+
+    def _dispose(self, event):
+        if event.widget is self:
+            self._disposed = True
+            self._cancel_layout()
 
     def set_items(self, items):
         for item in self.items:
@@ -44,14 +80,18 @@ class ActionRows(tk.Frame):
         self.refresh()
 
     def refresh(self, _event=None):
-        if self._scheduled is None:
+        if not self._disposed and self._scheduled is None:
             self._scheduled = self.after_idle(self._layout)
 
     def _layout(self):
-        self._scheduled = None
+        self._cancel_layout()
+        if self._disposed:
+            return
         width = max(1, self.winfo_width())
         y, row_height, used = 3, 0, 0
         for item in self.items:
+            if not item.winfo_exists():
+                continue
             # tk buttons support wrapping without a character-width truncation.
             if isinstance(item, (tk.Button, tk.Menubutton)):
                 item.configure(width=0, height=0, wraplength=max(40, width - 28), padx=8, pady=7)
@@ -136,9 +176,23 @@ class OccurrencePreview(tk.Frame):
         self.notice.pack(fill="x")
         self.pixmap = self.target = self.photo = None
         self._draw_pending = None
+        self._disposed = False
         self.canvas.bind("<Configure>", self._schedule_draw)
+        self.bind("<Destroy>", self._dispose)
+        self.canvas.bind("<Destroy>", self._dispose)
+
+    def _cancel_draw(self):
+        if self._draw_pending is not None:
+            self.after_cancel(self._draw_pending)
+            self._draw_pending = None
+
+    def _dispose(self, event):
+        if event.widget is self or event.widget is self.canvas:
+            self._disposed = True
+            self._cancel_draw()
 
     def clear(self, message=""):
+        self._cancel_draw()
         self.canvas.delete("all")
         self.pixmap = self.target = self.photo = None
         self.notice.configure(text=message)
@@ -157,11 +211,13 @@ class OccurrencePreview(tk.Frame):
             return False
 
     def _schedule_draw(self, _event=None):
-        if self._draw_pending is None:
+        if not self._disposed and self._draw_pending is None:
             self._draw_pending = self.after_idle(self._draw)
 
     def _draw(self):
-        self._draw_pending = None
+        self._cancel_draw()
+        if self._disposed:
+            return
         self.canvas.delete("all")
         if self.pixmap is None:
             return

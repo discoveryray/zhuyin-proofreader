@@ -87,7 +87,7 @@ def summarize_project_status(data, *, has_session=False):
         return _UNKNOWN_PROGRESS
     if status == "PROOFREAD_COMPLETE":
         in_scope = sum(value for key, value in counts.items() if key not in EXCLUDED_STATES)
-        if (gate.get("status") == status and gate.get("complete") is True and failed == []
+        if (has_session and gate.get("status") == status and gate.get("complete") is True and failed == []
                 and isinstance(hard, dict) and set(hard) == _KNOWN_GATES
                 and all(value is True for value in hard.values())
                 and in_scope > 0
@@ -121,14 +121,17 @@ def project_status_details(folder: Path) -> tuple[str, str]:
     status_path = folder / "pipeline_status.json"
     session_path = folder / "校對工作階段.json"
     try:
-        has_session = session_path.exists()
+        has_session = session_path.is_file()
         if status_path.exists():
             raw = status_path.read_text(encoding="utf-8")
             try:
                 data = json.loads(raw)
             except Exception as exc:
                 return _UNKNOWN_PROGRESS, f"{status_path}\n{exc}\n\n{raw}"
-            return summarize_project_status(data, has_session=has_session), f"{status_path}\n\n{json.dumps(data, ensure_ascii=False, indent=2)}"
+            diagnostics = f"{status_path}\n\n{json.dumps(data, ensure_ascii=False, indent=2)}"
+            if not has_session:
+                diagnostics += f"\n\n缺少工作階段檔案：{session_path}"
+            return summarize_project_status(data, has_session=has_session), diagnostics
         if not has_session:
             return "這是新的校對專案資料夾；尚未建立工作階段。請選擇教材後按『開始新校對』。", str(folder)
         return _UNKNOWN_PROGRESS, f"已有工作階段，但找不到 {status_path}"

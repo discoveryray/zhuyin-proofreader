@@ -82,7 +82,10 @@ def create_scrollable_body(window: tk.Toplevel) -> tuple[tk.Frame, tk.Canvas]:
     canvas.pack(side="left", fill="both", expand=True)
 
     content = tk.Frame(canvas)
-    window_id = canvas.create_window((0, 0), window=content, anchor="nw")
+    # Give content an explicit width from creation. Without this initial slot,
+    # Tk sizes the unmapped canvas window from its wrapping children's requests
+    # before the first canvas Configure can supply the viewport width.
+    window_id = canvas.create_window((0, 0), window=content, anchor="nw", width=1)
 
     def update_scrollregion(_event=None):
         canvas.configure(scrollregion=canvas.bbox("all"))
@@ -195,10 +198,13 @@ class ExpectedDialog(tk.Toplevel):
             ("補充說明（可空白）", self.reason, "例如：另一個讀音屬不同義項，本句不適用"),
         ]
         for row, (label, var, hint) in enumerate(labels):
-            WrappedLabel(form, text=label).grid(row=row * 2, column=0, sticky="w", pady=(7, 1))
+            WrappedLabel(form, text=label, width_fraction=0.25).grid(row=row * 2, column=0, sticky="ew", pady=(7, 1))
             scrollable_entry(form, var, readonly=var is self.context).grid(row=row * 2, column=1, sticky="ew", padx=(10, 0), pady=(7, 1))
-            WrappedLabel(form, text=hint, fg="#666666", justify="left", wraplength=520).grid(row=row * 2 + 1, column=1, sticky="ew", padx=(10, 0))
-        form.columnconfigure(1, weight=1)
+            WrappedLabel(form, text=hint, width_fraction=0.75, fg="#666666", justify="left", wraplength=520).grid(row=row * 2 + 1, column=1, sticky="ew", padx=(10, 0))
+        # Both columns derive their width from the full-width form, not from
+        # the wrapping labels' own requested sizes.
+        form.columnconfigure(0, weight=1, uniform="expected-form")
+        form.columnconfigure(1, weight=3, uniform="expected-form")
 
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         self.bind("<Escape>", lambda _event: self.destroy())
@@ -294,12 +300,13 @@ class ActualReadingDialog(tk.Toplevel):
         form.pack(fill="x", padx=16, pady=8)
         self.reading = tk.StringVar(value="")
         self.note = tk.StringVar(value="")
-        WrappedLabel(form, text=f"程式目前 actual：{entry.get('actual') or '尚未辨識'}").grid(row=0,column=0,columnspan=2,sticky="w",padx=8,pady=(8,4))
-        WrappedLabel(form, text="原頁真正 actual：").grid(row=1,column=0,sticky="w",padx=8,pady=4)
+        WrappedLabel(form, text=f"程式目前 actual：{entry.get('actual') or '尚未辨識'}").grid(row=0,column=0,columnspan=2,sticky="ew",padx=8,pady=(8,4))
+        WrappedLabel(form, text="原頁真正 actual：", width_fraction=0.25).grid(row=1,column=0,sticky="ew",padx=8,pady=4)
         scrollable_entry(form, self.reading).grid(row=1,column=1,sticky="ew",padx=8,pady=4)
-        WrappedLabel(form, text="備註（可空白）：").grid(row=2,column=0,sticky="w",padx=8,pady=4)
+        WrappedLabel(form, text="備註（可空白）：", width_fraction=0.25).grid(row=2,column=0,sticky="ew",padx=8,pady=4)
         scrollable_entry(form, self.note).grid(row=2,column=1,sticky="ew",padx=8,pady=(4,8))
-        form.columnconfigure(1, weight=1)
+        form.columnconfigure(0, weight=1, uniform="actual-form")
+        form.columnconfigure(1, weight=3, uniform="actual-form")
         kind = str(group.get("kind") or "")
         if len(self.samples) > 1 and kind in {"TTF_GLYF_SHA256", "CFF_GLYPH_SHA256"}:
             WrappedLabel(body, text="若 A、B 都勾選且讀音相同，批次套用時這個 exact 字形可升格為跨位置重用真值；只勾 A 則只修正本位置。", fg="#555555").pack(fill="x", anchor="w", padx=18, pady=(0,10))
@@ -846,18 +853,19 @@ class ReviewApp:
         apply_screen_safe_geometry(progress, 560, 210, min_width=440, min_height=170)
         progress.transient(self.root)
         progress.grab_set()
+        # Reserve the progress indicator before the resizable explanation.
+        bar = ttk.Progressbar(progress, mode="indeterminate", length=400)
+        bar.pack(side="bottom", fill="x", padx=18, pady=12)
         WrappedLabel(
             progress,
             text=f"正在一次套用 {count} 組 actual 修正",
             font=("Microsoft JhengHei UI", 11, "bold"),
-        ).pack(padx=18, pady=(28, 8))
+        ).pack(fill="x", padx=18, pady=(18, 8))
         WrappedLabel(
             progress,
             text="未受影響 PDF 將直接沿用 cache；請勿關閉程式。",
             fg="#555555",
-        ).pack(padx=18, pady=4)
-        bar = ttk.Progressbar(progress, mode="indeterminate", length=400)
-        bar.pack(padx=18, pady=12)
+        ).pack(fill="x", padx=18, pady=4)
         bar.start(12)
         old_index = self.index
 
