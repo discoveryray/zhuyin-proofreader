@@ -37,7 +37,7 @@ from standalone_proofread import (
     validate_output_artifact_hashes,
 )
 from actual_review import build_actual_group_for_entry
-from review_display import ActionRows, OccurrencePreview, WrappedLabel, scrollable_entry, wrap_checkbutton
+from review_display import ActionRows, OccurrencePreview, WrappedLabel, scroll_canvas, scrollable_entry, wrap_checkbutton
 
 
 STATE_HELP = {
@@ -71,12 +71,12 @@ def apply_screen_safe_geometry(window: tk.Toplevel | tk.Tk, desired_width: int, 
     window.minsize(min(min_width, width), min(min_height, height))
 
 
-def create_scrollable_body(window: tk.Toplevel) -> tuple[tk.Frame, tk.Canvas]:
+def create_scrollable_body(window: tk.Toplevel, *, fill_height=False) -> tuple[tk.Frame, tk.Canvas]:
     """Scrollable content area; callers can keep action buttons in a fixed footer."""
     holder = tk.Frame(window)
     holder.pack(fill="both", expand=True)
-    canvas = tk.Canvas(holder, highlightthickness=0, borderwidth=0)
-    scrollbar = ttk.Scrollbar(holder, orient="vertical", command=canvas.yview)
+    canvas = tk.Canvas(holder, highlightthickness=0, borderwidth=0, yscrollincrement=1)
+    scrollbar = ttk.Scrollbar(holder, orient="vertical", command=lambda *args: scroll_body(*args))
     canvas.configure(yscrollcommand=scrollbar.set)
     scrollbar.pack(side="right", fill="y")
     canvas.pack(side="left", fill="both", expand=True)
@@ -86,20 +86,111 @@ def create_scrollable_body(window: tk.Toplevel) -> tuple[tk.Frame, tk.Canvas]:
     # Tk sizes the unmapped canvas window from its wrapping children's requests
     # before the first canvas Configure can supply the viewport width.
     window_id = canvas.create_window((0, 0), window=content, anchor="nw", width=1)
+    canvas._layout_pending = None
+    layout_busy = False
+    layout_disposed = False
 
-    def update_scrollregion(_event=None):
-        canvas.configure(scrollregion=canvas.bbox("all"))
+    def flush_layout():
+        nonlocal layout_busy
+        if layout_disposed or layout_busy:
+            return False
+        if canvas._layout_pending is not None:
+            canvas.after_cancel(canvas._layout_pending)
+            canvas._layout_pending = None
+        layout_busy = True
+        try:
+            # A canvas height request propagates through several pack parents.
+            # Configure alone need not fire when their actual sizes are fixed.
+            # Drain those idle geometry requests before measuring the minimum.
+            content.update_idletasks()
+            if layout_disposed:
+                return False
+            if fill_height:
+                height = max(canvas.winfo_height(), content.winfo_reqheight())
+                if int(float(canvas.itemcget(window_id, "height"))) != height:
+                    canvas.itemconfigure(window_id, height=height)
+            # Width is already fixed; allocation cannot feed back into the
+            # width-derived preview minimum. This is one bounded allocation,
+            # not a retry or polling loop.
+            content.update_idletasks()
+            if layout_disposed:
+                return False
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            return not fill_height or content.winfo_height() >= content.winfo_reqheight()
+        finally:
+            layout_busy = False
+
+    def request_layout(_event=None):
+        if not layout_disposed and not layout_busy and canvas._layout_pending is None:
+            canvas._layout_pending = canvas.after_idle(flush_layout)
+
+    def dispose_layout(event):
+        nonlocal layout_disposed
+        if event.widget in (holder, canvas, content):
+            layout_disposed = True
+            if canvas._layout_pending is not None:
+                canvas.after_cancel(canvas._layout_pending)
+                canvas._layout_pending = None
+
+    canvas.request_layout = request_layout
+    canvas.flush_layout = flush_layout
+    for widget in (holder, canvas, content):
+        widget.bind("<Destroy>", dispose_layout, add="+")
 
     def fit_content_width(event):
         canvas.itemconfigure(window_id, width=max(1, event.width))
+        request_layout()
+
+    def reveal(widget, y0, y1):
+        offset = widget.winfo_rooty() - canvas.winfo_rooty() + canvas.canvasy(0)
+        top, bottom = offset + y0 - 20, offset + y1 + 20
+        visible_top = canvas.canvasy(0)
+        if top < visible_top or bottom > visible_top + canvas.winfo_height():
+            total = max(1, canvas.bbox("all")[3])
+            canvas.yview_moveto(max(0, (top + bottom - canvas.winfo_height()) / 2) / total)
+
+    canvas.reveal = reveal
+
+    def scroll_body(*args):
+        pending = list(content.winfo_children())
+        while pending:
+            widget = pending.pop()
+            if isinstance(widget, OccurrencePreview):
+                widget.cancel_positioning()
+            else:
+                pending.extend(widget.winfo_children())
+        scroll_canvas(canvas, *args)
 
     def on_mousewheel(event):
+        if layout_disposed:
+            return
+        # The inner preview returns break while it can scroll. A wheel at its
+        # boundary reaches here once, as do expanded samples with no inner bar.
+        widget = event.widget
+        while widget is not None and widget is not canvas:
+            if isinstance(widget, (tk.Text, ttk.Combobox)):
+                return
+            widget = getattr(widget, "master", None)
+        if widget is None:
+            return
         delta = int(getattr(event, "delta", 0))
         if delta:
-            canvas.yview_scroll(-1 if delta > 0 else 1, "units")
+            scroll_body("scroll", -1 if delta > 0 else 1, "units")
+            return "break"
 
-    content.bind("<Configure>", update_scrollregion)
+    content.bind("<Configure>", request_layout)
     canvas.bind("<Configure>", fit_content_width)
+    if fill_height:
+        def child_layout(event):
+            widget = event.widget
+            while widget is not None and widget is not content:
+                widget = getattr(widget, "master", None)
+            if widget is content:
+                request_layout()
+
+        # An explicitly sized canvas window need not receive Configure when
+        # its children's requested height changes (e.g. a longer summary).
+        window.bind("<Configure>", child_layout, add="+")
     window.bind("<MouseWheel>", on_mousewheel)
     return content, canvas
 
@@ -263,7 +354,7 @@ class ActualReadingDialog(tk.Toplevel):
         cancel = tk.Button(footer, text="取消", command=self.destroy)
         save = tk.Button(footer, text="暫存這筆 actual", command=self.submit)
         footer.set_items([save, cancel])
-        body, _canvas = create_scrollable_body(self)
+        body, self.body_canvas = create_scrollable_body(self)
 
         WrappedLabel(body, text="只看 PDF 原頁，確認實際印出的注音", font=("Microsoft JhengHei UI", 13, "bold")).pack(fill="x", anchor="w", padx=16, pady=(14,4))
         WrappedLabel(
@@ -286,15 +377,26 @@ class ActualReadingDialog(tk.Toplevel):
             frame.pack(fill="x", padx=16, pady=6)
             info = f"{sample.get('pdf_name','')}  課本頁 {sample.get('printed_page','')}  字：{sample.get('char','')}  occurrence：{sample.get('occurrence_id','')}"
             WrappedLabel(frame, text=info).pack(fill="x", padx=8, pady=(6, 2))
-            preview = OccurrencePreview(frame, height=220)
+            preview = OccurrencePreview(frame, expand_content=True,
+                                        on_locate=self.body_canvas.reveal if i == 1 else None,
+                                        on_layout=self.body_canvas.request_layout,
+                                        before_locate=self.body_canvas.flush_layout)
             preview.pack(fill="x", padx=8, pady=5)
             available = preview.load(sample, padding=(95, 60), output_dir=self.output_dir)
             self.previews.append(preview)
             self.sample_available.append(available)
             var = tk.BooleanVar(value=(i == 1 and available))
             self.checked_vars.append(var)
-            wrap_checkbutton(tk.Checkbutton(frame, text="我已直接核對這張 PDF 原頁", variable=var,
-                                            state="normal" if available else "disabled")).pack(fill="x", padx=8, pady=(2, 7))
+            check = wrap_checkbutton(tk.Checkbutton(frame, text="我已直接核對這張 PDF 原頁", variable=var,
+                                                   state="normal" if available else "disabled"))
+            check.pack(fill="x", padx=8, pady=(2, 7))
+
+            def unavailable(index=i - 1, variable=var, button=check):
+                self.sample_available[index] = False
+                variable.set(False)
+                button.configure(state="disabled")
+
+            preview.on_failure = unavailable
 
         form = tk.LabelFrame(body, text="實際注音")
         form.pack(fill="x", padx=16, pady=8)
@@ -444,7 +546,7 @@ class ReviewApp:
 
         actions = tk.Frame(root)
         actions.pack(side="bottom", fill="x", padx=12, pady=(4, 10))
-        body, self.body_canvas = create_scrollable_body(root)
+        body, self.body_canvas = create_scrollable_body(root, fill_height=True)
         top = tk.Frame(body)
         top.pack(fill="x", padx=12, pady=(10, 4))
         self.status = WrappedLabel(top, text="", font=("Microsoft JhengHei UI", 11, "bold"))
@@ -461,8 +563,10 @@ class ReviewApp:
         self.summary_text = WrappedLabel(self.summary, text="", justify="left", anchor="w", wraplength=1120, font=("Microsoft JhengHei", 11))
         self.summary_text.pack(fill="x", padx=10, pady=8)
 
-        self.image = OccurrencePreview(body, height=260)
-        self.image.pack(fill="x", padx=12, pady=6)
+        self.image = OccurrencePreview(body, on_locate=self.body_canvas.reveal, on_failure=self._preview_failed,
+                                       on_layout=self.body_canvas.request_layout,
+                                       before_locate=self.body_canvas.flush_layout)
+        self.image.pack(fill="both", expand=True, padx=12, pady=6)
 
         self.tech_frame = tk.LabelFrame(body, text="技術資訊")
         self.tech_text = tk.Text(self.tech_frame, height=8, wrap="word", font=("Consolas", 9))
@@ -1069,6 +1173,12 @@ class ReviewApp:
         if self.image.load(entry):
             self._rendered_review_id = entry.get("review_id")
         elif can_confirm_current_expected(entry):
+            self.primary.config(state="disabled")
+
+    def _preview_failed(self):
+        self._rendered_review_id = None
+        entry = self.current()
+        if entry and can_confirm_current_expected(entry):
             self.primary.config(state="disabled")
 
 

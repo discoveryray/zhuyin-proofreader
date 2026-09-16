@@ -1,0 +1,625 @@
+from __future__ import annotations
+
+import _tkinter
+import copy
+import math
+from pathlib import Path
+import tempfile
+import time
+import tkinter as tk
+import unittest
+from unittest.mock import patch
+
+import fitz
+
+import review_display as display
+import review_gui as gui
+from test_review_visual_usability_v580 import create_visual_fixture
+from test_review_visual_corrective_v580 import descendants
+
+
+def settle(window):
+    """Let the real resize debounce run, including any resulting geometry events."""
+    until = time.monotonic() + 5
+    while time.monotonic() < until:
+        window.update()
+        previews = [widget for widget in descendants(window) if isinstance(widget, display.OccurrencePreview)]
+        if not any(widget._draw_pending or widget._render_pending or widget._locate_pending for widget in previews):
+            return
+        time.sleep(.01)
+    raise AssertionError("preview layout/render callbacks did not settle")
+
+
+def make_page(folder, *, rotation=0):
+    path = folder / f"sizing-{rotation}.pdf"
+    with fitz.open() as doc:
+        page = doc.new_page(width=300, height=600)
+        page.draw_rect(fitz.Rect(80, 290, 110, 320), color=(0, 0, 0), fill=(0, 0, 0))
+        # Fine, separated strokes reveal whether the original PDF is rerendered.
+        for x in (122, 123, 124, 125):
+            page.draw_line((x, 292), (x, 318), color=(0, 0, 0), width=.2)
+        page.set_rotation(rotation)
+        doc.save(path)
+    return {"pdf": str(path), "pdf_name": path.name, "physical_page": 1,
+            "x0": 80, "y0": 290, "x1": 130, "y1": 320,
+            "occurrence_id": "sizing-A", "review_id": "review-A"}
+
+
+class WidthRenderTests(unittest.TestCase):
+    def test_width_render_preserves_crop_rotation_pixels_and_input(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            # Known rotated rectangles for a 300x600 page and crop
+            # [50,230,160,380]. These do not call the production transform.
+            crops = {0: (50, 230, 160, 380), 90: (220, 50, 370, 160),
+                     180: (140, 220, 250, 370), 270: (230, 140, 380, 250)}
+            boxes = {0: (80, 290, 130, 320), 90: (280, 80, 310, 130),
+                     180: (170, 280, 220, 310), 270: (290, 170, 320, 220)}
+            for rotation in crops:
+                entry = make_page(folder, rotation=rotation)
+                before = copy.deepcopy(entry), Path(entry["pdf"]).read_bytes()
+                for width in (247, 1193):
+                    pix, target, _ = display.occurrence_preview(entry, padding=(30, 60), display_width=width)
+                    cx0, cy0, cx1, cy1 = crops[rotation]
+                    scale = width / (cx1 - cx0)
+                    self.assertLessEqual(abs(pix.width - width), 2)
+                    self.assertAlmostEqual(pix.height / pix.width, (cy1 - cy0) / (cx1 - cx0), delta=.012)
+                    expected_target = tuple(value * scale - origin for value, origin in
+                                            zip(boxes[rotation], (pix.x, pix.y, pix.x, pix.y)))
+                    for actual, expected in zip(target, expected_target):
+                        self.assertAlmostEqual(actual, expected, places=4)
+                    with fitz.open(entry["pdf"]) as doc:
+                        raw = doc[0].get_pixmap(matrix=fitz.Matrix(scale, scale), clip=fitz.Rect(crops[rotation]), alpha=False)
+                    self.assertEqual(pix.samples, raw.samples)
+                self.assertEqual((entry, Path(entry["pdf"]).read_bytes()), before)
+
+    def test_invalid_resolution_and_resource_limit_fail_before_allocation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            entry = make_page(Path(directory))
+            with patch.object(fitz.Page, "get_pixmap", side_effect=AssertionError("must not allocate")):
+                for width in (0, -10, float("nan"), float("inf"), 10000):
+                    with self.subTest(width=width), self.assertRaises(ValueError):
+                        display.occurrence_preview(entry, display_width=width)
+
+
+class PreviewSizingTkTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.root = tk.Tk()
+        cls.root.withdraw()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.root.destroy()
+
+    def setUp(self):
+        self.folder_context = tempfile.TemporaryDirectory()
+        self.folder = Path(self.folder_context.name)
+        self.window = tk.Toplevel(self.root)
+        self.window.geometry("1180x800+0+0")
+        self.errors = []
+        self.previous_handler = self.root.report_callback_exception
+        self.root.report_callback_exception = lambda *args: self.errors.append(args)
+
+    def tearDown(self):
+        self.window.destroy()
+        self.root.update()
+        self.root.report_callback_exception = self.previous_handler
+        self.folder_context.cleanup()
+        self.assertEqual(self.errors, [])
+
+    def assert_target_visible(self, preview, outer=None):
+        box = preview.canvas.coords(preview.canvas.find_withtag("target")[-1])
+        top = preview.canvas.winfo_rooty() + box[1] - preview.canvas.canvasy(0)
+        bottom = preview.canvas.winfo_rooty() + box[3] - preview.canvas.canvasy(0)
+        for viewport in (preview.canvas, outer) if outer is not None else (preview.canvas,):
+            self.assertGreaterEqual(top, viewport.winfo_rooty() - 1)
+            self.assertLessEqual(bottom, viewport.winfo_rooty() + viewport.winfo_height() + 1)
+
+    def test_main_fills_remaining_space_width_and_switch_reveals_target(self):
+        create_visual_fixture(self.folder)
+        app = gui.ReviewApp(self.window, self.folder)
+        self.window.geometry("1440x960+0+0")
+        settle(self.window)
+        self.assertGreater(app.image.canvas.winfo_height(), 260)
+        self.assertGreater(app.image.photo.width(), self.window.winfo_width() * .9)
+        self.assertLessEqual(abs(app.image.photo.width() - (app.image.canvas.winfo_width() - 16)), 1)
+        # The preview uses the rest of the body, ending just above the footer.
+        body_bottom = app.body_canvas.winfo_rooty() + app.body_canvas.winfo_height()
+        self.assertAlmostEqual(app.image.winfo_rooty() + app.image.winfo_height(), body_bottom - 6, delta=2)
+        self.assert_target_visible(app.image, app.body_canvas)
+        for size in ("760x520", "1180x800", "1440x960"):
+            self.window.geometry(size)
+            settle(self.window)
+            app.image.canvas.yview_moveto(1)
+            app.next()
+            settle(self.window)
+            self.assert_target_visible(app.image, app.body_canvas)
+            self.assertLessEqual(app.primary.winfo_rooty() + app.primary.winfo_height(),
+                                 self.window.winfo_rooty() + self.window.winfo_height())
+
+    def test_pdf_rerenders_after_resize_manual_scroll_stays_and_events_converge(self):
+        preview = display.OccurrencePreview(self.window)
+        preview.pack(fill="both", expand=True)
+        entry = make_page(self.folder)
+        self.window.geometry("650x300")
+        self.window.update()
+        with patch.object(display, "occurrence_preview", wraps=display.occurrence_preview) as render:
+            self.assertTrue(preview.load(entry, padding=(30, 180)))
+            settle(self.window)
+            self.assert_target_visible(preview)
+            initial_width = preview.pixmap.width
+            preview.canvas.yview_moveto(.12)
+            first = preview.canvas.yview()[0]
+            initial_calls = render.call_count
+            render_timers = set()
+            native_after = preview.after
+
+            def record_after(delay, callback=None, *args):
+                timer = native_after(delay, callback, *args)
+                if callback == preview._render:
+                    self.assertEqual(delay, 120)
+                    render_timers.add(timer)
+                return timer
+
+            with patch.object(preview, "after", side_effect=record_after):
+                for width in (700, 750, 850, 980, 1100):
+                    previous_width = preview.canvas.winfo_width()
+                    self.window.geometry(f"{width}x300")
+                    # Dispatch real native Configure and idle drawing events,
+                    # but no timers during this explicitly constructed burst.
+                    # Full update() can span a legitimate 120ms quiet interval.
+                    flags = _tkinter.WINDOW_EVENTS | _tkinter.IDLE_EVENTS | _tkinter.DONT_WAIT
+                    for _ in range(200):
+                        if not self.window.tk.dooneevent(flags):
+                            break
+                    else:
+                        self.fail("resize window/idle events did not converge")
+                    self.assertGreater(preview.canvas.winfo_width(), previous_width)
+                    self.assertEqual(render.call_count, initial_calls)
+                    live = set(self.root.tk.splitlist(self.root.tk.call("after", "info")))
+                    pending = preview._render_pending
+                    self.assertIsNotNone(pending)
+                    # Includes every registration, even multiple draws inside
+                    # one idle cycle: lost older callbacks cannot go unnoticed.
+                    self.assertIn(pending, render_timers)
+                    self.assertEqual(render_timers & live, {pending})
+            settle(self.window)
+            self.assertEqual(render.call_count, initial_calls + 1)
+            self.assertEqual(render.call_args.kwargs["display_width"], preview.canvas.winfo_width() - 16)
+            self.assertFalse(render_timers & set(self.root.tk.splitlist(self.root.tk.call("after", "info"))))
+            self.assertGreater(preview.pixmap.width, initial_width * 1.5)
+            self.assertLessEqual(abs(preview.pixmap.width - preview.photo.width()), 2)
+            self.assertAlmostEqual(preview.canvas.yview()[0], first, delta=.025)
+            stable = (preview.winfo_height(), preview.canvas.yview(), render.call_count)
+            settle(self.window)
+            self.assertEqual(stable, (preview.winfo_height(), preview.canvas.yview(), render.call_count))
+            # Subsequent rerenders use the immutable display snapshot.
+            entry["physical_page"] = 99
+            self.window.geometry("1040x300")
+            settle(self.window)
+            self.assertIsNotNone(preview.pixmap)
+
+    def test_wide_short_first_and_next_have_full_inner_outer_target_and_context(self):
+        self.exercise_wide_short_first_and_next()
+
+    def test_wide_short_first_and_next_with_constrained_window_manager(self):
+        self.window.maxsize(1028, 768)
+        self.exercise_wide_short_first_and_next()
+        self.assertLessEqual(self.window.winfo_width(), 1028)
+
+    def exercise_wide_short_first_and_next(self):
+        create_visual_fixture(self.folder)
+        app = gui.ReviewApp(self.window, self.folder)
+        self.window.geometry("1540x520")
+        settle(self.window)
+        snapshots = []
+        for next_item in (False, True):
+            if next_item:
+                app.next()
+            else:
+                app.show()
+            settle(self.window)
+            preview, outer = app.image, app.body_canvas
+            self.assert_target_visible(preview, outer)
+            box = preview.canvas.coords(preview.canvas.find_withtag("target")[-1])
+            # Independent fixture dimensions: first crop 237x232, next
+            # same-character crop 337x232; both target bboxes are 37x27.
+            crop_width = 337 if next_item else 237
+            expected_target_height = (preview.canvas.winfo_width() - 16) * 27 / crop_width + 6
+            self.assertAlmostEqual(box[3] - box[1], expected_target_height, delta=1)
+            self.assertGreaterEqual(preview.canvas.winfo_height(), math.ceil(expected_target_height) + 38)
+            self.assertAlmostEqual(preview.photo.height() / preview.photo.width(), 232 / crop_width, delta=.005)
+            self.assertLessEqual(abs(preview.photo.width() - (preview.canvas.winfo_width() - 16)), 1)
+            # A geometry request can be capped by the window manager. A
+            # smaller width also reduces the target's required height, so
+            # ordinary content may fit without outer scrolling.
+            content = preview.master
+            self.assertEqual(content.winfo_height(), max(outer.winfo_height(), content.winfo_reqheight()))
+            self.assertEqual(outer.bbox("all")[3], content.winfo_height())
+            self.assertLessEqual(abs(preview.pixmap.width - preview.photo.width()), 2)
+            top = preview.canvas.winfo_rooty() + box[1] - preview.canvas.canvasy(0)
+            bottom = preview.canvas.winfo_rooty() + box[3] - preview.canvas.canvasy(0)
+            for viewport in (preview.canvas, outer):
+                self.assertGreaterEqual(top - viewport.winfo_rooty(), 18)
+                self.assertGreaterEqual(viewport.winfo_rooty() + viewport.winfo_height() - bottom, 18)
+            self.assertLessEqual(app.primary.winfo_rooty() + app.primary.winfo_height(),
+                                 self.window.winfo_rooty() + self.window.winfo_height())
+            snapshots.append(int(preview.canvas.cget("height")))
+            stable = (preview.winfo_height(), preview.canvas.winfo_height(), outer.bbox("all"), outer.yview())
+            for _ in range(4):
+                preview._schedule_draw()
+                settle(self.window)
+                self.assertEqual(stable, (preview.winfo_height(), preview.canvas.winfo_height(), outer.bbox("all"), outer.yview()))
+        self.assertLess(snapshots[1], snapshots[0], "next target must reduce the requested minimum, not accumulate height")
+        # Extra technical content remains reachable without undoing manual view.
+        app.image.canvas.yview_moveto(.2)
+        before = app.image.canvas.yview()[0]
+        app.toggle_tech()
+        settle(self.window)
+        self.assertAlmostEqual(app.image.canvas.yview()[0], before, delta=.003)
+        app.body_canvas.yview_moveto(1)
+        self.window.update()
+        self.assertLessEqual(app.tech_text.winfo_rooty() + app.tech_text.winfo_height(),
+                             app.body_canvas.winfo_rooty() + app.body_canvas.winfo_height())
+        app.toggle_tech()
+        for size in ("760x520", "1540x950", "1540x520"):
+            self.window.geometry(size)
+            app.show()
+            settle(self.window)
+            self.assert_target_visible(app.image, app.body_canvas)
+        self.assertEqual(int(app.image.canvas.cget("height")), snapshots[1])
+        app.image.clear()
+        self.assertEqual(int(app.image.canvas.cget("height")), 120)
+
+    def test_ordinary_first_and_next_fit_outer_with_sufficient_allocated_height(self):
+        create_visual_fixture(self.folder)
+        app = gui.ReviewApp(self.window, self.folder)
+        for limit in (self.window.maxsize(), (1028, 768)):
+            with self.subTest(window_limit=limit):
+                self.window.maxsize(*limit)
+                self.window.geometry("1540x950")
+                app.index = 0
+                for next_item in (False, True):
+                    app.next() if next_item else app.show()
+                    settle(self.window)
+                    preview, outer = app.image, app.body_canvas
+                    self.assertLessEqual(preview.master.winfo_reqheight(), outer.winfo_height())
+                    self.assertEqual(outer.bbox("all")[3], outer.winfo_height())
+                    self.assertEqual(outer.yview(), (0.0, 1.0))
+                    self.assert_target_visible(preview, outer)
+
+    def test_explicit_outer_overflow_reveals_first_and_next_in_both_window_limits(self):
+        create_visual_fixture(self.folder)
+        app = gui.ReviewApp(self.window, self.folder)
+        default_limit = self.window.maxsize()
+        self.window.geometry("1540x520")
+        settle(self.window)
+        # Force overflow from a measured viewport, independently of monitor
+        # width or font wrapping. The normal summary and preview add further
+        # height; neither the PDF, target nor preview allocation is changed.
+        spacer = tk.Frame(app.summary, height=app.body_canvas.winfo_height())
+        spacer.pack(fill="x")
+        for limit in (default_limit, (1028, 768)):
+            with self.subTest(window_limit=limit):
+                self.window.maxsize(*limit)
+                self.window.geometry("1540x520")
+                app.index = 0
+                for next_item in (False, True):
+                    app.next() if next_item else app.show()
+                    settle(self.window)
+                    preview, outer = app.image, app.body_canvas
+                    self.assertGreaterEqual(spacer.winfo_height(), outer.winfo_height())
+                    self.assertGreater(preview.master.winfo_reqheight(), outer.winfo_height())
+                    self.assertEqual(outer.bbox("all")[3], preview.master.winfo_height())
+                    self.assertGreater(outer.bbox("all")[3], outer.winfo_height())
+                    self.assertGreater(outer.yview()[0], 0)
+                    self.assert_target_visible(preview, outer)
+                    box = preview.canvas.coords(preview.canvas.find_withtag("target")[-1])
+                    top = preview.canvas.winfo_rooty() + box[1] - preview.canvas.canvasy(0)
+                    bottom = preview.canvas.winfo_rooty() + box[3] - preview.canvas.canvasy(0)
+                    for viewport in (preview.canvas, outer):
+                        self.assertGreaterEqual(top - viewport.winfo_rooty(), 18)
+                        self.assertGreaterEqual(viewport.winfo_rooty() + viewport.winfo_height() - bottom, 18)
+                    self.assertLessEqual(abs(preview.photo.width() - (preview.canvas.winfo_width() - 16)), 1)
+                    outer.yview_moveto(0)
+                    self.window.update()
+                    self.assertGreaterEqual(app.summary.winfo_rooty(), outer.winfo_rooty())
+
+    def test_near_viewport_height_target_uses_origin_between_24_pixel_steps(self):
+        manifest = create_visual_fixture(self.folder)
+        preview = display.OccurrencePreview(self.window)
+        preview.pack(fill="both", expand=True)
+        self.window.geometry("1499x400")
+        self.window.update()
+        entry = manifest["records"][2]
+        preview.load(entry)
+        settle(self.window)
+        box = preview.canvas.coords(preview.canvas.find_withtag("target")[-1])
+        canvas_height = math.ceil(box[3] - box[1]) + 5
+        # Constrain the host so even a requested minimum cannot mask the exact
+        # positioning case. The actual target fits, with less than 6px spare.
+        self.window.geometry(f"1499x{canvas_height + preview.notice.winfo_height()}")
+        settle(self.window)
+        preview.load(entry)
+        settle(self.window)
+        self.assertEqual(preview.canvas.winfo_height(), canvas_height)
+        box = preview.canvas.coords(preview.canvas.find_withtag("target")[-1])
+        valid_low, valid_high = box[3] - canvas_height, box[1]
+        self.assertGreater(math.ceil(valid_low / 24) * 24, valid_high,
+                           "fixture must require an origin unavailable on the old 24px grid")
+        self.assertGreaterEqual(preview.canvas.canvasy(0), valid_low)
+        self.assertLessEqual(preview.canvas.canvasy(0), valid_high)
+        self.assert_target_visible(preview)
+        # Pixel placement does not turn wheel or scrollbar arrow input into a
+        # one-pixel crawl: both still move exactly 24 pixels per unit.
+        before = preview.canvas.canvasy(0)
+        preview.canvas.event_generate("<MouseWheel>", delta=-120)
+        self.window.update()
+        self.assertEqual(preview.canvas.canvasy(0) - before, 24)
+        preview.tk.call(preview.scrollbar.cget("command"), "scroll", "-1", "units")
+        self.window.update()
+        self.assertEqual(preview.canvas.canvasy(0), before)
+
+    def test_width_only_resize_reconciles_requests_before_show_and_next_placement(self):
+        create_visual_fixture(self.folder)
+        app = gui.ReviewApp(self.window, self.folder)
+        content = app.image.master
+        for operation in ("show", "next"):
+            for wait_before_operation in (False, True):
+                with self.subTest(operation=operation, wait_before_operation=wait_before_operation):
+                    app.index = 0
+                    self.window.geometry("760x520")
+                    app.show()
+                    settle(self.window)
+                    for width in (1540, 760, 1540, 760):
+                        self.window.geometry(f"{width}x520")
+                        if wait_before_operation:
+                            settle(self.window)
+                        if operation == "next":
+                            app.next()
+                        else:
+                            app.show()
+                        settle(self.window)
+                        preview, outer = app.image, app.body_canvas
+                        self.assertEqual(self.window.winfo_height(), 520)
+                        self.assertGreaterEqual(content.winfo_height(), content.winfo_reqheight())
+                        self.assertGreaterEqual(preview.canvas.winfo_height(), int(preview.canvas.cget("height")))
+                        self.assertEqual(outer.bbox("all")[3], content.winfo_height())
+                        self.assert_target_visible(preview, outer)
+                        box = preview.canvas.coords(preview.canvas.find_withtag("target")[-1])
+                        top = preview.canvas.winfo_rooty() + box[1] - preview.canvas.canvasy(0)
+                        bottom = preview.canvas.winfo_rooty() + box[3] - preview.canvas.canvasy(0)
+                        for viewport in (preview.canvas, outer):
+                            self.assertGreaterEqual(top - viewport.winfo_rooty(), 18)
+                            self.assertGreaterEqual(viewport.winfo_rooty() + viewport.winfo_height() - bottom, 18)
+                        self.assertLessEqual(app.primary.winfo_rooty() + app.primary.winfo_height(),
+                                             self.window.winfo_rooty() + self.window.winfo_height())
+                        stable = (content.winfo_reqheight(), content.winfo_height(),
+                                  preview.canvas.winfo_height(), outer.bbox("all"), outer.yview())
+                        events = []
+                        binding = content.bind("<Configure>", lambda event: events.append(event.height), add="+")
+                        for _ in range(3):
+                            preview._schedule_draw()
+                            outer.request_layout()
+                            settle(self.window)
+                            self.assertEqual(stable, (content.winfo_reqheight(), content.winfo_height(),
+                                                     preview.canvas.winfo_height(), outer.bbox("all"), outer.yview()))
+                        content.unbind("<Configure>", binding)
+                        self.assertLessEqual(len(events), 2)
+                        self.assertIsNone(outer._layout_pending)
+
+    def test_width_only_resize_long_summary_technical_and_manual_scroll(self):
+        create_visual_fixture(self.folder)
+        app = gui.ReviewApp(self.window, self.folder)
+        app.current()["source_record"]["所在行"] = "原始位置的長句與附近文字必須可以完整查看。" * 18
+        app.toggle_tech()
+        self.window.geometry("760x520")
+        app.show()
+        settle(self.window)
+        for width in (1540, 760):
+            self.window.geometry(f"{width}x520")
+            app.show()
+            settle(self.window)
+            self.assert_target_visible(app.image, app.body_canvas)
+            self.assertGreaterEqual(app.image.master.winfo_height(), app.image.master.winfo_reqheight())
+            app.body_canvas.yview_moveto(1)
+            self.window.update()
+            self.assertGreaterEqual(app.tech_text.winfo_rooty(), app.body_canvas.winfo_rooty())
+            self.assertLessEqual(app.tech_text.winfo_rooty() + app.tech_text.winfo_height(),
+                                 app.body_canvas.winfo_rooty() + app.body_canvas.winfo_height())
+        app.image._scroll("moveto", .1)
+        before = app.image.canvas.yview()[0]
+        for width in (1540, 760, 1540):
+            self.window.geometry(f"{width}x520")
+            settle(self.window)
+            self.assertFalse(app.image._needs_locate)
+            self.assertAlmostEqual(app.image.canvas.yview()[0], before, delta=.01)
+            self.assertGreaterEqual(app.image.master.winfo_height(), app.image.master.winfo_reqheight())
+        self.assertIsNone(app.body_canvas._layout_pending)
+
+    def test_body_reconciliation_callbacks_cancel_with_any_owned_surface(self):
+        for target in ("content", "canvas", "holder", "window"):
+            host = tk.Toplevel(self.root)
+            body, outer = gui.create_scrollable_body(host, fill_height=True)
+            tk.Label(body, text="request propagation").pack()
+            outer.request_layout()
+            pending = outer._layout_pending
+            self.assertIsNotNone(pending)
+            {"content": body, "canvas": outer, "holder": outer.master, "window": host}[target].destroy()
+            self.assertNotIn(pending, self.root.tk.splitlist(self.root.tk.call("after", "info")))
+            self.assertIsNone(outer._layout_pending)
+            self.root.update()
+            if host.winfo_exists():
+                host.destroy()
+
+    def test_long_summary_can_scroll_then_returns_remaining_space_to_preview(self):
+        create_visual_fixture(self.folder)
+        app = gui.ReviewApp(self.window, self.folder)
+        self.window.geometry("760x520")
+        settle(self.window)
+        source = app.current()["source_record"]
+        original = source["所在行"]
+        source["所在行"] = "這是隔離測試的長句，所有內容都必須可以查看。" * 30
+        app.show()
+        settle(self.window)
+        self.assertGreater(app.body_canvas.bbox("all")[3], app.body_canvas.winfo_height())
+        self.assert_target_visible(app.image, app.body_canvas)
+        app.body_canvas.yview_moveto(0)
+        self.window.update()
+        self.assertGreaterEqual(app.summary.winfo_rooty(), app.body_canvas.winfo_rooty())
+        source["所在行"] = original
+        self.window.geometry("1440x960")
+        app.show()
+        settle(self.window)
+        self.assertGreater(app.image.canvas.winfo_height(), 260)
+        self.assertEqual(app.body_canvas.yview(), (0.0, 1.0))
+
+    def test_inner_wheel_consumes_once_and_boundary_hands_off_to_long_body(self):
+        body, outer = gui.create_scrollable_body(self.window)
+        tk.Frame(body, height=300).pack(fill="x")
+        preview = display.OccurrencePreview(body, height=180)
+        preview.pack(fill="x")
+        tk.Frame(body, height=900).pack(fill="x")
+        preview.load(make_page(self.folder), padding=(30, 180))
+        self.window.geometry("800x500")
+        settle(self.window)
+        outer.yview_moveto(.1)
+        preview.canvas.yview_moveto(.1)
+        before_outer, before_inner = outer.yview(), preview.canvas.yview()
+        preview.canvas.event_generate("<MouseWheel>", delta=-120)
+        self.window.update()
+        self.assertEqual(outer.yview(), before_outer)
+        self.assertGreater(preview.canvas.yview()[0], before_inner[0])
+        preview.canvas.yview_moveto(1)
+        preview.canvas.event_generate("<MouseWheel>", delta=-120)
+        self.window.update()
+        self.assertGreater(outer.yview()[0], before_outer[0])
+
+    def test_manual_scroll_cancels_pending_initial_target_placement(self):
+        preview = display.OccurrencePreview(self.window)
+        preview.pack(fill="both", expand=True)
+        self.window.geometry("800x300")
+        self.window.update()
+        for use_scrollbar in (False, True):
+            preview.load(make_page(self.folder), padding=(30, 180))
+            self.assertIsNotNone(preview._locate_pending)
+            if use_scrollbar:
+                # Execute the actual registered scrollbar callback.
+                preview.tk.call(preview.scrollbar.cget("command"), "moveto", .1)
+            else:
+                preview.canvas.event_generate("<MouseWheel>", delta=-120)
+            self.assertIsNone(preview._locate_pending)
+            fraction = preview.canvas.yview()[0]
+            settle(self.window)
+            self.assertAlmostEqual(preview.canvas.yview()[0], fraction, delta=.01)
+
+    def test_actual_expanded_samples_first_target_and_form_reachable(self):
+        self.exercise_actual_expanded_samples()
+
+    def test_actual_expanded_samples_with_constrained_window_manager(self):
+        self.exercise_actual_expanded_samples(window_limit=(1028, 768))
+
+    def exercise_actual_expanded_samples(self, window_limit=None):
+        first = make_page(self.folder)
+        second = {**first, "occurrence_id": "sizing-B", "review_id": "review-B", "y0": 410, "y1": 440}
+        dialog = gui.ActualReadingDialog(self.window, first, {"members": [first, second]}, self.folder, wait=False)
+        try:
+            if window_limit is not None:
+                dialog.maxsize(*window_limit)
+            dialog.geometry("1180x800")
+            settle(dialog)
+            if window_limit is not None:
+                self.assertLessEqual(dialog.winfo_width(), window_limit[0])
+                self.assertLessEqual(dialog.winfo_height(), window_limit[1])
+            self.assert_target_visible(dialog.previews[0], dialog.body_canvas)
+            for preview in dialog.previews:
+                available_width = preview.canvas.winfo_width() - 16
+                # Independent source geometry: page 300x600, crop 225x150
+                # (left clipped at x=0), target 50x30 for both samples.
+                self.assertLessEqual(abs(preview.photo.width() - available_width), 1)
+                self.assertAlmostEqual(preview.photo.height() / preview.photo.width(), 150 / 225, delta=.005)
+                self.assertLessEqual(abs(preview.pixmap.width - preview.photo.width()), 2)
+                self.assertEqual(preview.canvas.winfo_height(), preview.photo.height() + 16)
+                box = preview.canvas.coords(preview.canvas.find_withtag("target")[-1])
+                self.assertAlmostEqual(box[2] - box[0], available_width * 50 / 225 + 6, delta=1)
+                self.assertAlmostEqual(box[3] - box[1], available_width * 30 / 225 + 6, delta=1)
+                self.assertEqual(preview.canvas.yview(), (0.0, 1.0))
+            first_scroll = dialog.body_canvas.yview()
+            dialog.previews[0].canvas.event_generate("<MouseWheel>", delta=-120)
+            dialog.update()
+            self.assertGreater(dialog.body_canvas.yview()[0], first_scroll[0])
+            # Every sample's complete image can be reached through the one form.
+            preview = dialog.previews[1]
+            box = preview.canvas.coords(preview.canvas.find_withtag("target")[-1])
+            dialog.body_canvas.reveal(preview.canvas, box[1], box[3])
+            dialog.update()
+            self.assert_target_visible(preview, dialog.body_canvas)
+            for size in ("720x520", "1180x800"):
+                dialog.geometry(size)
+                settle(dialog)
+                dialog.body_canvas.yview_moveto(1)
+                dialog.update()
+                note = next(widget for widget in descendants(dialog)
+                            if isinstance(widget, tk.Entry) and widget.cget("textvariable") == str(dialog.note))
+                self.assertGreaterEqual(note.winfo_rooty(), dialog.body_canvas.winfo_rooty())
+                self.assertLessEqual(note.winfo_rooty() + note.winfo_height(),
+                                     dialog.body_canvas.winfo_rooty() + dialog.body_canvas.winfo_height())
+                before = dialog.body_canvas.yview()[0]
+                note.event_generate("<MouseWheel>", delta=120)
+                dialog.update()
+                self.assertLess(dialog.body_canvas.yview()[0], before)
+        finally:
+            dialog.destroy()
+
+    def test_resize_read_failure_clears_and_revokes_confirmation(self):
+        manifest = create_visual_fixture(self.folder)
+        app = gui.ReviewApp(self.window, self.folder)
+        settle(self.window)
+        with patch.object(display, "occurrence_preview", side_effect=OSError("isolated resize failure")):
+            self.window.geometry("1000x700")
+            settle(self.window)
+        self.assertIsNone(app._rendered_review_id)
+        self.assertIsNone(app.image.photo)
+        self.assertEqual(app.image.canvas.find_all(), ())
+        self.assertEqual(app.primary.cget("state"), "disabled")
+        entry = manifest["records"][0]
+        dialog = gui.ActualReadingDialog(self.window, entry, {"members": [entry]}, self.folder, wait=False)
+        try:
+            settle(dialog)
+            with patch.object(display, "occurrence_preview", side_effect=OSError("isolated sample failure")):
+                dialog.geometry("800x600")
+                settle(dialog)
+            self.assertEqual(dialog.sample_available, [False])
+            self.assertFalse(dialog.checked_vars[0].get())
+            dialog.checked_vars[0].set(True)
+            dialog.reading.set("ㄅ")
+            with patch.object(gui.messagebox, "showerror"):
+                dialog.submit()
+            self.assertIsNone(dialog.result)
+        finally:
+            dialog.destroy()
+
+    def test_all_owned_resize_and_locate_callbacks_cancel_on_destruction(self):
+        for target in ("frame", "canvas", "parent"):
+            parent = tk.Frame(self.window)
+            parent.pack(fill="both", expand=True)
+            preview = display.OccurrencePreview(parent)
+            preview.pack(fill="both", expand=True)
+            self.window.update()
+            preview.load(make_page(self.folder))
+            preview._render_width = None
+            preview._draw()
+            preview._schedule_draw()
+            owned = [preview._draw_pending, preview._render_pending, preview._locate_pending]
+            self.assertTrue(all(owned))
+            {"frame": preview, "canvas": preview.canvas, "parent": parent}[target].destroy()
+            pending = self.root.tk.splitlist(self.root.tk.call("after", "info"))
+            self.assertFalse(set(owned) & set(pending))
+            settle(self.window)
+            if parent.winfo_exists():
+                parent.destroy()
+
+
+if __name__ == "__main__":
+    unittest.main()
