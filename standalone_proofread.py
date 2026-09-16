@@ -46,6 +46,7 @@ from occurrence_ledger import (
     COMPARABLE_TERMINAL_STATES,
     CONFIRMATION_GATES,
     EXCLUDED_STATES,
+    HARD_BLOCKING_STATES,
     LEDGER_SCHEMA_VERSION,
     NON_TERMINAL_STATES,
     PIPELINE_BLOCKED,
@@ -106,6 +107,9 @@ from actual_review import (
     actual_workbook_global_exact_dependencies,
     load_manual_actual_staging,
     stage_manual_actual_group,
+    _revalidate_staged_manual_actual_group,
+    _resolve_pdf_path,
+    _staging_id_list,
 )
 from global_exact_glyph_library import (
     GlobalExactGlyphRepository,
@@ -3415,11 +3419,65 @@ def export_actual_pending_for_gpt(output_dir: Path) -> Path | None:
     )
 
 
-def manual_actual_staging_summary(output_dir: Path) -> dict[str, Any]:
-    """Return a read-only summary of durable, not-yet-authoritative actual intent."""
-    staging = load_manual_actual_staging(project_actual_evidence_root(Path(output_dir)))
+def _manual_actual_snapshot_ledger(manifest, db, ledger):
+    """Recover only the known sealed state before a verified expected-only event.
+
+    Manual group snapshots historically include the composite workflow state.
+    Expected-only edits may change that state without changing actual. Use one
+    provable sealed projection, never guessed historical states or a new hash
+    contract. Hard blocks, exclusions and comparison confirmations stay live.
+    """
+    expected_events = {rid: event for rid, event in db.get("events", {}).items()
+                       if event.get("action") in {"補建expected證據", "解決expected證據"}}
+    if not expected_events:
+        return ledger
+    base = {row["review_id"]: row for row in materialize_ledger(manifest, normalize_db({}))}
+    projected = []
+    for row in ledger:
+        event = expected_events.get(row["review_id"])
+        original = base.get(row["review_id"])
+        if (event and original and row.get("state") not in HARD_BLOCKING_STATES | EXCLUDED_STATES
+                and original.get("state") not in HARD_BLOCKING_STATES | EXCLUDED_STATES
+                and row.get("blocking_state") not in HARD_BLOCKING_STATES
+                and original.get("blocking_state") not in HARD_BLOCKING_STATES
+                and not row.get("review_event_replay_status")):
+            replayed = _apply_review_event(original, event)
+            if replayed != row or actual_confirmation_snapshot(original) != actual_confirmation_snapshot(row):
+                raise ValueError("manual actual snapshot 無法證明是獨立 expected 變更")
+            # The whole source record (PDF/identity/coordinates/exact metadata)
+            # must remain identical, not just its visible reading.
+            if original.get("source_record") != row.get("source_record"):
+                raise ValueError("manual actual snapshot source_record 已變更")
+            projected.append({**row, "state": original["state"]})
+        else:
+            projected.append(row)
+    return projected
+
+
+def _validate_manual_actual_group_sources(output_dir, live_groups):
+    """Reprove the source bytes before retaining any prior visual checks."""
+    checked_sources = set()
+    for live in live_groups:
+        for member in live["members"]:
+            path = _resolve_pdf_path(member, output_dir)
+            wanted = str(member.get("pdf_sha256") or "")
+            key = (path, wanted)
+            if key not in checked_sources:
+                if not wanted or sha256_file(path) != wanted:
+                    raise ValueError(f"SOURCE_INVALID：actual 暫存來源 PDF 已變更：{path.name}")
+                checked_sources.add(key)
+
+
+def manual_actual_staging_summary(output_dir: Path, *, ledger=None) -> dict[str, Any]:
+    """Read durable intent; a GUI ledger requests live validation before hiding.
+
+    Without ``ledger`` this remains the historical storage-only inventory. It
+    cannot attest that a checked occurrence is still actionable/applicable.
+    """
+    output_dir = Path(output_dir)
+    staging = load_manual_actual_staging(project_actual_evidence_root(output_dir))
     groups = list(staging.get("staged_groups") or [])
-    return {
+    summary = {
         "staged_group_count": len(groups),
         "staged_group_ids": [str(group.get("group_id") or "") for group in groups],
         "staged_member_occurrence_ids": sorted({
@@ -3435,6 +3493,28 @@ def manual_actual_staging_summary(output_dir: Path) -> dict[str, Any]:
             if str(occurrence_id)
         }),
     }
+    if ledger is not None:
+        try:
+            summary["actual_recovery_pending"] = committed_project_recovery(project_actual_evidence_root(output_dir)) is not None
+            if not groups:
+                return summary
+            manifest = json_load_strict(output_dir / "校對工作階段.json")
+            validate_manifest_integrity(manifest)
+            validate_output_artifact_hashes(manifest)
+            # Strict reading, not load_or_initialize_db: summary never writes.
+            db = normalize_db(json_load_strict(output_dir / "人工判定資料庫.json"))
+            current = materialize_ledger(manifest, db)
+            if current != ledger:
+                raise ValueError("工作階段已變更，請重新開啟人工校對畫面")
+            projected = _manual_actual_snapshot_ledger(manifest, db, current)
+            live_groups = _current_live_groups_for_staged_manual_actual(current, groups, snapshot_ledger=projected)
+            for staged, live in zip(sorted(groups, key=lambda item: item["group_id"]), live_groups):
+                _revalidate_staged_manual_actual_group(staged, live)
+            _validate_manual_actual_group_sources(output_dir, live_groups)
+        except Exception as exc:
+            summary["staging_error"] = str(exc)
+            summary["staged_checked_occurrence_ids"] = []
+    return summary
 
 
 def stage_manual_actual_correction(
@@ -3457,12 +3537,33 @@ def stage_manual_actual_correction(
     )
     if entry is None:
         raise ValueError("找不到目前 review_id；請重新開啟人工校對畫面")
-    group = build_actual_group_for_entry(ledger, entry)
+    snapshot_ledger = _manual_actual_snapshot_ledger(manifest, db, ledger)
+    snapshot_entry = next(row for row in snapshot_ledger if row["review_id"] == entry["review_id"])
+    group = build_actual_group_for_entry(snapshot_ledger, snapshot_entry)
+    # Keep a historical current-state snapshot when it is exactly provable.
+    # An unknown older snapshot is intentionally still rejected by stage/upsert.
+    existing = load_manual_actual_staging(project_actual_evidence_root(output_dir))["staged_groups"]
+    prior = next((item for item in existing if item["group_id"] == group["group_id"]), None)
+    if prior:
+        group = _current_live_groups_for_staged_manual_actual(ledger, [prior], snapshot_ledger=snapshot_ledger)[0]
     checked_ids = (
         [str(entry.get("occurrence_id") or "")]
         if checked_occurrence_ids is None
         else list(checked_occurrence_ids)
     )
+    if prior:
+        # The lower-level API intentionally replaces a whole group's decision.
+        # This GUI service instead accumulates individually checked peers, but
+        # only after proving the retained snapshot, sources and same reading.
+        if canonical_bopomofo(reading) != prior["reading"]:
+            raise ValueError("此字形已有不同讀音的 actual 暫存；未覆寫既有確認。請先釐清既有暫存，再重新核對本筆。")
+        _validate_manual_actual_group_sources(output_dir, [group])
+        checked_ids = _staging_id_list(checked_ids, "input.checked_occurrence_ids")
+        if not checked_ids:
+            raise ValueError("manual actual staging checked_occurrence_ids 不得為空")
+        # Keep unknown IDs for the existing writer's rejection, rather than
+        # filtering them away when constructing the union in member order.
+        checked_ids = list(dict.fromkeys(prior["checked_occurrence_ids"] + checked_ids))
     staged = stage_manual_actual_group(
         project_actual_evidence_root(output_dir),
         group,
@@ -3651,6 +3752,7 @@ def apply_manual_actual_correction(
 def _current_live_groups_for_staged_manual_actual(
     ledger: list[dict[str, Any]],
     staged_decisions: list[Mapping[str, Any]],
+    *, snapshot_ledger=None,
 ) -> list[dict[str, Any]]:
     """Rebuild every Phase 2A live group from the current materialized ledger."""
     by_occurrence_id: dict[str, dict[str, Any]] = {}
@@ -3677,7 +3779,17 @@ def _current_live_groups_for_staged_manual_actual(
                 "manual actual batch staged group 在目前 ledger 找不到任何 member："
                 f"{staged.get('group_id') or ''}；整批拒絕"
             )
-        live_groups.append(build_actual_group_for_entry(ledger, current_member))
+        live = build_actual_group_for_entry(ledger, current_member)
+        if snapshot_ledger is not None:
+            try:
+                _revalidate_staged_manual_actual_group(staged, live)
+            except ValueError:
+                projected_member = next(row for row in snapshot_ledger
+                                        if row["occurrence_id"] == current_member["occurrence_id"])
+                projected = build_actual_group_for_entry(snapshot_ledger, projected_member)
+                _revalidate_staged_manual_actual_group(staged, projected)
+                live = projected
+        live_groups.append(live)
     return live_groups
 
 
@@ -3759,6 +3871,7 @@ def apply_staged_manual_actual_corrections(output_dir: Path) -> dict[str, Any]:
     live_groups = _current_live_groups_for_staged_manual_actual(
         pre_refresh_ledger,
         frozen_staged_decisions,
+        snapshot_ledger=_manual_actual_snapshot_ledger(manifest, db, pre_refresh_ledger),
     )
 
     if frozen_staged_decisions:

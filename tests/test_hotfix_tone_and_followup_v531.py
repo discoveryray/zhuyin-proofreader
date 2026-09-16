@@ -44,7 +44,7 @@ class TonePositionCanonicalizationTests(unittest.TestCase):
 
 
 class ExpectedResolutionFollowupTests(unittest.TestCase):
-    def _make_app(self, updated_entry):
+    def _make_app(self, updated_entry, *, refresh_succeeded=True):
         app = object.__new__(ReviewApp)
         app.root = None
         original = {
@@ -57,9 +57,16 @@ class ExpectedResolutionFollowupTests(unittest.TestCase):
         }
         app.current = lambda: original
         app.records = [updated_entry] if updated_entry is not None else []
+        app.staging_summary = {"staged_group_count": 0, "staging_error": ""}
+        app.staged_checked_occurrence_ids = set()
 
         def save_event(_entry, _event):
             app._last_event_saved = True
+            # A saved PASS entry still exists even after leaving the pending list.
+            app.last_saved_expected = updated_entry if updated_entry is not None else {
+                **original, "state": "PASS", "expected_set": ["ㄒㄧ"],
+            }
+            app._last_event_refreshed = refresh_succeeded
             app.records = [updated_entry] if updated_entry is not None else []
 
         app.save_event = save_event
@@ -90,6 +97,25 @@ class ExpectedResolutionFollowupTests(unittest.TestCase):
         warning.assert_called_once()
         self.assertIn("ㄒㄧ", warning.call_args.args[1])
         self.assertIn("˙ㄒㄧ", warning.call_args.args[1])
+
+    def test_saved_mismatch_without_successful_refresh_has_no_normal_followup(self):
+        updated = {
+            "review_id": "RID-1",
+            "state": "DIFFERENCE_PENDING_CONFIRMATION",
+            "actual": "ㄒㄧ",
+            "expected_set": ["˙ㄒㄧ"],
+        }
+        app = self._make_app(updated, refresh_succeeded=False)
+        with patch("review_gui.ExpectedDialog") as dialog_cls, \
+                patch("review_gui.messagebox.showwarning") as warning, \
+                patch("review_gui.messagebox.showinfo") as info:
+            dialog_cls.return_value.result = {"expected_set": "˙ㄒㄧ"}
+            app.resolve_expected()
+        self.assertTrue(app._last_event_saved)
+        self.assertEqual(app.last_saved_expected, updated)
+        warning.assert_not_called()
+        info.assert_not_called()
+        self.assertEqual(app._confirm_calls, [])
 
     def test_expected_match_does_not_open_six_gate_followup(self):
         updated = None  # PASS rows disappear from the pending list after save_event().
