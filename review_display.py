@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 import math
 import tkinter as tk
 from tkinter import ttk
@@ -119,7 +120,11 @@ def scrollable_entry(master, variable, *, readonly=False):
     return frame
 
 
-def occurrence_preview(entry, *, padding=(150, 115), scale=2.2, output_dir=None):
+MAX_PREVIEW_DIMENSION = 8192
+MAX_PREVIEW_PIXELS = 16_000_000
+
+
+def occurrence_preview(entry, *, padding=(150, 115), scale=2.2, output_dir=None, display_width=None):
     """Return unmarked pixels and an optional target rectangle in pixel coordinates.
 
     Occurrence coordinates are PyMuPDF's unrotated page coordinates. Rendering
@@ -159,6 +164,16 @@ def occurrence_preview(entry, *, padding=(150, 115), scale=2.2, output_dir=None)
         except (KeyError, TypeError, ValueError, OverflowError):
             clip = page.rect
             notice = "無法標示目標：位置資料缺失、無效或在頁面之外。請依原頁核對。"
+        if display_width is not None:
+            scale = float(display_width) / clip.width
+        if not math.isfinite(scale) or scale <= 0:
+            raise ValueError("無效的預覽比例")
+        # Bound allocation before asking MuPDF for pixels. Do not silently
+        # substitute a blurry low-resolution image when width-fit is too large.
+        raster_bounds = (clip * fitz.Matrix(scale, scale)).irect
+        if (max(raster_bounds.width, raster_bounds.height) > MAX_PREVIEW_DIMENSION
+                or raster_bounds.width * raster_bounds.height > MAX_PREVIEW_PIXELS):
+            raise ValueError("預覽超出可安全顯示的尺寸，請縮小視窗後重新選取本筆")
         pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), clip=clip, alpha=False)
         rect = None if target is None else tuple(
             coordinate * scale - origin
@@ -168,16 +183,30 @@ def occurrence_preview(entry, *, padding=(150, 115), scale=2.2, output_dir=None)
 
 
 class OccurrencePreview(tk.Frame):
-    def __init__(self, master, *, height=240):
+    """Width-fit PDF view; an expanded sample delegates scrolling to its form."""
+    def __init__(self, master, *, height=120, expand_content=False, on_locate=None, on_failure=None):
         super().__init__(master)
-        self.canvas = tk.Canvas(self, bg="white", height=height, highlightthickness=0, width=1)
-        self.canvas.pack(fill="both", expand=True)
+        self.expand_content = expand_content
+        self._minimum_height = height
+        self.on_locate = on_locate
+        self.on_failure = on_failure
         self.notice = WrappedLabel(self, fg="#555555")
-        self.notice.pack(fill="x")
+        self.notice.pack(side="bottom", fill="x")
+        self.canvas = tk.Canvas(self, bg="white", height=height, highlightthickness=0, width=1)
+        if not expand_content:
+            self.scrollbar = ttk.Scrollbar(self, orient="vertical", command=self._scroll)
+            self.scrollbar.pack(side="right", fill="y")
+            self.canvas.configure(yscrollcommand=self.scrollbar.set, yscrollincrement=24)
+            self.canvas.bind("<MouseWheel>", self._mousewheel)
+        self.canvas.pack(side="left", fill="both", expand=True)
         self.pixmap = self.target = self.photo = None
-        self._draw_pending = None
+        self._entry = None
+        self._draw_pending = self._render_pending = self._locate_pending = None
+        self._render_width = None
+        self._needs_locate = False
         self._disposed = False
         self.canvas.bind("<Configure>", self._schedule_draw)
+        self.bind("<Configure>", self._schedule_draw)
         self.bind("<Destroy>", self._dispose)
         self.canvas.bind("<Destroy>", self._dispose)
 
@@ -186,46 +215,143 @@ class OccurrencePreview(tk.Frame):
             self.after_cancel(self._draw_pending)
             self._draw_pending = None
 
+    def _cancel_callbacks(self):
+        self._cancel_draw()
+        for name in ("_render_pending", "_locate_pending"):
+            pending = getattr(self, name)
+            if pending is not None:
+                self.after_cancel(pending)
+                setattr(self, name, None)
+
     def _dispose(self, event):
         if event.widget is self or event.widget is self.canvas:
             self._disposed = True
-            self._cancel_draw()
+            self._cancel_callbacks()
 
     def clear(self, message=""):
-        self._cancel_draw()
+        self._cancel_callbacks()
         self.canvas.delete("all")
+        self.canvas.configure(scrollregion=(0, 0, 0, 0))
+        self.canvas.yview_moveto(0)
+        if self.expand_content:
+            self.canvas.configure(height=self._minimum_height)
         self.pixmap = self.target = self.photo = None
+        self._entry = self._render_width = None
+        self._needs_locate = False
         self.notice.configure(text=message)
 
     def load(self, entry, *, padding=(150, 115), output_dir=None):
         self.clear()
         try:
-            self.pixmap, self.target, notice = occurrence_preview(entry, padding=padding, output_dir=output_dir)
+            # Keep a private display snapshot. No delayed callback may read a
+            # record that a caller has since reused for another occurrence.
+            self._entry = copy.deepcopy(entry)
+            self._padding, self._output_dir = padding, output_dir
+            width = self.canvas.winfo_width() - 16
+            self._render_width = width if width > 16 else None
+            self.pixmap, self.target, notice = occurrence_preview(
+                self._entry, padding=padding, output_dir=output_dir, display_width=self._render_width)
             self.notice.configure(text=notice)
+            self._needs_locate = True
             self._draw()
             # A full-page fallback is useful context, but is not a successfully
             # located sample and cannot authorize a visual confirmation.
             return self.target is not None
         except Exception as exc:
-            self.clear(f"無法顯示頁面：{exc}")
+            self._failed(exc)
             return False
+
+    def _failed(self, exc):
+        self.clear(f"無法顯示頁面：{exc}")
+        if self.on_failure is not None:
+            self.on_failure()
+
+    def _mousewheel(self, event):
+        delta = int(getattr(event, "delta", 0))
+        if not delta:
+            return
+        self.cancel_positioning()
+        first, last = self.canvas.yview()
+        if (delta > 0 and first > 0) or (delta < 0 and last < 1):
+            self.canvas.yview_scroll(-1 if delta > 0 else 1, "units")
+            # Stop before the containing toplevel's form-scroll binding.
+            return "break"
+
+    def cancel_positioning(self):
+        """Manual scrolling wins even before the first layout has settled."""
+        self._needs_locate = False
+        if self._locate_pending is not None:
+            self.after_cancel(self._locate_pending)
+            self._locate_pending = None
+
+    def _scroll(self, *args):
+        self.cancel_positioning()
+        self.canvas.yview(*args)
+
+    def _render(self):
+        self._render_pending = None
+        if self._disposed or self._entry is None:
+            return
+        width = max(1, self.canvas.winfo_width() - 16)
+        try:
+            self.pixmap, self.target, notice = occurrence_preview(
+                self._entry, padding=self._padding, output_dir=self._output_dir, display_width=width)
+            self._render_width = width
+            self.notice.configure(text=notice)
+            self._draw()
+            if self.target is None and self.on_failure is not None:
+                self.on_failure()
+        except Exception as exc:
+            self._failed(exc)
 
     def _schedule_draw(self, _event=None):
         if not self._disposed and self._draw_pending is None:
             self._draw_pending = self.after_idle(self._draw)
 
+    def _locate(self):
+        self._locate_pending = None
+        if self._disposed or not self._needs_locate or self.target is None:
+            return
+        targets = self.canvas.find_withtag("target")
+        if not targets:
+            return
+        box = self.canvas.coords(targets[-1])
+        if not self.expand_content:
+            total = float(self.canvas.cget("scrollregion").split()[3])
+            top = max(0, (box[1] + box[3] - self.canvas.winfo_height()) / 2)
+            self.canvas.yview_moveto(top / max(1, total))
+        self._needs_locate = False
+        if self.on_locate is not None:
+            # Pass viewport coordinates after the inner view has been placed.
+            self.on_locate(self.canvas, box[1] - self.canvas.canvasy(0), box[3] - self.canvas.canvasy(0))
+
     def _draw(self):
         self._cancel_draw()
         if self._disposed:
             return
+        fraction = self.canvas.yview()[0]
         self.canvas.delete("all")
         if self.pixmap is None:
             return
-        width, height = max(1, self.canvas.winfo_width()), max(1, self.canvas.winfo_height())
-        factor = min(1.0, max(1, width - 16) / self.pixmap.width, max(1, height - 16) / self.pixmap.height)
-        scaled = fitz.Pixmap(self.pixmap, max(1, int(self.pixmap.width * factor)), max(1, int(self.pixmap.height * factor)))
-        self.photo = tk.PhotoImage(master=self, data=base64.b64encode(scaled.tobytes("png")))
-        x, y = (width - scaled.width) / 2, (height - scaled.height) / 2
+        width = max(1, self.canvas.winfo_width())
+        if width <= 16:
+            return
+        factor = max(1, width - 16) / self.pixmap.width
+        size = (max(1, int(self.pixmap.width * factor)), max(1, int(self.pixmap.height * factor)))
+        if max(size) > MAX_PREVIEW_DIMENSION or size[0] * size[1] > MAX_PREVIEW_PIXELS:
+            self._failed(ValueError("預覽超出可安全顯示的尺寸，請縮小視窗後重新選取本筆"))
+            return
+        try:
+            scaled = fitz.Pixmap(self.pixmap, *size)
+            self.photo = tk.PhotoImage(master=self, data=base64.b64encode(scaled.tobytes("png")))
+        except Exception as exc:
+            self._failed(exc)
+            return
+        if self.expand_content and int(self.canvas.cget("height")) != scaled.height + 16:
+            self.canvas.configure(height=scaled.height + 16)
+        x, y = (width - scaled.width) / 2, 8
+        self.canvas.configure(scrollregion=(0, 0, width, scaled.height + 16))
+        self.canvas.yview_moveto(fraction)
         self.canvas.create_image(x, y, image=self.photo, anchor="nw", tags="page")
         if self.target is not None:
             sx, sy = scaled.width / self.pixmap.width, scaled.height / self.pixmap.height
@@ -234,3 +360,15 @@ class OccurrencePreview(tk.Frame):
             box = (x + x0 * sx - 3, y + y0 * sy - 3, x + x1 * sx + 3, y + y1 * sy + 3)
             self.canvas.create_rectangle(*box, outline="#ffffff", width=5, tags="target")
             self.canvas.create_rectangle(*box, outline="#bc230d", width=2, tags="target")
+            if self._needs_locate:
+                if self._locate_pending is not None:
+                    self.after_cancel(self._locate_pending)
+                # Debounce placement too: wrapping can propagate through
+                # several ancestor layouts after the first image draw.
+                self._locate_pending = self.after(120, self._locate)
+        if self._entry is not None and width - 16 != self._render_width:
+            if self._render_pending is not None:
+                self.after_cancel(self._render_pending)
+            # The cheap interim redraw uses the previous pixels. After a short
+            # quiet period render the original PDF at the actual display size.
+            self._render_pending = self.after(120, self._render)

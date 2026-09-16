@@ -224,15 +224,15 @@ class VisualGuiTests(unittest.TestCase):
         canvas = app.image.canvas
         first_box = canvas.coords(canvas.find_withtag("target")[-1])
         self.assertEqual(app.current()["source_row_number"], 1)
-        for actual, expected in zip(app.image.target, (110, 198, 191.4, 257.4)):
-            self.assertAlmostEqual(actual, expected, places=4)
-        # Independently specified crop is [0,0,237,232] at 2.2x => 522x511.
-        width, height = canvas.winfo_width(), canvas.winfo_height()
-        factor = min(1, (width - 16) / 522, (height - 16) / 511)
-        sw, sh = int(522 * factor), int(511 * factor)
-        x, y = (width - sw) / 2, (height - sh) / 2
-        for actual, expected in zip(first_box, (x+110*sw/522-3, y+198*sh/511-3, x+191.4*sw/522+3, y+257.4*sh/511+3)):
-            self.assertAlmostEqual(actual, expected, places=4)
+        # Independent PDF crop [0,0,237,232], target [50,90,87,117].
+        # Width-fit can rerender at a new resolution; integer raster rounding
+        # accounts for at most a pixel here, independent of viewport height.
+        sw, sh = app.image.photo.width(), app.image.photo.height()
+        self.assertLessEqual(abs(sw - (canvas.winfo_width() - 16)), 1)
+        self.assertAlmostEqual(sh / sw, 232 / 237, delta=.005)
+        x, y = (canvas.winfo_width() - sw) / 2, 8
+        for actual, expected in zip(first_box, (x+50*sw/237-3, y+90*sh/232-3, x+87*sw/237+3, y+117*sh/232+3)):
+            self.assertAlmostEqual(actual, expected, delta=1)
         app.next()
         self.window.update()
         self.assertEqual(app.current()["source_row_number"], 3)
@@ -301,10 +301,12 @@ class VisualGuiTests(unittest.TestCase):
         self.window.geometry("333x277")
         self.assertTrue(preview.load(entry))
         self.window.update()
-        self.assertEqual(preview.pixmap.pixel(180, 180), (255, 0, 0))
+        # The render resolution now follows the viewport. The colored square
+        # occupies PDF coordinates 70..100 on this unrotated 200-point page.
+        self.assertEqual(preview.pixmap.pixel(int(preview.pixmap.width * .425), int(preview.pixmap.height * .425)), (255, 0, 0))
         self.assertTrue(preview.load({**entry, "physical_page": 2}))
         self.window.update()
-        self.assertEqual(preview.pixmap.pixel(180, 180), (0, 0, 255))
+        self.assertEqual(preview.pixmap.pixel(int(preview.pixmap.width * .425), int(preview.pixmap.height * .425)), (0, 0, 255))
         self.assertEqual(len(preview.canvas.find_withtag("target")), 2)
         self.assertFalse(preview.load({**entry, "physical_page": 3}))
         self.window.geometry("415x303")
