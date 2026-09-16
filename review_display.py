@@ -191,12 +191,15 @@ def occurrence_preview(entry, *, padding=(150, 115), scale=2.2, output_dir=None,
 
 class OccurrencePreview(tk.Frame):
     """Width-fit PDF view; an expanded sample delegates scrolling to its form."""
-    def __init__(self, master, *, height=120, expand_content=False, on_locate=None, on_failure=None):
+    def __init__(self, master, *, height=120, expand_content=False, on_locate=None, on_failure=None,
+                 on_layout=None, before_locate=None):
         super().__init__(master)
         self.expand_content = expand_content
         self._minimum_height = height
         self.on_locate = on_locate
         self.on_failure = on_failure
+        self.on_layout = on_layout
+        self.before_locate = before_locate
         self.notice = WrappedLabel(self, fg="#555555")
         self.notice.pack(side="bottom", fill="x")
         self.canvas = tk.Canvas(self, bg="white", height=height, highlightthickness=0, width=1)
@@ -240,7 +243,7 @@ class OccurrencePreview(tk.Frame):
         self.canvas.delete("all")
         self.canvas.configure(scrollregion=(0, 0, 0, 0))
         self.canvas.yview_moveto(0)
-        self.canvas.configure(height=self._minimum_height)
+        self._request_height(self._minimum_height)
         self.pixmap = self.target = self.photo = None
         self._entry = self._render_width = None
         self._needs_locate = False
@@ -314,10 +317,30 @@ class OccurrencePreview(tk.Frame):
         if not self._disposed and self._draw_pending is None:
             self._draw_pending = self.after_idle(self._draw)
 
+    def _request_height(self, height):
+        if int(self.canvas.cget("height")) != height:
+            self.canvas.configure(height=height)
+            if self.on_layout is not None:
+                self.on_layout()
+
     def _locate(self):
         self._locate_pending = None
         if self._disposed or not self._needs_locate or self.target is None:
             return
+        if self.before_locate is not None:
+            ready = self.before_locate()
+            if self._disposed or not self._needs_locate or self.target is None:
+                return
+            if not ready:
+                self._failed(ValueError("無法完成預覽版面配置，請重新選取本筆"))
+                return
+        # A flush may have processed a width change and scheduled its render.
+        # That render will draw and request placement of the new dimensions.
+        if self._render_pending is not None:
+            return
+        if self._locate_pending is not None:
+            self.after_cancel(self._locate_pending)
+            self._locate_pending = None
         targets = self.canvas.find_withtag("target")
         if not targets:
             return
@@ -362,8 +385,7 @@ class OccurrencePreview(tk.Frame):
             # minimum only from the display transform, never allocated height.
             target_height = (self.target[3] - self.target[1]) * scaled.height / self.pixmap.height
             requested_height = max(requested_height, math.ceil(target_height + 6) + 40)
-        if int(self.canvas.cget("height")) != requested_height:
-            self.canvas.configure(height=requested_height)
+        self._request_height(requested_height)
         x, y = (width - scaled.width) / 2, 8
         self.canvas.configure(scrollregion=(0, 0, width, scaled.height + 16))
         self.canvas.yview_moveto(fraction)

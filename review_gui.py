@@ -86,19 +86,60 @@ def create_scrollable_body(window: tk.Toplevel, *, fill_height=False) -> tuple[t
     # Tk sizes the unmapped canvas window from its wrapping children's requests
     # before the first canvas Configure can supply the viewport width.
     window_id = canvas.create_window((0, 0), window=content, anchor="nw", width=1)
+    canvas._layout_pending = None
+    layout_busy = False
+    layout_disposed = False
 
-    def update_scrollregion(_event=None):
-        if fill_height:
-            # Requested height is the minimum (summary + small preview slot),
-            # not the last allocated height. Resizing cannot grow this loop.
-            height = max(canvas.winfo_height(), content.winfo_reqheight())
-            if int(float(canvas.itemcget(window_id, "height"))) != height:
-                canvas.itemconfigure(window_id, height=height)
-        canvas.configure(scrollregion=canvas.bbox("all"))
+    def flush_layout():
+        nonlocal layout_busy
+        if layout_disposed or layout_busy:
+            return False
+        if canvas._layout_pending is not None:
+            canvas.after_cancel(canvas._layout_pending)
+            canvas._layout_pending = None
+        layout_busy = True
+        try:
+            # A canvas height request propagates through several pack parents.
+            # Configure alone need not fire when their actual sizes are fixed.
+            # Drain those idle geometry requests before measuring the minimum.
+            content.update_idletasks()
+            if layout_disposed:
+                return False
+            if fill_height:
+                height = max(canvas.winfo_height(), content.winfo_reqheight())
+                if int(float(canvas.itemcget(window_id, "height"))) != height:
+                    canvas.itemconfigure(window_id, height=height)
+            # Width is already fixed; allocation cannot feed back into the
+            # width-derived preview minimum. This is one bounded allocation,
+            # not a retry or polling loop.
+            content.update_idletasks()
+            if layout_disposed:
+                return False
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            return not fill_height or content.winfo_height() >= content.winfo_reqheight()
+        finally:
+            layout_busy = False
+
+    def request_layout(_event=None):
+        if not layout_disposed and not layout_busy and canvas._layout_pending is None:
+            canvas._layout_pending = canvas.after_idle(flush_layout)
+
+    def dispose_layout(event):
+        nonlocal layout_disposed
+        if event.widget in (holder, canvas, content):
+            layout_disposed = True
+            if canvas._layout_pending is not None:
+                canvas.after_cancel(canvas._layout_pending)
+                canvas._layout_pending = None
+
+    canvas.request_layout = request_layout
+    canvas.flush_layout = flush_layout
+    for widget in (holder, canvas, content):
+        widget.bind("<Destroy>", dispose_layout, add="+")
 
     def fit_content_width(event):
         canvas.itemconfigure(window_id, width=max(1, event.width))
-        update_scrollregion()
+        request_layout()
 
     def reveal(widget, y0, y1):
         offset = widget.winfo_rooty() - canvas.winfo_rooty() + canvas.canvasy(0)
@@ -121,6 +162,8 @@ def create_scrollable_body(window: tk.Toplevel, *, fill_height=False) -> tuple[t
         scroll_canvas(canvas, *args)
 
     def on_mousewheel(event):
+        if layout_disposed:
+            return
         # The inner preview returns break while it can scroll. A wheel at its
         # boundary reaches here once, as do expanded samples with no inner bar.
         widget = event.widget
@@ -135,7 +178,7 @@ def create_scrollable_body(window: tk.Toplevel, *, fill_height=False) -> tuple[t
             scroll_body("scroll", -1 if delta > 0 else 1, "units")
             return "break"
 
-    content.bind("<Configure>", update_scrollregion)
+    content.bind("<Configure>", request_layout)
     canvas.bind("<Configure>", fit_content_width)
     if fill_height:
         def child_layout(event):
@@ -143,7 +186,7 @@ def create_scrollable_body(window: tk.Toplevel, *, fill_height=False) -> tuple[t
             while widget is not None and widget is not content:
                 widget = getattr(widget, "master", None)
             if widget is content:
-                update_scrollregion()
+                request_layout()
 
         # An explicitly sized canvas window need not receive Configure when
         # its children's requested height changes (e.g. a longer summary).
@@ -335,7 +378,9 @@ class ActualReadingDialog(tk.Toplevel):
             info = f"{sample.get('pdf_name','')}  課本頁 {sample.get('printed_page','')}  字：{sample.get('char','')}  occurrence：{sample.get('occurrence_id','')}"
             WrappedLabel(frame, text=info).pack(fill="x", padx=8, pady=(6, 2))
             preview = OccurrencePreview(frame, expand_content=True,
-                                        on_locate=self.body_canvas.reveal if i == 1 else None)
+                                        on_locate=self.body_canvas.reveal if i == 1 else None,
+                                        on_layout=self.body_canvas.request_layout,
+                                        before_locate=self.body_canvas.flush_layout)
             preview.pack(fill="x", padx=8, pady=5)
             available = preview.load(sample, padding=(95, 60), output_dir=self.output_dir)
             self.previews.append(preview)
@@ -518,7 +563,9 @@ class ReviewApp:
         self.summary_text = WrappedLabel(self.summary, text="", justify="left", anchor="w", wraplength=1120, font=("Microsoft JhengHei", 11))
         self.summary_text.pack(fill="x", padx=10, pady=8)
 
-        self.image = OccurrencePreview(body, on_locate=self.body_canvas.reveal, on_failure=self._preview_failed)
+        self.image = OccurrencePreview(body, on_locate=self.body_canvas.reveal, on_failure=self._preview_failed,
+                                       on_layout=self.body_canvas.request_layout,
+                                       before_locate=self.body_canvas.flush_layout)
         self.image.pack(fill="both", expand=True, padx=12, pady=6)
 
         self.tech_frame = tk.LabelFrame(body, text="技術資訊")
