@@ -232,6 +232,24 @@ def can_confirm_current_expected(entry):
     )
 
 
+def guarded_review_action(method):
+    """A modal/save action belongs to one item, including queued double clicks."""
+    def run(self, *args, **kwargs):
+        if (getattr(self, "_review_action_in_progress", False)
+                or getattr(self, "_apply_in_progress", False)
+                or time.monotonic() < getattr(self, "_review_action_cooldown_until", 0)):
+            return
+        self._review_action_in_progress = True
+        self._last_event_saved = self._last_actual_staged = False
+        try:
+            return method(self, *args, **kwargs)
+        finally:
+            self._review_action_in_progress = False
+            if self._last_event_saved or self._last_actual_staged:
+                self._review_action_cooldown_until = time.monotonic() + 0.5
+    return run
+
+
 class ExpectedDialog(tk.Toplevel):
     def __init__(self, parent, entry, title: str, *, wait: bool = True):
         super().__init__(parent)
@@ -540,6 +558,7 @@ class ReviewApp:
         self.staged_checked_occurrence_ids = set()
         self.deferred_items = set()
         self._save_in_progress = False
+        self.waiting_actual_occurrence_ids = set()
 
         root.title(f"注音校對－人工確認 v{VERSION}")
         apply_screen_safe_geometry(root, 1180, 850, min_width=760, min_height=520)
@@ -602,12 +621,13 @@ class ReviewApp:
             command=self.apply_staged_actuals,
         )
         batch_actions.set_items([self.apply_actual_button])
-        WrappedLabel(
+        self.staging_status = WrappedLabel(
             actions,
             text="先逐筆暫存原頁 actual；確認完後再一次套用與增量更新。",
             fg="#555555",
             anchor="w",
-        ).pack(fill="x")
+        )
+        self.staging_status.pack(fill="x")
 
         self.reload_records()
         self.show()
@@ -615,12 +635,22 @@ class ReviewApp:
             title, detail, _primary_text = self._empty_actionable_state()
             messagebox.showinfo(title, detail, parent=self.root)
 
-    def reload_records(self):
-        self.reload_staging_summary()
+    def reload_records(self, *, advance_from=None):
         ledger = materialize_ledger(self.manifest, self.db)
-        self._set_actionable_records_from_ledger(ledger)
+        self.reload_staging_summary(ledger)
+        self._set_actionable_records_from_ledger(ledger, advance_from=advance_from)
 
-    def _set_actionable_records_from_ledger(self, ledger):
+    def _waits_for_actual(self, item):
+        # This is only a view of pending comparison, never a ledger transition.
+        return (str(item.get("occurrence_id") or "") in self.staged_checked_occurrence_ids
+                and infer_expected_status(item) == "RESOLVED"
+                and item.get("state") in {
+                    "ACTUAL_UNRESOLVED", "ACTUAL_DECODE_ERROR", "DIFFERENCE_PENDING_CONFIRMATION",
+                    "PASS", "TEXTBOOK_ERROR_CONFIRMED",
+                }
+                and item.get("blocking_state") not in HARD_BLOCKING_STATES)
+
+    def _set_actionable_records_from_ledger(self, ledger, *, advance_from=None):
         previous = list(getattr(self, "records", []))
         index = int(getattr(self, "index", 0))
         old = previous[index] if 0 <= index < len(previous) else None
@@ -628,11 +658,15 @@ class ReviewApp:
         same_character = [item for item in previous[index:] + list(reversed(previous[:index]))
                           if old and review_lane(item) == lane and item.get("char") == old.get("char")]
         following = [(review_lane(item), str(item.get("occurrence_id") or ""))
-                     for item in same_character + previous[index:] if review_lane(item) == lane]
-        checked = set(getattr(self, "staged_checked_occurrence_ids", set()))
+                     for item in same_character + previous[index:]
+                     if review_lane(item) == lane and item.get("review_id") != advance_from]
+        self.staged_checked_occurrence_ids = set(getattr(self, "staged_checked_occurrence_ids", set()))
+        self.waiting_actual_occurrence_ids = {
+            str(item.get("occurrence_id") or "") for item in ledger if self._waits_for_actual(item)
+        }
         deferred = set(getattr(self, "deferred_items", set()))
         pending = [item for item in ledger if item.get("state") in NON_TERMINAL_STATES
-                   and not (review_lane(item) == "actual" and str(item.get("occurrence_id") or "") in checked)]
+                   and not self._waits_for_actual(item)]
         live_keys = {(review_lane(item), str(item.get("occurrence_id") or "")) for item in pending}
         self.deferred_items = deferred & live_keys
         self.pending_lane_counts = Counter(review_lane(item) for item in pending)
@@ -670,13 +704,15 @@ class ReviewApp:
             if hasattr(self, "navigation"):
                 self.navigation.refresh()
         indexes = {(review_lane(item), str(item.get("occurrence_id") or "")): n for n, item in enumerate(self.records)}
+        self._show_staging_status()
         for key in following:
             if key in indexes:
                 self.index = indexes[key]
                 return
         # Finish the current lane before a just-saved row moves to another lane.
-        same_lane = [n for n, item in enumerate(self.records) if review_lane(item) == lane]
-        self.index = min(same_lane, key=lambda n: abs(n - index)) if same_lane else 0
+        alternatives = [n for n, item in enumerate(self.records) if item.get("review_id") != advance_from]
+        same_lane = [n for n in alternatives if review_lane(self.records[n]) == lane]
+        self.index = min(same_lane, key=lambda n: abs(n - index)) if same_lane else (alternatives[0] if alternatives else 0)
 
     def defer_current(self):
         entry = self.current()
@@ -694,21 +730,47 @@ class ReviewApp:
         self.reload_records()
         self.show()
 
-    def reload_staging_summary(self):
-        summary = manual_actual_staging_summary(self.output_dir)
+    def reload_staging_summary(self, ledger=None):
+        if ledger is None:
+            ledger = materialize_ledger(self.manifest, self.db)
+        try:
+            summary = manual_actual_staging_summary(self.output_dir, ledger=ledger)
+        except Exception as exc:
+            # Do not retain an earlier trusted checked roster on a read failure.
+            summary = {"staging_error": str(exc)}
         self.staging_summary = dict(summary)
         self.staged_member_occurrence_ids = set(summary.get("staged_member_occurrence_ids") or [])
         self.staged_checked_occurrence_ids = set(summary.get("staged_checked_occurrence_ids") or [])
         count = int(summary.get("staged_group_count") or 0)
         self.apply_actual_button.config(
-            text=f"套用 actual 修正（{count}）",
-            state="normal" if count > 0 else "disabled",
+            text="繼續 actual 更新（已提交）" if summary.get("actual_recovery_pending") else f"套用 actual 修正（{count}）",
+            state="normal" if count > 0 or summary.get("actual_recovery_pending") else "disabled",
         )
         if hasattr(self, "batch_actions"):
             self.batch_actions.refresh()
         return self.staging_summary
 
+    def _show_staging_status(self):
+        if not hasattr(self, "staging_status"):
+            return
+        error = self.staging_summary.get("staging_error")
+        count = int(self.staging_summary.get("staged_group_count") or 0)
+        checked = len(self.staged_checked_occurrence_ids)
+        waiting = len(getattr(self, "waiting_actual_occurrence_ids", set()))
+        self.staging_status.config(text=(
+            f"actual 暫存無法驗證：{error}。未將任何項目視為已處理；請修復來源／暫存後重新開啟。"
+            if error else
+            "actual 已提交，後續更新尚未完成。請按「繼續 actual 更新（已提交）」；不會重複套用暫存。"
+            if self.staging_summary.get("actual_recovery_pending") else
+            f"待套用 {count} 組 actual 修正（已核對 {checked} 個位置）；其中 {waiting} 筆等待套用後重新比較。"
+            "請按「套用 actual 修正」；等待套用不等於完成。"
+        ))
+
     def _empty_actionable_state(self):
+        if self.staging_summary.get("staging_error"):
+            return ("actual 暫存無法驗證", f"尚未完成：{self.staging_summary['staging_error']}。請修復後重新開啟。", "請先處理暫存阻擋")
+        if self.staging_summary.get("actual_recovery_pending"):
+            return ("actual 後續更新尚未完成", "actual 已提交；請按「繼續 actual 更新（已提交）」恢復更新，尚未視為校對完成。", "請繼續 actual 更新")
         deferred = len(getattr(self, "deferred_items", set()))
         if deferred:
             return (
@@ -720,7 +782,7 @@ class ReviewApp:
         if count > 0:
             return (
                 "目前沒有尚未暫存的待人工項目",
-                f"仍有 {count} 組 actual 修正等待批次套用，"
+                f"仍有 {count} 組 actual 修正等待批次套用（已核對 {len(self.staged_checked_occurrence_ids)} 個位置），未視為完成。"
                 f"請按「套用 actual 修正（{count}）」。",
                 "請使用批次套用按鈕",
             )
@@ -754,10 +816,16 @@ class ReviewApp:
             self._save_in_progress = False
         self.db = staged
         self._last_event_saved = True
+        self._last_event_refreshed = False
         if "manual_expected_decision" in event:
             self.last_saved_expected = resolved_entry
-        self._set_actionable_records_from_ledger(staged_ledger)
-        self.show()
+        try:
+            self.reload_staging_summary(staged_ledger)
+            self._set_actionable_records_from_ledger(staged_ledger, advance_from=review_id)
+            self.show()
+            self._last_event_refreshed = True
+        except Exception as exc:
+            messagebox.showwarning("人工判定已保存，但畫面更新失敗", f"本筆人工判定已寫入，請重新開啟畫面恢復待辦。\n{exc}", parent=self.root)
         return resolved_entry.get("state") not in NON_TERMINAL_STATES
 
     def prev(self):
@@ -770,6 +838,7 @@ class ReviewApp:
         self.index = min(len(self.records) - 1, self.index + 1)
         self.show()
 
+    @guarded_review_action
     def confirm_current_expected(self, review_id=None):
         if time.monotonic() < getattr(self, "_shortcut_cooldown_until", 0):
             return
@@ -777,6 +846,8 @@ class ReviewApp:
         if not entry or (review_id is not None and entry.get("review_id") != review_id):
             return
         if not can_confirm_current_expected(entry):
+            return
+        if str(entry.get("occurrence_id") or "") in self.staged_checked_occurrence_ids:
             return
         if getattr(self, "_rendered_review_id", None) != entry.get("review_id"):
             return
@@ -788,7 +859,9 @@ class ReviewApp:
         self.save_event(entry, event)
         if getattr(self, "_last_event_saved", False):
             self._shortcut_cooldown_until = time.monotonic() + 0.5
+            self._explain_saved_expected(entry)
 
+    @guarded_review_action
     def resolve_expected(self):
         entry = self.current()
         if not entry or review_lane(entry) not in {"expected", "other"} or entry.get("state") in HARD_BLOCKING_STATES:
@@ -808,12 +881,23 @@ class ReviewApp:
             return
         self.save_event(entry, event)
         if getattr(self, "_last_event_saved", False):
-            updated = next((item for item in self.records if item.get("review_id") == entry.get("review_id")), None)
-            if updated and updated.get("state") == "DIFFERENCE_PENDING_CONFIRMATION":
-                messagebox.showwarning(
+            self._explain_saved_expected(entry)
+
+    def _explain_saved_expected(self, entry):
+        if not getattr(self, "_last_event_refreshed", False):
+            return
+        if self.staging_summary.get("staging_error"):
+            messagebox.showwarning("應標注音已保存，暫存待檢查", "應標注音已保存；actual 暫存無法驗證，仍保留待處理。請先處理畫面上的暫存阻擋。", parent=self.root)
+            return
+        if str(entry.get("occurrence_id") or "") in self.staged_checked_occurrence_ids:
+            messagebox.showinfo("應標注音已保存", "應標注音已保存，目前注音套用後再比較。請繼續下一筆，最後按「套用 actual 修正」。", parent=self.root)
+            return
+        updated = getattr(self, "last_saved_expected", None)
+        if updated and updated.get("state") == "DIFFERENCE_PENDING_CONFIRMATION":
+            messagebox.showwarning(
                     "仍有注音差異，尚未確認教材錯誤",
                     f"本筆應標判定已保存。課本目前注音：{updated.get('actual')}；"
-                    f"應標注音：{' | '.join(updated.get('expected_set') or [])}。\\n"
+                    f"應標注音：{' | '.join(updated.get('expected_set') or [])}。\n"
                     "仍保留差異待確認；需要時另按「確認教材錯誤」完成六閘門。",
                     parent=self.root,
                 )
@@ -862,6 +946,7 @@ class ReviewApp:
             "updated_at": datetime.now().isoformat(timespec="seconds"),
         })
 
+    @guarded_review_action
     def confirm_difference(self):
         entry = self.current()
         if not entry:
@@ -871,6 +956,7 @@ class ReviewApp:
             return
         self._confirm_difference_entry(entry)
 
+    @guarded_review_action
     def exclude(self):
         entry = self.current()
         if not entry:
@@ -891,6 +977,7 @@ class ReviewApp:
             "updated_at": datetime.now().isoformat(timespec="seconds"),
         })
 
+    @guarded_review_action
     def correct_actual(self):
         entry = self.current()
         if not entry:
@@ -915,8 +1002,9 @@ class ReviewApp:
         except Exception as exc:
             messagebox.showerror("actual 暫存失敗", str(exc), parent=self.root)
             return
+        self._last_actual_staged = True
         try:
-            self.reload_records()
+            self.reload_records(advance_from=entry.get("review_id"))
             self.show()
         except Exception as exc:
             messagebox.showwarning(
@@ -926,6 +1014,9 @@ class ReviewApp:
             )
             return
         fresh_summary = self.staging_summary
+        if fresh_summary.get("staging_error"):
+            messagebox.showwarning("actual 已暫存，但尚未通過驗證", f"暫存仍保留，未移除待辦；請處理來源／暫存阻擋。\n{fresh_summary['staging_error']}", parent=self.root)
+            return
         count = int(fresh_summary.get("staged_group_count") or 0)
         messagebox.showinfo(
             "actual 已暫存",
@@ -935,24 +1026,53 @@ class ReviewApp:
         )
 
     def apply_staged_actuals(self):
+        if getattr(self, "_apply_in_progress", False) or getattr(self, "_review_action_in_progress", False):
+            return
+        self._apply_in_progress = True
         try:
             summary = self.reload_staging_summary()
         except Exception as exc:
+            self._apply_in_progress = False
             messagebox.showerror("無法讀取 actual 暫存清單", str(exc), parent=self.root)
             return
+        if summary.get("staging_error") and not summary.get("actual_recovery_pending"):
+            self._apply_in_progress = False
+            self.reload_records()
+            self.show()
+            messagebox.showerror("actual 暫存尚未通過驗證", summary["staging_error"], parent=self.root)
+            return
         count = int(summary.get("staged_group_count") or 0)
-        if count <= 0:
+        if count <= 0 and not summary.get("actual_recovery_pending"):
+            self._apply_in_progress = False
+            if summary.get("staging_error"):
+                messagebox.showerror("無法讀取 actual 暫存清單", summary["staging_error"], parent=self.root)
             return
         if not messagebox.askyesno(
             "套用 actual 修正",
-            f"目前有 {count} 組 actual 人工確認等待套用。\n"
+            ("actual 已提交，將依既有交易紀錄繼續未完成的更新。\n" if summary.get("actual_recovery_pending")
+             else f"目前有 {count} 組 actual 人工確認等待套用。\n") +
             "套用後會正式寫入 actual 證據，並一次增量重新處理受影響 PDF。\n"
             "是否繼續？",
             parent=self.root,
         ):
+            self._apply_in_progress = False
             return
 
+        try:
+            self._start_staged_actual_apply(count)
+        except Exception as exc:
+            self._apply_in_progress = False
+            progress = getattr(self, "_actual_progress_window", None)
+            if progress is not None:
+                try:
+                    progress.destroy()
+                except tk.TclError:
+                    pass
+            messagebox.showerror("無法開始套用 actual 修正", str(exc), parent=self.root)
+
+    def _start_staged_actual_apply(self, count):
         progress = tk.Toplevel(self.root)
+        self._actual_progress_window = progress
         progress.title("批次套用 actual")
         apply_screen_safe_geometry(progress, 560, 210, min_width=440, min_height=170)
         progress.transient(self.root)
@@ -981,6 +1101,7 @@ class ReviewApp:
                 self.root.after(0, lambda exc=exc: done(None, exc))
 
         def done(result, error):
+            self._apply_in_progress = False
             try:
                 bar.stop()
                 progress.grab_release()
@@ -989,10 +1110,16 @@ class ReviewApp:
                 pass
             if error:
                 try:
-                    self.reload_staging_summary()
+                    self.manifest = json_load_strict(self.output_dir / "校對工作階段.json")
+                    validate_manifest_integrity(self.manifest)
+                    validate_output_artifact_hashes(self.manifest)
+                    self.db = load_or_initialize_db(self.output_dir)
+                    self.reload_records()
                     self.show()
-                except Exception:
-                    pass
+                except Exception as reload_error:
+                    self.staged_checked_occurrence_ids = set()
+                    self.staging_summary = {"staging_error": str(reload_error)}
+                    self._show_staging_status()
                 if isinstance(error, ManualActualPostApplyError):
                     title = "actual evidence 已套用，但後續未完成"
                 else:
@@ -1049,6 +1176,7 @@ class ReviewApp:
         # Backward-compatible alias for old callbacks/hotkeys.
         return self.correct_actual()
 
+    @guarded_review_action
     def clear(self):
         entry = self.current()
         if not entry:
@@ -1090,7 +1218,8 @@ class ReviewApp:
         if lane == "expected":
             primary_text = "輸入其他應標注音"
             primary_command = self.resolve_expected
-            if can_confirm_current_expected(entry):
+            if (can_confirm_current_expected(entry)
+                    and str(entry.get("occurrence_id") or "") not in self.staged_checked_occurrence_ids):
                 primary_text = "確認目前注音就是應標注音"
                 primary_command = lambda rid=entry["review_id"]: self.confirm_current_expected(rid)
                 secondary_text = "輸入其他應標注音"
@@ -1111,6 +1240,7 @@ class ReviewApp:
             self.decision_actions.set_items(buttons + [self.later, self.more_button])
 
     def show(self):
+        self._show_staging_status()
         entry = self.current()
         if not entry:
             title, detail, primary_text = self._empty_actionable_state()
@@ -1142,7 +1272,7 @@ class ReviewApp:
         help_text = STATE_HELP.get(state, "這一筆需要人工處理。")
         if lane == "expected":
             help_text = "請先依原文與語境判定應標注音；目前注音待辨識時，儲存後再進第二組。依據選填。"
-        staged_line = "\nactual 狀態：已暫存人工核對結果，等待批次套用。" if is_staged else ""
+        staged_line = "\nactual 狀態：已暫存人工核對結果，等待批次套用；上方目前注音是套用前的正式結果，應標仍須依語境獨立判定。" if is_staged else ""
         summary = (
             f"課本頁：{entry.get('printed_page', '')}　　目標字：{entry.get('char', '')}　　本組此字剩餘 {group_count} 筆（含本筆，不含稍後處理）\n"
             f"詞語／局部詞境：{phrase}\n"

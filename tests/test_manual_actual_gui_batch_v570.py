@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import tempfile
 import tkinter as tk
 import unittest
@@ -79,6 +80,15 @@ def make_project(base: Path) -> Path:
 
 def actual_root(output_dir: Path) -> Path:
     return sp.project_actual_evidence_root(output_dir)
+
+
+def attach_source_bytes(output_dir, ledger):
+    # Headless behavior samples use auditable bytes; real PDF rendering has
+    # separate GUI fixtures. No production source or runtime asset is changed.
+    for row in ledger:
+        path = output_dir / row["pdf_name"]
+        path.write_bytes(b"isolated source hash fixture")
+        row.update(pdf=str(path), pdf_sha256=hashlib.sha256(path.read_bytes()).hexdigest())
 
 
 def group_for(ledger: list[dict], target_index: int = 0) -> dict:
@@ -739,6 +749,7 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
             output_dir = make_project(Path(directory))
             checked = entry("checked-a", "9" * 64, pdf_name="a.pdf", x0=10.0)
             unchecked = entry("unchecked-b", "9" * 64, pdf_name="b.pdf", x0=30.0)
+            attach_source_bytes(output_dir, [checked, unchecked])
             group = group_for([checked, unchecked])
             stage_manual_actual_group(
                 actual_root(output_dir),
@@ -765,7 +776,8 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
             app.tech_text = MagicMock()
             app.configure_actions = MagicMock()
             app.render = MagicMock()
-            with patch.object(review_gui, "materialize_ledger", return_value=[checked, unchecked]):
+            with (patch.object(review_gui, "materialize_ledger", return_value=[checked, unchecked]),
+                  patch.object(sp, "materialize_ledger", return_value=[checked, unchecked])):
                 app.reload_records()
 
             self.assertEqual(app.staged_member_occurrence_ids, {"checked-a", "unchecked-b"})
@@ -782,6 +794,8 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
         app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
         app.output_dir = Path("unused")
         app.apply_actual_button = DummyButton()
+        app.manifest = {}
+        app.db = {}
         with patch.object(review_gui, "manual_actual_staging_summary", return_value={
             "staged_group_count": 0,
             "staged_group_ids": [],
@@ -809,6 +823,7 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
             staged_entry = entry("durable", "e" * 64)
             remaining_entry = entry("remaining", "f" * 64)
             ledger = [staged_entry, remaining_entry]
+            attach_source_bytes(output_dir, ledger)
             with patch.object(sp, "materialize_ledger", return_value=ledger):
                 sp.stage_manual_actual_correction(
                     output_dir, "review-durable", "ㄉㄨˊ", ["durable"],
@@ -821,7 +836,8 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
                 app.records = []
                 app.index = 0
                 app.apply_actual_button = DummyButton()
-                with patch.object(review_gui, "materialize_ledger", return_value=ledger):
+                with (patch.object(review_gui, "materialize_ledger", return_value=ledger),
+                      patch.object(sp, "materialize_ledger", return_value=ledger)):
                     app.reload_records()
                 self.assertEqual(app.staging_summary["staged_group_count"], 1)
                 self.assertEqual(app.apply_actual_button.options["text"], "套用 actual 修正（1）")
@@ -928,14 +944,19 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
         app.records = [current, next_entry]
         app.index = 0
         app.staged_checked_occurrence_ids = {"staged-b"}
+        app.apply_actual_button = DummyButton()
         app.show = MagicMock()
         with (
             patch.object(review_gui, "materialize_ledger", return_value=staged_ledger),
             patch.object(review_gui, "json_save") as save,
+            patch.object(review_gui, "manual_actual_staging_summary", return_value={
+                "staged_group_count": 1, "staged_checked_occurrence_ids": ["staged-b"],
+            }) as summary,
         ):
             terminal = app.save_event(current, {"action": "確認 expected"})
         self.assertTrue(terminal)
         save.assert_called_once()
+        summary.assert_called_once_with(app.output_dir, ledger=staged_ledger)
         self.assertEqual([item["occurrence_id"] for item in app.records], ["next-c"])
         self.assertNotIn("staged-b", [item["occurrence_id"] for item in app.records])
         app.show.assert_called_once()
