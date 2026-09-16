@@ -18,13 +18,20 @@ from tests.test_manual_actual_gui_batch_v570 import DummyButton, FakeProgressWid
 from export_zhuyin_readings import load_actual_occurrence_overrides, match_actual_occurrence_override
 
 
-def create_staged_navigation_fixture(output):
+def create_staged_navigation_fixture(output, *, same_exact_peers=False):
     """Synthetic visual samples plus sealed fixture workbooks; no real textbook.
 
     Workbook rows are explicit fixture input, not a decoder acceptance claim.
     Their recorded hashes exercise the ordinary artifact integrity gate.
     """
     manifest = create_gui_fixture(output)
+    if same_exact_peers:
+        # Explicit synthetic group identity for navigation/transaction tests,
+        # not a claim of production glyph identity or Global eligibility.
+        for row in manifest["records"][:3]:
+            row["source_record"]["TTF字形SHA256"] = "a" * 64
+            row.update(actual="ㄎㄢˋ", actual_status="RESOLVED", actual_evidence="isolated fixture reading")
+            row.update(ol.refresh_derived_state(row))
     pdf = Path(manifest["records"][0]["pdf"])
     info = {"pdf": str(pdf), "pdf_name": pdf.name,
             "pdf_sha256": hashlib.sha256(pdf.read_bytes()).hexdigest()}
@@ -378,6 +385,135 @@ class StagedNavigationTests(unittest.TestCase):
         self.app._rendered_review_id = row["review_id"]
         self.app.confirm_current_expected(row["review_id"])
         self.assertEqual(self.app.db, before)
+
+
+class SameExactStagedNavigationTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.output = Path(self.temp.name)
+        manifest = create_staged_navigation_fixture(self.output, same_exact_peers=True)
+        self.peers = manifest["records"][:3]
+        self.ids = [row["occurrence_id"] for row in self.peers]
+        self.app = headless_app(self.output)
+        for row in self.peers:
+            self.app.save_event(row, sp.build_manual_expected_event(row, operation="ENTER_EXPECTED", expected_set="ㄎㄢ"))
+        self.expected_before = copy.deepcopy(self.app.db["events"])
+        self.stage_path = ar.manual_actual_staging_path(sp.project_actual_evidence_root(self.output))
+
+    def stage_gui(self, index, reading="ㄎㄢ"):
+        row = self.peers[index]
+        self.app.index = next(n for n, item in enumerate(self.app.records) if item["review_id"] == row["review_id"])
+        self.app._review_action_cooldown_until = 0
+        with patch.object(gui, "ActualReadingDialog", return_value=SimpleNamespace(result={
+                "reading": reading, "checked_occurrence_ids": [row["occurrence_id"]]})), \
+                patch.object(gui.messagebox, "showinfo") as success, \
+                patch.object(gui.messagebox, "showwarning") as warning, \
+                patch.object(gui.messagebox, "showerror") as error:
+            self.app.correct_actual()
+        return success, warning, error
+
+    def test_individual_a_b_c_accumulate_only_checked_then_reopen_and_apply_once(self):
+        for index in range(3):
+            success, warning, error = self.stage_gui(index)
+            success.assert_called_once()
+            warning.assert_not_called()
+            error.assert_not_called()
+            wanted = set(self.ids[:index + 1])
+            self.assertEqual(self.app.staged_checked_occurrence_ids, wanted)
+            self.assertEqual(self.app.waiting_actual_occurrence_ids, wanted)
+            self.assertEqual({r["occurrence_id"] for r in self.app.records} & set(self.ids), set(self.ids[index + 1:]))
+            self.assertEqual(self.app.staging_summary["staged_group_count"], 1)
+            self.assertEqual(ar.load_manual_actual_staging(sp.project_actual_evidence_root(self.output))["staged_groups"][0]["checked_occurrence_ids"], self.ids[:index + 1])
+        reopened = headless_app(self.output)
+        self.assertEqual(reopened.staged_checked_occurrence_ids, set(self.ids))
+        self.assertEqual(reopened.db["events"], self.expected_before)
+        # Retrying the same explicit checked item cannot duplicate evidence.
+        sp.stage_manual_actual_correction(self.output, self.peers[0]["review_id"], "ㄎㄢ", [self.ids[0]])
+        self.assertEqual(ar.load_manual_actual_staging(sp.project_actual_evidence_root(self.output))["staged_groups"][0]["checked_occurrence_ids"], self.ids)
+        with patch.object(ar, "apply_verified_actual_group", wraps=ar.apply_verified_actual_group) as apply, \
+                patch.object(sp, "refresh_actual_project", side_effect=controlled_refresh):
+            result = sp.apply_staged_manual_actual_corrections(self.output)
+        apply.assert_called_once()
+        self.assertEqual(apply.call_args.kwargs["checked_occurrence_ids"], self.ids)
+        self.assertCountEqual(result["postcondition_checked_occurrence_ids"], self.ids)
+        self.assertEqual(result["applied_group_count"], 1)
+        reopened = headless_app(self.output)
+        self.assertEqual(reopened.db["events"], self.expected_before)
+        self.assertFalse(reopened.staged_checked_occurrence_ids)
+        self.assertFalse({r["occurrence_id"] for r in reopened.records} & set(self.ids))
+
+    def test_different_reading_or_rejudgment_preserves_prior_and_does_not_advance(self):
+        self.stage_gui(0)
+        before = self.stage_path.read_bytes()
+        success, warning, error = self.stage_gui(1, "ㄎㄢˊ")
+        error.assert_called_once()
+        self.assertIn("不同讀音", error.call_args.args[1])
+        warning.assert_not_called()
+        success.assert_not_called()
+        self.assertEqual(self.app.current()["review_id"], self.peers[1]["review_id"])
+        self.assertEqual(self.stage_path.read_bytes(), before)
+        self.assertEqual(self.app.staged_checked_occurrence_ids, {self.ids[0]})
+        with self.assertRaisesRegex(ValueError, "不同讀音"):
+            sp.stage_manual_actual_correction(self.output, self.peers[0]["review_id"], "ㄎㄢˊ", [self.ids[0]])
+        self.assertEqual(self.stage_path.read_bytes(), before)
+        self.assertEqual(sp.load_or_initialize_db(self.output)["events"], self.expected_before)
+
+    def test_stale_snapshot_or_changed_pdf_cannot_retain_prior_checks(self):
+        self.stage_gui(0)
+        before = self.stage_path.read_bytes()
+        original_manifest = sp.json_load_strict(self.output / "校對工作階段.json")
+        changed = copy.deepcopy(original_manifest)
+        changed["records"][0]["actual"] = "ㄎㄢˊ"
+        sp.json_save(self.output / "校對工作階段.json", sp.seal_manifest(changed))
+        with self.assertRaisesRegex(ValueError, "identity 已變更"):
+            sp.stage_manual_actual_correction(self.output, self.peers[1]["review_id"], "ㄎㄢ", [self.ids[1]])
+        self.assertEqual(self.stage_path.read_bytes(), before)
+        sp.json_save(self.output / "校對工作階段.json", original_manifest)
+        pdf = Path(self.peers[0]["pdf"])
+        pdf.write_bytes(pdf.read_bytes() + b"\nsource drift")
+        with self.assertRaisesRegex(ValueError, "SOURCE_INVALID"):
+            sp.stage_manual_actual_correction(self.output, self.peers[1]["review_id"], "ㄎㄢ", [self.ids[1]])
+        self.assertEqual(self.stage_path.read_bytes(), before)
+        self.app.reload_records()
+        self.assertEqual({r["occurrence_id"] for r in self.app.records} & set(self.ids), set(self.ids))
+        self.assertFalse(self.app.staged_checked_occurrence_ids)
+
+    def test_bad_checked_lists_and_failed_stage_write_do_not_change_prior(self):
+        self.stage_gui(0)
+        before = self.stage_path.read_bytes()
+        for checked in ([], [self.ids[1], self.ids[1]], ["unknown"], [" " + self.ids[1]]):
+            with self.subTest(checked=checked), self.assertRaises(ValueError):
+                sp.stage_manual_actual_correction(self.output, self.peers[1]["review_id"], "ㄎㄢ", checked)
+            self.assertEqual(self.stage_path.read_bytes(), before)
+        with patch.object(ar.os, "replace", side_effect=OSError("isolated staging replacement failure")):
+            success, warning, error = self.stage_gui(1)
+        error.assert_called_once()
+        success.assert_not_called()
+        self.assertEqual(self.stage_path.read_bytes(), before)
+        self.assertEqual(self.app.staged_checked_occurrence_ids, {self.ids[0]})
+        self.assertEqual(self.app.current()["review_id"], self.peers[1]["review_id"])
+
+    def test_accumulated_checks_survive_apply_failure_and_committed_refresh_recovery(self):
+        self.stage_gui(0)
+        self.stage_gui(1)
+        before = self.stage_path.read_bytes()
+        with patch.object(ar, "apply_verified_actual_group", side_effect=OSError("isolated apply failure")):
+            with self.assertRaisesRegex(OSError, "isolated apply failure"):
+                sp.apply_staged_manual_actual_corrections(self.output)
+        self.assertEqual(self.stage_path.read_bytes(), before)
+        reopened = headless_app(self.output)
+        self.assertEqual(reopened.staged_checked_occurrence_ids, set(self.ids[:2]))
+        self.assertIn(self.ids[2], {r["occurrence_id"] for r in reopened.records})
+        with patch.object(sp, "refresh_actual_project", side_effect=OSError("isolated refresh failure")):
+            with self.assertRaises(sp.ManualActualPostApplyError):
+                sp.apply_staged_manual_actual_corrections(self.output)
+        with patch.object(sp, "apply_staged_manual_actual_batch") as batch, \
+                patch.object(sp, "refresh_actual_project", side_effect=controlled_refresh):
+            result = sp.apply_staged_manual_actual_corrections(self.output)
+        batch.assert_not_called()
+        self.assertCountEqual(result["postcondition_checked_occurrence_ids"], self.ids[:2])
+        self.assertEqual(sp.load_or_initialize_db(self.output)["events"], self.expected_before)
 
 
 if __name__ == "__main__":

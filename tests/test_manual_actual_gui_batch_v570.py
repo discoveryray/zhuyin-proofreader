@@ -250,7 +250,7 @@ class ManualActualGuiStagingServiceTests(unittest.TestCase):
             staged = load_manual_actual_staging(actual_root(output_dir))["staged_groups"][0]
             self.assertEqual(staged["member_occurrence_ids"], ["current"])
 
-    def test_same_exact_group_upserts_one_queue_item(self):
+    def test_gui_service_rejects_different_reading_without_replacing_prior(self):
         with tempfile.TemporaryDirectory() as directory:
             output_dir = make_project(Path(directory))
             ledger = [
@@ -261,13 +261,16 @@ class ManualActualGuiStagingServiceTests(unittest.TestCase):
                 sp.stage_manual_actual_correction(
                     output_dir, "review-same-a", "ㄓㄨㄢˇ", ["same-a"],
                 )
-                sp.stage_manual_actual_correction(
-                    output_dir, "review-same-b", "ㄓㄨㄢˋ", ["same-b"],
-                )
+                before = (actual_root(output_dir) / MANUAL_ACTUAL_STAGING_FILE).read_bytes()
+                with self.assertRaisesRegex(ValueError, "不同讀音"):
+                    sp.stage_manual_actual_correction(
+                        output_dir, "review-same-b", "ㄓㄨㄢˋ", ["same-b"],
+                    )
+                self.assertEqual((actual_root(output_dir) / MANUAL_ACTUAL_STAGING_FILE).read_bytes(), before)
             loaded = load_manual_actual_staging(actual_root(output_dir))
             self.assertEqual(len(loaded["staged_groups"]), 1)
-            self.assertEqual(loaded["staged_groups"][0]["reading"], "ㄓㄨㄢˋ")
-            self.assertEqual(loaded["staged_groups"][0]["checked_occurrence_ids"], ["same-b"])
+            self.assertEqual(loaded["staged_groups"][0]["reading"], "ㄓㄨㄢˇ")
+            self.assertEqual(loaded["staged_groups"][0]["checked_occurrence_ids"], ["same-a"])
 
     def test_restart_summary_recovers_count_group_ids_and_member_ids_read_only(self):
         with tempfile.TemporaryDirectory() as directory:

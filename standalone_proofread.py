@@ -109,6 +109,7 @@ from actual_review import (
     stage_manual_actual_group,
     _revalidate_staged_manual_actual_group,
     _resolve_pdf_path,
+    _staging_id_list,
 )
 from global_exact_glyph_library import (
     GlobalExactGlyphRepository,
@@ -3453,6 +3454,20 @@ def _manual_actual_snapshot_ledger(manifest, db, ledger):
     return projected
 
 
+def _validate_manual_actual_group_sources(output_dir, live_groups):
+    """Reprove the source bytes before retaining any prior visual checks."""
+    checked_sources = set()
+    for live in live_groups:
+        for member in live["members"]:
+            path = _resolve_pdf_path(member, output_dir)
+            wanted = str(member.get("pdf_sha256") or "")
+            key = (path, wanted)
+            if key not in checked_sources:
+                if not wanted or sha256_file(path) != wanted:
+                    raise ValueError(f"SOURCE_INVALID：actual 暫存來源 PDF 已變更：{path.name}")
+                checked_sources.add(key)
+
+
 def manual_actual_staging_summary(output_dir: Path, *, ledger=None) -> dict[str, Any]:
     """Read durable intent; a GUI ledger requests live validation before hiding.
 
@@ -3493,17 +3508,9 @@ def manual_actual_staging_summary(output_dir: Path, *, ledger=None) -> dict[str,
                 raise ValueError("工作階段已變更，請重新開啟人工校對畫面")
             projected = _manual_actual_snapshot_ledger(manifest, db, current)
             live_groups = _current_live_groups_for_staged_manual_actual(current, groups, snapshot_ledger=projected)
-            checked_sources = set()
             for staged, live in zip(sorted(groups, key=lambda item: item["group_id"]), live_groups):
                 _revalidate_staged_manual_actual_group(staged, live)
-                for member in live["members"]:
-                    path = _resolve_pdf_path(member, output_dir)
-                    wanted = str(member.get("pdf_sha256") or "")
-                    key = (path, wanted)
-                    if key not in checked_sources:
-                        if not wanted or sha256_file(path) != wanted:
-                            raise ValueError(f"SOURCE_INVALID：actual 暫存來源 PDF 已變更：{path.name}")
-                        checked_sources.add(key)
+            _validate_manual_actual_group_sources(output_dir, live_groups)
         except Exception as exc:
             summary["staging_error"] = str(exc)
             summary["staged_checked_occurrence_ids"] = []
@@ -3544,6 +3551,19 @@ def stage_manual_actual_correction(
         if checked_occurrence_ids is None
         else list(checked_occurrence_ids)
     )
+    if prior:
+        # The lower-level API intentionally replaces a whole group's decision.
+        # This GUI service instead accumulates individually checked peers, but
+        # only after proving the retained snapshot, sources and same reading.
+        if canonical_bopomofo(reading) != prior["reading"]:
+            raise ValueError("此字形已有不同讀音的 actual 暫存；未覆寫既有確認。請先釐清既有暫存，再重新核對本筆。")
+        _validate_manual_actual_group_sources(output_dir, [group])
+        checked_ids = _staging_id_list(checked_ids, "input.checked_occurrence_ids")
+        if not checked_ids:
+            raise ValueError("manual actual staging checked_occurrence_ids 不得為空")
+        # Keep unknown IDs for the existing writer's rejection, rather than
+        # filtering them away when constructing the union in member order.
+        checked_ids = list(dict.fromkeys(prior["checked_occurrence_ids"] + checked_ids))
     staged = stage_manual_actual_group(
         project_actual_evidence_root(output_dir),
         group,
