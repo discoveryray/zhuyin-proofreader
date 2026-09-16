@@ -120,6 +120,13 @@ def scrollable_entry(master, variable, *, readonly=False):
     return frame
 
 
+def scroll_canvas(canvas, *args):
+    """Keep wheel/arrow steps readable while moveto retains pixel precision."""
+    if len(args) == 3 and args[0] == "scroll" and args[2] == "units":
+        args = ("scroll", int(args[1]) * 24, "units")
+    canvas.yview(*args)
+
+
 MAX_PREVIEW_DIMENSION = 8192
 MAX_PREVIEW_PIXELS = 16_000_000
 
@@ -196,7 +203,7 @@ class OccurrencePreview(tk.Frame):
         if not expand_content:
             self.scrollbar = ttk.Scrollbar(self, orient="vertical", command=self._scroll)
             self.scrollbar.pack(side="right", fill="y")
-            self.canvas.configure(yscrollcommand=self.scrollbar.set, yscrollincrement=24)
+            self.canvas.configure(yscrollcommand=self.scrollbar.set, yscrollincrement=1)
             self.canvas.bind("<MouseWheel>", self._mousewheel)
         self.canvas.pack(side="left", fill="both", expand=True)
         self.pixmap = self.target = self.photo = None
@@ -233,8 +240,7 @@ class OccurrencePreview(tk.Frame):
         self.canvas.delete("all")
         self.canvas.configure(scrollregion=(0, 0, 0, 0))
         self.canvas.yview_moveto(0)
-        if self.expand_content:
-            self.canvas.configure(height=self._minimum_height)
+        self.canvas.configure(height=self._minimum_height)
         self.pixmap = self.target = self.photo = None
         self._entry = self._render_width = None
         self._needs_locate = False
@@ -273,7 +279,7 @@ class OccurrencePreview(tk.Frame):
         self.cancel_positioning()
         first, last = self.canvas.yview()
         if (delta > 0 and first > 0) or (delta < 0 and last < 1):
-            self.canvas.yview_scroll(-1 if delta > 0 else 1, "units")
+            scroll_canvas(self.canvas, "scroll", -1 if delta > 0 else 1, "units")
             # Stop before the containing toplevel's form-scroll binding.
             return "break"
 
@@ -286,7 +292,7 @@ class OccurrencePreview(tk.Frame):
 
     def _scroll(self, *args):
         self.cancel_positioning()
-        self.canvas.yview(*args)
+        scroll_canvas(self.canvas, *args)
 
     def _render(self):
         self._render_pending = None
@@ -347,8 +353,17 @@ class OccurrencePreview(tk.Frame):
         except Exception as exc:
             self._failed(exc)
             return
-        if self.expand_content and int(self.canvas.cget("height")) != scaled.height + 16:
-            self.canvas.configure(height=scaled.height + 16)
+        requested_height = self._minimum_height
+        if self.expand_content:
+            requested_height = scaled.height + 16
+        elif self.target is not None:
+            # The outer form may scroll its summary away to make room for the
+            # complete target and 20px of context on each side. Derive this
+            # minimum only from the display transform, never allocated height.
+            target_height = (self.target[3] - self.target[1]) * scaled.height / self.pixmap.height
+            requested_height = max(requested_height, math.ceil(target_height + 6) + 40)
+        if int(self.canvas.cget("height")) != requested_height:
+            self.canvas.configure(height=requested_height)
         x, y = (width - scaled.width) / 2, 8
         self.canvas.configure(scrollregion=(0, 0, width, scaled.height + 16))
         self.canvas.yview_moveto(fraction)

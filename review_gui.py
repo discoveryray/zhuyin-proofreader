@@ -37,7 +37,7 @@ from standalone_proofread import (
     validate_output_artifact_hashes,
 )
 from actual_review import build_actual_group_for_entry
-from review_display import ActionRows, OccurrencePreview, WrappedLabel, scrollable_entry, wrap_checkbutton
+from review_display import ActionRows, OccurrencePreview, WrappedLabel, scroll_canvas, scrollable_entry, wrap_checkbutton
 
 
 STATE_HELP = {
@@ -75,7 +75,7 @@ def create_scrollable_body(window: tk.Toplevel, *, fill_height=False) -> tuple[t
     """Scrollable content area; callers can keep action buttons in a fixed footer."""
     holder = tk.Frame(window)
     holder.pack(fill="both", expand=True)
-    canvas = tk.Canvas(holder, highlightthickness=0, borderwidth=0, yscrollincrement=24)
+    canvas = tk.Canvas(holder, highlightthickness=0, borderwidth=0, yscrollincrement=1)
     scrollbar = ttk.Scrollbar(holder, orient="vertical", command=lambda *args: scroll_body(*args))
     canvas.configure(yscrollcommand=scrollbar.set)
     scrollbar.pack(side="right", fill="y")
@@ -118,7 +118,7 @@ def create_scrollable_body(window: tk.Toplevel, *, fill_height=False) -> tuple[t
                 widget.cancel_positioning()
             else:
                 pending.extend(widget.winfo_children())
-        canvas.yview(*args)
+        scroll_canvas(canvas, *args)
 
     def on_mousewheel(event):
         # The inner preview returns break while it can scroll. A wheel at its

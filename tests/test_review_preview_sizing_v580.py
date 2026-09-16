@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import math
 from pathlib import Path
 import tempfile
 import time
@@ -110,9 +111,9 @@ class PreviewSizingTkTests(unittest.TestCase):
         box = preview.canvas.coords(preview.canvas.find_withtag("target")[-1])
         top = preview.canvas.winfo_rooty() + box[1] - preview.canvas.canvasy(0)
         bottom = preview.canvas.winfo_rooty() + box[3] - preview.canvas.canvasy(0)
-        viewport = outer or preview.canvas
-        self.assertGreaterEqual(top, viewport.winfo_rooty() - 1)
-        self.assertLessEqual(bottom, viewport.winfo_rooty() + viewport.winfo_height() + 1)
+        for viewport in (preview.canvas, outer) if outer is not None else (preview.canvas,):
+            self.assertGreaterEqual(top, viewport.winfo_rooty() - 1)
+            self.assertLessEqual(bottom, viewport.winfo_rooty() + viewport.winfo_height() + 1)
 
     def test_main_fills_remaining_space_width_and_switch_reveals_target(self):
         create_visual_fixture(self.folder)
@@ -165,6 +166,99 @@ class PreviewSizingTkTests(unittest.TestCase):
             self.window.geometry("1040x300")
             settle(self.window)
             self.assertIsNotNone(preview.pixmap)
+
+    def test_wide_short_first_and_next_have_full_inner_outer_target_and_context(self):
+        create_visual_fixture(self.folder)
+        app = gui.ReviewApp(self.window, self.folder)
+        self.window.geometry("1540x520")
+        settle(self.window)
+        snapshots = []
+        for next_item in (False, True):
+            if next_item:
+                app.next()
+            else:
+                app.show()
+            settle(self.window)
+            preview, outer = app.image, app.body_canvas
+            self.assert_target_visible(preview, outer)
+            box = preview.canvas.coords(preview.canvas.find_withtag("target")[-1])
+            # Independent fixture dimensions: first crop 237x232, next
+            # same-character crop 337x232; both target bboxes are 37x27.
+            crop_width = 337 if next_item else 237
+            expected_target_height = (preview.canvas.winfo_width() - 16) * 27 / crop_width + 6
+            self.assertAlmostEqual(box[3] - box[1], expected_target_height, delta=1)
+            self.assertGreaterEqual(preview.canvas.winfo_height(), math.ceil(expected_target_height) + 38)
+            self.assertAlmostEqual(preview.photo.height() / preview.photo.width(), 232 / crop_width, delta=.005)
+            self.assertLessEqual(abs(preview.photo.width() - (preview.canvas.winfo_width() - 16)), 1)
+            self.assertGreater(outer.bbox("all")[3], outer.winfo_height())
+            top = preview.canvas.winfo_rooty() + box[1] - preview.canvas.canvasy(0)
+            bottom = preview.canvas.winfo_rooty() + box[3] - preview.canvas.canvasy(0)
+            for viewport in (preview.canvas, outer):
+                self.assertGreaterEqual(top - viewport.winfo_rooty(), 18)
+                self.assertGreaterEqual(viewport.winfo_rooty() + viewport.winfo_height() - bottom, 18)
+            self.assertLessEqual(app.primary.winfo_rooty() + app.primary.winfo_height(),
+                                 self.window.winfo_rooty() + self.window.winfo_height())
+            snapshots.append(int(preview.canvas.cget("height")))
+            stable = (preview.winfo_height(), preview.canvas.winfo_height(), outer.bbox("all"), outer.yview())
+            for _ in range(4):
+                preview._schedule_draw()
+                settle(self.window)
+                self.assertEqual(stable, (preview.winfo_height(), preview.canvas.winfo_height(), outer.bbox("all"), outer.yview()))
+        self.assertLess(snapshots[1], snapshots[0], "next target must reduce the requested minimum, not accumulate height")
+        # Extra technical content remains reachable without undoing manual view.
+        app.image.canvas.yview_moveto(.2)
+        before = app.image.canvas.yview()[0]
+        app.toggle_tech()
+        settle(self.window)
+        self.assertAlmostEqual(app.image.canvas.yview()[0], before, delta=.003)
+        app.body_canvas.yview_moveto(1)
+        self.window.update()
+        self.assertLessEqual(app.tech_text.winfo_rooty() + app.tech_text.winfo_height(),
+                             app.body_canvas.winfo_rooty() + app.body_canvas.winfo_height())
+        app.toggle_tech()
+        for size in ("760x520", "1540x950", "1540x520"):
+            self.window.geometry(size)
+            app.show()
+            settle(self.window)
+            self.assert_target_visible(app.image, app.body_canvas)
+        self.assertEqual(int(app.image.canvas.cget("height")), snapshots[1])
+        app.image.clear()
+        self.assertEqual(int(app.image.canvas.cget("height")), 120)
+
+    def test_near_viewport_height_target_uses_origin_between_24_pixel_steps(self):
+        manifest = create_visual_fixture(self.folder)
+        preview = display.OccurrencePreview(self.window)
+        preview.pack(fill="both", expand=True)
+        self.window.geometry("1499x400")
+        self.window.update()
+        entry = manifest["records"][2]
+        preview.load(entry)
+        settle(self.window)
+        box = preview.canvas.coords(preview.canvas.find_withtag("target")[-1])
+        canvas_height = math.ceil(box[3] - box[1]) + 5
+        # Constrain the host so even a requested minimum cannot mask the exact
+        # positioning case. The actual target fits, with less than 6px spare.
+        self.window.geometry(f"1499x{canvas_height + preview.notice.winfo_height()}")
+        settle(self.window)
+        preview.load(entry)
+        settle(self.window)
+        self.assertEqual(preview.canvas.winfo_height(), canvas_height)
+        box = preview.canvas.coords(preview.canvas.find_withtag("target")[-1])
+        valid_low, valid_high = box[3] - canvas_height, box[1]
+        self.assertGreater(math.ceil(valid_low / 24) * 24, valid_high,
+                           "fixture must require an origin unavailable on the old 24px grid")
+        self.assertGreaterEqual(preview.canvas.canvasy(0), valid_low)
+        self.assertLessEqual(preview.canvas.canvasy(0), valid_high)
+        self.assert_target_visible(preview)
+        # Pixel placement does not turn wheel or scrollbar arrow input into a
+        # one-pixel crawl: both still move exactly 24 pixels per unit.
+        before = preview.canvas.canvasy(0)
+        preview.canvas.event_generate("<MouseWheel>", delta=-120)
+        self.window.update()
+        self.assertEqual(preview.canvas.canvasy(0) - before, 24)
+        preview.tk.call(preview.scrollbar.cget("command"), "scroll", "-1", "units")
+        self.window.update()
+        self.assertEqual(preview.canvas.canvasy(0), before)
 
     def test_long_summary_can_scroll_then_returns_remaining_space_to_preview(self):
         create_visual_fixture(self.folder)
