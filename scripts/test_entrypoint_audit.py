@@ -43,7 +43,7 @@ def compare_collections(unittest_ids, pytest_ids):
 
 
 def gui_classes(tests):
-    """Discover classes constructing real Tk roots, including inherited cases."""
+    """Find classes directly constructing real Tk roots."""
     result = []
     for path in sorted(tests.glob("test_*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8-sig"))
@@ -57,6 +57,21 @@ def gui_classes(tests):
     if not result:
         raise ValueError("no real Tk classes discovered")
     return result
+
+
+def gui_ids_from_cases(cases, direct_prefixes):
+    """Include collected subclasses whose MRO reaches a direct Tk class."""
+    direct_classes = {prefix.removesuffix(".") for prefix in direct_prefixes}
+    gui_ids = [case.id() for case in cases if any(
+        f"{base.__module__}.{base.__name__}" in direct_classes
+        for base in type(case).__mro__
+    )]
+    if not gui_ids or any(
+        not any(case.id().startswith(prefix) for case in cases)
+        for prefix in direct_prefixes
+    ):
+        raise ValueError("Tk class has no collected tests")
+    return gui_ids
 
 
 def verify_gui(report, inventory):
@@ -85,11 +100,13 @@ def collect(runner, output):
                 for child in item:
                     yield from flatten(child)
             else:
-                yield item.id()
+                yield item
 
-        ids = list(flatten(suite))
+        cases = list(flatten(suite))
+        ids = [case.id() for case in cases]
         if loader.errors:
             raise ValueError("unittest discovery failed: " + "\n".join(loader.errors))
+        gui_ids = gui_ids_from_cases(cases, gui_classes(ROOT / "tests"))
     else:
         import pytest
 
@@ -106,7 +123,8 @@ def collect(runner, output):
         if result != 0:
             raise ValueError(f"pytest discovery failed: {result}")
         ids = plugin.ids
-    output.write_text(json.dumps(ids, ensure_ascii=False, indent=2), encoding="utf-8")
+    collection = {"ids": ids, "gui_ids": gui_ids} if runner == "unittest" else ids
+    output.write_text(json.dumps(collection, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def main(argv=None):
@@ -122,11 +140,11 @@ def main(argv=None):
             paths = [Path(temporary) / f"{runner}.json" for runner in ("unittest", "pytest")]
             for runner, path in zip(("unittest", "pytest"), paths):
                 subprocess.run([sys.executable, __file__, "_" + runner, str(path)], cwd=ROOT, check=True)
-            result = compare_collections(*(json.loads(path.read_text(encoding="utf-8")) for path in paths))
-        prefixes = gui_classes(ROOT / "tests")
-        result["gui_ids"] = [name for name in result["unittest_ids"] if any(name.startswith(p) for p in prefixes)]
-        if not result["gui_ids"] or any(not any(name.startswith(p) for name in result["gui_ids"]) for p in prefixes):
-            raise ValueError("Tk class has no collected tests")
+            unittest_collection, pytest_ids = (
+                json.loads(path.read_text(encoding="utf-8")) for path in paths
+            )
+            result = compare_collections(unittest_collection["ids"], pytest_ids)
+            result["gui_ids"] = unittest_collection["gui_ids"]
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
         print(json.dumps({"unittest": len(result["unittest_ids"]), "pytest": len(result["pytest_ids"]),

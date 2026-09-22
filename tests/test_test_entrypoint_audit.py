@@ -1,3 +1,4 @@
+import json
 import tempfile
 from pathlib import Path
 import sys
@@ -111,6 +112,56 @@ class EntrypointAuditTests(unittest.TestCase):
                 sys.path[:] = original_path
                 sys.modules.pop("test_hook_probe", None)
                 sys.modules.pop("hook_provider", None)
+
+    def test_inherited_gui_cases_are_mandatory_across_modules(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            tests = root / "tests"
+            tests.mkdir()
+            (tests / "test_gui_parent.py").write_text(
+                "import unittest\n"
+                "import tkinter as tk\n"
+                "class Parent(unittest.TestCase):\n"
+                "    def setUp(self): self.root = tk.Tk()\n"
+                "    def test_base(self): pass\n"
+                "class LocalChild(Parent):\n"
+                "    def test_local(self): pass\n",
+                encoding="utf-8",
+            )
+            (tests / "test_gui_child.py").write_text(
+                "import test_gui_parent\n"
+                "class CrossChild(test_gui_parent.Parent):\n"
+                "    def test_cross(self): pass\n",
+                encoding="utf-8",
+            )
+            original_path = sys.path[:]
+            try:
+                with patch("scripts.test_entrypoint_audit.ROOT", root):
+                    output = root / "unittest.json"
+                    collect("unittest", output)
+                    collection = json.loads(output.read_text(encoding="utf-8"))
+            finally:
+                sys.path[:] = original_path
+                sys.modules.pop("test_gui_parent", None)
+                sys.modules.pop("test_gui_child", None)
+
+            ids = collection["ids"]
+            inventory = compare_collections(ids, ids)
+            inventory["gui_ids"] = collection["gui_ids"]
+            self.assertEqual(set(inventory["gui_ids"]), set(ids))
+            self.assertEqual(len(ids), 5)
+            report = root / "junit.xml"
+            entries = []
+            for name in ids:
+                module, class_name, method = name.rsplit(".", 2)
+                content = "<skipped/>" if class_name == "CrossChild" else ""
+                entries.append(
+                    f'<testcase classname="tests.{module}.{class_name}" name="{method}">'
+                    f"{content}</testcase>"
+                )
+            report.write_text("<testsuite>" + "".join(entries) + "</testsuite>", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "required GUI case did not execute"):
+                verify_gui(report, inventory)
 
 
 if __name__ == "__main__":
