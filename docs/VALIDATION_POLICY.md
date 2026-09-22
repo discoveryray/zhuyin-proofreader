@@ -63,6 +63,8 @@ CI 僅在 `pull_request`、上述精確 head branch 且 base SHA 恰等於固定
 
 新 v3 不默認接受 v1／v2 snapshot。其他尚未完成的舊任務維持凍結契約；若未來 CI 變更讓舊必要證據無法取得，應明確 BLOCKED 並交回契約／能力解決條件，不能靜默套用本任務 transition。
 
+外部採用限制：2026-09-22 從 GitHub `GET /repos/discoveryray/zhuyin-proofreader/rules/branches/develop` 核對，ruleset `21894326` 的 strict required status checks 仍要求 `Python 3.12`、`Python 3.13`，並要求 review threads resolution、只允許 merge commit。原始 JSON 保存在 task evidence `develop-rules-before-pr.json`。本次有限雙 job transition 可提供這兩個 context；未來例行單 3.13 的新任務仍會被外部 `Python 3.12` 必要 context 阻擋。Gate 必須保持 `protection_satisfied=false` 並 STOP，不能用 dummy 3.12 成功、改寫證據或改 CI 名稱冒充真正舊 gate。使用者未授權本次修改 GitHub 保護規則，因此只交付此採用限制；要全面啟用新單版本制度，需另外取得明確保護規則遷移授權及驗證，或交回具體 contract／capability resolution，不能宣稱外部門檻已同步。
+
 本次本機須依舊制度完成 full unittest + full pytest、runtime、GUI、compile、diff；3.12 證據由 transition CI 提供。實測命令、耗時及限制保存在 task evidence 並由 PR 回報；未實測的節省不估算或捏造。此文件不是測試 PASS，兩輪審查與 CI 仍須取得原始證據。
 
 ## 可同步文件
