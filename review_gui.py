@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import json
+import queue
 import re
 import sys
 import threading
@@ -26,7 +26,6 @@ from standalone_proofread import (
     friendly_state,
     json_load,
     json_load_strict,
-    json_save,
     load_or_initialize_db,
     manual_actual_staging_summary,
     materialize_ledger,
@@ -38,6 +37,7 @@ from standalone_proofread import (
 )
 from actual_review import build_actual_group_for_entry
 from review_display import ActionRows, OccurrencePreview, WrappedLabel, scroll_canvas, scrollable_entry, wrap_checkbutton
+from review_save_service import ReviewSaveService
 
 
 STATE_HELP = {
@@ -232,10 +232,84 @@ def can_confirm_current_expected(entry):
     )
 
 
+def _waits_for_actual(item, checked):
+    # A pending-comparison view only; it never changes a ledger state.
+    return (str(item.get("occurrence_id") or "") in checked
+            and infer_expected_status(item) == "RESOLVED"
+            and item.get("state") in {
+                "ACTUAL_UNRESOLVED", "ACTUAL_DECODE_ERROR", "DIFFERENCE_PENDING_CONFIRMATION",
+                "PASS", "TEXTBOOK_ERROR_CONFIRMED",
+            }
+            and item.get("blocking_state") not in HARD_BLOCKING_STATES)
+
+
+def prepare_review_queue(manifest, ledger, previous, index, checked, deferred,
+                         character_order=None, *, advance_from=None):
+    """Prepare navigation without Tk calls; synchronous reload and save share it."""
+    old = previous[index] if 0 <= index < len(previous) else None
+    lane = review_lane(old) if old else None
+    same_character = [item for item in previous[index:] + list(reversed(previous[:index]))
+                      if old and review_lane(item) == lane and item.get("char") == old.get("char")]
+    following = [(review_lane(item), str(item.get("occurrence_id") or ""))
+                 for item in same_character + previous[index:]
+                 if review_lane(item) == lane and item.get("review_id") != advance_from]
+    checked = set(checked)
+    waiting = {
+        str(item.get("occurrence_id") or "") for item in ledger if _waits_for_actual(item, checked)
+    }
+    pending = [item for item in ledger if item.get("state") in NON_TERMINAL_STATES
+               and not _waits_for_actual(item, checked)]
+    live_keys = {(review_lane(item), str(item.get("occurrence_id") or "")) for item in pending}
+    deferred = deferred & live_keys
+    lane_counts = Counter(review_lane(item) for item in pending)
+    pdf_order = {str(item.get("pdf_name") or ""): n for n, item in enumerate(manifest.get("pdfs", []))}
+
+    def number(value):
+        try:
+            return float(value or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def source_order(item):
+        pdf = str(item.get("pdf_name") or "")
+        return (pdf_order.get(pdf, len(pdf_order)), pdf,
+                number(item.get("physical_page")), number(item.get("source_row_number")),
+                number(item.get("y0")), number(item.get("x0")), str(item.get("occurrence_id") or ""))
+
+    # Anchor groups to the full original roster, including completed/deferred
+    # rows. Refreshing the remaining queue must not move a character group.
+    if character_order is None:
+        character_order = {}
+        for item in sorted(ledger, key=source_order):
+            character_order.setdefault(str(item.get("char") or ""), len(character_order))
+
+    def order(item):
+        item_lane = review_lane(item)
+        char_rank = character_order.get(str(item.get("char") or ""), len(character_order)) if item_lane != "other" else 0
+        return (LANE_ORDER[item_lane], char_rank, source_order(item))
+
+    records = sorted([item for item in pending
+                           if (review_lane(item), str(item.get("occurrence_id") or "")) not in deferred], key=order)
+    indexes = {(review_lane(item), str(item.get("occurrence_id") or "")): n for n, item in enumerate(records)}
+    for key in following:
+        if key in indexes:
+            selected_index = indexes[key]
+            break
+    else:
+        # Finish the current lane before a just-saved row moves to another lane.
+        alternatives = [n for n, item in enumerate(records) if item.get("review_id") != advance_from]
+        same_lane = [n for n in alternatives if review_lane(records[n]) == lane]
+        selected_index = min(same_lane, key=lambda n: abs(n - index)) if same_lane else (alternatives[0] if alternatives else 0)
+    return {"records": records, "index": selected_index, "deferred_items": deferred,
+            "waiting_actual_occurrence_ids": waiting, "pending_lane_counts": lane_counts,
+            "_character_order": character_order}
+
+
 def guarded_review_action(method):
     """A modal/save action belongs to one item, including queued double clicks."""
     def run(self, *args, **kwargs):
         if (getattr(self, "_review_action_in_progress", False)
+                or self._save_busy()
                 or getattr(self, "_apply_in_progress", False)
                 or time.monotonic() < getattr(self, "_review_action_cooldown_until", 0)):
             return
@@ -558,7 +632,12 @@ class ReviewApp:
         self.staged_checked_occurrence_ids = set()
         self.deferred_items = set()
         self._save_in_progress = False
+        self._project_generation = 0
+        self._save_service = ReviewSaveService(output_dir)
+        self._save_recovery_required = False
+        self.last_save_timings = {}
         self.waiting_actual_occurrence_ids = set()
+        root.protocol("WM_DELETE_WINDOW", self.close)
 
         root.title(f"注音校對－人工確認 v{VERSION}")
         apply_screen_safe_geometry(root, 1180, 850, min_width=760, min_height=520)
@@ -636,85 +715,40 @@ class ReviewApp:
             messagebox.showinfo(title, detail, parent=self.root)
 
     def reload_records(self, *, advance_from=None):
+        if getattr(self, "_save_in_progress", False):
+            return
+        self._invalidate_save_snapshot()
+        if getattr(self, "_character_order_manifest", None) is not self.manifest:
+            self.__dict__.pop("_character_order", None)
+            self._character_order_manifest = self.manifest
         ledger = materialize_ledger(self.manifest, self.db)
         self.reload_staging_summary(ledger)
         self._set_actionable_records_from_ledger(ledger, advance_from=advance_from)
 
-    def _waits_for_actual(self, item):
-        # This is only a view of pending comparison, never a ledger transition.
-        return (str(item.get("occurrence_id") or "") in self.staged_checked_occurrence_ids
-                and infer_expected_status(item) == "RESOLVED"
-                and item.get("state") in {
-                    "ACTUAL_UNRESOLVED", "ACTUAL_DECODE_ERROR", "DIFFERENCE_PENDING_CONFIRMATION",
-                    "PASS", "TEXTBOOK_ERROR_CONFIRMED",
-                }
-                and item.get("blocking_state") not in HARD_BLOCKING_STATES)
+    def _queue_inputs(self):
+        return (self.manifest, self.records, self.index,
+                set(getattr(self, "deferred_items", set())),
+                dict(self._character_order) if hasattr(self, "_character_order") else None)
 
     def _set_actionable_records_from_ledger(self, ledger, *, advance_from=None):
-        previous = list(getattr(self, "records", []))
-        index = int(getattr(self, "index", 0))
-        old = previous[index] if 0 <= index < len(previous) else None
-        lane = review_lane(old) if old else None
-        same_character = [item for item in previous[index:] + list(reversed(previous[:index]))
-                          if old and review_lane(item) == lane and item.get("char") == old.get("char")]
-        following = [(review_lane(item), str(item.get("occurrence_id") or ""))
-                     for item in same_character + previous[index:]
-                     if review_lane(item) == lane and item.get("review_id") != advance_from]
-        self.staged_checked_occurrence_ids = set(getattr(self, "staged_checked_occurrence_ids", set()))
-        self.waiting_actual_occurrence_ids = {
-            str(item.get("occurrence_id") or "") for item in ledger if self._waits_for_actual(item)
-        }
-        deferred = set(getattr(self, "deferred_items", set()))
-        pending = [item for item in ledger if item.get("state") in NON_TERMINAL_STATES
-                   and not self._waits_for_actual(item)]
-        live_keys = {(review_lane(item), str(item.get("occurrence_id") or "")) for item in pending}
-        self.deferred_items = deferred & live_keys
-        self.pending_lane_counts = Counter(review_lane(item) for item in pending)
-        pdf_order = {str(item.get("pdf_name") or ""): n for n, item in enumerate(getattr(self, "manifest", {}).get("pdfs", []))}
+        manifest, previous, index, deferred, character_order = self._queue_inputs()
+        prepared = prepare_review_queue(manifest, ledger, previous, index,
+                                        self.staged_checked_occurrence_ids, deferred,
+                                        character_order, advance_from=advance_from)
+        self._publish_review_queue(prepared)
 
-        def number(value):
-            try:
-                return float(value or 0)
-            except (TypeError, ValueError):
-                return 0.0
-
-        def source_order(item):
-            pdf = str(item.get("pdf_name") or "")
-            return (pdf_order.get(pdf, len(pdf_order)), pdf,
-                    number(item.get("physical_page")), number(item.get("source_row_number")),
-                    number(item.get("y0")), number(item.get("x0")), str(item.get("occurrence_id") or ""))
-
-        # Anchor groups to the full original roster, including completed/deferred
-        # rows. Refreshing the remaining queue must not move a character group.
-        if not hasattr(self, "_character_order"):
-            self._character_order = {}
-            for item in sorted(ledger, key=source_order):
-                self._character_order.setdefault(str(item.get("char") or ""), len(self._character_order))
-
-        def order(item):
-            item_lane = review_lane(item)
-            char_rank = self._character_order.get(str(item.get("char") or ""), len(self._character_order)) if item_lane != "other" else 0
-            return (LANE_ORDER[item_lane], char_rank, source_order(item))
-
-        self.records = sorted([item for item in pending
-                               if (review_lane(item), str(item.get("occurrence_id") or "")) not in self.deferred_items], key=order)
+    def _publish_review_queue(self, prepared):
+        self.__dict__.update(prepared)
         if hasattr(self, "revisit_button"):
             count = len(self.deferred_items)
             self.revisit_button.config(text=f"重新查看稍後處理（{count}）", state="normal" if count else "disabled")
             if hasattr(self, "navigation"):
                 self.navigation.refresh()
-        indexes = {(review_lane(item), str(item.get("occurrence_id") or "")): n for n, item in enumerate(self.records)}
         self._show_staging_status()
-        for key in following:
-            if key in indexes:
-                self.index = indexes[key]
-                return
-        # Finish the current lane before a just-saved row moves to another lane.
-        alternatives = [n for n, item in enumerate(self.records) if item.get("review_id") != advance_from]
-        same_lane = [n for n in alternatives if review_lane(self.records[n]) == lane]
-        self.index = min(same_lane, key=lambda n: abs(n - index)) if same_lane else (alternatives[0] if alternatives else 0)
 
     def defer_current(self):
+        if self._save_busy() or getattr(self, "_apply_in_progress", False):
+            return
         entry = self.current()
         if not entry:
             return
@@ -724,6 +758,8 @@ class ReviewApp:
         self.show()
 
     def revisit_deferred(self):
+        if self._save_busy() or getattr(self, "_apply_in_progress", False):
+            return
         self.deferred_items = set()
         self.records = []
         self.index = 0
@@ -738,6 +774,9 @@ class ReviewApp:
         except Exception as exc:
             # Do not retain an earlier trusted checked roster on a read failure.
             summary = {"staging_error": str(exc)}
+        return self._publish_staging_summary(summary)
+
+    def _publish_staging_summary(self, summary):
         self.staging_summary = dict(summary)
         self.staged_member_occurrence_ids = set(summary.get("staged_member_occurrence_ids") or [])
         self.staged_checked_occurrence_ids = set(summary.get("staged_checked_occurrence_ids") or [])
@@ -795,44 +834,183 @@ class ReviewApp:
     def current(self):
         return self.records[self.index] if self.records else None
 
-    def save_event(self, entry, event):
-        if getattr(self, "_save_in_progress", False):
+    def _save_busy(self):
+        return (getattr(self, "_save_in_progress", False)
+                or getattr(self, "_save_recovery_required", False))
+
+    def _invalidate_save_snapshot(self):
+        self._project_generation = getattr(self, "_project_generation", 0) + 1
+        # Replace rather than mutate a snapshot potentially owned by a worker.
+        self._save_service = ReviewSaveService(self.output_dir)
+
+    def close(self):
+        if getattr(self, "_save_in_progress", False) or getattr(self, "_apply_in_progress", False):
+            self.status.config(text="人工判定儲存中，完成後即可關閉。")
+            return
+        self._project_generation = getattr(self, "_project_generation", 0) + 1
+        self.root.destroy()
+
+    def _disable_save_controls(self):
+        widgets = [getattr(self, name, None) for name in
+                   ("primary", "secondary", "later", "more_button", "apply_actual_button", "revisit_button")]
+        navigation = getattr(self, "navigation", None)
+        if navigation is not None:
+            widgets.extend(navigation.winfo_children())
+        self._saved_control_states = []
+        for widget in widgets:
+            if widget is not None and hasattr(widget, "cget"):
+                self._saved_control_states.append((widget, widget.cget("state")))
+                widget.config(state="disabled")
+        if hasattr(self, "status"):
+            self._saved_status_text = self.status.cget("text")
+            self.status.config(text="正在儲存人工判定與更新待辦，請稍候…")
+
+    def _restore_save_controls(self):
+        for widget, state in getattr(self, "_saved_control_states", []):
+            widget.config(state=state)
+        self._saved_control_states = []
+        entry = self.current()
+        if (entry and can_confirm_current_expected(entry) and hasattr(self, "primary")
+                and getattr(self, "_rendered_review_id", None) != entry.get("review_id")):
+            # A resize/render may fail while the save worker is running. Do not
+            # restore the shortcut's old enabled state after a failed write.
+            self.primary.config(state="disabled")
+        if hasattr(self, "status") and hasattr(self, "_saved_status_text"):
+            self.status.config(text=self._saved_status_text)
+
+    def save_event(self, entry, event, *, explain_expected=False):
+        """Start one durable save; publish only from the Tk polling callback."""
+        if self._save_busy() or getattr(self, "_apply_in_progress", False):
+            return False
+        current = self.current()
+        if not current or current.get("review_id") != entry.get("review_id"):
             return False
         self._save_in_progress = True
-        self._last_event_saved = False
+        self._last_event_saved = self._last_event_refreshed = False
+        if not hasattr(self, "_save_service"):
+            self._save_service = ReviewSaveService(self.output_dir)
+        started = time.perf_counter()
+        request = {"generation": getattr(self, "_project_generation", 0),
+                   "review_id": entry["review_id"], "manifest": self.manifest,
+                   "db": self.db, "output_dir": self.output_dir,
+                   "entry": entry, "event": event, "explain_expected": explain_expected,
+                   "started": started}
+        self._save_request = request
+        completed = queue.Queue(maxsize=1)
+        service = self._save_service
+        manifest, previous, index, deferred, character_order = self._queue_inputs()
+
+        def worker():
+            result = prepared = error = None
+            try:
+                result = service.save_event(request["review_id"], event,
+                                            expected_manifest=manifest, expected_db=request["db"])
+                queue_started = time.perf_counter()
+                prepared = prepare_review_queue(
+                    manifest, result.ledger, previous, index,
+                    set(result.staging_summary.get("staged_checked_occurrence_ids") or []),
+                    deferred, character_order, advance_from=request["review_id"])
+                result.timings["todo_update"] = time.perf_counter() - queue_started
+            except Exception as exc:
+                error = exc
+            # No root.after or other Tk call is permitted from this worker.
+            completed.put((result, prepared, error))
+
+        def poll():
+            if getattr(self, "_save_request", None) is not request:
+                return
+            try:
+                result, prepared, error = completed.get_nowait()
+            except queue.Empty:
+                self.root.after(20, poll)
+                return
+            self._finish_event_save(request, result, prepared, error)
+
         try:
-            review_id = entry["review_id"]
-            staged = json.loads(json.dumps(self.db, ensure_ascii=False))
-            staged.setdefault("events", {})[review_id] = event
-            staged_ledger = materialize_ledger(self.manifest, staged)
-            resolved_entry = next((item for item in staged_ledger if item.get("review_id") == review_id), None)
-            if resolved_entry is None:
-                raise ValueError("儲存後找不到本筆 review_id，已取消寫入。")
-            json_save(self.output_dir / "人工判定資料庫.json", staged)
+            self._disable_save_controls()
+            self._save_worker = threading.Thread(target=worker, daemon=False)
+            self.root.after(20, poll)
+            self._save_worker.start()
         except Exception as exc:
-            messagebox.showerror("無法儲存人工判定", str(exc), parent=self.root)
-            return False
-        finally:
+            self._save_request = None
             self._save_in_progress = False
-        self.db = staged
-        self._last_event_saved = True
+            self._restore_save_controls()
+            messagebox.showerror("無法開始儲存人工判定", str(exc), parent=self.root)
+            return False
+        return True
+
+    def _finish_event_save(self, request, result, prepared, error):
+        if getattr(self, "_save_request", None) is not request:
+            return
+        current = self.current()
+        applies = (request["generation"] == getattr(self, "_project_generation", 0)
+                   and request["manifest"] is self.manifest and request["db"] is self.db
+                   and request["output_dir"] == self.output_dir
+                   and current is not None and current.get("review_id") == request["review_id"])
+        self._last_event_saved = result is not None
         self._last_event_refreshed = False
-        if "manual_expected_decision" in event:
-            self.last_saved_expected = resolved_entry
+        self.last_save_timings = dict(result.timings) if result is not None else {}
+        publish_started = time.perf_counter()
         try:
-            self.reload_staging_summary(staged_ledger)
-            self._set_actionable_records_from_ledger(staged_ledger, advance_from=review_id)
-            self.show()
-            self._last_event_refreshed = True
-        except Exception as exc:
-            messagebox.showwarning("人工判定已保存，但畫面更新失敗", f"本筆人工判定已寫入，請重新開啟畫面恢復待辦。\n{exc}", parent=self.root)
-        return resolved_entry.get("state") not in NON_TERMINAL_STATES
+            if not applies:
+                self._save_recovery_required = True
+                self._rendered_review_id = None
+                if hasattr(self, "status"):
+                    self.status.config(text="儲存結果未套用到目前畫面；請關閉並重新開啟以恢復待辦。")
+                messagebox.showwarning(
+                    "人工判定已保存，但畫面已變更" if result is not None else "畫面已變更，無法套用儲存結果",
+                    "背景結果未套用到目前項目。請關閉並重新開啟人工校對，以磁碟中的判定恢復。",
+                    parent=self.root)
+                return
+            if result is None:
+                self._restore_save_controls()
+                self._invalidate_save_snapshot()
+                messagebox.showerror("無法儲存人工判定", str(error), parent=self.root)
+                return
+            # This is the first mutation of authoritative UI data after the write.
+            self.db = result.db
+            self._saved_version_token = result.version_token
+            if request["event"] and "manual_expected_decision" in request["event"]:
+                self.last_saved_expected = result.resolved_entry
+            try:
+                self._restore_save_controls()
+                if error is not None:
+                    raise error
+                self._publish_staging_summary(result.staging_summary)
+                self._publish_review_queue(prepared)
+                render_started = time.perf_counter()
+                self.show()
+                self.last_save_timings["preview_and_show"] = time.perf_counter() - render_started
+                self._last_event_refreshed = True
+                if request["explain_expected"]:
+                    self._explain_saved_expected(request["entry"])
+            except Exception as exc:
+                self._save_recovery_required = True
+                self._rendered_review_id = None
+                self._disable_save_controls()
+                if hasattr(self, "status"):
+                    self.status.config(text="判定已保存，畫面更新失敗；請關閉並重新開啟以恢復待辦。")
+                messagebox.showwarning("人工判定已保存，但畫面更新失敗",
+                                       f"本筆人工判定已寫入，請重新開啟畫面恢復待辦。\n{exc}", parent=self.root)
+        finally:
+            if result is not None:
+                # Keep the existing 0.5 s click/key debounce separate from work.
+                self._review_action_cooldown_until = time.monotonic() + 0.5
+                self._shortcut_cooldown_until = self._review_action_cooldown_until
+            self.last_save_timings["ui_publish"] = time.perf_counter() - publish_started
+            self.last_save_timings["operation_total"] = time.perf_counter() - request["started"]
+            self.last_save_timings["cooldown_seconds"] = 0.5 if result is not None else 0.0
+            self._save_in_progress = False
 
     def prev(self):
+        if self._save_busy() or getattr(self, "_apply_in_progress", False):
+            return
         self.index = max(0, self.index - 1)
         self.show()
 
     def next(self):
+        if self._save_busy() or getattr(self, "_apply_in_progress", False):
+            return
         if not self.records:
             return
         self.index = min(len(self.records) - 1, self.index + 1)
@@ -856,10 +1034,7 @@ class ReviewApp:
         except Exception as exc:
             messagebox.showerror("無法儲存人工判定", str(exc), parent=self.root)
             return
-        self.save_event(entry, event)
-        if getattr(self, "_last_event_saved", False):
-            self._shortcut_cooldown_until = time.monotonic() + 0.5
-            self._explain_saved_expected(entry)
+        self.save_event(entry, event, explain_expected=True)
 
     @guarded_review_action
     def resolve_expected(self):
@@ -879,9 +1054,7 @@ class ReviewApp:
         except Exception as exc:
             messagebox.showerror("無法儲存人工判定", str(exc), parent=self.root)
             return
-        self.save_event(entry, event)
-        if getattr(self, "_last_event_saved", False):
-            self._explain_saved_expected(entry)
+        self.save_event(entry, event, explain_expected=True)
 
     def _explain_saved_expected(self, entry):
         if not getattr(self, "_last_event_refreshed", False):
@@ -903,6 +1076,8 @@ class ReviewApp:
                 )
 
     def create_reusable_expected_rule(self):
+        if self._save_busy() or getattr(self, "_apply_in_progress", False):
+            return
         # A separate explicit operation, available even after the saved row left
         # the current lane. Its stronger requirements cannot prevent item saving.
         entry = getattr(self, "last_saved_expected", None)
@@ -918,6 +1093,7 @@ class ReviewApp:
         try:
             rule = build_reusable_rule(entry, phrase=phrase, expected_set=entry["expected_set"], evidence=evidence)
             save_reusable_expected_rule(rule)
+            self._invalidate_save_snapshot()
         except Exception as exc:
             messagebox.showerror("可重用規則未儲存", f"{exc}\n本筆已保存的人工判定仍保留。", parent=self.root)
             return
@@ -1026,7 +1202,7 @@ class ReviewApp:
         )
 
     def apply_staged_actuals(self):
-        if getattr(self, "_apply_in_progress", False) or getattr(self, "_review_action_in_progress", False):
+        if self._save_busy() or getattr(self, "_apply_in_progress", False) or getattr(self, "_review_action_in_progress", False):
             return
         self._apply_in_progress = True
         try:
@@ -1092,13 +1268,22 @@ class ReviewApp:
         ).pack(fill="x", padx=18, pady=4)
         bar.start(12)
         old_index = self.index
+        completed = queue.Queue(maxsize=1)
 
         def worker():
             try:
                 result = apply_staged_manual_actual_corrections(self.output_dir)
-                self.root.after(0, lambda: done(result, None))
+                completed.put((result, None))
             except Exception as exc:
-                self.root.after(0, lambda exc=exc: done(None, exc))
+                completed.put((None, exc))
+
+        def poll():
+            try:
+                result, error = completed.get_nowait()
+            except queue.Empty:
+                self.root.after(20, poll)
+                return
+            done(result, error)
 
         def done(result, error):
             self._apply_in_progress = False
@@ -1171,6 +1356,7 @@ class ReviewApp:
             messagebox.showinfo("actual 批次套用完成", "\n".join(lines), parent=self.root)
 
         threading.Thread(target=worker, daemon=True).start()
+        self.root.after(20, poll)
 
     def actual_instruction(self):
         # Backward-compatible alias for old callbacks/hotkeys.
@@ -1186,12 +1372,11 @@ class ReviewApp:
             return
         if not messagebox.askyesno("撤銷本筆判定", "確定撤銷這一筆的人工作業，回到程式原本狀態？"):
             return
-        self.db.setdefault("events", {}).pop(entry["review_id"], None)
-        json_save(self.output_dir / "人工判定資料庫.json", self.db)
-        self.reload_records()
-        self.show()
+        self.save_event(entry, None)
 
     def report(self):
+        if self._save_busy() or getattr(self, "_apply_in_progress", False):
+            return
         try:
             path = regenerate_report(self.output_dir)
             status = json_load(self.output_dir / "pipeline_status.json", {}).get("status", "")
@@ -1299,11 +1484,16 @@ class ReviewApp:
         self.render(entry)
 
     def render(self, entry):
+        started = time.perf_counter()
         self._rendered_review_id = None
-        if self.image.load(entry):
-            self._rendered_review_id = entry.get("review_id")
-        elif can_confirm_current_expected(entry):
-            self.primary.config(state="disabled")
+        try:
+            if self.image.load(entry):
+                self._rendered_review_id = entry.get("review_id")
+            elif can_confirm_current_expected(entry):
+                self.primary.config(state="disabled")
+        finally:
+            if getattr(self, "_save_in_progress", False):
+                self.last_save_timings["preview_render"] = time.perf_counter() - started
 
     def _preview_failed(self):
         self._rendered_review_id = None

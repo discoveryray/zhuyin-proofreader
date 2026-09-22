@@ -1,0 +1,2515 @@
+{
+  "baseline_commit": "1593e7af65596d320b4427f1b15bb2bc0bdc949c",
+  "note": "Synthetic Windows native Tk measurements, 21 operations each; first cold operation retained separately. Before/after fixture digests are identical. See REVIEW_CONFIRM_PERFORMANCE.md for limitations.",
+  "runs": {
+    "before_without_staging": {
+      "fixture": "synthetic sealed session, PDF and hashed XLSX; not real textbook/decoder acceptance",
+      "platform": "Windows-10-10.0.19045-SP0",
+      "fixture_content_sha256": "788efe2d6e918159ad78f8d47d974201e5324de49d99584f2247f5419644881f",
+      "python": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]",
+      "pymupdf": "1.26.4",
+      "rows": 2000,
+      "initial_events": 500,
+      "staged_groups": 0,
+      "operations": 21,
+      "summary_excludes_first_operation": true,
+      "p95_method": "nearest rank",
+      "heartbeat_interval_ms": 10,
+      "processing": {
+        "median_ms": 367.9996999853756,
+        "p95_ms": 432.3663000250235
+      },
+      "button_callback": {
+        "median_ms": 354.20450000674464,
+        "p95_ms": 417.07389999646693
+      },
+      "ui_max_heartbeat_gap": {
+        "median_ms": 354.3486499984283,
+        "p95_ms": 417.23339998861775
+      },
+      "cooldown_ms": 500,
+      "stages_inclusive": {
+        "actual_staging": {
+          "median_ms": 0.5735500017181039,
+          "p95_ms": 0.6193000008352101
+        },
+        "json_save": {
+          "median_ms": 8.9948000095319,
+          "p95_ms": 9.613800037186593
+        },
+        "ledger_full": {
+          "median_ms": 223.35755001404323,
+          "p95_ms": 259.26439999602735
+        },
+        "preview_render": {
+          "median_ms": 92.77724998537451,
+          "p95_ms": 103.5480999853462
+        },
+        "todo_update": {
+          "median_ms": 13.58790000085719,
+          "p95_ms": 17.468700010795146
+        }
+      },
+      "service_stages": {},
+      "samples": [
+        {
+          "operation": 0,
+          "events_before": 500,
+          "processing_seconds": 0.3705347999930382,
+          "button_callback_seconds": 0.35709619999397546,
+          "max_heartbeat_gap_seconds": 0.3572442000149749,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.22535530000459403,
+            "json_save": 0.01000830001430586,
+            "actual_staging": 0.0014609999489039183,
+            "todo_update": 0.014498800039291382,
+            "preview_render": 0.09155710000777617
+          },
+          "stage_calls": {
+            "ledger_full": 1,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 1,
+          "events_before": 501,
+          "processing_seconds": 0.3539161999942735,
+          "button_callback_seconds": 0.3399261999875307,
+          "max_heartbeat_gap_seconds": 0.3400922999717295,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.21605990000534803,
+            "json_save": 0.008981199993286282,
+            "actual_staging": 0.0005545999738387764,
+            "todo_update": 0.013279500009957701,
+            "preview_render": 0.08723129995632917
+          },
+          "stage_calls": {
+            "ledger_full": 1,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 2,
+          "events_before": 502,
+          "processing_seconds": 0.3465640000067651,
+          "button_callback_seconds": 0.33275050000520423,
+          "max_heartbeat_gap_seconds": 0.33289439999498427,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.20932210003957152,
+            "json_save": 0.009008400025777519,
+            "actual_staging": 0.0005358000053092837,
+            "todo_update": 0.014417000056710094,
+            "preview_render": 0.08580549998441711
+          },
+          "stage_calls": {
+            "ledger_full": 1,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 3,
+          "events_before": 503,
+          "processing_seconds": 0.39249860000563785,
+          "button_callback_seconds": 0.3759802000131458,
+          "max_heartbeat_gap_seconds": 0.3761503000278026,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.23266610002610832,
+            "json_save": 0.008362399996258318,
+            "actual_staging": 0.0005952999927103519,
+            "todo_update": 0.017655800038482994,
+            "preview_render": 0.09929909999482334
+          },
+          "stage_calls": {
+            "ledger_full": 1,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 4,
+          "events_before": 504,
+          "processing_seconds": 0.44359239999903366,
+          "button_callback_seconds": 0.4262594999745488,
+          "max_heartbeat_gap_seconds": 0.4264265999663621,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.28972659999271855,
+            "json_save": 0.008613199985120445,
+            "actual_staging": 0.0005344999954104424,
+            "todo_update": 0.017074900039006025,
+            "preview_render": 0.0956446000491269
+          },
+          "stage_calls": {
+            "ledger_full": 1,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 5,
+          "events_before": 505,
+          "processing_seconds": 0.4045613999478519,
+          "button_callback_seconds": 0.38924469996709377,
+          "max_heartbeat_gap_seconds": 0.38938169996254146,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.2509518999722786,
+            "json_save": 0.009953700006008148,
+            "actual_staging": 0.0006065000197850168,
+            "todo_update": 0.016563799988944083,
+            "preview_render": 0.09656640002503991
+          },
+          "stage_calls": {
+            "ledger_full": 1,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 6,
+          "events_before": 506,
+          "processing_seconds": 0.4323663000250235,
+          "button_callback_seconds": 0.41707389999646693,
+          "max_heartbeat_gap_seconds": 0.41723339998861775,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.2500255999621004,
+            "json_save": 0.009227200003806502,
+            "actual_staging": 0.0005988000193610787,
+            "todo_update": 0.017468700010795146,
+            "preview_render": 0.1252791999722831
+          },
+          "stage_calls": {
+            "ledger_full": 1,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 7,
+          "events_before": 507,
+          "processing_seconds": 0.3691822999971919,
+          "button_callback_seconds": 0.35599970002658665,
+          "max_heartbeat_gap_seconds": 0.35613989998819306,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.2266568000195548,
+            "json_save": 0.008698799996636808,
+            "actual_staging": 0.0005601000157184899,
+            "todo_update": 0.014646399999037385,
+            "preview_render": 0.09080710000125691
+          },
+          "stage_calls": {
+            "ledger_full": 1,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 8,
+          "events_before": 508,
+          "processing_seconds": 0.3860239000059664,
+          "button_callback_seconds": 0.37145869998494163,
+          "max_heartbeat_gap_seconds": 0.3716306000133045,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.22940479998942465,
+            "json_save": 0.009413000021595508,
+            "actual_staging": 0.0005803999956697226,
+            "todo_update": 0.014872999978251755,
+            "preview_render": 0.10084719996666536
+          },
+          "stage_calls": {
+            "ledger_full": 1,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 9,
+          "events_before": 509,
+          "processing_seconds": 0.40769510000245646,
+          "button_callback_seconds": 0.39414420002140105,
+          "max_heartbeat_gap_seconds": 0.3942867000005208,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.25926439999602735,
+            "json_save": 0.009150099998805672,
+            "actual_staging": 0.0007429999532178044,
+            "todo_update": 0.014349100005347282,
+            "preview_render": 0.09239109995542094
+          },
+          "stage_calls": {
+            "ledger_full": 1,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 10,
+          "events_before": 510,
+          "processing_seconds": 0.3668170999735594,
+          "button_callback_seconds": 0.3524092999869026,
+          "max_heartbeat_gap_seconds": 0.35255740000866354,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.2262394999852404,
+            "json_save": 0.009026899992022663,
+            "actual_staging": 0.0005616000271402299,
+            "todo_update": 0.01356120000127703,
+            "preview_render": 0.08800580003298819
+          },
+          "stage_calls": {
+            "ledger_full": 1,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 11,
+          "events_before": 511,
+          "processing_seconds": 0.3610900999628939,
+          "button_callback_seconds": 0.3473029999877326,
+          "max_heartbeat_gap_seconds": 0.3474386999732815,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.21616870001889765,
+            "json_save": 0.009613800037186593,
+            "actual_staging": 0.000576100021135062,
+            "todo_update": 0.013105900026857853,
+            "preview_render": 0.09326820005662739
+          },
+          "stage_calls": {
+            "ledger_full": 1,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 12,
+          "events_before": 512,
+          "processing_seconds": 0.3565468000015244,
+          "button_callback_seconds": 0.3431209000409581,
+          "max_heartbeat_gap_seconds": 0.3432562999660149,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.2107267999672331,
+            "json_save": 0.009104299999307841,
+            "actual_staging": 0.0005718999891541898,
+            "todo_update": 0.013453400053549558,
+            "preview_render": 0.09316340001532808
+          },
+          "stage_calls": {
+            "ledger_full": 1,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 13,
+          "events_before": 513,
+          "processing_seconds": 0.3564660000265576,
+          "button_callback_seconds": 0.3435687000164762,
+          "max_heartbeat_gap_seconds": 0.3437027000472881,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.21695370000088587,
+            "json_save": 0.008901699970010668,
+            "actual_staging": 0.000616599980276078,
+            "todo_update": 0.013432600011583418,
+            "preview_render": 0.08891120000043884
+          },
+          "stage_calls": {
+            "ledger_full": 1,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 14,
+          "events_before": 514,
+          "processing_seconds": 0.3780535000259988,
+          "button_callback_seconds": 0.3638809000258334,
+          "max_heartbeat_gap_seconds": 0.3640266000293195,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.22638270002789795,
+            "json_save": 0.009502400003839284,
+            "actual_staging": 0.0006193000008352101,
+            "todo_update": 0.013614600000437349,
+            "preview_render": 0.09885529999155551
+          },
+          "stage_calls": {
+            "ledger_full": 1,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 15,
+          "events_before": 515,
+          "processing_seconds": 0.3636077999835834,
+          "button_callback_seconds": 0.3498736000037752,
+          "max_heartbeat_gap_seconds": 0.350008399982471,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.2177557999966666,
+            "json_save": 0.008553799998480827,
+            "actual_staging": 0.000575200014282018,
+            "todo_update": 0.013129500031936914,
+            "preview_render": 0.09475350001594052
+          },
+          "stage_calls": {
+            "ledger_full": 1,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 16,
+          "events_before": 516,
+          "processing_seconds": 0.35804710001684725,
+          "button_callback_seconds": 0.34424300002865493,
+          "max_heartbeat_gap_seconds": 0.34438270004466176,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.22047560004284605,
+            "json_save": 0.00873849994968623,
+            "actual_staging": 0.000569300027564168,
+            "todo_update": 0.013343099970370531,
+            "preview_render": 0.08585149998543784
+          },
+          "stage_calls": {
+            "ledger_full": 1,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 17,
+          "events_before": 517,
+          "processing_seconds": 0.3732383000315167,
+          "button_callback_seconds": 0.360117900010664,
+          "max_heartbeat_gap_seconds": 0.3602534999954514,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.2191230999887921,
+            "json_save": 0.008560399990528822,
+            "actual_staging": 0.0005449000163935125,
+            "todo_update": 0.012911300000268966,
+            "preview_render": 0.1035480999853462
+          },
+          "stage_calls": {
+            "ledger_full": 1,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 18,
+          "events_before": 518,
+          "processing_seconds": 0.3530896000447683,
+          "button_callback_seconds": 0.3396115000359714,
+          "max_heartbeat_gap_seconds": 0.33974529994884506,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.21496930002467707,
+            "json_save": 0.00889120000647381,
+            "actual_staging": 0.000603599997702986,
+            "todo_update": 0.012743100000079721,
+            "preview_render": 0.08683789998758584
+          },
+          "stage_calls": {
+            "ledger_full": 1,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 19,
+          "events_before": 519,
+          "processing_seconds": 0.39105799997923896,
+          "button_callback_seconds": 0.37730970000848174,
+          "max_heartbeat_gap_seconds": 0.3774464000016451,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.2476590999867767,
+            "json_save": 0.00914000003831461,
+            "actual_staging": 0.0005682000191882253,
+            "todo_update": 0.014369199983775616,
+            "preview_render": 0.08990660001290962
+          },
+          "stage_calls": {
+            "ledger_full": 1,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 20,
+          "events_before": 520,
+          "processing_seconds": 0.3575313999899663,
+          "button_callback_seconds": 0.3441815000260249,
+          "max_heartbeat_gap_seconds": 0.34433049999643117,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.21835580002516508,
+            "json_save": 0.008613199985120445,
+            "actual_staging": 0.0005438000080175698,
+            "todo_update": 0.013059100019745529,
+            "preview_render": 0.08871209999779239
+          },
+          "stage_calls": {
+            "ledger_full": 1,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        }
+      ]
+    },
+    "after_without_staging": {
+      "fixture": "synthetic sealed session, PDF and hashed XLSX; not real textbook/decoder acceptance",
+      "platform": "Windows-10-10.0.19045-SP0",
+      "fixture_content_sha256": "788efe2d6e918159ad78f8d47d974201e5324de49d99584f2247f5419644881f",
+      "python": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]",
+      "pymupdf": "1.26.4",
+      "rows": 2000,
+      "initial_events": 500,
+      "staged_groups": 0,
+      "operations": 21,
+      "summary_excludes_first_operation": true,
+      "p95_method": "nearest rank",
+      "heartbeat_interval_ms": 10,
+      "processing": {
+        "median_ms": 302.60870000347495,
+        "p95_ms": 325.41809999383986
+      },
+      "button_callback": {
+        "median_ms": 1.5344000130426139,
+        "p95_ms": 1.7436000052839518
+      },
+      "ui_max_heartbeat_gap": {
+        "median_ms": 100.52329997415654,
+        "p95_ms": 112.05689999042079
+      },
+      "cooldown_ms": 500,
+      "stages_inclusive": {
+        "json_save": {
+          "median_ms": 49.333050003042445,
+          "p95_ms": 52.319200010970235
+        },
+        "preview_render": {
+          "median_ms": 89.67474996461533,
+          "p95_ms": 93.0070000467822
+        }
+      },
+      "service_stages": {
+        "actual_staging_validation": {
+          "median_ms": 0.43280000681988895,
+          "p95_ms": 0.4608000162988901
+        },
+        "backend_total": {
+          "median_ms": 172.18845000024885,
+          "p95_ms": 184.86379995010793
+        },
+        "cooldown_seconds": {
+          "median_ms": 500.0,
+          "p95_ms": 500.0
+        },
+        "dependency_hashing": {
+          "median_ms": 103.04495002492331,
+          "p95_ms": 114.8490000050515
+        },
+        "json_save": {
+          "median_ms": 49.34669999056496,
+          "p95_ms": 52.33129998669028
+        },
+        "ledger_full_rebuild": {
+          "median_ms": 0.0,
+          "p95_ms": 0.0
+        },
+        "ledger_incremental": {
+          "median_ms": 0.4200500261504203,
+          "p95_ms": 0.44380000326782465
+        },
+        "operation_total": {
+          "median_ms": 286.3589999906253,
+          "p95_ms": 308.1120999995619
+        },
+        "preview_and_show": {
+          "median_ms": 93.570950004505,
+          "p95_ms": 96.90000000409782
+        },
+        "preview_render": {
+          "median_ms": 89.67064999160357,
+          "p95_ms": 93.00300001632422
+        },
+        "todo_update": {
+          "median_ms": 11.593799979891628,
+          "p95_ms": 14.080900000408292
+        },
+        "ui_publish": {
+          "median_ms": 94.88779999082908,
+          "p95_ms": 98.20169996237382
+        }
+      },
+      "samples": [
+        {
+          "operation": 0,
+          "events_before": 500,
+          "processing_seconds": 0.6871534999809228,
+          "button_callback_seconds": 0.0020098999957554042,
+          "max_heartbeat_gap_seconds": 0.18595370004186407,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.049097899987827986,
+            "preview_render": 0.08951730001717806
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "runtime_manifest_validation": 0.003824200015515089,
+            "dependency_hashing": 0.10713060002308339,
+            "ledger_full_rebuild": 0.2201447999686934,
+            "ledger_incremental": 0.0004154000198468566,
+            "actual_staging_validation": 0.0005621000309474766,
+            "json_save": 0.04911219998029992,
+            "backend_total": 0.5598817999707535,
+            "todo_update": 0.011440300033427775,
+            "preview_render": 0.08951130002969876,
+            "preview_and_show": 0.09325789997819811,
+            "ui_publish": 0.0955686999950558,
+            "operation_total": 0.6712574000121094,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 1,
+          "events_before": 501,
+          "processing_seconds": 0.30317640001885593,
+          "button_callback_seconds": 0.0016695000231266022,
+          "max_heartbeat_gap_seconds": 0.11205689999042079,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.0493138000019826,
+            "preview_render": 0.0915349000133574
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.10337960004108027,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.00042039999971166253,
+            "actual_staging_validation": 0.0004314999678172171,
+            "json_save": 0.04932839999673888,
+            "backend_total": 0.1718510999926366,
+            "todo_update": 0.011614399962127209,
+            "preview_render": 0.09152969997376204,
+            "preview_and_show": 0.09517990000313148,
+            "ui_publish": 0.09648000000743195,
+            "operation_total": 0.28676160000031814,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 2,
+          "events_before": 502,
+          "processing_seconds": 0.28731450001941994,
+          "button_callback_seconds": 0.0015103000332601368,
+          "max_heartbeat_gap_seconds": 0.09058840002398938,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.04914289998123422,
+            "preview_render": 0.0852370000211522
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.09901110001374036,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.00040880002779886127,
+            "actual_staging_validation": 0.00042159995064139366,
+            "json_save": 0.04915570002049208,
+            "backend_total": 0.16613149998011068,
+            "todo_update": 0.010781000019051135,
+            "preview_render": 0.08523269998840988,
+            "preview_and_show": 0.08905619999859482,
+            "ui_publish": 0.09039809997193515,
+            "operation_total": 0.2706056999741122,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 3,
+          "events_before": 503,
+          "processing_seconds": 0.293325700040441,
+          "button_callback_seconds": 0.001514800009317696,
+          "max_heartbeat_gap_seconds": 0.11099100002320483,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.04719199996907264,
+            "preview_render": 0.0881770999985747
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.09941279998747632,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.0004319999716244638,
+            "actual_staging_validation": 0.00044520001392811537,
+            "json_save": 0.04720530001213774,
+            "backend_total": 0.16572790005011484,
+            "todo_update": 0.014080900000408292,
+            "preview_render": 0.0881721000187099,
+            "preview_and_show": 0.09224000002723187,
+            "ui_publish": 0.0935633999761194,
+            "operation_total": 0.27642850001575425,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 4,
+          "events_before": 504,
+          "processing_seconds": 0.30179410002892837,
+          "button_callback_seconds": 0.0014984000008553267,
+          "max_heartbeat_gap_seconds": 0.09265219996450469,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.04750049998983741,
+            "preview_render": 0.08715600002324209
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.11294720001751557,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.00042260001646354795,
+            "actual_staging_validation": 0.00042719999328255653,
+            "json_save": 0.04751330002909526,
+            "backend_total": 0.17900250002276152,
+            "todo_update": 0.011017700016964227,
+            "preview_render": 0.08715229999506846,
+            "preview_and_show": 0.09116259997244924,
+            "ui_publish": 0.0924409999861382,
+            "operation_total": 0.2855150999967009,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 5,
+          "events_before": 505,
+          "processing_seconds": 0.30091900000115857,
+          "button_callback_seconds": 0.0017296999576501548,
+          "max_heartbeat_gap_seconds": 0.09795869997469708,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.04709240002557635,
+            "preview_render": 0.08898709999630228
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.10717969998950139,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.000424400030169636,
+            "actual_staging_validation": 0.0004452999564819038,
+            "json_save": 0.047107100021094084,
+            "backend_total": 0.17262329999357462,
+            "todo_update": 0.011709799990057945,
+            "preview_render": 0.08898160001263022,
+            "preview_and_show": 0.09291320003103465,
+            "ui_publish": 0.09428200003458187,
+            "operation_total": 0.285365300020203,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 6,
+          "events_before": 506,
+          "processing_seconds": 0.2920696000219323,
+          "button_callback_seconds": 0.00150830001803115,
+          "max_heartbeat_gap_seconds": 0.11428060004254803,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.0491770000080578,
+            "preview_render": 0.08924209995893762
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.09868250001454726,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.0004188999882899225,
+            "actual_staging_validation": 0.0004273999948054552,
+            "json_save": 0.049190099991392344,
+            "backend_total": 0.1660056000109762,
+            "todo_update": 0.011565000051632524,
+            "preview_render": 0.08923799998592585,
+            "preview_and_show": 0.0934205999947153,
+            "ui_publish": 0.09472729999106377,
+            "operation_total": 0.2753489000024274,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 7,
+          "events_before": 507,
+          "processing_seconds": 0.3175335000269115,
+          "button_callback_seconds": 0.0016481000347994268,
+          "max_heartbeat_gap_seconds": 0.10061039996799082,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.04766579996794462,
+            "preview_render": 0.08909009996568784
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.11827410006662831,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.00043219997314736247,
+            "actual_staging_validation": 0.00044810003601014614,
+            "json_save": 0.047680200019385666,
+            "backend_total": 0.18486379995010793,
+            "todo_update": 0.012603100039996207,
+            "preview_render": 0.08908600005088374,
+            "preview_and_show": 0.09244689997285604,
+            "ui_publish": 0.0937372000189498,
+            "operation_total": 0.3023778999922797,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 8,
+          "events_before": 508,
+          "processing_seconds": 0.2891578000271693,
+          "button_callback_seconds": 0.0015357999945990741,
+          "max_heartbeat_gap_seconds": 0.11158829997293651,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.04834280000068247,
+            "preview_render": 0.08666000002995133
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.0990437000291422,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.00041259999852627516,
+            "actual_staging_validation": 0.00041939999209716916,
+            "json_save": 0.04835529997944832,
+            "backend_total": 0.16578560002380982,
+            "todo_update": 0.010972200019750744,
+            "preview_render": 0.08665579999797046,
+            "preview_and_show": 0.09062590001849458,
+            "ui_publish": 0.09193219995358959,
+            "operation_total": 0.2736641999799758,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 9,
+          "events_before": 509,
+          "processing_seconds": 0.2998198000132106,
+          "button_callback_seconds": 0.001420999993570149,
+          "max_heartbeat_gap_seconds": 0.09691799996653572,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.050987399998120964,
+            "preview_render": 0.08873110002605245
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.10271030000876635,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.00042770005529746413,
+            "actual_staging_validation": 0.0004488000413402915,
+            "json_save": 0.05100249999668449,
+            "backend_total": 0.1724199000163935,
+            "todo_update": 0.01267970004118979,
+            "preview_render": 0.08872669999254867,
+            "preview_and_show": 0.09248819999629632,
+            "ui_publish": 0.09381399996345863,
+            "operation_total": 0.2847892999998294,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 10,
+          "events_before": 510,
+          "processing_seconds": 0.3058030999964103,
+          "button_callback_seconds": 0.0015317999641411006,
+          "max_heartbeat_gap_seconds": 0.10043619998032227,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.04830520000541583,
+            "preview_render": 0.0930070000467822
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.10737280000466853,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.0004123999970033765,
+            "actual_staging_validation": 0.0004194999928586185,
+            "json_save": 0.04831809998722747,
+            "backend_total": 0.17532729997765273,
+            "todo_update": 0.010841600014828146,
+            "preview_render": 0.09300300001632422,
+            "preview_and_show": 0.09690000000409782,
+            "ui_publish": 0.09820169996237382,
+            "operation_total": 0.28957129997434095,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 11,
+          "events_before": 511,
+          "processing_seconds": 0.298353300022427,
+          "button_callback_seconds": 0.001540500030387193,
+          "max_heartbeat_gap_seconds": 0.09395219996804371,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.050410999974701554,
+            "preview_render": 0.08839450002415106
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.10244210000382736,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.00044380000326782465,
+            "actual_staging_validation": 0.0004608000162988901,
+            "json_save": 0.05042380001395941,
+            "backend_total": 0.17169310001190752,
+            "todo_update": 0.012153999996371567,
+            "preview_render": 0.08839049999369308,
+            "preview_and_show": 0.09218649996910244,
+            "ui_publish": 0.09376439999323338,
+            "operation_total": 0.2815333000035025,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 12,
+          "events_before": 512,
+          "processing_seconds": 0.30204099998809397,
+          "button_callback_seconds": 0.0014814999885857105,
+          "max_heartbeat_gap_seconds": 0.1061242000432685,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.048018099972978234,
+            "preview_render": 0.09044749999884516
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.09936900000320747,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.0004152000183239579,
+            "actual_staging_validation": 0.0004290000069886446,
+            "json_save": 0.04803170001832768,
+            "backend_total": 0.16572550003184006,
+            "todo_update": 0.011183599999640137,
+            "preview_render": 0.0904434000258334,
+            "preview_and_show": 0.09487480000825599,
+            "ui_publish": 0.09619120002025738,
+            "operation_total": 0.2859563999809325,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 13,
+          "events_before": 513,
+          "processing_seconds": 0.30708379996940494,
+          "button_callback_seconds": 0.0015724999830126762,
+          "max_heartbeat_gap_seconds": 0.0975347000057809,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.050884699972812086,
+            "preview_render": 0.09210840001469478
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.10806160006904975,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.0004260999849066138,
+            "actual_staging_validation": 0.00043789995834231377,
+            "json_save": 0.05089960002806038,
+            "backend_total": 0.17781309998827055,
+            "todo_update": 0.012690999952610582,
+            "preview_render": 0.0921043999842368,
+            "preview_and_show": 0.09567070001503453,
+            "ui_publish": 0.0971684999531135,
+            "operation_total": 0.29087550000986084,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 14,
+          "events_before": 514,
+          "processing_seconds": 0.31589560001157224,
+          "button_callback_seconds": 0.001665899995714426,
+          "max_heartbeat_gap_seconds": 0.10569480003323406,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.04935230000410229,
+            "preview_render": 0.09153999999398366
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.09995619999244809,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.0004197000525891781,
+            "actual_staging_validation": 0.0004341000458225608,
+            "json_save": 0.049364999984391034,
+            "backend_total": 0.1683614999637939,
+            "todo_update": 0.011269499955233186,
+            "preview_render": 0.091535700019449,
+            "preview_and_show": 0.09590379998553544,
+            "ui_publish": 0.0975715999957174,
+            "operation_total": 0.29968459997326136,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 15,
+          "events_before": 515,
+          "processing_seconds": 0.3518149000010453,
+          "button_callback_seconds": 0.0017436000052839518,
+          "max_heartbeat_gap_seconds": 0.11094719998072833,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.050797700008843094,
+            "preview_render": 0.10535810003057122
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.10196749999886379,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.00042340002255514264,
+            "actual_staging_validation": 0.00043000001460313797,
+            "json_save": 0.05081129999598488,
+            "backend_total": 0.1719569999841042,
+            "todo_update": 0.04957249999279156,
+            "preview_render": 0.10534599999664351,
+            "preview_and_show": 0.10920459998305887,
+            "ui_publish": 0.11055230000056326,
+            "operation_total": 0.33535879995906726,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 16,
+          "events_before": 516,
+          "processing_seconds": 0.30841369996778667,
+          "button_callback_seconds": 0.001638099958654493,
+          "max_heartbeat_gap_seconds": 0.09670430002734065,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.04979109996929765,
+            "preview_render": 0.09060449997195974
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.10980260005453601,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.0005292000132612884,
+            "actual_staging_validation": 0.0004971000016666949,
+            "json_save": 0.04981779999798164,
+            "backend_total": 0.1799357999698259,
+            "todo_update": 0.010884900053497404,
+            "preview_render": 0.09059929999057204,
+            "preview_and_show": 0.09521020000101998,
+            "ui_publish": 0.09650420001707971,
+            "operation_total": 0.29227660002652556,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 17,
+          "events_before": 517,
+          "processing_seconds": 0.30694859998766333,
+          "button_callback_seconds": 0.0015044999890960753,
+          "max_heartbeat_gap_seconds": 0.10974220000207424,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.049477600026875734,
+            "preview_render": 0.09018700005253777
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.1130173999699764,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.0004144000122323632,
+            "actual_staging_validation": 0.0004412999842315912,
+            "json_save": 0.049490800010971725,
+            "backend_total": 0.18138510000426322,
+            "todo_update": 0.011573199997656047,
+            "preview_render": 0.09018330002436414,
+            "preview_and_show": 0.09372130001429468,
+            "ui_publish": 0.09504829999059439,
+            "operation_total": 0.2912155999802053,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 18,
+          "events_before": 518,
+          "processing_seconds": 0.29373000003397465,
+          "button_callback_seconds": 0.0015330000314861536,
+          "max_heartbeat_gap_seconds": 0.10778699995717034,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.050102499953936785,
+            "preview_render": 0.0874832000117749
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.10108890000265092,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.000415499962400645,
+            "actual_staging_validation": 0.0004295000107958913,
+            "json_save": 0.050114599987864494,
+            "backend_total": 0.17033739999169484,
+            "todo_update": 0.011649099993519485,
+            "preview_render": 0.08747909998055547,
+            "preview_and_show": 0.09143619996029884,
+            "ui_publish": 0.09281770000234246,
+            "operation_total": 0.2777799000032246,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 19,
+          "events_before": 519,
+          "processing_seconds": 0.32541809999383986,
+          "button_callback_seconds": 0.002381499973125756,
+          "max_heartbeat_gap_seconds": 0.09817100001964718,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.057272400008514524,
+            "preview_render": 0.09123369998997077
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.1148490000050515,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.0004144000122323632,
+            "actual_staging_validation": 0.00043479999294504523,
+            "json_save": 0.05728609999641776,
+            "backend_total": 0.19163219997426495,
+            "todo_update": 0.013686500024050474,
+            "preview_render": 0.09122979996027425,
+            "preview_and_show": 0.09472839999943972,
+            "ui_publish": 0.09602530003758147,
+            "operation_total": 0.3081120999995619,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 20,
+          "events_before": 520,
+          "processing_seconds": 0.3037609000457451,
+          "button_callback_seconds": 0.0014768000110052526,
+          "max_heartbeat_gap_seconds": 0.09545840002829209,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.052319200010970235,
+            "preview_render": 0.09010739997029305
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.10715749999508262,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.0004054000019095838,
+            "actual_staging_validation": 0.0004186999867670238,
+            "json_save": 0.05233129998669028,
+            "backend_total": 0.1775791000109166,
+            "todo_update": 0.010616999992635101,
+            "preview_render": 0.09010329999728128,
+            "preview_and_show": 0.09397680003894493,
+            "ui_publish": 0.09526490001007915,
+            "operation_total": 0.28729559999192134,
+            "cooldown_seconds": 0.5
+          }
+        }
+      ]
+    },
+    "before_with_staging": {
+      "fixture": "synthetic sealed session, PDF and hashed XLSX; not real textbook/decoder acceptance",
+      "platform": "Windows-10-10.0.19045-SP0",
+      "fixture_content_sha256": "1a293363b5470626bbc2fa0f74acb13b954fac1a0a486eb08860449066a17f11",
+      "python": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]",
+      "pymupdf": "1.26.4",
+      "rows": 2000,
+      "initial_events": 500,
+      "staged_groups": 8,
+      "operations": 21,
+      "summary_excludes_first_operation": true,
+      "p95_method": "nearest rank",
+      "heartbeat_interval_ms": 10,
+      "processing": {
+        "median_ms": 1018.3528500201646,
+        "p95_ms": 1098.979399946984
+      },
+      "button_callback": {
+        "median_ms": 1004.9002000305336,
+        "p95_ms": 1085.9621999552473
+      },
+      "ui_max_heartbeat_gap": {
+        "median_ms": 1005.0694500096142,
+        "p95_ms": 1086.121899948921
+      },
+      "cooldown_ms": 500,
+      "stages_inclusive": {
+        "actual_staging": {
+          "median_ms": 645.5325000279117,
+          "p95_ms": 695.8156999899074
+        },
+        "json_save": {
+          "median_ms": 9.155250008916482,
+          "p95_ms": 10.954400000628084
+        },
+        "ledger_full": {
+          "median_ms": 563.3312999852933,
+          "p95_ms": 622.6618000073358
+        },
+        "preview_render": {
+          "median_ms": 89.15640000486746,
+          "p95_ms": 93.81089999806136
+        },
+        "todo_update": {
+          "median_ms": 13.246299989987165,
+          "p95_ms": 18.253799993544817
+        }
+      },
+      "samples": [
+        {
+          "operation": 0,
+          "events_before": 500,
+          "processing_seconds": 1.033083600050304,
+          "button_callback_seconds": 1.0200894000008702,
+          "max_heartbeat_gap_seconds": 1.0202542000333779,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.5443216999410652,
+            "json_save": 0.008541699964553118,
+            "actual_staging": 0.6831378999631852,
+            "todo_update": 0.01457609998760745,
+            "preview_render": 0.0887737000011839
+          },
+          "stage_calls": {
+            "ledger_full": 3,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 1,
+          "events_before": 501,
+          "processing_seconds": 1.3678863999666646,
+          "button_callback_seconds": 1.3540296999854036,
+          "max_heartbeat_gap_seconds": 1.3542080000042915,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.7775822000112385,
+            "json_save": 0.008258800022304058,
+            "actual_staging": 0.9203116999706253,
+            "todo_update": 0.01869810000061989,
+            "preview_render": 0.14487139997072518
+          },
+          "stage_calls": {
+            "ledger_full": 3,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 2,
+          "events_before": 502,
+          "processing_seconds": 0.9801885000197217,
+          "button_callback_seconds": 0.9660810999921523,
+          "max_heartbeat_gap_seconds": 0.9662671000114642,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.547173600003589,
+            "json_save": 0.008594999962951988,
+            "actual_staging": 0.6229508999967948,
+            "todo_update": 0.0136280000442639,
+            "preview_render": 0.08641009998973459
+          },
+          "stage_calls": {
+            "ledger_full": 3,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 3,
+          "events_before": 503,
+          "processing_seconds": 0.9990546000190079,
+          "button_callback_seconds": 0.9858907000161707,
+          "max_heartbeat_gap_seconds": 0.9860611000331119,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.5624302999931388,
+            "json_save": 0.008758499985560775,
+            "actual_staging": 0.6202151000034064,
+            "todo_update": 0.01428260002285242,
+            "preview_render": 0.09184779995121062
+          },
+          "stage_calls": {
+            "ledger_full": 3,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 4,
+          "events_before": 504,
+          "processing_seconds": 0.9939021999598481,
+          "button_callback_seconds": 0.9801465999917127,
+          "max_heartbeat_gap_seconds": 0.9803240000037476,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.5408913999563083,
+            "json_save": 0.008552399987820536,
+            "actual_staging": 0.6330622999812476,
+            "todo_update": 0.014174099953379482,
+            "preview_render": 0.0885312000173144
+          },
+          "stage_calls": {
+            "ledger_full": 3,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 5,
+          "events_before": 505,
+          "processing_seconds": 1.0757425000192598,
+          "button_callback_seconds": 1.0620124000124633,
+          "max_heartbeat_gap_seconds": 1.0621835000347346,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.6089937000069767,
+            "json_save": 0.01007190003292635,
+            "actual_staging": 0.6958156999899074,
+            "todo_update": 0.013115699985064566,
+            "preview_render": 0.091131100023631
+          },
+          "stage_calls": {
+            "ledger_full": 3,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 6,
+          "events_before": 506,
+          "processing_seconds": 0.9945317999809049,
+          "button_callback_seconds": 0.9806589999934658,
+          "max_heartbeat_gap_seconds": 0.9808329999796115,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.5533022000454366,
+            "json_save": 0.008526500023435801,
+            "actual_staging": 0.6201336999656633,
+            "todo_update": 0.013213899976108223,
+            "preview_render": 0.08898170001339167
+          },
+          "stage_calls": {
+            "ledger_full": 3,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 7,
+          "events_before": 507,
+          "processing_seconds": 0.9701125000137836,
+          "button_callback_seconds": 0.9559095000149682,
+          "max_heartbeat_gap_seconds": 0.9560818000463769,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.528447899967432,
+            "json_save": 0.008974800002761185,
+            "actual_staging": 0.6101724999607541,
+            "todo_update": 0.0129255999927409,
+            "preview_render": 0.09130169998388737
+          },
+          "stage_calls": {
+            "ledger_full": 3,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 8,
+          "events_before": 508,
+          "processing_seconds": 1.0668415000545792,
+          "button_callback_seconds": 1.0525859000044875,
+          "max_heartbeat_gap_seconds": 1.0527592999860644,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.5888535999692976,
+            "json_save": 0.009945400001015514,
+            "actual_staging": 0.6731315999641083,
+            "todo_update": 0.018253799993544817,
+            "preview_render": 0.09381089999806136
+          },
+          "stage_calls": {
+            "ledger_full": 3,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 9,
+          "events_before": 509,
+          "processing_seconds": 1.0602920999517664,
+          "button_callback_seconds": 1.0466943999635987,
+          "max_heartbeat_gap_seconds": 1.0469452999532223,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.5658062000293285,
+            "json_save": 0.009144200012087822,
+            "actual_staging": 0.691885199979879,
+            "todo_update": 0.015541900007519871,
+            "preview_render": 0.08813889999873936
+          },
+          "stage_calls": {
+            "ledger_full": 3,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 10,
+          "events_before": 510,
+          "processing_seconds": 1.0450761000392959,
+          "button_callback_seconds": 1.0290561000001617,
+          "max_heartbeat_gap_seconds": 1.0293165000039153,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.5723150999983773,
+            "json_save": 0.009238000027835369,
+            "actual_staging": 0.668220299994573,
+            "todo_update": 0.016963600006420165,
+            "preview_render": 0.09236750000854954
+          },
+          "stage_calls": {
+            "ledger_full": 3,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 11,
+          "events_before": 511,
+          "processing_seconds": 1.098979399946984,
+          "button_callback_seconds": 1.0859621999552473,
+          "max_heartbeat_gap_seconds": 1.086121899948921,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.6226618000073358,
+            "json_save": 0.010025300027336925,
+            "actual_staging": 0.6849110999610275,
+            "todo_update": 0.013189000019337982,
+            "preview_render": 0.08838250004919246
+          },
+          "stage_calls": {
+            "ledger_full": 3,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 12,
+          "events_before": 512,
+          "processing_seconds": 1.0341586000286043,
+          "button_callback_seconds": 1.0205518000293523,
+          "max_heartbeat_gap_seconds": 1.0207130000344478,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.5642322999774478,
+            "json_save": 0.010282900009769946,
+            "actual_staging": 0.657480800000485,
+            "todo_update": 0.013016599987167865,
+            "preview_render": 0.08933109999634326
+          },
+          "stage_calls": {
+            "ledger_full": 3,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 13,
+          "events_before": 513,
+          "processing_seconds": 1.052619699970819,
+          "button_callback_seconds": 1.0390385999926366,
+          "max_heartbeat_gap_seconds": 1.0392157000023872,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.5922841999563389,
+            "json_save": 0.014907500008121133,
+            "actual_staging": 0.6515544000430964,
+            "todo_update": 0.012822400021832436,
+            "preview_render": 0.09016660001361743
+          },
+          "stage_calls": {
+            "ledger_full": 3,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 14,
+          "events_before": 514,
+          "processing_seconds": 1.08285160001833,
+          "button_callback_seconds": 1.0695923999883235,
+          "max_heartbeat_gap_seconds": 1.069759099977091,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.6090949000208639,
+            "json_save": 0.010954400000628084,
+            "actual_staging": 0.6871409000013955,
+            "todo_update": 0.012747100030537695,
+            "preview_render": 0.09056849998887628
+          },
+          "stage_calls": {
+            "ledger_full": 3,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 15,
+          "events_before": 515,
+          "processing_seconds": 0.9796484000398777,
+          "button_callback_seconds": 0.9660101000335999,
+          "max_heartbeat_gap_seconds": 0.9661789000383578,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.5395261000376195,
+            "json_save": 0.008882699999958277,
+            "actual_staging": 0.6188505000318401,
+            "todo_update": 0.012940600048750639,
+            "preview_render": 0.08749190001981333
+          },
+          "stage_calls": {
+            "ledger_full": 3,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 16,
+          "events_before": 516,
+          "processing_seconds": 1.0288785999873653,
+          "button_callback_seconds": 1.015446300036274,
+          "max_heartbeat_gap_seconds": 1.01561549998587,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.5798690000083297,
+            "json_save": 0.0095193000161089,
+            "actual_staging": 0.6626402999972925,
+            "todo_update": 0.013349100016057491,
+            "preview_render": 0.08672719995956868
+          },
+          "stage_calls": {
+            "ledger_full": 3,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 17,
+          "events_before": 517,
+          "processing_seconds": 1.0048202000325546,
+          "button_callback_seconds": 0.9912047000252642,
+          "max_heartbeat_gap_seconds": 0.9913883000263013,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.5468806000426412,
+            "json_save": 0.008751399989705533,
+            "actual_staging": 0.6395106000127271,
+            "todo_update": 0.013307499990332872,
+            "preview_render": 0.08838400000240654
+          },
+          "stage_calls": {
+            "ledger_full": 3,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 18,
+          "events_before": 518,
+          "processing_seconds": 1.007827100052964,
+          "button_callback_seconds": 0.9943541000247933,
+          "max_heartbeat_gap_seconds": 0.9945234000333585,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.550378899963107,
+            "json_save": 0.008840300026349723,
+            "actual_staging": 0.634499300038442,
+            "todo_update": 0.012981500010937452,
+            "preview_render": 0.08868270000675693
+          },
+          "stage_calls": {
+            "ledger_full": 3,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 19,
+          "events_before": 519,
+          "processing_seconds": 1.0007049999549054,
+          "button_callback_seconds": 0.9866269999765791,
+          "max_heartbeat_gap_seconds": 0.9870131000061519,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.5622438000282273,
+            "json_save": 0.009166300005745143,
+            "actual_staging": 0.6337406999664381,
+            "todo_update": 0.012875600019469857,
+            "preview_render": 0.08844100002897903
+          },
+          "stage_calls": {
+            "ledger_full": 3,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        },
+        {
+          "operation": 20,
+          "events_before": 520,
+          "processing_seconds": 1.0055566999944858,
+          "button_callback_seconds": 0.9928606000030413,
+          "max_heartbeat_gap_seconds": 0.9930376000120305,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "ledger_full": 0.5562712000100873,
+            "json_save": 0.009224699984770268,
+            "actual_staging": 0.637743600003887,
+            "todo_update": 0.013278700003866106,
+            "preview_render": 0.09076170000480488
+          },
+          "stage_calls": {
+            "ledger_full": 3,
+            "json_save": 1,
+            "actual_staging": 1,
+            "todo_update": 1,
+            "preview_render": 1
+          },
+          "service_timings": {}
+        }
+      ]
+    },
+    "after_with_staging": {
+      "fixture": "synthetic sealed session, PDF and hashed XLSX; not real textbook/decoder acceptance",
+      "platform": "Windows-10-10.0.19045-SP0",
+      "fixture_content_sha256": "1a293363b5470626bbc2fa0f74acb13b954fac1a0a486eb08860449066a17f11",
+      "python": "3.13.5 (tags/v3.13.5:6cb20a2, Jun 11 2025, 16:15:46) [MSC v.1943 64 bit (AMD64)]",
+      "pymupdf": "1.26.4",
+      "rows": 2000,
+      "initial_events": 500,
+      "staged_groups": 8,
+      "operations": 21,
+      "summary_excludes_first_operation": true,
+      "p95_method": "nearest rank",
+      "heartbeat_interval_ms": 10,
+      "processing": {
+        "median_ms": 428.29434998566285,
+        "p95_ms": 450.33599995076656
+      },
+      "button_callback": {
+        "median_ms": 1.5063000319059938,
+        "p95_ms": 1.8207999528385699
+      },
+      "ui_max_heartbeat_gap": {
+        "median_ms": 108.53905000840314,
+        "p95_ms": 114.49649999849498
+      },
+      "cooldown_ms": 500,
+      "stages_inclusive": {
+        "json_save": {
+          "median_ms": 48.80439999396913,
+          "p95_ms": 51.21299996972084
+        },
+        "preview_render": {
+          "median_ms": 88.79150002030656,
+          "p95_ms": 99.43120001116768
+        }
+      },
+      "service_stages": {
+        "actual_staging_validation": {
+          "median_ms": 127.56064999848604,
+          "p95_ms": 131.05209998320788
+        },
+        "backend_total": {
+          "median_ms": 300.16559999785386,
+          "p95_ms": 308.93290002131835
+        },
+        "cooldown_seconds": {
+          "median_ms": 500.0,
+          "p95_ms": 500.0
+        },
+        "dependency_hashing": {
+          "median_ms": 101.35874999104999,
+          "p95_ms": 121.83690001256764
+        },
+        "json_save": {
+          "median_ms": 48.816049995366484,
+          "p95_ms": 51.224399998318404
+        },
+        "ledger_full_rebuild": {
+          "median_ms": 0.0,
+          "p95_ms": 0.0
+        },
+        "ledger_incremental": {
+          "median_ms": 0.4282500012777746,
+          "p95_ms": 0.6205999525263906
+        },
+        "operation_total": {
+          "median_ms": 412.5437500188127,
+          "p95_ms": 434.90079999901354
+        },
+        "preview_and_show": {
+          "median_ms": 92.69135000067763,
+          "p95_ms": 103.30529999919236
+        },
+        "preview_render": {
+          "median_ms": 88.78764999099076,
+          "p95_ms": 99.4277999852784
+        },
+        "todo_update": {
+          "median_ms": 11.014599993359298,
+          "p95_ms": 12.54200004041195
+        },
+        "ui_publish": {
+          "median_ms": 94.04900000663474,
+          "p95_ms": 104.60479999892414
+        }
+      },
+      "samples": [
+        {
+          "operation": 0,
+          "events_before": 500,
+          "processing_seconds": 0.812096500012558,
+          "button_callback_seconds": 0.0015239000204019248,
+          "max_heartbeat_gap_seconds": 0.12100040004588664,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.05099880002671853,
+            "preview_render": 0.09169199998723343
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "runtime_manifest_validation": 0.004061900021042675,
+            "dependency_hashing": 0.10979229997610673,
+            "ledger_full_rebuild": 0.2187751000165008,
+            "ledger_incremental": 0.0003744999994523823,
+            "actual_staging_validation": 0.1245902000227943,
+            "json_save": 0.05101330002071336,
+            "backend_total": 0.6842955999891274,
+            "todo_update": 0.011230300005991012,
+            "preview_render": 0.09168649994535372,
+            "preview_and_show": 0.095642099971883,
+            "ui_publish": 0.09793069999432191,
+            "operation_total": 0.7968701000208966,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 1,
+          "events_before": 501,
+          "processing_seconds": 0.41966060001868755,
+          "button_callback_seconds": 0.0015585999935865402,
+          "max_heartbeat_gap_seconds": 0.10963429999537766,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.046557400026358664,
+            "preview_render": 0.08807289996184409
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.0996506999945268,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.0004240999696776271,
+            "actual_staging_validation": 0.1301431999891065,
+            "json_save": 0.0465713000157848,
+            "backend_total": 0.29437469999538735,
+            "todo_update": 0.012272999971173704,
+            "preview_render": 0.08806839998578653,
+            "preview_and_show": 0.09221810003509745,
+            "ui_publish": 0.09356250002747402,
+            "operation_total": 0.40331720001995564,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 2,
+          "events_before": 502,
+          "processing_seconds": 0.4349771999986842,
+          "button_callback_seconds": 0.0014620000147260725,
+          "max_heartbeat_gap_seconds": 0.10643589997198433,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.046795899979770184,
+            "preview_render": 0.08771420002449304
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.12183690001256764,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.00042260001646354795,
+            "actual_staging_validation": 0.12265060003846884,
+            "json_save": 0.046809199964627624,
+            "backend_total": 0.30893290002131835,
+            "todo_update": 0.011457399989012629,
+            "preview_render": 0.08770959998946637,
+            "preview_and_show": 0.09215709997806698,
+            "ui_publish": 0.09352690004743636,
+            "operation_total": 0.4169577000429854,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 3,
+          "events_before": 503,
+          "processing_seconds": 0.45033599995076656,
+          "button_callback_seconds": 0.0014649999793618917,
+          "max_heartbeat_gap_seconds": 0.1293922999757342,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.04891339997993782,
+            "preview_render": 0.08895870001288131
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.1011276999488473,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.00041610002517700195,
+            "actual_staging_validation": 0.12705609999829903,
+            "json_save": 0.048926199960988015,
+            "backend_total": 0.29466740001225844,
+            "todo_update": 0.042180499993264675,
+            "preview_render": 0.08895519998623058,
+            "preview_and_show": 0.09280079999007285,
+            "ui_publish": 0.09488180000334978,
+            "operation_total": 0.43490079999901354,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 4,
+          "events_before": 504,
+          "processing_seconds": 0.4631392000010237,
+          "button_callback_seconds": 0.0014942000270821154,
+          "max_heartbeat_gap_seconds": 0.10843969997949898,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.04878429998643696,
+            "preview_render": 0.09943120001116768
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.1305160000338219,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.0004216000088490546,
+            "actual_staging_validation": 0.12702830001944676,
+            "json_save": 0.048796100018080324,
+            "backend_total": 0.324233399995137,
+            "todo_update": 0.011335499992128462,
+            "preview_render": 0.0994277999852784,
+            "preview_and_show": 0.10330529999919236,
+            "ui_publish": 0.10460479999892414,
+            "operation_total": 0.44695069995941594,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 5,
+          "events_before": 505,
+          "processing_seconds": 0.41556509997462854,
+          "button_callback_seconds": 0.0014674999983981252,
+          "max_heartbeat_gap_seconds": 0.09509220003383234,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.04612249997444451,
+            "preview_render": 0.08950250002089888
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.10155870002927259,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.00044659996638074517,
+            "actual_staging_validation": 0.12469470000360161,
+            "json_save": 0.04613430000608787,
+            "backend_total": 0.29025099996943027,
+            "todo_update": 0.011159099987708032,
+            "preview_render": 0.08949790004407987,
+            "preview_and_show": 0.09360439999727532,
+            "ui_publish": 0.0948869000421837,
+            "operation_total": 0.39947900001425296,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 6,
+          "events_before": 506,
+          "processing_seconds": 0.4310529000358656,
+          "button_callback_seconds": 0.001541100034955889,
+          "max_heartbeat_gap_seconds": 0.11308330000611022,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.04930469999089837,
+            "preview_render": 0.08860740001546219
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.09913119999691844,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.00042799999937415123,
+            "actual_staging_validation": 0.1379128000116907,
+            "json_save": 0.04931710002711043,
+            "backend_total": 0.304766200017184,
+            "todo_update": 0.01100090000545606,
+            "preview_render": 0.08860329998424277,
+            "preview_and_show": 0.09249489998910576,
+            "ui_publish": 0.09377689997199923,
+            "operation_total": 0.41445529996417463,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 7,
+          "events_before": 507,
+          "processing_seconds": 0.4174841999774799,
+          "button_callback_seconds": 0.0014916000072844326,
+          "max_heartbeat_gap_seconds": 0.11256969999521971,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.04882450000150129,
+            "preview_render": 0.08841289998963475
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.10022700001718476,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.0004387999651953578,
+            "actual_staging_validation": 0.1251242000143975,
+            "json_save": 0.048835999972652644,
+            "backend_total": 0.2922141999588348,
+            "todo_update": 0.011006099986843765,
+            "preview_render": 0.08840900001814589,
+            "preview_and_show": 0.09268090000841767,
+            "ui_publish": 0.09408220002660528,
+            "operation_total": 0.40224940003827214,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 8,
+          "events_before": 508,
+          "processing_seconds": 0.41700509999645874,
+          "button_callback_seconds": 0.0015184000367298722,
+          "max_heartbeat_gap_seconds": 0.10398740001255646,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.04877389996545389,
+            "preview_render": 0.08638059999793768
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.10011260001920164,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.0004333999822847545,
+            "actual_staging_validation": 0.12771560001419857,
+            "json_save": 0.04878650000318885,
+            "backend_total": 0.2956797999795526,
+            "todo_update": 0.011096300033386797,
+            "preview_render": 0.08637709997128695,
+            "preview_and_show": 0.09010390000184998,
+            "ui_publish": 0.09138789999997243,
+            "operation_total": 0.4015413000015542,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 9,
+          "events_before": 509,
+          "processing_seconds": 0.42838100000517443,
+          "button_callback_seconds": 0.0014460000093095005,
+          "max_heartbeat_gap_seconds": 0.110920500010252,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.04798289999598637,
+            "preview_render": 0.08536450000246987
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.11092690005898476,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.00041959999362006783,
+            "actual_staging_validation": 0.13105209998320788,
+            "json_save": 0.04799459996866062,
+            "backend_total": 0.3074532000464387,
+            "todo_update": 0.011052499990910292,
+            "preview_render": 0.08536070003174245,
+            "preview_and_show": 0.08957710000686347,
+            "ui_publish": 0.09093720000237226,
+            "operation_total": 0.4127075999858789,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 10,
+          "events_before": 510,
+          "processing_seconds": 0.42080899997381493,
+          "button_callback_seconds": 0.0014807999832555652,
+          "max_heartbeat_gap_seconds": 0.110679000033997,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.050151599978562444,
+            "preview_render": 0.08831639995332807
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.10048009996535257,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.00045009999303147197,
+            "actual_staging_validation": 0.12835429998813197,
+            "json_save": 0.050163400010205805,
+            "backend_total": 0.29706790001364425,
+            "todo_update": 0.010812899970915169,
+            "preview_render": 0.08831249998183921,
+            "preview_and_show": 0.09261870000045747,
+            "ui_publish": 0.09390879998682067,
+            "operation_total": 0.4050097999861464,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 11,
+          "events_before": 511,
+          "processing_seconds": 0.4113752000266686,
+          "button_callback_seconds": 0.001493200019467622,
+          "max_heartbeat_gap_seconds": 0.09423849999438971,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.046549800026696175,
+            "preview_render": 0.08857480000006035
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.0984922000207007,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.00041640002746134996,
+            "actual_staging_validation": 0.12512330000754446,
+            "json_save": 0.04656139999860898,
+            "backend_total": 0.2876383999828249,
+            "todo_update": 0.010997099976520985,
+            "preview_render": 0.08857120003085583,
+            "preview_and_show": 0.0927017999929376,
+            "ui_publish": 0.0940157999866642,
+            "operation_total": 0.3958023000159301,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 12,
+          "events_before": 512,
+          "processing_seconds": 0.42820769996615127,
+          "button_callback_seconds": 0.0016360999434255064,
+          "max_heartbeat_gap_seconds": 0.09697489999234676,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.05018789996393025,
+            "preview_render": 0.08906210004352033
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.1024235999211669,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.0007756000268273056,
+            "actual_staging_validation": 0.1309820999740623,
+            "json_save": 0.05019979999633506,
+            "backend_total": 0.30338210001355037,
+            "todo_update": 0.010977800004184246,
+            "preview_render": 0.08905790001153946,
+            "preview_and_show": 0.09293539996724576,
+            "ui_publish": 0.09417509997729212,
+            "operation_total": 0.4123646999942139,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 13,
+          "events_before": 513,
+          "processing_seconds": 0.417523100040853,
+          "button_callback_seconds": 0.0014473000192083418,
+          "max_heartbeat_gap_seconds": 0.09597959998063743,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.04730469995411113,
+            "preview_render": 0.08892080001533031
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.10000889998627827,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.0004183999844826758,
+            "actual_staging_validation": 0.12885739997727796,
+            "json_save": 0.047321600024588406,
+            "backend_total": 0.29376079997746274,
+            "todo_update": 0.01102309999987483,
+            "preview_render": 0.08891719998791814,
+            "preview_and_show": 0.09252780000679195,
+            "ui_publish": 0.09379399998579174,
+            "operation_total": 0.40165600000182167,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 14,
+          "events_before": 514,
+          "processing_seconds": 0.4293887999956496,
+          "button_callback_seconds": 0.0018207999528385699,
+          "max_heartbeat_gap_seconds": 0.09964969998691231,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.05104150000261143,
+            "preview_render": 0.09411930001806468
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.10494650003965944,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.0004285000031813979,
+            "actual_staging_validation": 0.12653690000297502,
+            "json_save": 0.05105269997147843,
+            "backend_total": 0.30066579999402165,
+            "todo_update": 0.010684199980460107,
+            "preview_render": 0.0941156999906525,
+            "preview_and_show": 0.09816529997624457,
+            "ui_publish": 0.0994520999956876,
+            "operation_total": 0.4142431000364013,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 15,
+          "events_before": 515,
+          "processing_seconds": 0.4393374000210315,
+          "button_callback_seconds": 0.001702300040051341,
+          "max_heartbeat_gap_seconds": 0.10203069995623082,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.04945569997653365,
+            "preview_render": 0.09657559997867793
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.11002919997554272,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.0004569999873638153,
+            "actual_staging_validation": 0.12720839999383315,
+            "json_save": 0.04946750000817701,
+            "backend_total": 0.30649109999649227,
+            "todo_update": 0.010674600023776293,
+            "preview_render": 0.0965714999474585,
+            "preview_and_show": 0.10053669998887926,
+            "ui_publish": 0.10184660000959411,
+            "operation_total": 0.4226386999944225,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 16,
+          "events_before": 516,
+          "processing_seconds": 0.43123029998969287,
+          "button_callback_seconds": 0.0014684000052511692,
+          "max_heartbeat_gap_seconds": 0.11380779999308288,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.04794939997373149,
+            "preview_render": 0.08711119997315109
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.10906710004201159,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.0004243000294081867,
+            "actual_staging_validation": 0.1303194999927655,
+            "json_save": 0.047960500000044703,
+            "backend_total": 0.3059637999976985,
+            "todo_update": 0.011169600009452552,
+            "preview_render": 0.08710780000546947,
+            "preview_and_show": 0.0912489999900572,
+            "ui_publish": 0.09277330001350492,
+            "operation_total": 0.4147928999736905,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 17,
+          "events_before": 517,
+          "processing_seconds": 0.4277144999941811,
+          "button_callback_seconds": 0.0015296999481506646,
+          "max_heartbeat_gap_seconds": 0.11449649999849498,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.0508276000036858,
+            "preview_render": 0.0893509000306949
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.106210199999623,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.00042619998566806316,
+            "actual_staging_validation": 0.12817209999775514,
+            "json_save": 0.0508393999771215,
+            "backend_total": 0.30327760003274307,
+            "todo_update": 0.010520399955566972,
+            "preview_render": 0.08934669999871403,
+            "preview_and_show": 0.09388489997945726,
+            "ui_publish": 0.09519830002682284,
+            "operation_total": 0.4123799000517465,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 18,
+          "events_before": 518,
+          "processing_seconds": 0.4385216999799013,
+          "button_callback_seconds": 0.0020453999750316143,
+          "max_heartbeat_gap_seconds": 0.10129309998592362,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.05632740003056824,
+            "preview_render": 0.08993640000699088
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.1020468000206165,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.0006205999525263906,
+            "actual_staging_validation": 0.12557299999753013,
+            "json_save": 0.056338900001719594,
+            "backend_total": 0.30306330003077164,
+            "todo_update": 0.01254200004041195,
+            "preview_render": 0.08993269997881725,
+            "preview_and_show": 0.0941350000211969,
+            "ui_publish": 0.09551999997347593,
+            "operation_total": 0.4205737999873236,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 19,
+          "events_before": 519,
+          "processing_seconds": 0.43101800000295043,
+          "button_callback_seconds": 0.00176470004953444,
+          "max_heartbeat_gap_seconds": 0.10863840003730729,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.04724560002796352,
+            "preview_render": 0.10325550002744421
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.10041850002016872,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.00044410000555217266,
+            "actual_staging_validation": 0.1274056999827735,
+            "json_save": 0.04725760000292212,
+            "backend_total": 0.2929897999856621,
+            "todo_update": 0.010369200026616454,
+            "preview_render": 0.10325149999698624,
+            "preview_and_show": 0.10712090000743046,
+            "ui_publish": 0.10839389998000115,
+            "operation_total": 0.41531879996182397,
+            "cooldown_seconds": 0.5
+          }
+        },
+        {
+          "operation": 20,
+          "events_before": 520,
+          "processing_seconds": 0.42653679999057204,
+          "button_callback_seconds": 0.001540199969895184,
+          "max_heartbeat_gap_seconds": 0.10986690002027899,
+          "cooldown_seconds": 0.5,
+          "stage_seconds": {
+            "json_save": 0.05121299996972084,
+            "preview_render": 0.0886622000252828
+          },
+          "stage_calls": {
+            "json_save": 1,
+            "preview_render": 1
+          },
+          "service_timings": {
+            "dependency_hashing": 0.1011587999528274,
+            "ledger_full_rebuild": 0.0,
+            "ledger_incremental": 0.00042939995182678103,
+            "actual_staging_validation": 0.12836450000759214,
+            "json_save": 0.051224399998318404,
+            "backend_total": 0.29966540000168607,
+            "todo_update": 0.010911300021689385,
+            "preview_render": 0.08865809999406338,
+            "preview_and_show": 0.09256020002067089,
+            "ui_publish": 0.09383829997386783,
+            "operation_total": 0.4094877999741584,
+            "cooldown_seconds": 0.5
+          }
+        }
+      ]
+    }
+  }
+}
