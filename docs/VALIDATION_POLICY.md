@@ -33,7 +33,7 @@
 - 現有 unittest `TestCase` 經 pytest 的 unittest adapter 執行，保留 `setUp`／`tearDown`、`setUpClass`／`tearDownClass`、`addCleanup`／`addClassCleanup` 及 `subTest`。沒有自訂 `load_tests`、module setup/teardown、pytest fixture 或參數化 marker。pytest-only 函式以函式本身的 context managers／臨時路徑處理清理。
 - unittest 依 loader 的 module／class／method 排序；pytest 依 collection 與宣告順序管理 class，`TestCase` 方法仍經 unittest loader。共同案例順序確實不同，不宣稱等價順序。pytest 的 setup/call/teardown 報告分段也不同，subtests 額外統計不能當成遺漏或新增 top-level 案例。
 - 特別追查 frozen legacy fixture 的 `sys.modules` 登錄與 `addClassCleanup`、approval／inspector 的繼承與顯式 fixture 清理、project repair 的 class-level patches／temporary cleanup、Tk root destroy、reader thread release。這些仍執行原 hooks；本次舊契約的兩個完整入口實跑提供排序／清理差異證據。沒有已證明只有 unittest 才能暴露、而 pytest 漏掉的案例；日後若有具體失敗線索則保留該情境的 targeted unittest／order reproduction，不能靠集合包含推論一切 runner 行為相同。
-- GUI classes 從真實 `tk.Tk()` 建立處盤點；`verify-gui` 對照 full pytest JUnit，逐一確認必要 GUI 案例恰好一次成功。missing、skip、failure、error 均失敗。Windows Tk 不可用須 BLOCKED，不把 collection 當成執行。GUI 測試內容及既有 skip 行為本身未修改。
+- GUI classes 從真實 `tk.Tk()` 建立處盤點；`verify-gui` 對照 full pytest JUnit，逐一確認必要 GUI 案例恰好一次成功。所有已收集 pytest identity 也須與 JUnit testcase 精確一對一且全部成功，未知、missing、重複、skip、failure、error 均失敗，沒有一般豁免。Windows Tk 不可用須 BLOCKED，不把 collection 當成執行。GUI 測試內容及既有 skip 行為本身未修改。
 
 ## 保留、移除與條件執行
 

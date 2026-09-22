@@ -197,14 +197,27 @@ def verify_gui(report, inventory):
     required = inventory["gui_ids"]
     if not required:
         raise ValueError("missing required GUI inventory")
+    collected = inventory.get("pytest_ids")
+    if not isinstance(collected, list) or not collected or any(
+        count != 1 for count in Counter(collected).values()
+    ):
+        raise ValueError("missing or duplicate collected pytest case identity")
+    if any(name not in collected for name in required):
+        raise ValueError("required GUI case absent from pytest collection")
     cases = {}
     for case in ET.parse(report).iter("testcase"):
         name = case.get("classname", "").removeprefix("tests.") + "." + case.get("name", "")
         cases.setdefault(name, []).append(case)
+    if Counter(collected) != Counter({name: len(entries) for name, entries in cases.items()}):
+        raise ValueError("collected pytest case identity mismatch with JUnit")
     for name in required:
         entries = cases.get(name, [])
         if len(entries) != 1 or any(entries[0].find(tag) is not None for tag in ("skipped", "failure", "error")):
             raise ValueError(f"required GUI case did not execute successfully exactly once: {name}")
+    for name in collected:
+        entry = cases[name][0]
+        if any(entry.find(tag) is not None for tag in ("skipped", "failure", "error")):
+            raise ValueError(f"collected pytest case did not execute successfully: {name}")
     return len(required)
 
 

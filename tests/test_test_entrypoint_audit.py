@@ -30,12 +30,46 @@ class EntrypointAuditTests(unittest.TestCase):
             for inner in ("", "<skipped/>", "<failure/>", "<error/>"):
                 for count in (0, 1, 2):
                     report.write_text("<testsuite>" + case.format(inner) * count + "</testsuite>")
-                    inventory = {"gui_ids": ["test_gui.RealTk.test_visible"]}
+                    inventory = {"gui_ids": ["test_gui.RealTk.test_visible"],
+                                 "pytest_ids": ["test_gui.RealTk.test_visible"]}
                     if not inner and count == 1:
                         self.assertEqual(verify_gui(report, inventory), 1)
                     else:
                         with self.assertRaises(ValueError):
                             verify_gui(report, inventory)
+
+    def test_every_collected_case_must_execute_successfully_exactly_once(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            report = Path(temporary) / "junit.xml"
+            gui = '<testcase classname="tests.test_gui.RealTk" name="test_visible"/>'
+            other = '<testcase classname="tests.test_other" name="test_plain">{}</testcase>'
+            unknown = '<testcase classname="tests.test_unknown" name="test_extra"/>'
+            inventory = {"gui_ids": ["test_gui.RealTk.test_visible"],
+                         "pytest_ids": ["test_gui.RealTk.test_visible", "test_other.test_plain"]}
+            report.write_text("<testsuite>" + gui + other.format("") + "</testsuite>")
+            self.assertEqual(verify_gui(report, inventory), 1)
+            rejected = (
+                gui,
+                gui + other.format("<skipped/>"),
+                gui + other.format("<failure/>"),
+                gui + other.format("<error/>"),
+                gui + other.format("") * 2,
+                gui + other.format("") + unknown,
+            )
+            for cases in rejected:
+                with self.subTest(cases=cases):
+                    report.write_text("<testsuite>" + cases + "</testsuite>")
+                    with self.assertRaises(ValueError):
+                        verify_gui(report, inventory)
+            report.write_text("<testsuite>" + gui + other.format("") + "</testsuite>")
+            with self.assertRaisesRegex(ValueError, "missing or duplicate collected pytest"):
+                verify_gui(report, {"gui_ids": inventory["gui_ids"]})
+            with self.assertRaisesRegex(ValueError, "missing or duplicate collected pytest"):
+                verify_gui(report, {"gui_ids": inventory["gui_ids"],
+                                    "pytest_ids": inventory["pytest_ids"] * 2})
+            with self.assertRaisesRegex(ValueError, "required GUI case absent"):
+                verify_gui(report, {"gui_ids": inventory["gui_ids"],
+                                    "pytest_ids": ["test_other.test_plain"]})
 
     def test_custom_loader_cannot_silently_bypass_entrypoint_review(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -268,6 +302,81 @@ class EntrypointAuditTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(ValueError, "wildcard tkinter import"):
                 gui_functions(folder)
+
+    def test_cross_module_tk_helper_skip_cannot_escape_junit_gate(self):
+        repo = Path(__file__).resolve().parents[1]
+        fixture_parent = repo / "tmp"
+        fixture_parent.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=fixture_parent) as temporary:
+            root = Path(temporary)
+            tests = root / "tests"
+            tests.mkdir()
+            (tests / "cross_gui_helper.py").write_text(
+                "import tkinter as tk\n"
+                "def create_root(): return tk.Tk()\n", encoding="utf-8"
+            )
+            (tests / "test_cross_module_existing.py").write_text(
+                "import unittest\nimport tkinter as tk\n"
+                "class Existing(unittest.TestCase):\n"
+                "    def setUp(self):\n"
+                "        self.root = tk.Tk()\n"
+                "        self.addCleanup(self.root.destroy)\n"
+                "    def test_ok(self): pass\n", encoding="utf-8"
+            )
+            (tests / "test_cross_module_imported.py").write_text(
+                "import pytest\nfrom cross_gui_helper import create_root\n"
+                "@pytest.mark.skip(reason='cross-module GUI bypass regression')\n"
+                "def test_imported_gui():\n"
+                "    root = create_root()\n"
+                "    root.destroy()\n", encoding="utf-8"
+            )
+            original_path = sys.path[:]
+            try:
+                with patch("scripts.test_entrypoint_audit.ROOT", root):
+                    unittest_output = root / "unittest.json"
+                    collect("unittest", unittest_output)
+            finally:
+                sys.path[:] = original_path
+                sys.modules.pop("test_cross_module_existing", None)
+                sys.modules.pop("test_cross_module_imported", None)
+                sys.modules.pop("cross_gui_helper", None)
+            script = (
+                "import sys; from pathlib import Path; "
+                "from scripts import test_entrypoint_audit as audit; "
+                "audit.ROOT = Path(sys.argv[1]); "
+                "audit.collect('pytest', Path(sys.argv[2]))"
+            )
+            pytest_output = root / "pytest.json"
+            subprocess.run(
+                [sys.executable, "-c", script, str(root), str(pytest_output)],
+                cwd=repo, check=True, capture_output=True, text=True, timeout=30,
+            )
+            report = root / "junit.xml"
+            subprocess.run(
+                [sys.executable, "-m", "pytest", str(tests), "-q", "-rs",
+                 f"--junitxml={report}", f"--basetemp={root / 'pytest-temp'}",
+                 f"--rootdir={root}"],
+                cwd=repo, check=True, capture_output=True, text=True, timeout=30,
+            )
+            unittest_collection = json.loads(unittest_output.read_text(encoding="utf-8"))
+            pytest_ids = json.loads(pytest_output.read_text(encoding="utf-8"))
+            inventory = inventory_from_collections(
+                unittest_collection, pytest_ids, gui_functions(tests)
+            )
+            self.assertEqual(inventory["pytest_only"], [
+                "test_cross_module_imported.test_imported_gui"
+            ])
+            self.assertEqual(inventory["gui_ids"], [
+                "test_cross_module_existing.Existing.test_ok"
+            ])
+            from xml.etree import ElementTree as ET
+            actual_ids = {
+                case.get("classname", "").removeprefix("tests.") + "." + case.get("name", "")
+                for case in ET.parse(report).iter("testcase")
+            }
+            self.assertEqual(actual_ids, set(pytest_ids))
+            with self.assertRaisesRegex(ValueError, "collected pytest case"):
+                verify_gui(report, inventory)
 
 
 if __name__ == "__main__":
