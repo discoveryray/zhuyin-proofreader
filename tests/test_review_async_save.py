@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import copy
+from contextlib import contextmanager
+import gc
+import subprocess
+import sys
 import tempfile
 import threading
 import time
 import tkinter as tk
 import unittest
+import weakref
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -15,6 +20,100 @@ from tests.review_save_test_support import wait_for_save
 from tests.test_staged_review_navigation_v580 import (
     create_staged_navigation_fixture, headless_app, controlled_refresh,
 )
+
+
+@contextmanager
+def traced_tk_finalizers():
+    """Record real finalizer ownership; never suppress a Tcl failure."""
+    released = []
+    variable_del, image_del = tk.Variable.__del__, tk.Image.__del__
+
+    def variable_finalizer(value):
+        released.append((id(value), threading.get_ident()))
+        variable_del(value)
+
+    def image_finalizer(value):
+        released.append((id(value), threading.get_ident()))
+        image_del(value)
+
+    with patch.object(tk.Variable, "__del__", variable_finalizer), \
+            patch.object(tk.Image, "__del__", image_finalizer):
+        yield released
+
+
+def exercise_closed_root_worker(output_dir, mode):
+    """Child-process regression: no class-owned Tk can mask interpreter lifetime."""
+    output = Path(output_dir)
+    entered, release = threading.Event(), threading.Event()
+
+    def collect_in_worker():
+        entered.set()
+        if not release.wait(10):
+            raise RuntimeError("main did not release worker")
+        gc.collect()
+
+    def run_window():
+        root = tk.Tk()
+        app = gui.ReviewApp(root, output)
+        root.update()
+        row = app.current()
+
+        def close_prior_dialogs():
+            for factory in (
+                lambda: gui.ExpectedDialog(root, row, "closed expected", wait=False),
+                lambda: gui.ActualReadingDialog(root, row, {"members": [row]}, output, wait=False),
+                lambda: gui.ConfirmationDialog(root, row, wait=False),
+            ):
+                dialog = factory()
+                dialog.update()
+                dialog.destroy()
+
+        close_prior_dialogs()
+        if mode == "expected":
+            save = app._save_service.save_event
+
+            def held_save(*args, **kwargs):
+                collect_in_worker()
+                return save(*args, **kwargs)
+
+            app._save_service.save_event = held_save
+            app.primary.invoke()
+        else:
+            sp.stage_manual_actual_correction(output, row["review_id"], "ㄎㄢ")
+            apply_actual = gui.apply_staged_manual_actual_corrections
+
+            def held_apply(path):
+                collect_in_worker()
+                return apply_actual(path)
+
+            # This fixture has a controlled refresh contract; transaction,
+            # source checks and actual writes are the real implementation.
+            sp.refresh_actual_project = controlled_refresh
+            gui.apply_staged_manual_actual_corrections = held_apply
+            app._apply_in_progress = True
+            app._start_staged_actual_apply(1)
+        assert entered.wait(5)
+        workers = [thread for thread in threading.enumerate() if thread is not threading.main_thread()]
+        assert len(workers) == 1, workers
+        references = weakref.ref(root), weakref.ref(app)
+        root.destroy()
+        return workers[0], references, row["review_id"]
+
+    worker, references, review_id = run_window()
+    try:
+        assert all(ref() is None for ref in references), "destroyed root/app retained by Python cycles"
+    finally:
+        release.set()
+        worker.join(20)
+    assert not worker.is_alive()
+    if mode == "expected":
+        assert review_id in sp.load_or_initialize_db(output)["events"]
+    else:
+        summary = sp.manual_actual_staging_summary(output)
+        assert not summary.get("staging_error"), summary
+        assert summary["staged_group_count"] == 0, summary
+        assert (sp.project_actual_evidence_root(output) / sp.OCCURRENCE_OVERRIDE_FILE).is_file()
+    print("closed real Tk root, worker GC, durable completion:", mode)
 
 
 class AsyncReviewSaveTests(unittest.TestCase):
@@ -368,6 +467,7 @@ class AsyncOwnerTkTests(unittest.TestCase):
         app.save_event(row, sp.build_manual_expected_event(row, operation="CONFIRM_CURRENT_AS_EXPECTED"))
         wait_for_save(app)
         self.assertFalse(app._async_after_ids)
+
         row = app.current()
         with patch.object(sp.os, "fsync", side_effect=OSError("isolated disk failure")), \
                 patch.object(gui.messagebox, "showerror") as error:
@@ -375,6 +475,151 @@ class AsyncOwnerTkTests(unittest.TestCase):
             wait_for_save(app)
         error.assert_called_once()
         self.assertFalse(app._async_after_ids)
+
+    def test_submitted_expected_variables_release_on_main_before_save_worker_gc(self):
+        app = self.app
+        row = app.current()
+        entered, release = threading.Event(), threading.Event()
+        original_save, original_dialog = app._save_service.save_event, gui.ExpectedDialog
+        resources, identities, collector_threads = [], [], []
+
+        def submitted_dialog(*args, **kwargs):
+            dialog = original_dialog(*args, **kwargs, wait=False)
+            resources.extend(weakref.ref(getattr(dialog, name))
+                             for name in ("expected", "evidence", "context", "reason"))
+            identities.extend(id(ref()) for ref in resources)
+            dialog.expected.set(row["actual"])
+            dialog.update()
+            dialog.submit()
+            return dialog
+
+        def collect_then_save(*args, **kwargs):
+            entered.set()
+            if not release.wait(10):
+                raise RuntimeError("test did not release worker GC")
+            collector_threads.append(threading.get_ident())
+            gc.collect()
+            return original_save(*args, **kwargs)
+
+        with traced_tk_finalizers() as finalized, \
+                patch.object(gui, "ExpectedDialog", submitted_dialog), \
+                patch.object(app._save_service, "save_event", collect_then_save):
+            try:
+                app.resolve_expected()
+                self.assertTrue(entered.wait(5))
+                # The real save worker collects after resolve_expected's dialog
+                # local has returned; no GC threshold/enable state is changed.
+                release.set()
+                wait_for_save(app)
+            finally:
+                release.set()
+                app._save_worker.join(15)
+            self.assertTrue(all(ref() is None for ref in resources))
+            self.assertEqual({identity for identity, _ in finalized} & set(identities), set(identities))
+            self.assertTrue(all(thread == threading.get_ident() for identity, thread in finalized
+                                if identity in identities))
+            self.assertEqual(len(collector_threads), 1)
+            self.assertNotEqual(collector_threads[0], threading.get_ident())
+        reopened = headless_app(self.output)
+        self.assertIn(row["review_id"], reopened.db["events"])
+        self.assertNotIn(row["review_id"], [item["review_id"] for item in reopened.records])
+
+    def test_submit_cancel_and_owner_destroy_release_dialog_variables_and_photos(self):
+        row = self.app.current()
+        for kind in ("expected", "confirmation", "actual"):
+            for close in ("submit", "cancel", "owner_destroy"):
+                with self.subTest(kind=kind, close=close), traced_tk_finalizers() as finalized:
+                    owner = tk.Toplevel(self.window)
+                    try:
+                        if kind == "expected":
+                            dialog = gui.ExpectedDialog(owner, row, "isolated resource ownership", wait=False)
+                            resources = [weakref.ref(getattr(dialog, name))
+                                         for name in ("expected", "evidence", "context", "reason")]
+                            dialog.expected.set(row["actual"])
+                        elif kind == "confirmation":
+                            dialog = gui.ConfirmationDialog(owner, row, wait=False)
+                            resources = [weakref.ref(value) for value in dialog.vars]
+                            [value.set(True) for value in dialog.vars]
+                        else:
+                            dialog = gui.ActualReadingDialog(owner, row, {"members": [row]}, self.output, wait=False)
+                            dialog.update()
+                            self.assertTrue(dialog.sample_available[0])
+                            self.assertIsNotNone(dialog.previews[0].photo)
+                            resources = [weakref.ref(value) for value in dialog.checked_vars]
+                            resources.extend([weakref.ref(dialog.reading), weakref.ref(dialog.note),
+                                              weakref.ref(dialog.previews[0].photo)])
+                            dialog.reading.set(row["actual"])
+                        dialog.update()
+                        identities = {id(ref()) for ref in resources}
+                        if close == "submit":
+                            dialog.submit()
+                            self.assertIsNotNone(dialog.result)
+                        elif close == "cancel":
+                            dialog.destroy()
+                            self.assertIsNone(dialog.result)
+                        else:
+                            owner.destroy()
+                            self.assertIsNone(dialog.result)
+                        # Keep the destroyed dialog Python object alive. Its Tk
+                        # resources must already be gone even before cyclic GC.
+                        self.assertTrue(all(ref() is None for ref in resources))
+                        collector = threading.Thread(target=gc.collect)
+                        collector.start()
+                        collector.join(10)
+                        self.assertFalse(collector.is_alive())
+                        self.assertEqual({identity for identity, _ in finalized} & identities, identities)
+                        self.assertTrue(all(thread == threading.get_ident() for identity, thread in finalized
+                                            if identity in identities))
+                    finally:
+                        if owner.winfo_exists():
+                            owner.destroy()
+
+    def test_owner_close_releases_preview_before_pending_save_worker_collects(self):
+        app = self.app
+        row = app.current()
+        self.assertIsNotNone(app.image.photo)
+        photo, identity = weakref.ref(app.image.photo), id(app.image.photo)
+        entered, release = threading.Event(), threading.Event()
+        save = app._save_service.save_event
+
+        def collect_then_save(*args, **kwargs):
+            entered.set()
+            if not release.wait(10):
+                raise RuntimeError("test did not release owner-close save")
+            gc.collect()
+            return save(*args, **kwargs)
+
+        with traced_tk_finalizers() as finalized, \
+                patch.object(app._save_service, "save_event", collect_then_save):
+            try:
+                app.primary.invoke()
+                self.assertTrue(entered.wait(5))
+                self.window.destroy()
+                self.assertIsNone(photo())
+                self.assertIsNone(app.image.on_failure)
+            finally:
+                release.set()
+                app._save_worker.join(15)
+            self.assertFalse(app._save_worker.is_alive())
+            self.assertIn((identity, threading.get_ident()), finalized)
+            self.assertFalse(any(thread != threading.get_ident() for item, thread in finalized if item == identity))
+        self.assertIn(row["review_id"], headless_app(self.output).db["events"])
+
+    def test_real_root_and_prior_dialogs_release_before_expected_or_actual_worker_gc(self):
+        for mode in ("expected", "actual"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as td:
+                output = Path(td)
+                create_staged_navigation_fixture(output)
+                result = subprocess.run(
+                    [sys.executable, "-X", "utf8", "-c",
+                     "import sys; from tests.test_review_async_save import exercise_closed_root_worker; "
+                     "exercise_closed_root_worker(sys.argv[1], sys.argv[2])", str(output), mode],
+                    cwd=Path(__file__).resolve().parents[1], capture_output=True, text=True,
+                    encoding="utf-8", timeout=60)
+                self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertNotIn("Tcl_AsyncDelete", result.stderr)
+                self.assertNotIn("main thread is not in main loop", result.stderr)
+                self.assertIn("durable completion: " + mode, result.stdout)
 
 
 if __name__ == "__main__":

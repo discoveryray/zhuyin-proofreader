@@ -131,6 +131,9 @@ def create_scrollable_body(window: tk.Toplevel, *, fill_height=False) -> tuple[t
             if canvas._layout_pending is not None:
                 canvas.after_cancel(canvas._layout_pending)
                 canvas._layout_pending = None
+            # These convenience closures otherwise retain the destroyed widget
+            # tree (and its Tk resources) until cyclic GC runs on any thread.
+            canvas.request_layout = canvas.flush_layout = canvas.reveal = None
 
     canvas.request_layout = request_layout
     canvas.flush_layout = flush_layout
@@ -324,7 +327,28 @@ def guarded_review_action(method):
     return run
 
 
-class ExpectedDialog(tk.Toplevel):
+class _ReviewDialog(tk.Toplevel):
+    """Release owned Tk resources and child cycles on the owning Tk thread."""
+    _variable_attributes = ()
+    _widget_attributes = ("body_canvas",)
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.bind("<Destroy>", self._release_resources, add="+")
+
+    def _release_resources(self, event):
+        if event.widget is self:
+            # Result dictionaries contain plain data. Variables must not remain
+            # attached to a destroyed dialog's Python cycles for worker GC.
+            for name in self._variable_attributes + self._widget_attributes:
+                value = self.__dict__.pop(name, None)
+                if isinstance(value, list):
+                    value.clear()
+
+
+class ExpectedDialog(_ReviewDialog):
+    _variable_attributes = ("expected", "evidence", "context", "reason")
+
     def __init__(self, parent, entry, title: str, *, wait: bool = True):
         super().__init__(parent)
         self.result = None
@@ -369,11 +393,11 @@ class ExpectedDialog(tk.Toplevel):
 
         form = tk.Frame(body)
         form.pack(fill="x", padx=16, pady=4)
-        self.expected = tk.StringVar()
-        self.evidence = tk.StringVar()
+        self.expected = tk.StringVar(master=self)
+        self.evidence = tk.StringVar(master=self)
         default_context = f"完整詞／局部詞境：{phrase}；所在句：{sentence}；目標字：{entry.get('char', '')}"
-        self.context = tk.StringVar(value=default_context)
-        self.reason = tk.StringVar()
+        self.context = tk.StringVar(master=self, value=default_context)
+        self.reason = tk.StringVar(master=self)
         labels = [
             ("應標注音", self.expected, "多個可接受音請用 | 分隔；聲調可前置或後置，例如：˙ㄒㄧ 或 ㄒㄧ˙ 會視為同音"),
             ("依據（選填）", self.evidence, "可填實際參考來源或判斷理由，也可以留白；不需要填入代用或虛構來源"),
@@ -426,8 +450,11 @@ class ExpectedDialog(tk.Toplevel):
         self.destroy()
 
 
-class ActualReadingDialog(tk.Toplevel):
+class ActualReadingDialog(_ReviewDialog):
     """Human visual confirmation for the actual evidence chain only."""
+    _variable_attributes = ("checked_vars", "reading", "note")
+    _widget_attributes = ("body_canvas", "previews")
+
     def __init__(self, parent, entry, group, output_dir: Path, *, wait: bool = True):
         super().__init__(parent)
         self.result = None
@@ -477,7 +504,7 @@ class ActualReadingDialog(tk.Toplevel):
             available = preview.load(sample, padding=(95, 60), output_dir=self.output_dir)
             self.previews.append(preview)
             self.sample_available.append(available)
-            var = tk.BooleanVar(value=(i == 1 and available))
+            var = tk.BooleanVar(master=self, value=(i == 1 and available))
             self.checked_vars.append(var)
             check = wrap_checkbutton(tk.Checkbutton(frame, text="我已直接核對這張 PDF 原頁", variable=var,
                                                    state="normal" if available else "disabled"))
@@ -492,8 +519,8 @@ class ActualReadingDialog(tk.Toplevel):
 
         form = tk.LabelFrame(body, text="實際注音")
         form.pack(fill="x", padx=16, pady=8)
-        self.reading = tk.StringVar(value="")
-        self.note = tk.StringVar(value="")
+        self.reading = tk.StringVar(master=self, value="")
+        self.note = tk.StringVar(master=self, value="")
         WrappedLabel(form, text=f"程式目前 actual：{entry.get('actual') or '尚未辨識'}").grid(row=0,column=0,columnspan=2,sticky="ew",padx=8,pady=(8,4))
         WrappedLabel(form, text="原頁真正 actual：", width_fraction=0.25).grid(row=1,column=0,sticky="ew",padx=8,pady=4)
         scrollable_entry(form, self.reading).grid(row=1,column=1,sticky="ew",padx=8,pady=4)
@@ -524,7 +551,10 @@ class ActualReadingDialog(tk.Toplevel):
         self.destroy()
 
 
-class ConfirmationDialog(tk.Toplevel):
+class ConfirmationDialog(_ReviewDialog):
+    _variable_attributes = ("vars",)
+    _widget_attributes = ("body_canvas", "note")
+
     def __init__(self, parent, entry, *, wait: bool = True):
         super().__init__(parent)
         self.result = None
@@ -582,7 +612,7 @@ class ConfirmationDialog(tk.Toplevel):
         gate_frame = tk.Frame(body)
         gate_frame.pack(fill="x", padx=24, pady=4)
         for text in gate_texts:
-            var = tk.BooleanVar(value=False)
+            var = tk.BooleanVar(master=self, value=False)
             self.vars.append(var)
             wrap_checkbutton(tk.Checkbutton(gate_frame, text=text, variable=var)).pack(fill="x", anchor="w", pady=5)
 
@@ -859,7 +889,7 @@ class ReviewApp:
         # reopening reads the saved result instead of publishing to this owner.
         self._save_in_progress = False
 
-    def _schedule_async_poll(self, callback):
+    def _schedule_async_poll(self, callback, *args):
         self._ensure_async_lifecycle()
         if self._async_disposed:
             return
@@ -868,7 +898,7 @@ class ReviewApp:
         def deliver():
             self._async_after_ids.discard(timer_id)
             if not self._async_disposed:
-                callback()
+                callback(*args)
 
         timer_id = self.root.after(20, deliver)
         if timer_id is not None:
@@ -955,20 +985,10 @@ class ReviewApp:
             # No root.after or other Tk call is permitted from this worker.
             completed.put((result, prepared, error))
 
-        def poll():
-            if getattr(self, "_save_request", None) is not request:
-                return
-            try:
-                result, prepared, error = completed.get_nowait()
-            except queue.Empty:
-                self._schedule_async_poll(poll)
-                return
-            self._finish_event_save(request, result, prepared, error)
-
         try:
             self._disable_save_controls()
             self._save_worker = threading.Thread(target=worker, daemon=False)
-            self._schedule_async_poll(poll)
+            self._schedule_async_poll(self._poll_event_save, request, completed)
             self._save_worker.start()
         except Exception as exc:
             self._save_request = None
@@ -977,6 +997,18 @@ class ReviewApp:
             messagebox.showerror("無法開始儲存人工判定", str(exc), parent=self.root)
             return False
         return True
+
+    def _poll_event_save(self, request, completed):
+        # A method avoids a self-referencing local poll closure that would keep
+        # the destroyed Tk owner alive until arbitrary worker-thread GC.
+        if getattr(self, "_save_request", None) is not request:
+            return
+        try:
+            result, prepared, error = completed.get_nowait()
+        except queue.Empty:
+            self._schedule_async_poll(self._poll_event_save, request, completed)
+            return
+        self._finish_event_save(request, result, prepared, error)
 
     def _finish_event_save(self, request, result, prepared, error):
         if (getattr(self, "_async_disposed", False)
@@ -1309,21 +1341,14 @@ class ReviewApp:
         bar.start(12)
         old_index = self.index
         completed = queue.Queue(maxsize=1)
+        output_dir = self.output_dir
 
         def worker():
             try:
-                result = apply_staged_manual_actual_corrections(self.output_dir)
+                result = apply_staged_manual_actual_corrections(output_dir)
                 completed.put((result, None))
             except Exception as exc:
                 completed.put((None, exc))
-
-        def poll():
-            try:
-                result, error = completed.get_nowait()
-            except queue.Empty:
-                self._schedule_async_poll(poll)
-                return
-            done(result, error)
 
         def done(result, error):
             self._apply_in_progress = False
@@ -1396,7 +1421,15 @@ class ReviewApp:
             messagebox.showinfo("actual 批次套用完成", "\n".join(lines), parent=self.root)
 
         threading.Thread(target=worker, daemon=True).start()
-        self._schedule_async_poll(poll)
+        self._schedule_async_poll(self._poll_actual_apply, completed, done)
+
+    def _poll_actual_apply(self, completed, done):
+        try:
+            result, error = completed.get_nowait()
+        except queue.Empty:
+            self._schedule_async_poll(self._poll_actual_apply, completed, done)
+            return
+        done(result, error)
 
     def actual_instruction(self):
         # Backward-compatible alias for old callbacks/hotkeys.
