@@ -34,7 +34,7 @@ def ci_evidence(event="pull_request"):
         "status": "completed", "conclusion": "success", "url": "fixture://ci/100",
         "evidence_ref": "fixture://raw-run-and-git-metadata",
         "jobs": [{
-            "name": f"Python {version}", "runner": "windows-2025", "python_version": version + ".10",
+            "name": f"Python {version}", "runner": "windows-2025", "python_version": "3.13.0",
             "run_id": 100, "attempt": 1, "tested_sha": tested, "conclusion": "success",
             "steps": {step: "success" for step in (*gate.COMMON_STEPS,
                        f"Check committed whitespace ({whitespace})")},
@@ -48,7 +48,7 @@ def review_evidence(number):
         "round": number, "reviewer": f"independent-agent-{number}",
         "baseline": BASE, "base": BASE, "head": HEAD,
         "scope": "baseline_to_head" if number == 1 else "cumulative_and_full_pr_with_ci",
-        "verdict": "PASS", "independent": True, "full_diff_reviewed": True,
+        "verdict": "PASS", "independent": True, "full_diff_reviewed": True, "review_mode": "full_diff",
         "findings": [], "report_ref": f"fixture://independent-report/{number}",
         "blocker_kind": None, "supersedes_report_ref": None, "resolution_evidence_ref": None,
         "ci": None if number == 1 else {"run_id": 100, "attempt": 1, "tested_sha": SYNTHETIC},
@@ -138,6 +138,53 @@ class ReviewGateTests(unittest.TestCase):
         decision = gate.next_action(state)
         self.assertEqual(decision["action"], expected, decision)
         return decision
+
+    def test_same_reviewer_may_close_only_evidence_gap_at_unchanged_scope(self):
+        for number in (1, 2):
+            state = evidence_state()
+            old = state["reviews"][number - 1]
+            block_review(old, "evidence")
+            fresh = supplement(old)
+            fresh.update(reviewer=old["reviewer"], review_mode="evidence_gap", full_diff_reviewed=False)
+            state["reviews"].append(fresh)
+            self.assertAction(state, "MERGE_PROPOSAL")
+            # A chain remains rooted in the retained full review, without inventing a reread.
+            block_review(fresh, "capability")
+            latest = supplement(fresh)
+            latest["reviewer"] = fresh["reviewer"]
+            state["reviews"].append(latest)
+            self.assertAction(state, "MERGE_PROPOSAL")
+
+    def test_gap_review_cannot_replace_initial_review_or_change_reviewer_or_scope(self):
+        for field, value in (("reviewer", "another-agent"), ("head", NEW),
+                             ("base", NEW), ("baseline", NEW), ("scope", "partial"),
+                             ("resolution_evidence_ref", None), ("supersedes_report_ref", None)):
+            with self.subTest(field=field):
+                state = evidence_state()
+                old = state["reviews"][0]
+                block_review(old, "evidence")
+                fresh = supplement(old)
+                fresh.update(reviewer=old["reviewer"], review_mode="evidence_gap", full_diff_reviewed=False)
+                fresh[field] = value
+                state["reviews"].append(fresh)
+                self.assertAction(state, "STOP")
+
+    def test_gap_review_never_clears_code_blocker_or_fabricates_full_review(self):
+        state = evidence_state()
+        old = state["reviews"][0]
+        block_review(old, "code")
+        fresh = supplement(old)
+        fresh.update(reviewer=old["reviewer"], review_mode="evidence_gap", full_diff_reviewed=False)
+        state["reviews"].append(fresh)
+        self.assertAction(state, "STOP")
+        block_review(old, "evidence")
+        fresh["full_diff_reviewed"] = True
+        self.assertAction(state, "STOP")
+
+    def test_new_schema_does_not_silently_adopt_old_task_contract(self):
+        state = evidence_state()
+        state["schema"] = "zhuyin-pr-review-gate/2"
+        self.assertAction(state, "STOP")
 
     def test_pass_progresses_through_both_reviews_and_post_merge(self):
         state = evidence_state()
@@ -233,7 +280,7 @@ class ReviewGateTests(unittest.TestCase):
                 self.assertAction(state, "STOP")
 
     def test_pr_ci_failure_or_missing_step_never_merges(self):
-        for version_index in (0, 1):
+        for version_index in range(len(gate.PYTHONS)):
             for step in (*gate.COMMON_STEPS, "Check committed whitespace (pull request)"):
                 for outcome in (None, "failure", "skipped", "cancelled"):
                     with self.subTest(job=version_index, step=step, outcome=outcome):
@@ -259,7 +306,7 @@ class ReviewGateTests(unittest.TestCase):
                              ("conclusion", "skipped")):
             with self.subTest(field=field):
                 state = evidence_state()
-                state["pr_ci"]["jobs"][1][field] = value
+                state["pr_ci"]["jobs"][0][field] = value
                 self.assertAction(state, "INVESTIGATE_CI" if field == "conclusion" else "REFRESH_EVIDENCE")
         state = evidence_state()
         state["pr_ci"]["jobs"].pop()
@@ -346,7 +393,7 @@ class ReviewGateTests(unittest.TestCase):
         state["pr_ci"]["latest_attempt"] = 2
         self.assertAction(state, "REFRESH_EVIDENCE")
         state["pr_ci"]["latest_attempt"] = 1
-        del state["pr_ci"]["jobs"][0]["steps"]["Run full unittest suite"]
+        del state["pr_ci"]["jobs"][0]["steps"]["Run full pytest suite"]
         self.assertAction(state, "REFRESH_EVIDENCE")
         state["pr_ci"] = ci_evidence()
         state["pr_ci"]["conclusion"] = "failure"
@@ -366,7 +413,7 @@ class ReviewGateTests(unittest.TestCase):
                         if status == "failure":
                             state["pr_ci"]["conclusion"] = "failure"
                             state["pr_ci"]["jobs"][0]["conclusion"] = "failure"
-                            state["pr_ci"]["jobs"][0]["steps"]["Run full unittest suite"] = "failure"
+                            state["pr_ci"]["jobs"][0]["steps"]["Run full pytest suite"] = "failure"
                         else:
                             state["pr_ci"].update(status=status, conclusion=None, jobs=[])
                         if source == "pr":
@@ -768,7 +815,10 @@ class ReviewGateTests(unittest.TestCase):
                      "Check committed whitespace (push)"):
             self.assertIn(f"- name: {step}\n", workflow)
         for version in gate.PYTHONS:
-            self.assertIn(f'- "{version}"', workflow)
+            self.assertIn(f"|| '[\"{version}\"]'", workflow)
+        self.assertIn("&& '3.13.0'", workflow)
+        self.assertIn("github.head_ref == 'codex/simplify-validation'", workflow)
+        self.assertEqual(workflow.count("github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c'"), 2)
 
 
 if __name__ == "__main__":

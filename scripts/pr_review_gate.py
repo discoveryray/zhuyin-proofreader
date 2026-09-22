@@ -13,16 +13,16 @@ import re
 import sys
 
 
-SCHEMA = "zhuyin-pr-review-gate/2"
+SCHEMA = "zhuyin-pr-review-gate/3"
 REPOSITORY = "discoveryray/zhuyin-proofreader"
 WORKFLOW = ".github/workflows/ci.yml"
-PYTHONS = ("3.12", "3.13")
+PYTHONS = ("3.13",)
 OPERATIONS = {"implement", "delegate", "test", "commit", "push", "pr", "merge"}
 COMMON_STEPS = (
     "Check out repository", "Set up Python", "Show Python version",
     "Upgrade pip", "Install development dependencies",
-    "Validate runtime asset integrity", "Run full unittest suite",
-    "Run full pytest suite", "Compile Python sources",
+    "Validate runtime asset integrity", "Audit test entrypoint coverage",
+    "Run full pytest suite", "Verify GUI test execution", "Compile Python sources",
     "Check repository working tree",
 )
 
@@ -155,7 +155,10 @@ def validate_state(state):
     for review in state["reviews"]:
         _fields(review, "round reviewer baseline base head scope verdict independent "
                 "full_diff_reviewed findings report_ref ci blocker_kind "
-                "supersedes_report_ref resolution_evidence_ref", "review")
+                "supersedes_report_ref resolution_evidence_ref review_mode", "review")
+        _require(review["review_mode"] in ("full_diff", "evidence_gap"), "unknown review mode")
+        _require(review["full_diff_reviewed"] == (review["review_mode"] == "full_diff"),
+                 "review mode must accurately describe the work performed")
         _require(type(review["round"]) is int and review["round"] in (1, 2), "invalid review round")
         for field in ("reviewer", "scope", "report_ref"):
             _text(review[field], f"review.{field}")
@@ -265,6 +268,7 @@ def _validate_review_history(state):
         _require(ref not in reports, "report_ref must uniquely identify an original report")
         if prior is None:
             _require(review["resolution_evidence_ref"] is None, "resolution needs a supersession target")
+            _require(review["review_mode"] == "full_diff", "gap review needs a retained full-review chain")
         else:
             _require(prior in reports and prior not in superseded,
                      "supersession target must be earlier, retained, and not already superseded")
@@ -273,6 +277,9 @@ def _validate_review_history(state):
                      "only non-code BLOCKED reports may be supplemented at unchanged HEAD")
             _require(_review_scope(review) == _review_scope(old), "supersession must retain the exact code scope")
             _text(review["resolution_evidence_ref"], "supersession resolution evidence")
+            if review["review_mode"] == "evidence_gap":
+                _require(review["reviewer"] == old["reviewer"],
+                         "only the original reviewer may perform a gap-only supplement")
             for candidate in (old, review):
                 problem = _review_problem(state, candidate, candidate["round"])
                 _require(problem is None, "invalid supersession review: " + str(problem))
@@ -304,7 +311,7 @@ def _review(state, number, base, head):
 def _review_problem(state, review, number):
     if not review["independent"] or review["reviewer"] in state["implementers"]:
         return "reviewer must be independent of every implementation actor"
-    if not review["full_diff_reviewed"]:
+    if not review["full_diff_reviewed"] and review["review_mode"] != "evidence_gap":
         return "full applicable diff has not been reviewed"
     scope = "baseline_to_head" if number == 1 else "cumulative_and_full_pr_with_ci"
     if review["scope"] != scope:
@@ -342,7 +349,7 @@ def _ci_problem(ci, event, branch, head, parents):
             return "REFRESH_EVIDENCE", f"required Windows runner is missing: {name}"
         if job["conclusion"] != "success":
             return "INVESTIGATE_CI", f"required Windows job did not succeed: {name}"
-        if not re.fullmatch(re.escape(version) + r"\.\d+", job["python_version"]):
+        if job["python_version"] != "3.13.0":
             return "REFRESH_EVIDENCE", f"wrong actual Python version: {name}"
         if (job["run_id"], job["attempt"], job["tested_sha"]) != (
                 ci["run_id"], ci["attempt"], ci["tested_sha"]):

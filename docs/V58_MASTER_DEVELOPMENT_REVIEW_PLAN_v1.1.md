@@ -1,8 +1,8 @@
 # zhuyin-proofreader v5.8 Master Development & Independent Review Plan
 
-文件版本：1.2（保留既有檔名以維持引用）
+文件版本：1.3（保留既有檔名以維持引用）
 
-修訂日期：2026-09-09
+修訂日期：2026-09-22
 
 Repository：`discoveryray/zhuyin-proofreader`
 
@@ -306,7 +306,7 @@ GUI 只能呼叫既有安全 service / API，不能另造 approval、quorum、id
 6. 任一輪 BLOCKED 先依第 8 節核對 `blocker_kind`：只有 confirmed `code` finding 交回實作代理新增 corrective commit、重跑必要測試並使用一輪 corrective implementation；新 HEAD 必須重新取得兩輪完整適用 PASS。`evidence` 先補證據，`capability`／`contract` 先 STOP；解決後保留原 HEAD 與計數，以 append-only 完整補審接續，不能新增空 commit。所有舊報告都保留。每個 task 最多三輪自動程式修正，第三輪後仍需程式修正則停止回報，不藉另開 session／task 重設；合法 non-code 補證據不消耗此上限。
 7. 代理不可用、report 缺失／不完整、CI pending／failed／cancelled／必要 job 被 skip 時，不得合併。可自動補證據或調查故障，但不能偽裝 PASS 或改驗證規則。
 8. 兩輪適用 PASS、必要 CI 全通過且授權有效後，立即重讀 PR、base、head、findings、GitHub 保護規則及最新 CI。以 merge API 的 expected head SHA 綁定 reviewed HEAD，只使用 Create a merge commit；不用 squash、rebase、auto-merge，不降低保護規則。不代 reviewer approve、不自行 resolve discussions 或刪除 branch。
-9. 不確定 API 是否成功時先讀遠端狀態，不盲目重送副作用。核對實際 merge SHA、兩個 parents、預期檔案樹；不能假設它等於 synthetic SHA。Fetch 並核對 develop，再驗證實際 merge SHA 觸發的 develop push CI（Windows Python 3.12／3.13 及當次必要 gates），不得拿 PR CI 代替。
+9. 不確定 API 是否成功時先讀遠端狀態，不盲目重送副作用。核對實際 merge SHA、兩個 parents、預期檔案樹；不能假設它等於 synthetic SHA。Fetch 並核對 develop，再驗證實際 merge SHA 觸發的 develop push CI（Windows Python 3.13.0 及當次必要 gates），不得拿 PR CI 代替。
 10. 所有門檻均通過才回報該任務 COMPLETE。Develop 後續前進時分開報告已驗證 merge SHA 與目前 HEAD。Phase N 全部完成也不授權自行開始未交付的下一 Phase。
 
 Phase N 只有 implementation、兩輪 independent review、必要 PR CI、merge commit、develop post-merge CI 全部完成，才算通過階段門檻。此流程建置任務不等於 Phase 6，也不重新宣告歷史 Phase 狀態。
@@ -321,7 +321,7 @@ Phase N 只有 implementation、兩輪 independent review、必要 PR CI、merge
 
 Corrective commit 後：仍審 Phase baseline → latest authorized feature HEAD 的完整 cumulative diff，不能只審上一個 HEAD → corrective commit。可沿用未受影響且仍有效的證據，但必須重新檢查修正對整體契約的影響。
 
-純 non-code 補證據且 HEAD／base 未變時，依第 8 節 append 完整適用補審與 resolution 原始證據；不以空 commit 改 HEAD，也不覆寫原 BLOCKED。第二輪補審仍須綁定其親自核對的最新適用 CI；未連結的 PASS 或 CI rerun 不構成 blocker resolution。
+純 non-code 補證據且 baseline／HEAD／base／scope 均未變時，原 reviewer 可核對缺口、原始 resolution 及既有完整結論，不強制從頭重讀所有差異；換 reviewer 須讀足以自行負責完整 scope 的原始材料，不能只採信舊 PASS。依第 8 節 append 完整適用補審與 resolution 原始證據；不以空 commit 改 HEAD，也不覆寫原 BLOCKED。第二輪補審仍須綁定其親自核對的最新適用 CI；未連結的 PASS 或 CI rerun 不構成 blocker resolution。
 
 PR review：核對當前 PR base、head、merge-base 與 GitHub 實際顯示的 cumulative diff。明確記錄比較方式；develop 已前進時，不得把單純兩棵 tree 的差異錯當 PR diff。
 
@@ -340,13 +340,15 @@ PR base / integration context 改變時，評估並重做受影響的整合檢�
 
 ## 7. Independent review 與測試標準
 
+驗證入口、Windows Python 3.13.0 與依賴、證據沿用和制度過渡以 [驗證政策](VALIDATION_POLICY.md) 為準。修正期間先執行受影響測試；固定版本後完成必要 full pytest。每次重跑須對應修改影響、具體失敗線索或明確門檻。等待 CI、重開 session、整理報告不構成重跑理由。效能量測僅在效能影響或明確驗收要求時執行。新制度不自動套用尚未收尾的任務，本次變更仍按凍結舊 gate／審查契約驗收。
+
 必須實際核對 GitHub metadata、parents、cumulative diff、全部 changed production code 與 tests，並交叉追蹤適用的前階段架構和呼叫路徑。
 
 至少檢查 failure paths、state transition、transaction atomicity、idempotency、concurrency、backward compatibility、runtime boundary、import side effects、來源驗證與 actual / expected 隔離。
 
 檢查 tests 是否用獨立 expected value / invariant，避免只照 production code 重算同一錯誤。Test 數量與綠燈不能單獨證明 correctness。B1 / B2 / B3 這類會改變安全狀態的修正，必須有可重現失敗情境及有效 regression coverage。
 
-依當次要求執行 targeted tests、必要的 full unittest / pytest、runtime integrity、compile 與 diff check；已充分驗證後不任意擴張測試。數量以當次 discovery 和輸出為準，不沿用歷史數字。
+依當次要求執行 targeted tests、必要的 full pytest、runtime integrity、compile 與 diff check；已充分驗證後不任意擴張測試。數量以當次 discovery 和輸出為準，不沿用歷史數字。
 
 明確區分本次實際執行、已閱讀 repository tests、已核對 GitHub CI、實作者回報，以及未驗證事項。
 
@@ -377,9 +379,9 @@ Code blocker 必須包含 exact file / function / code region、具體 failure s
 - `BLOCKED / capability` 或 `contract`：STOP 交接，列出具體限制與解除條件；解決後同 HEAD 補審，不耗修正輪次、不新增空 commit。三輪程式修正用盡也不阻止合法 non-code 補證據。
 - PASS：依實際已達階段提供下一個 workflow action，例如準備 PR、核對 PR / CI、執行已授權 merge，或核對 post-merge CI。不能跳過尚未完成的門檻。
 
-所有報告都須有唯一 `report_ref`；PASS 的 `blocker_kind=null` 且 findings 為空。未補審的 `supersedes_report_ref`、`resolution_evidence_ref` 均為 null。補審必須保留舊原文，append 新的獨立 full-diff 報告，明確指向較早、尚未被取代、相同 round／baseline／base／head／scope 的 non-code BLOCKED，並附協調者已核對、留存的原始 resolution artifact reference。原／新報告均須符合 reviewer 獨立性；第二輪 reviewer 不得參與同 code scope 的第一輪，補審 PASS 仍須核對最新適用 CI run／attempt／tested SHA。
+所有報告都須有唯一 `report_ref`；PASS 的 `blocker_kind=null` 且 findings 為空。未補審的 `supersedes_report_ref`、`resolution_evidence_ref` 均為 null。補審必須保留舊原文，依 gate v3 append 新的獨立報告（完整審查或同 reviewer 缺口補審），明確指向較早、尚未被取代、相同 round／baseline／base／head／scope 的 non-code BLOCKED，並附協調者已核對、留存的原始 resolution artifact reference。原／新報告均須符合 reviewer 獨立性；第二輪 reviewer 不得參與同 code scope 的第一輪，補審 PASS 仍須核對最新適用 CI run／attempt／tested SHA。
 
-依 [gate v2 契約](PR_REVIEW_GATE.md) 保存單向 append-only 補審鏈；未知／較晚／自身 target、叉分、跨 scope、缺 resolution 或不合法 reviewer 均 fail closed。Code BLOCKED 不可同 HEAD supersede，不能以 CI rerun 或無關 PASS 清除，須新增 corrective commit 後重新審查。Reference、分類或自行填入的 PASS 本身不認證真實性；協調者必須讀取原始報告與 resolution。第二輪僅 non-code BLOCKED 可在 CI metadata 不可得時暫列 ci=null，不據此放行。
+依 [gate v3 契約](PR_REVIEW_GATE.md) 保存單向 append-only 補審鏈；未知／較晚／自身 target、叉分、跨 scope、缺 resolution 或不合法 reviewer 均 fail closed。Code BLOCKED 不可同 HEAD supersede，不能以 CI rerun 或無關 PASS 清除，須新增 corrective commit 後重新審查。Reference、分類或自行填入的 PASS 本身不認證真實性；協調者必須讀取原始報告與 resolution。第二輪僅 non-code BLOCKED 可在 CI metadata 不可得時暫列 ci=null，不據此放行。
 
 交接 prompt 必須自足：repository、phase、branch、baseline / reviewed SHA、任務、authorization scope、禁止事項、必要測試、停止條件與交回資料。尚未獲授權的 write 必須清楚標為待授權，不能在 prompt 中偽造已授權。
 
