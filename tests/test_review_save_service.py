@@ -243,6 +243,84 @@ class ReviewSaveServiceTests(unittest.TestCase):
         with self.assertRaises(StaleReviewProjectError):
             self.save(self.event(1, "ㄎㄢ"), 1)
 
+    def test_non_object_db_roots_reject_before_replay_and_write_in_cold_and_warm_cache(self):
+        path = self.output / "人工判定資料庫.json"
+        initial_bytes = path.read_bytes()
+        expected_message = "DATA_INTEGRITY_ERROR：現版人工判定資料庫根節點必須是物件"
+        for warm in (False, True):
+            for invalid in (b"[]", b"null", b"false", b"0", b'""'):
+                with self.subTest(warm=warm, root=invalid):
+                    path.write_bytes(initial_bytes)
+                    self.db = sp.load_or_initialize_db(self.output)
+                    self.service = ReviewSaveService(self.output)
+                    if warm:
+                        self.save(self.event())
+                        self.save(None)
+                        self.assertEqual(self.db["events"], {})
+                        self.assertIsNotNone(self.service._ledger)
+                    displayed_db = self.db
+                    before_db = copy.deepcopy(displayed_db)
+                    before_manifest = copy.deepcopy(self.manifest)
+                    path.write_bytes(invalid)
+                    with self.assertRaisesRegex(ValueError, expected_message):
+                        sp.load_or_initialize_db(self.output)
+                    for attempt in ("initial", "retry", "invalidate", "replacement"):
+                        if attempt == "invalidate":
+                            self.service.invalidate()
+                        elif attempt == "replacement":
+                            self.service = self.service.with_invalidated_cache()
+                        with self.subTest(attempt=attempt), \
+                                patch.object(sp, "prepare_review_ledger") as replay, \
+                                patch.object(sp, "json_save") as write:
+                            with self.assertRaisesRegex(ValueError, expected_message):
+                                self.save(self.event())
+                            replay.assert_not_called()
+                            write.assert_not_called()
+                        self.assertEqual(path.read_bytes(), invalid)
+                        self.assertIs(self.db, displayed_db)
+                        self.assertEqual(self.db, before_db)
+                        self.assertEqual(self.manifest, before_manifest)
+
+    def test_missing_and_empty_object_databases_keep_initialization_contract(self):
+        path = self.output / "人工判定資料庫.json"
+        for initial in (None, b"{}"):
+            with self.subTest(initial=initial):
+                if initial is None:
+                    path.unlink()
+                else:
+                    path.write_bytes(initial)
+                self.db = sp.load_or_initialize_db(self.output)
+                self.assertEqual(self.db, sp.normalize_db({}))
+                self.service = ReviewSaveService(self.output)
+                result = self.save(self.event())
+                self.assertEqual(result.resolved_entry["state"], "PASS")
+                self.assertEqual(set(result.db["events"]), {self.row()["review_id"]})
+                self.assertEqual(sp.load_or_initialize_db(self.output), result.db)
+
+    def test_object_root_preserves_version_normalization_and_schema_rejection(self):
+        path = self.output / "人工判定資料庫.json"
+        old_version = {**sp.normalize_db({}), "version": "5.6.9"}
+        sp.json_save(path, old_version)
+        self.db = sp.load_or_initialize_db(self.output)
+        self.service = ReviewSaveService(self.output)
+        result = self.save(self.event())
+        self.assertEqual(result.db["version"], sp.VERSION)
+        self.assertEqual(result.db["migrated_from_version"], "5.6.9")
+        invalid_objects = (
+            {**sp.normalize_db({}), "events": []},
+            {**sp.normalize_db({}), "session_schema_version": "999.0"},
+            {"version": "5.1.5", "legacy_decisions": []},
+        )
+        for invalid in invalid_objects:
+            with self.subTest(invalid=invalid):
+                sp.json_save(path, invalid)
+                before = path.read_bytes()
+                self.service = self.service.with_invalidated_cache()
+                with self.assertRaisesRegex(ValueError, "DECISION_SCHEMA_INCOMPATIBLE"):
+                    self.save(self.event(1), 1)
+                self.assertEqual(path.read_bytes(), before)
+                self.assertFalse((self.output / "legacy_orphan_decisions.json").exists())
+
     def test_dependency_changed_during_replay_rejected_before_write(self):
         self.save(self.event())
         path = self.output / "校對工作階段.json"

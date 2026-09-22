@@ -226,8 +226,15 @@ class ReviewSaveService:
         if hashes[str(manifest_path)] != manifest_sha:
             raise StaleReviewProjectError("驗證期間工作階段已變更；未保存")
         db_sha = hashes[str(db_path)]
-        db = self._db if self._db is not None and db_sha == self._db_sha else sp.normalize_db(
-            _json(content[db_path], db_path) if content[db_path] is not None else {})
+        if self._db is not None and db_sha == self._db_sha:
+            db = self._db
+        else:
+            raw_db = _json(content[db_path], db_path) if content[db_path] is not None else {}
+            # Match the durable loader's root contract before normalization:
+            # falsy JSON scalars/lists are corruption, not an absent database.
+            if not isinstance(raw_db, dict):
+                raise ValueError("DATA_INTEGRITY_ERROR：現版人工判定資料庫根節點必須是物件")
+            db = sp.normalize_db(raw_db)
         if expected_db is not None and db != expected_db:
             raise StaleReviewProjectError("人工判定資料庫已由其他操作變更；未覆寫，請重新載入")
         evidence_root = sp.project_actual_evidence_root(self.output_dir)

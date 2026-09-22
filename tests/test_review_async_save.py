@@ -187,6 +187,65 @@ class AsyncReviewSaveTests(unittest.TestCase):
         self.assertEqual((self.output / "人工判定資料庫.json").read_bytes(), raw)
         self.assertEqual(headless_app(self.output).db, before)
 
+    def test_corrupt_db_root_never_publishes_or_advances_and_valid_bytes_restore_retry(self):
+        path = self.output / "人工判定資料庫.json"
+        initial_bytes = path.read_bytes()
+        for warm in (False, True):
+            for invalid in (b"[]", b"null", b"false", b"0", b'""'):
+                with self.subTest(warm=warm, root=invalid):
+                    path.write_bytes(initial_bytes)
+                    app = headless_app(self.output)
+                    if warm:
+                        # Keep a real mismatch pending so the GUI can select
+                        # it again and undo through the same asynchronous API.
+                        row = app.current()
+                        mismatch = sp.build_manual_expected_event(
+                            row, operation="ENTER_EXPECTED", expected_set="ㄎㄢ")
+                        self.assertTrue(app.save_event(row, mismatch))
+                        wait_for_save(app)
+                        self.assertTrue(app._last_event_saved)
+                        app.index = next(n for n, item in enumerate(app.records)
+                                         if item["review_id"] == row["review_id"])
+                        self.assertTrue(app.save_event(app.current(), None))
+                        wait_for_save(app)
+                        self.assertTrue(app._last_event_saved)
+                        self.assertEqual(app.db["events"], {})
+                        self.assertIsNotNone(app._save_service._ledger)
+                    valid_bytes = path.read_bytes()
+                    row = app.current()
+                    event = sp.build_manual_expected_event(
+                        row, operation="ENTER_EXPECTED", expected_set=row["actual"])
+                    displayed_db = app.db
+                    before_db = copy.deepcopy(app.db)
+                    before_records = copy.deepcopy(app.records)
+                    before_current, before_index = copy.deepcopy(row), app.index
+                    app.show.reset_mock()
+                    path.write_bytes(invalid)
+                    with patch.object(gui.messagebox, "showerror") as error:
+                        for attempt in range(2):
+                            with self.subTest(attempt=attempt):
+                                self.assertTrue(app.save_event(row, event))
+                                wait_for_save(app)
+                                self.assertEqual(error.call_count, attempt + 1)
+                                self.assertIn("根節點必須是物件", error.call_args.args[1])
+                                self.assertFalse(app._last_event_saved)
+                                self.assertFalse(app._last_event_refreshed)
+                                self.assertEqual(path.read_bytes(), invalid)
+                                self.assertIs(app.db, displayed_db)
+                                self.assertEqual(app.db, before_db)
+                                self.assertEqual(app.records, before_records)
+                                self.assertEqual(app.current(), before_current)
+                                self.assertEqual(app.index, before_index)
+                                app.show.assert_not_called()
+                    path.write_bytes(valid_bytes)
+                    self.assertTrue(app.save_event(row, event))
+                    wait_for_save(app)
+                    self.assertTrue(app._last_event_saved)
+                    self.assertTrue(app._last_event_refreshed)
+                    self.assertIn(row["review_id"], app.db["events"])
+                    self.assertEqual(sp.load_or_initialize_db(self.output), app.db)
+                    self.assertNotEqual(app.current()["review_id"], row["review_id"])
+
     def test_post_save_queue_failure_is_saved_and_recoverable_after_reopen(self):
         with patch.object(gui, "prepare_review_queue", side_effect=RuntimeError("queue failure")), \
                 patch.object(gui.messagebox, "showwarning") as warning:
