@@ -18,10 +18,11 @@
 - 每次保存核對完整工作階段／DB bytes、來源 PDF、manifest 所列 actual/candidate artifacts、runtime 資產、可重用 expected 規則與 project actual/staging/recovery 依賴。大小與 mtime 不用作內容有效的證據。保存前再次核對，DB 原子替換前另核對預期 SHA。
 - runtime byte guard 使用共用資產清單 registry。它是內容異動檢查，不宣稱取代正式 pipeline 的完整 runtime schema validation；校對保存只重播 sealed ledger，不重新解析字典或 decoder assets。
 - `version_token` 是整次人工操作的 snapshot 識別，不是 actual/expected pipeline fingerprint。fingerprint、schema、identity、semantics epochs、JSON 格式及 runtime manifest truth 都未遷移。
-- 規則、actual 套用、重新載入等操作更換 service，丟棄舊基準與索引；外部內容變更依其契約重新計算或阻擋，不能在舊畫面上靜默 rebase。
+- 規則、actual 套用、重新載入等操作丟棄舊計算基準與索引，但同一已驗證工作階段的 evidence anchor 會保留。已偵測的外部 actual／規則異動不能因保存失敗後重試、稍後處理或 queue reload 而被清除；須恢復原證據或經既有 refresh 流程確立有效新工作階段。
 - 保留同字分組、lane/source 順序、稍後處理與 actual 暫存導覽。待辦計算共用同一函式，worker 不操作 Tk。
 - JSON 以獨立暫存檔、flush/fsync、原子替換保存。失敗保留舊 DB、當前項目與記憶體。成功後才 publish DB/待辦並移下一筆；已保存但 queue/show 失敗顯示不同訊息，阻擋繼續操作，關閉重開由 durable DB 恢復。
 - 背景 request 綁 generation、專案路徑、manifest/DB snapshot 與 review_id，過期結果不 publish。保存期間阻擋重入及導覽，完成後仍有 0.5 秒防連點。只有當前預覽成功對應該 review_id 時才能快捷確認。
+- 保存與 actual 套用的輪詢 timer 由視窗管理；視窗銷毀時只取消自身 callbacks，禁止後續 UI publication。已啟動的持久化 worker 不操作 Tk，保存結果可由重新開啟恢復。
 - 匯出／更新報告及全冊完成仍走既有完整驗證與 completion gate。
 
 ## 可重現量測
@@ -43,33 +44,33 @@ python scripts/benchmark_review_confirm.py --repository . --fixture tmp/review-b
 
 | 情境 | 指標 | 原版 | 修正版 |
 | --- | --- | ---: | ---: |
-| 0 組暫存 | 按下至畫面更新完成 | 368.00 / 432.37 | 302.61 / 325.42 |
-| 0 組暫存 | 每筆最長 Tk 心跳間隔 | 354.35 / 417.23 | 100.52 / 112.06 |
-| 8 組暫存 | 按下至畫面更新完成 | 1018.35 / 1098.98 | 428.29 / 450.34 |
-| 8 組暫存 | 每筆最長 Tk 心跳間隔 | 1005.07 / 1086.12 | 108.54 / 114.50 |
-| 8 組暫存 | 按鈕 callback | 1004.90 / 1085.96 | 1.51 / 1.82 |
+| 0 組暫存 | 按下至畫面更新完成 | 368.00 / 432.37 | 301.50 / 309.03 |
+| 0 組暫存 | 每筆最長 Tk 心跳間隔 | 354.35 / 417.23 | 107.07 / 125.70 |
+| 8 組暫存 | 按下至畫面更新完成 | 1018.35 / 1098.98 | 437.07 / 444.31 |
+| 8 組暫存 | 每筆最長 Tk 心跳間隔 | 1005.07 / 1086.12 | 103.02 / 117.30 |
+| 8 組暫存 | 按鈕 callback | 1004.90 / 1085.96 | 1.53 / 1.83 |
 | 兩種情境 | 保存成功後防連點 | 500 / 500 | 500 / 500 |
 
 8 組暫存的分段結果：
 
 | 分段 | 原版中位數 / P95 | 修正版中位數 / P95 |
 | --- | ---: | ---: |
-| 全冊 materialize（含 nested staging calls） | 563.33 / 622.66；每筆 3 次 | 穩態 0 次；單筆 replay 0.43 / 0.62 |
-| actual 暫存驗證（inclusive） | 645.53 / 695.82 | 127.56 / 131.05 |
-| JSON 保存 | 9.16 / 10.95 | 48.82 / 51.22 |
-| 待辦更新 | 13.25 / 18.25 | 11.01 / 12.54（worker） |
-| 預覽渲染 | 89.16 / 93.81 | 88.79 / 99.43（主執行緒） |
-| 完整內容 hash 核對（新增明確分段） | 原路徑未獨立分段 | 101.36 / 121.84（worker） |
+| 全冊 materialize（含 nested staging calls） | 563.33 / 622.66；每筆 3 次 | 穩態 0 次；單筆 replay 0.43 / 0.50 |
+| actual 暫存驗證（inclusive） | 645.53 / 695.82 | 136.07 / 139.83 |
+| JSON 保存 | 9.16 / 10.95 | 50.19 / 53.37 |
+| 待辦更新 | 13.25 / 18.25 | 11.74 / 14.40（worker） |
+| 預覽渲染 | 89.16 / 93.81 | 88.97 / 93.72（主執行緒） |
+| 完整內容 hash 核對（新增明確分段） | 原路徑未獨立分段 | 101.36 / 107.28（worker） |
 
 JSON 保存現在包含 flush/fsync 及寫入前 DB hash guard，因此這一段較慢；整體改善來自消除重複計算及背景處理，沒有刪除防連點。UI heartbeat gap 仍包含約 90 ms 的主執行緒預覽，不能宣稱完全沒有停頓。
 
-冷 cache 第一次確認各只有一筆樣本，不能提供有意義 P95：8 組暫存總時間原版 1033.08、修正版 812.10；無暫存原版 370.53、修正版 687.15。無暫存首次保存因建立完整可驗證 snapshot、內容 hash 與持久化檢查而較慢，但其 Tk 最大心跳間隔由 357.24 降至 185.95；後續操作才使用增量快取。本次不隱藏這項首次操作成本。
+冷 cache 第一次確認各只有一筆樣本，不能提供有意義 P95：8 組暫存總時間原版 1033.08、修正版 838.13；無暫存原版 370.53、修正版 699.16。無暫存首次保存因建立完整可驗證 snapshot、內容 hash 與持久化檢查而較慢，但其 Tk 最大心跳間隔由 357.24 降至 116.42；後續操作才使用增量快取。本次不隱藏這項首次操作成本。
 
-量測後另補了「保存失敗且等待期間預覽失效」的控制項恢復保護與回歸；成功保存的計算、排序及渲染路徑未變，以上數據沿用該次實測，不捏造重新量測結果。
+上表已在第一輪審查修正後重新量測，包含 evidence anchor 保留、保存失敗且預覽失效的控制項保護，以及視窗輪詢生命週期修正。先前量測與失敗紀錄保留在 task evidence，沒有覆寫原審查報告。
 
 ## 回歸範圍與查核命令
 
-新增 backend regression 涵蓋增量／完整等價、覆寫／撤銷、actual unresolved 下 expected 獨立、暫存三態、同大小同 mtime 檔案竄改、外部 session／DB 變更、保存期間依賴變更、failed write、重開、規則／actual 失效、重入與 runtime guard。新增 async regression 涵蓋 stale generation/review_id、worker/main thread 分工、queue failure、undo 與互斥操作。
+新增 backend regression 涵蓋增量／完整等價、覆寫／撤銷、actual unresolved 下 expected 獨立、暫存三態、同大小同 mtime 檔案竄改、外部 session／DB 變更、保存期間依賴變更、failed write、重開、規則／actual 失效、重入與 runtime guard。新增 async regression 涵蓋 stale generation/review_id、worker/main thread 分工、queue failure、undo 與互斥操作；另驗證同一失效 anchor 跨重試／defer／revisit／reload 保留、普通 I/O retry、既有 actual transaction refresh 後恢復，以及 save／actual poll 的 owner destruction 與完成清理。
 
 原生 Tk 回歸實際 invoke 按鈕與 Ctrl+Enter 事件，檢查重複提交、show failure 後重開、下一筆預覽失敗，以及保存期間預覽失效後不得恢復快捷按鈕；既有同字分組、處理順序、defer 與 actual staging 導覽測試也配合非同步完成時點繼續檢查。Headless tests 與 native Tk tests 分開留存，未把前者稱作人工視覺驗收。
 
@@ -93,6 +94,7 @@ git status --short
 - `tests/review_save_test_support.py`
 - `tests/test_review_save_service.py`
 - `tests/test_review_async_save.py`
+- `tests/test_hotfix_tone_and_followup_v531.py`
 - `tests/test_manual_actual_gui_batch_v570.py`
 - `tests/test_manual_review_usability_v580.py`
 - `tests/test_review_visual_usability_v580.py`
@@ -110,5 +112,5 @@ git status --short
 
 1. 用測試專案開啟人工校對，等原頁預覽出現後連按確認；應顯示儲存狀態，只記一筆，保存期間不能跳到別筆，成功後按原分組順序前進。
 2. 分別用無 actual 暫存、有效暫存與失效暫存測試；失效時不得把該群組視為已處理。檢查稍後處理及 actual 批次套用導覽。
-3. 在專案副本中修改來源 PDF／session bytes 或使 DB 無法寫入，再保存；應留在原筆、顯示原因且不覆寫既有 DB。
+3. 在專案副本中修改來源 PDF／session bytes 或使 DB 無法寫入，再保存；應留在原筆、顯示原因且不覆寫既有 DB。先成功保存一次後修改 project actual／可重用規則，確認重試、稍後處理再返回仍持續拒絕；恢復原證據或正常 refresh 後再確認可恢復。
 4. 關閉重開確認已保存事件；更新報告時仍執行完整驗證。若畫面提示「已保存，但畫面更新失敗」，先重開恢復，不重複輸入判定。

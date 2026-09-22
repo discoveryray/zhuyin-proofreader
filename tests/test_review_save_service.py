@@ -103,24 +103,75 @@ class ReviewSaveServiceTests(unittest.TestCase):
         self.save(self.event())
         path = sp.project_actual_evidence_root(self.output) / sp.GLYPH_CONFLICT_FILE
         path.write_text("external evidence change", encoding="utf-8")
-        with self.assertRaisesRegex(StaleReviewProjectError, "actual 證據或應標規則"):
-            self.save(self.event(1), 1)
+        original_db = (self.output / "人工判定資料庫.json").read_bytes()
+        anchor = self.service.evidence_anchor
+        for replacement in (False, True, False, True):
+            if replacement:
+                self.service = self.service.with_invalidated_cache()
+            else:
+                self.service.invalidate()
+            self.assertIs(self.service.evidence_anchor, anchor)
+            with self.subTest(replacement=replacement), self.assertRaisesRegex(StaleReviewProjectError, "actual 證據或應標規則"):
+                self.save(self.event(1), 1)
+            self.assertEqual(original_db, (self.output / "人工判定資料庫.json").read_bytes())
 
     def test_external_rule_change_and_explicit_reload_invalidation(self):
         rules_path = self.output / "isolated-reusable-rules.json"
         sp.json_save(rules_path, {"schema_version": "1.0", "rules": []})
+        original_rules = rules_path.read_bytes()
         with patch.object(sp, "REUSABLE_EXPECTED_RULES", rules_path):
             self.save(self.event())
             rules_path.write_text('{"schema_version":"1.0", "rules": []}', encoding="utf-8")
             with self.assertRaisesRegex(StaleReviewProjectError, "應標規則已變更"):
                 self.save(self.event(1), 1)
-            # A caller reloads the sealed project after a rule/actual refresh;
-            # even semantically equal rule bytes never retain the old cache.
+            # Cache eviction is not source validation, even when changed rules
+            # are semantically equal. Repeated reload/replacement must reject.
             self.service.invalidate()
+            with self.assertRaises(StaleReviewProjectError):
+                self.save(self.event(1), 1)
+            self.service = self.service.with_invalidated_cache()
+            with self.assertRaises(StaleReviewProjectError):
+                self.save(self.event(1), 1)
+            # Restoring the exact previously verified evidence permits retry.
+            rules_path.write_bytes(original_rules)
             with patch.object(sp, "prepare_review_ledger", wraps=sp.prepare_review_ledger) as full:
                 result = self.save(self.event(1), 1)
                 self.assertEqual(full.call_count, 1)
             self.assertEqual(result.ledger, sp.materialize_ledger(self.manifest, result.db))
+
+    def test_changed_sealed_snapshot_requires_full_validation_before_reanchor(self):
+        self.save(self.event())
+        old_anchor = self.service.evidence_anchor
+        # Valid empty project evidence is a synthetic external change. A fresh
+        # sealed fixture snapshot below represents successful pipeline refresh;
+        # this test is not a claim about real textbook decoding.
+        sp.ensure_user_evidence_files(sp.project_actual_evidence_root(self.output))
+        with self.assertRaises(StaleReviewProjectError):
+            self.save(self.event(1), 1)
+        self.service = self.service.with_invalidated_cache()
+        refreshed = copy.deepcopy(self.manifest)
+        refreshed["session_id"] = "isolated-successful-refresh"
+        sp.json_save(self.output / "校對工作階段.json", sp.seal_manifest(refreshed))
+        self.manifest = refreshed
+        with patch.object(sp, "prepare_review_ledger", side_effect=ValueError("invalid refreshed ledger")), \
+                self.assertRaisesRegex(ValueError, "invalid refreshed ledger"):
+            self.save(self.event(1), 1)
+        self.assertIs(self.service.evidence_anchor, old_anchor)
+        with patch.object(sp, "prepare_review_ledger", wraps=sp.prepare_review_ledger) as full:
+            result = self.save(self.event(1), 1)
+            self.assertEqual(full.call_count, 1)
+        self.assertNotEqual(self.service.evidence_anchor, old_anchor)
+        self.assertEqual(self.service.evidence_anchor.manifest_seal, refreshed["manifest_integrity_sha256"])
+        self.assertEqual(result.ledger, sp.materialize_ledger(refreshed, result.db))
+
+    def test_failed_first_write_keeps_verified_anchor_and_unchanged_source_can_retry(self):
+        with patch.object(sp.os, "fsync", side_effect=OSError("disk full")), self.assertRaises(OSError):
+            self.save(self.event())
+        self.assertIsNotNone(self.service.evidence_anchor)
+        self.assertEqual(self.db, sp.load_or_initialize_db(self.output))
+        self.service = self.service.with_invalidated_cache()
+        result = self.save(self.event())
+        self.assertEqual(result.resolved_entry["state"], "PASS")
 
     def test_no_staging_does_not_materialize_or_read_again(self):
         with patch.object(sp, "prepare_review_ledger", wraps=sp.prepare_review_ledger) as full, \

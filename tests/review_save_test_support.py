@@ -4,15 +4,27 @@ import time
 
 class QueuedRoot:
     def __init__(self):
-        self.callbacks = []
+        self.callbacks = {}
+        self.bindings = {}
+        self.serial = 0
 
     def after(self, _delay, callback):
-        self.callbacks.append(callback)
+        self.serial += 1
+        timer_id = f"after-{self.serial}"
+        self.callbacks[timer_id] = callback
+        return timer_id
+
+    def after_cancel(self, timer_id):
+        self.callbacks.pop(timer_id, None)
+
+    def bind(self, event, callback, *, add=None):
+        self.bindings[event] = callback
 
     def update(self):
-        callbacks, self.callbacks = self.callbacks, []
-        for callback in callbacks:
-            callback()
+        for timer_id in list(self.callbacks):
+            callback = self.callbacks.pop(timer_id, None)
+            if callback is not None:
+                callback()
 
 
 def wait_for_save(app, *, timeout=15):

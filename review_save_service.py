@@ -29,6 +29,18 @@ class StaleReviewProjectError(ValueError):
 
 
 @dataclass(frozen=True)
+class ReviewEvidenceAnchor:
+    """Previously verified inputs for one sealed session, independent of cache.
+
+    This process-local guard preserves known evidence drift across retries and
+    queue reloads. It neither replaces the pipeline fingerprint nor introduces
+    a new first-open validation contract.
+    """
+    manifest_seal: str
+    frozen_inputs: tuple[tuple[str, str], ...]
+
+
+@dataclass(frozen=True)
 class SaveResult:
     """Read-only GUI snapshot; version_token is NOT a pipeline fingerprint.
 
@@ -72,12 +84,23 @@ def _json(raw: bytes | None, path: Path):
 class ReviewSaveService:
     """One worker at a time. Constructor and invalidation do no heavy work."""
 
-    def __init__(self, output_dir: Path):
+    def __init__(self, output_dir: Path, *, evidence_anchor: ReviewEvidenceAnchor | None = None):
         self.output_dir = Path(output_dir).resolve()
         self._lock = threading.Lock()
+        self._evidence_anchor = evidence_anchor
         self.invalidate()
 
+    @property
+    def evidence_anchor(self):
+        return self._evidence_anchor
+
+    def with_invalidated_cache(self):
+        """Replace a GUI worker cache without forgetting verified evidence."""
+        return ReviewSaveService(self.output_dir, evidence_anchor=self._evidence_anchor)
+
     def invalidate(self):
+        # Materialization is disposable. The independently retained anchor is
+        # not: retrying a failed save is not proof that changed evidence is safe.
         self._manifest = self._db = self._baseline = self._ledger = None
         self._manifest_sha = self._db_sha = None
         self._index = {}
@@ -207,13 +230,17 @@ class ReviewSaveService:
             _json(content[db_path], db_path) if content[db_path] is not None else {})
         if expected_db is not None and db != expected_db:
             raise StaleReviewProjectError("人工判定資料庫已由其他操作變更；未覆寫，請重新載入")
-        if self._dependencies is not None:
-            evidence_root = sp.project_actual_evidence_root(self.output_dir)
-            frozen_inputs = [sp.REUSABLE_EXPECTED_RULES] + [evidence_root / name for name in (
-                sp.OCCURRENCE_OVERRIDE_FILE, sp.USER_GLYF_FILE, sp.USER_CFF_FILE, sp.GLYPH_CONFLICT_FILE,
-                sp.GLYPH_PROVENANCE_FILE)]
-            if any(self._dependencies.get(str(path)) != hashes.get(str(path)) for path in frozen_inputs):
-                raise StaleReviewProjectError("actual 證據或應標規則已變更；請先重新產生並載入工作階段")
+        evidence_root = sp.project_actual_evidence_root(self.output_dir)
+        frozen_paths = [sp.REUSABLE_EXPECTED_RULES] + [evidence_root / name for name in (
+            sp.OCCURRENCE_OVERRIDE_FILE, sp.USER_GLYF_FILE, sp.USER_CFF_FILE, sp.GLYPH_CONFLICT_FILE,
+            sp.GLYPH_PROVENANCE_FILE)]
+        candidate_anchor = ReviewEvidenceAnchor(
+            manifest_seal=str(manifest["manifest_integrity_sha256"]),
+            frozen_inputs=tuple(sorted((str(path), hashes[str(path)]) for path in frozen_paths)))
+        if (self._evidence_anchor is not None
+                and self._evidence_anchor.manifest_seal == candidate_anchor.manifest_seal
+                and self._evidence_anchor != candidate_anchor):
+            raise StaleReviewProjectError("actual 證據或應標規則已變更；請先重新產生並載入工作階段")
         # A changed dependency invalidates the baseline and indexes together.
         # Session/DB changes additionally have to match the displayed snapshot.
         full = (self._dependencies != hashes or self._manifest is None or self._db is None)
@@ -262,6 +289,11 @@ class ReviewSaveService:
         _, final_hashes = self._capture(timings)
         if final_hashes != hashes:
             raise StaleReviewProjectError("驗證期間專案來源或暫存已變更；未保存，請重新載入")
+        # Accept a new seal only after its schema, source/artifact bytes, full
+        # ledger and stable inputs have passed. Existing actual/rule refresh
+        # paths produce that new sealed snapshot. I/O failure after this point
+        # may evict the calculation cache, but cannot erase the verified anchor.
+        self._evidence_anchor = candidate_anchor
         phase = time.perf_counter()
         saved_sha = sp.json_save(db_path, staged_db, expected_sha256=db_sha)
         timings["json_save"] = time.perf_counter() - phase

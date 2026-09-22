@@ -677,6 +677,9 @@ class DummyButton:
 
 
 class ImmediateRoot:
+    def bind(self, _event, _callback, *, add=None):
+        pass
+
     def after(self, _delay, callback):
         callback()
 

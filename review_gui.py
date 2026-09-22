@@ -836,12 +836,51 @@ class ReviewApp:
 
     def _save_busy(self):
         return (getattr(self, "_save_in_progress", False)
-                or getattr(self, "_save_recovery_required", False))
+                or getattr(self, "_save_recovery_required", False)
+                or getattr(self, "_async_disposed", False))
+
+    def _ensure_async_lifecycle(self):
+        if hasattr(self, "_async_after_ids"):
+            return
+        self._async_after_ids = set()
+        self._async_disposed = False
+        self.root.bind("<Destroy>", self._dispose_async, add="+")
+
+    def _dispose_async(self, event):
+        if event.widget is not self.root:
+            return
+        self._async_disposed = True
+        self._project_generation = getattr(self, "_project_generation", 0) + 1
+        self._save_request = None
+        for timer_id in self._async_after_ids:
+            self.root.after_cancel(timer_id)
+        self._async_after_ids.clear()
+        # The worker may still finish its durable write. It never touches Tk;
+        # reopening reads the saved result instead of publishing to this owner.
+        self._save_in_progress = False
+
+    def _schedule_async_poll(self, callback):
+        self._ensure_async_lifecycle()
+        if self._async_disposed:
+            return
+        timer_id = None
+
+        def deliver():
+            self._async_after_ids.discard(timer_id)
+            if not self._async_disposed:
+                callback()
+
+        timer_id = self.root.after(20, deliver)
+        if timer_id is not None:
+            self._async_after_ids.add(timer_id)
 
     def _invalidate_save_snapshot(self):
         self._project_generation = getattr(self, "_project_generation", 0) + 1
-        # Replace rather than mutate a snapshot potentially owned by a worker.
-        self._save_service = ReviewSaveService(self.output_dir)
+        # Evict computation only. A rejected evidence change remains rejected
+        # across retry, queue reload and defer/revisit of the same session.
+        service = getattr(self, "_save_service", None)
+        self._save_service = (service.with_invalidated_cache() if service is not None
+                              else ReviewSaveService(self.output_dir))
 
     def close(self):
         if getattr(self, "_save_in_progress", False) or getattr(self, "_apply_in_progress", False):
@@ -922,14 +961,14 @@ class ReviewApp:
             try:
                 result, prepared, error = completed.get_nowait()
             except queue.Empty:
-                self.root.after(20, poll)
+                self._schedule_async_poll(poll)
                 return
             self._finish_event_save(request, result, prepared, error)
 
         try:
             self._disable_save_controls()
             self._save_worker = threading.Thread(target=worker, daemon=False)
-            self.root.after(20, poll)
+            self._schedule_async_poll(poll)
             self._save_worker.start()
         except Exception as exc:
             self._save_request = None
@@ -940,7 +979,8 @@ class ReviewApp:
         return True
 
     def _finish_event_save(self, request, result, prepared, error):
-        if getattr(self, "_save_request", None) is not request:
+        if (getattr(self, "_async_disposed", False)
+                or getattr(self, "_save_request", None) is not request):
             return
         current = self.current()
         applies = (request["generation"] == getattr(self, "_project_generation", 0)
@@ -1281,7 +1321,7 @@ class ReviewApp:
             try:
                 result, error = completed.get_nowait()
             except queue.Empty:
-                self.root.after(20, poll)
+                self._schedule_async_poll(poll)
                 return
             done(result, error)
 
@@ -1356,7 +1396,7 @@ class ReviewApp:
             messagebox.showinfo("actual 批次套用完成", "\n".join(lines), parent=self.root)
 
         threading.Thread(target=worker, daemon=True).start()
-        self.root.after(20, poll)
+        self._schedule_async_poll(poll)
 
     def actual_instruction(self):
         # Backward-compatible alias for old callbacks/hotkeys.
