@@ -18,6 +18,18 @@ import xml.etree.ElementTree as ET
 
 
 ROOT = Path(__file__).resolve().parents[1]
+_MISSING = object()
+
+
+class ReviewLoadTestsLoader(unittest.TestLoader):
+    """Stop discovery before a module's custom unittest hook can run."""
+
+    def loadTestsFromModule(self, module, *, pattern=None):
+        if getattr(module, "load_tests", _MISSING) is not _MISSING:
+            raise ValueError(
+                f"custom unittest load_tests needs explicit runner review: {module.__name__}"
+            )
+        return super().loadTestsFromModule(module, pattern=pattern)
 
 
 def compare_collections(unittest_ids, pytest_ids):
@@ -65,7 +77,7 @@ def verify_gui(report, inventory):
 def collect(runner, output):
     sys.path.insert(0, str(ROOT))
     if runner == "unittest":
-        loader = unittest.TestLoader()
+        loader = ReviewLoadTestsLoader()
         suite = loader.discover(str(ROOT / "tests"), pattern="test_*.py")
 
         def flatten(item):
