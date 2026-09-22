@@ -47,15 +47,118 @@ def gui_classes(tests):
     result = []
     for path in sorted(tests.glob("test_*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        tk_names = tk_constructor_names(tree)
         for node in tree.body:
             if isinstance(node, ast.FunctionDef) and node.name == "load_tests":
                 raise ValueError(f"custom unittest load_tests needs explicit runner review: {path}")
-            if isinstance(node, ast.ClassDef) and any(
-                    isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
-                    and call.func.attr == "Tk" for call in ast.walk(node)):
+            if isinstance(node, ast.ClassDef) and calls_tk(node, tk_names):
                 result.append(f"{path.stem}.{node.name}.")
     if not result:
         raise ValueError("no real Tk classes discovered")
+    return result
+
+
+def tk_constructor_names(tree):
+    """Resolve direct tkinter Tk imports and simple module-level aliases."""
+    if any(
+        isinstance(node, ast.ImportFrom) and node.module == "tkinter"
+        and any(alias.name == "*" for alias in node.names)
+        for node in tree.body
+    ):
+        raise ValueError("wildcard tkinter import needs explicit GUI inventory review")
+    names = {
+        alias.asname or alias.name
+        for node in tree.body if isinstance(node, ast.ImportFrom) and node.module == "tkinter"
+        for alias in node.names if alias.name == "Tk"
+    }
+    aliases = [node for node in tree.body if isinstance(node, (ast.Assign, ast.AnnAssign))]
+    while True:
+        previous = len(names)
+        for node in aliases:
+            value = node.value
+            if value is None:
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            for target in targets:
+                names.update(tk_aliases(target, value, names))
+        if len(names) == previous:
+            return names
+
+
+def tk_aliases(target, value, names):
+    if isinstance(target, ast.Name) and (
+        isinstance(value, ast.Name) and value.id in names
+        or isinstance(value, ast.Attribute) and value.attr == "Tk"
+    ):
+        return {target.id}
+    if isinstance(target, (ast.Tuple, ast.List)) and isinstance(value, (ast.Tuple, ast.List)):
+        if len(target.elts) == len(value.elts):
+            return set().union(*(
+                tk_aliases(child, source, names)
+                for child, source in zip(target.elts, value.elts)
+            ))
+    return set()
+
+
+def calls_tk(node, tk_names):
+    names = set(tk_names)
+    assignments = [item for item in ast.walk(node) if isinstance(item, (ast.Assign, ast.AnnAssign))]
+    while True:
+        previous = len(names)
+        for item in assignments:
+            if item.value is None:
+                continue
+            targets = item.targets if isinstance(item, ast.Assign) else [item.target]
+            for target in targets:
+                names.update(tk_aliases(target, item.value, names))
+        if len(names) == previous:
+            break
+    return any(
+        isinstance(call, ast.Call) and (
+            isinstance(call.func, ast.Attribute) and call.func.attr == "Tk"
+            or isinstance(call.func, ast.Name) and call.func.id in names
+        )
+        for call in ast.walk(node)
+    )
+
+
+def gui_functions(tests):
+    """Find pytest test functions with direct or local-helper Tk construction.
+
+    Imported helper behavior is outside this bounded source scan and needs
+    explicit runner-contract review before use in a new GUI test.
+    """
+    result = []
+    for path in sorted(tests.glob("test_*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8-sig"))
+        tk_names = tk_constructor_names(tree)
+        functions = {
+            node.name: node for node in tree.body
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+
+        def uses_tk(name, seen):
+            if name in seen:
+                return False
+            node = functions[name]
+            if calls_tk(node, tk_names):
+                return True
+            seen = seen | {name}
+            called = {
+                call.func.id for call in ast.walk(node)
+                if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+                and call.func.id in functions
+            }
+            fixtures = {
+                arg.arg for arg in (*node.args.posonlyargs, *node.args.args, *node.args.kwonlyargs)
+                if arg.arg in functions
+            }
+            return any(uses_tk(other, seen) for other in called | fixtures)
+
+        result.extend(
+            f"{path.stem}.{name}" for name in functions
+            if name.startswith("test_") and uses_tk(name, set())
+        )
     return result
 
 
@@ -72,6 +175,22 @@ def gui_ids_from_cases(cases, direct_prefixes):
     ):
         raise ValueError("Tk class has no collected tests")
     return gui_ids
+
+
+def inventory_from_collections(unittest_collection, pytest_ids, function_prefixes):
+    result = compare_collections(unittest_collection["ids"], pytest_ids)
+    pytest_only = set(result["pytest_only"])
+    function_ids = [name for name in pytest_ids if name in pytest_only and any(
+        name == prefix or name.startswith(prefix + "[") for prefix in function_prefixes
+    )]
+    if any(not any(
+        name == prefix or name.startswith(prefix + "[") for name in function_ids
+    ) for prefix in function_prefixes):
+        raise ValueError("Tk test function has no collected pytest case")
+    result["gui_ids"] = unittest_collection["gui_ids"] + function_ids
+    if len(result["gui_ids"]) != len(set(result["gui_ids"])):
+        raise ValueError("duplicate required GUI identity")
+    return result
 
 
 def verify_gui(report, inventory):
@@ -143,8 +262,9 @@ def main(argv=None):
             unittest_collection, pytest_ids = (
                 json.loads(path.read_text(encoding="utf-8")) for path in paths
             )
-            result = compare_collections(unittest_collection["ids"], pytest_ids)
-            result["gui_ids"] = unittest_collection["gui_ids"]
+            result = inventory_from_collections(
+                unittest_collection, pytest_ids, gui_functions(ROOT / "tests")
+            )
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
         print(json.dumps({"unittest": len(result["unittest_ids"]), "pytest": len(result["pytest_ids"]),

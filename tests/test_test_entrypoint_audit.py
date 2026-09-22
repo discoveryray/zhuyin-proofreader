@@ -1,4 +1,5 @@
 import json
+import subprocess
 import tempfile
 from pathlib import Path
 import sys
@@ -7,7 +8,8 @@ import unittest
 from unittest.mock import patch
 
 from scripts.test_entrypoint_audit import (
-    ReviewLoadTestsLoader, collect, compare_collections, gui_classes, verify_gui,
+    ReviewLoadTestsLoader, collect, compare_collections, gui_classes, gui_functions,
+    inventory_from_collections, verify_gui,
 )
 
 
@@ -162,6 +164,110 @@ class EntrypointAuditTests(unittest.TestCase):
             report.write_text("<testsuite>" + "".join(entries) + "</testsuite>", encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "required GUI case did not execute"):
                 verify_gui(report, inventory)
+
+    def test_pytest_only_tk_functions_are_mandatory_even_when_skipped(self):
+        repo = Path(__file__).resolve().parents[1]
+        fixture_parent = repo / "tmp"
+        fixture_parent.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=fixture_parent) as temporary:
+            root = Path(temporary)
+            tests = root / "tests"
+            tests.mkdir()
+            (tests / "test_gui_probe.py").write_text(
+                "import unittest\n"
+                "import tkinter as tk\n"
+                "from tkinter import Tk as Root\n"
+                "import pytest\n"
+                "class Existing(unittest.TestCase):\n"
+                "    def setUp(self):\n"
+                "        self.root = tk.Tk()\n"
+                "        self.addCleanup(self.root.destroy)\n"
+                "    def test_existing(self): pass\n"
+                "@pytest.mark.parametrize('case', [1, 2])\n"
+                "@pytest.mark.skip(reason='prove GUI verifier rejects skipped functions')\n"
+                "def test_new_gui(case):\n"
+                "    root = tk.Tk()\n"
+                "    root.destroy()\n"
+                "def make_alias_root(): return Root()\n"
+                "@pytest.mark.skip(reason='prove GUI verifier rejects skipped functions')\n"
+                "def test_alias_gui():\n"
+                "    root = make_alias_root()\n"
+                "    root.destroy()\n"
+                "TkRoot = tk.Tk\n"
+                "@pytest.mark.skip(reason='prove GUI verifier rejects skipped functions')\n"
+                "def test_module_alias_gui():\n"
+                "    root = TkRoot()\n"
+                "    root.destroy()\n"
+                "@pytest.mark.skip(reason='prove GUI verifier rejects skipped functions')\n"
+                "def test_local_alias_gui():\n"
+                "    LocalRoot = tk.Tk\n"
+                "    root = LocalRoot()\n"
+                "    root.destroy()\n",
+                encoding="utf-8",
+            )
+            original_path = sys.path[:]
+            try:
+                with patch("scripts.test_entrypoint_audit.ROOT", root):
+                    unittest_output = root / "unittest.json"
+                    collect("unittest", unittest_output)
+            finally:
+                sys.path[:] = original_path
+                sys.modules.pop("test_gui_probe", None)
+
+            pytest_output = root / "pytest.json"
+            script = (
+                "import sys; from pathlib import Path; "
+                "from scripts import test_entrypoint_audit as audit; "
+                "audit.ROOT = Path(sys.argv[1]); "
+                "audit.collect('pytest', Path(sys.argv[2]))"
+            )
+            subprocess.run(
+                [sys.executable, "-c", script, str(root), str(pytest_output)],
+                cwd=repo, check=True, capture_output=True, text=True, timeout=30,
+            )
+            unittest_collection = json.loads(unittest_output.read_text(encoding="utf-8"))
+            pytest_ids = json.loads(pytest_output.read_text(encoding="utf-8"))
+            prefixes = gui_functions(tests)
+            self.assertEqual(set(prefixes), {
+                "test_gui_probe.test_new_gui", "test_gui_probe.test_alias_gui",
+                "test_gui_probe.test_module_alias_gui",
+                "test_gui_probe.test_local_alias_gui",
+            })
+            inventory = inventory_from_collections(unittest_collection, pytest_ids, prefixes)
+            self.assertEqual(set(inventory["gui_ids"]), set(pytest_ids))
+            self.assertEqual(len(pytest_ids), 6)
+            report = root / "junit.xml"
+            subprocess.run(
+                [sys.executable, "-m", "pytest", str(tests), "-q", "-rs",
+                 f"--junitxml={report}", f"--basetemp={root / 'pytest-temp'}",
+                 f"--rootdir={root}"],
+                cwd=repo, check=True, capture_output=True, text=True, timeout=30,
+            )
+            from xml.etree import ElementTree as ET
+            junit_ids = {
+                case.get("classname", "").removeprefix("tests.") + "." + case.get("name", "")
+                for case in ET.parse(report).iter("testcase")
+            }
+            self.assertEqual(junit_ids, set(pytest_ids))
+            with self.assertRaisesRegex(ValueError, "required GUI case did not execute"):
+                verify_gui(report, inventory)
+            with self.assertRaisesRegex(ValueError, "Tk test function has no collected pytest case"):
+                inventory_from_collections(
+                    unittest_collection, unittest_collection["ids"], prefixes
+                )
+
+    def test_wildcard_tk_import_requires_inventory_review(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            folder = Path(temporary)
+            (folder / "test_wildcard.py").write_text(
+                "from tkinter import *\n"
+                "def test_gui():\n"
+                "    root = Tk()\n"
+                "    root.destroy()\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ValueError, "wildcard tkinter import"):
+                gui_functions(folder)
 
 
 if __name__ == "__main__":
