@@ -1357,7 +1357,7 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
                     dialog.destroy()
 
     def test_real_tk_check_waits_for_drawn_page_and_target(self):
-        ledger = [entry(name, "f" * 64) for name in "ab"]
+        ledger = [entry(name, "f" * 64) for name in "abc"]
         with patch("review_display.occurrence_preview", side_effect=self.preview_pixels):
             dialog = review_gui.ActualReadingDialog(
                 self.root, ledger[0], group_for(ledger), Path("unused"), wait=False,
@@ -1370,10 +1370,13 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
                 self.wait_for_gui(lambda: not dialog.previews[0]._needs_locate)
                 self.assertIsNotNone(dialog.previews[0].photo)
                 self.assertTrue(dialog.previews[0].canvas.find_withtag("page"))
-                self.assertTrue(dialog.previews[0].canvas.find_withtag("target"))
-                self.assertLess(dialog.body_canvas.yview()[0], 0.01)
+                target = dialog.previews[0].canvas.coords(dialog.previews[0].canvas.find_withtag("target")[-1])
+                target_top = dialog.previews[0].canvas.winfo_rooty() + target[1] - dialog.previews[0].canvas.canvasy(0)
+                target_bottom = dialog.previews[0].canvas.winfo_rooty() + target[3] - dialog.previews[0].canvas.canvasy(0)
+                self.assertGreaterEqual(target_top, dialog.body_canvas.winfo_rooty() - 1)
+                self.assertLessEqual(target_bottom, dialog.body_canvas.winfo_rooty() + dialog.body_canvas.winfo_height() + 1)
                 self.assertIn("請向下捲到原頁圖片及其下方的勾選框", "\n".join(all_widget_text(dialog)))
-                self.assertIn("本群組共 2 個位置", str(dialog.preview_guidance.cget("text")))
+                self.assertIn("本群組共 3 個位置", str(dialog.preview_guidance.cget("text")))
                 self.assertTrue(dialog.preview_guidance.winfo_viewable())
                 dialog.show_sample_preview(1)
                 self.assertFalse(dialog.sample_available[1])
@@ -1381,15 +1384,53 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
                 self.wait_for_gui(lambda: dialog.sample_available[1])
                 self.wait_for_gui(lambda: not dialog.previews[1]._needs_locate)
                 self.assertTrue(dialog.previews[1].canvas.find_withtag("target"))
-                self.assertLess(dialog.body_canvas.yview()[0], 0.01)
-                dialog.body_canvas.yview_moveto(1)
-                dialog.update()
-                self.assertTrue(dialog.preview_guidance.winfo_viewable())
-                self.assertGreaterEqual(
-                    dialog.preview_guidance.winfo_rooty(),
-                    dialog.body_canvas.winfo_rooty() + dialog.body_canvas.winfo_height(),
-                )
+                for size in ("720x520", "980x760"):
+                    dialog.geometry(size)
+                    dialog.update()
+                    dialog.body_canvas.yview_moveto(1)
+                    dialog.update()
+                    self.assertTrue(dialog.preview_guidance.winfo_viewable())
+                    self.assertGreaterEqual(
+                        dialog.preview_guidance.winfo_rooty(),
+                        dialog.body_canvas.winfo_rooty() + dialog.body_canvas.winfo_height(),
+                    )
+                    pending = [dialog]
+                    note_entry = None
+                    while pending:
+                        widget = pending.pop()
+                        if isinstance(widget, tk.Entry) and widget.cget("textvariable") == str(dialog.note):
+                            note_entry = widget
+                            break
+                        pending.extend(widget.winfo_children())
+                    self.assertIsNotNone(note_entry)
+                    self.assertGreaterEqual(note_entry.winfo_rooty(), dialog.body_canvas.winfo_rooty())
+                    self.assertLessEqual(
+                        note_entry.winfo_rooty() + note_entry.winfo_height(),
+                        dialog.body_canvas.winfo_rooty() + dialog.body_canvas.winfo_height(),
+                    )
                 self.assertFalse(any(var.get() for var in dialog.checked_vars))
+            finally:
+                dialog.grab_release()
+                dialog.destroy()
+
+    def test_two_member_dialog_preloads_b_without_accepting_an_implicit_check(self):
+        ledger = [entry(name, "f" * 64) for name in "ab"]
+        with patch("review_display.occurrence_preview", side_effect=self.preview_pixels):
+            dialog = review_gui.ActualReadingDialog(
+                self.root, ledger[0], group_for(ledger), Path("unused"), wait=False,
+            )
+            try:
+                self.assertIsNotNone(dialog.previews[0])
+                self.assertIsNotNone(dialog.previews[1])
+                self.assertFalse(any(var.get() for var in dialog.checked_vars))
+                self.assertEqual(str(dialog.check_buttons[1].cget("state")), "disabled")
+                dialog.wait_visibility()
+                self.wait_for_gui(lambda: all(dialog.sample_available))
+                self.assertTrue(dialog.previews[1].canvas.find_withtag("page"))
+                self.assertTrue(dialog.previews[1].canvas.find_withtag("target"))
+                self.assertEqual(str(dialog.check_buttons[1].cget("state")), "normal")
+                self.assertFalse(dialog.checked_vars[1].get())
+                self.assertIn("A、B 兩張原頁會先載入", str(dialog.preview_guidance.cget("text")))
             finally:
                 dialog.grab_release()
                 dialog.destroy()

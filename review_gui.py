@@ -415,9 +415,15 @@ class ActualReadingDialog(tk.Toplevel):
         self.samples = actual_review_samples(
             entry, group, verified_checked_occurrence_ids=verified_checked_occurrence_ids,
         )
+        if len(self.samples) == 2:
+            load_instruction = "A、B 兩張原頁會先載入；請分別看圖，未暫存的位置仍要親自勾選。"
+        elif len(self.samples) > 2:
+            load_instruction = "先載入 A；其他位置按「顯示原頁」逐張載入，再看圖並親自勾選。"
+        else:
+            load_instruction = "先載入目前位置 A，請看圖並親自勾選。"
         self.preview_guidance.configure(
             text=f"本群組共 {len(self.samples)} 個位置：向下捲查看各張原頁與其下方的勾選框；"
-                 "A 必須核對。其他位置先按「顯示原頁」，再看圖片並親自勾選。",
+                 f"A 必須核對。{load_instruction}",
         )
         target_char = str(entry.get("char") or "")
         other_char_count = sum(
@@ -433,22 +439,10 @@ class ActualReadingDialog(tk.Toplevel):
                   + (f"其中 {other_char_count} 個位置的文字與目前字不同，但屬於同一 exact 字形群組；"
                      "請個別看原頁確認，不能依字形推定讀音。" if other_char_count else "") +
                   "請向下捲到原頁圖片及其下方的勾選框，逐個位置核對。"
-                  "為避免大量 PDF 影像使視窗停住，先載入目前位置 A；其他位置按『顯示原頁』逐張載入。"
+                  f"為避免大量 PDF 影像使視窗停住，{load_instruction}"
                   "同時最多保留 A 與一張其他位置的影像。已核對並暫存的位置仍列出，但不必重做。"),
             fg="#555555", justify="left", wraplength=900,
         ).pack(fill="x", anchor="w", padx=16, pady=(0, 8))
-
-        form = tk.LabelFrame(body, text="實際注音")
-        form.pack(fill="x", padx=16, pady=8)
-        self.reading = tk.StringVar(value="")
-        self.note = tk.StringVar(value="")
-        WrappedLabel(form, text=f"程式目前 actual：{entry.get('actual') or '尚未辨識'}").grid(row=0,column=0,columnspan=2,sticky="ew",padx=8,pady=(8,4))
-        WrappedLabel(form, text="原頁真正 actual：", width_fraction=0.25).grid(row=1,column=0,sticky="ew",padx=8,pady=4)
-        scrollable_entry(form, self.reading).grid(row=1,column=1,sticky="ew",padx=8,pady=4)
-        WrappedLabel(form, text="備註（可空白）：", width_fraction=0.25).grid(row=2,column=0,sticky="ew",padx=8,pady=4)
-        scrollable_entry(form, self.note).grid(row=2,column=1,sticky="ew",padx=8,pady=(4,8))
-        form.columnconfigure(0, weight=1, uniform="actual-form")
-        form.columnconfigure(1, weight=3, uniform="actual-form")
 
         self.checked_vars = []
         for i, sample in enumerate(self.samples, 1):
@@ -484,8 +478,24 @@ class ActualReadingDialog(tk.Toplevel):
                 check.pack(fill="x", padx=8, pady=(2, 7))
                 self.check_buttons.append(check)
 
+        form = tk.LabelFrame(body, text="實際注音")
+        form.pack(fill="x", padx=16, pady=8)
+        self.reading = tk.StringVar(value="")
+        self.note = tk.StringVar(value="")
+        WrappedLabel(form, text=f"程式目前 actual：{entry.get('actual') or '尚未辨識'}").grid(row=0,column=0,columnspan=2,sticky="ew",padx=8,pady=(8,4))
+        WrappedLabel(form, text="原頁真正 actual：", width_fraction=0.25).grid(row=1,column=0,sticky="ew",padx=8,pady=4)
+        scrollable_entry(form, self.reading).grid(row=1,column=1,sticky="ew",padx=8,pady=4)
+        WrappedLabel(form, text="備註（可空白）：", width_fraction=0.25).grid(row=2,column=0,sticky="ew",padx=8,pady=4)
+        scrollable_entry(form, self.note).grid(row=2,column=1,sticky="ew",padx=8,pady=(4,8))
+        form.columnconfigure(0, weight=1, uniform="actual-form")
+        form.columnconfigure(1, weight=3, uniform="actual-form")
+
         if self.samples:
             self.show_sample_preview(0)
+        if len(self.samples) == 2:
+            # Preserve the two-sample visual layout contract without eagerly
+            # rasterizing a larger exact group or checking B on the user's behalf.
+            self.show_sample_preview(1)
         kind = str(group.get("kind") or "")
         checked_peers = set(verified_checked_occurrence_ids) & {
             str(member.get("occurrence_id") or "") for member in group.get("members") or []
@@ -559,6 +569,7 @@ class ActualReadingDialog(tk.Toplevel):
         if preview is None:
             preview = OccurrencePreview(
                 self.preview_slots[index], expand_content=True,
+                on_locate=self.body_canvas.reveal if index == 0 else None,
                 on_layout=self.body_canvas.request_layout,
                 before_locate=self.body_canvas.flush_layout,
             )
