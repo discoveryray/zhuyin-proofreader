@@ -352,9 +352,27 @@ class ExpectedDialog(tk.Toplevel):
         self.destroy()
 
 
+def actual_review_samples(entry, group, *, verified_checked_occurrence_ids=()):
+    """Show one new peer only; a previously verified check needs no repeat preview."""
+    members = list(group.get("members") or [])
+    target_id = str(entry.get("occurrence_id") or "")
+    members.sort(key=lambda member: 0 if str(member.get("occurrence_id") or "") == target_id else 1)
+    if not members:
+        return []
+    checked = set(verified_checked_occurrence_ids)
+    samples = [members[0]]
+    for member in members[1:]:
+        member_id = str(member.get("occurrence_id") or "")
+        if member_id and member_id not in checked:
+            samples.append(member)
+            break
+    return samples
+
+
 class ActualReadingDialog(tk.Toplevel):
     """Human visual confirmation for the actual evidence chain only."""
-    def __init__(self, parent, entry, group, output_dir: Path, *, wait: bool = True):
+    def __init__(self, parent, entry, group, output_dir: Path, *, wait: bool = True,
+                 verified_checked_occurrence_ids=()):
         super().__init__(parent)
         self.result = None
         self.entry = entry
@@ -385,10 +403,9 @@ class ActualReadingDialog(tk.Toplevel):
             fg="#555555", justify="left", wraplength=900,
         ).pack(fill="x", anchor="w", padx=16, pady=(0,8))
 
-        members = list(group.get("members") or [])
-        target_id = str(entry.get("occurrence_id") or "")
-        members.sort(key=lambda m: 0 if str(m.get("occurrence_id") or "") == target_id else 1)
-        self.samples = members[:2]
+        self.samples = actual_review_samples(
+            entry, group, verified_checked_occurrence_ids=verified_checked_occurrence_ids,
+        )
         self.checked_vars = []
         for i, sample in enumerate(self.samples, 1):
             frame = tk.LabelFrame(body, text=f"樣本 {chr(64+i)}")
@@ -985,10 +1002,20 @@ class ReviewApp:
         try:
             full_ledger = materialize_ledger(self.manifest, self.db)
             group = build_actual_group_for_entry(full_ledger, entry)
+            # Revalidate durable checks against this live ledger. On an invalid
+            # summary, no occurrence is treated as already checked.
+            self.reload_staging_summary(full_ledger)
         except Exception as exc:
             messagebox.showerror("無法建立 actual 核對群組", str(exc), parent=self.root)
             return
-        dialog = ActualReadingDialog(self.root, entry, group, self.output_dir)
+        verified_checked = (
+            self.staged_checked_occurrence_ids
+            if not self.staging_summary.get("staging_error") else ()
+        )
+        dialog = ActualReadingDialog(
+            self.root, entry, group, self.output_dir,
+            verified_checked_occurrence_ids=verified_checked,
+        )
         if not dialog.result:
             return
         try:
