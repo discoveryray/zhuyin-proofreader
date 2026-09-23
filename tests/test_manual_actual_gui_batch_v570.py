@@ -723,6 +723,45 @@ class ImmediateThread:
 
 
 class ManualActualGuiBehaviorTests(unittest.TestCase):
+    def test_sample_b_advances_past_only_verified_checked_peers(self):
+        ledger = [entry(name, "f" * 64) for name in "abcd"]
+        group = group_for(ledger, 2)
+        select = review_gui.actual_review_samples
+        self.assertEqual(
+            [row["occurrence_id"] for row in select(ledger[2], group, verified_checked_occurrence_ids={"a", "b"})],
+            ["c", "d"],
+        )
+        # Simply displaying B never counts as a direct visual check.
+        self.assertEqual([row["occurrence_id"] for row in select(ledger[2], group)], ["c", "a"])
+        self.assertEqual(
+            [row["occurrence_id"] for row in select(ledger[2], group, verified_checked_occurrence_ids={"a", "b", "d"})],
+            ["c"],
+        )
+
+    def test_unvalidated_staging_does_not_hide_sample_b(self):
+        app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
+        ledger = [entry(name, "f" * 64) for name in "abc"]
+        app.root = object()
+        app.output_dir = Path("project")
+        app.manifest = {}
+        app.db = {}
+        app.records = ledger
+        app.index = 2
+        app.apply_actual_button = DummyButton()
+        group = group_for(ledger, 2)
+        with (
+            patch.object(review_gui, "materialize_ledger", return_value=ledger),
+            patch.object(review_gui, "build_actual_group_for_entry", return_value=group),
+            patch.object(review_gui, "manual_actual_staging_summary", return_value={
+                "staging_error": "stale evidence",
+                "staged_checked_occurrence_ids": ["a", "b"],
+            }),
+            patch.object(review_gui, "ActualReadingDialog", return_value=SimpleNamespace(result=None)) as dialog,
+        ):
+            app.correct_actual()
+        self.assertEqual(dialog.call_args.kwargs["verified_checked_occurrence_ids"], ())
+        self.assertEqual([row["occurrence_id"] for row in review_gui.actual_review_samples(ledger[2], group)], ["c", "a"])
+
     def test_reload_records_excludes_checked_occurrences_and_reduces_denominator(self):
         ledger = [entry(name, str(index) * 64) for index, name in enumerate("abcde", start=1)]
         app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
@@ -1124,6 +1163,32 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
             self.assertIn("套用 actual 修正", text)
             self.assertNotIn("expected_set", text)
             self.assertNotIn("字典答案：", text)
+        finally:
+            dialog.grab_release()
+            dialog.destroy()
+
+    def test_actual_dialog_shows_next_unchecked_peer_or_only_a(self):
+        ledger = [entry(name, "f" * 64) for name in "abcd"]
+        group = group_for(ledger, 2)
+        with patch("review_display.occurrence_preview", side_effect=RuntimeError("no preview fixture")):
+            dialog = review_gui.ActualReadingDialog(
+                self.root, ledger[2], group, Path("unused"),
+                verified_checked_occurrence_ids={"a", "b"}, wait=False,
+            )
+        try:
+            self.assertEqual([row["occurrence_id"] for row in dialog.samples], ["c", "d"])
+            self.assertEqual(len(dialog.checked_vars), 2)
+        finally:
+            dialog.grab_release()
+            dialog.destroy()
+        with patch("review_display.occurrence_preview", side_effect=RuntimeError("no preview fixture")):
+            dialog = review_gui.ActualReadingDialog(
+                self.root, ledger[2], group, Path("unused"),
+                verified_checked_occurrence_ids={"a", "b", "d"}, wait=False,
+            )
+        try:
+            self.assertEqual([row["occurrence_id"] for row in dialog.samples], ["c"])
+            self.assertEqual(len(dialog.checked_vars), 1)
         finally:
             dialog.grab_release()
             dialog.destroy()
