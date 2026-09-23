@@ -1208,6 +1208,18 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
         pixmap.clear_with(255)
         return pixmap, (10.0, 10.0, 30.0, 30.0), "合成預覽"
 
+    @staticmethod
+    def tall_preview_pixels(*_args, **_kwargs):
+        pixmap = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 120, 160), False)
+        pixmap.clear_with(255)
+        return pixmap, (10.0, 10.0, 30.0, 30.0), "合成原頁"
+
+    def reveal_sample_target(self, dialog, index):
+        preview = dialog.previews[index]
+        target = preview.canvas.coords(preview.canvas.find_withtag("target")[-1])
+        dialog.body_canvas.reveal(preview.canvas, target[1], target[3])
+        dialog.update()
+
     def test_actual_dialog_uses_staging_label_and_explains_no_immediate_refresh(self):
         current = entry("dialog", "1" * 64)
         group = group_for([current])
@@ -1318,7 +1330,8 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
             created.append(preview)
             return preview
 
-        with patch.object(review_gui, "OccurrencePreview", side_effect=fake_preview):
+        with (patch.object(review_gui, "OccurrencePreview", side_effect=fake_preview),
+              patch.object(review_gui.ActualReadingDialog, "_target_in_viewport", return_value=True)):
             dialog = review_gui.ActualReadingDialog(
                 self.root, ledger[0], group_for(ledger), Path("unused"), wait=False,
             )
@@ -1358,7 +1371,7 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
 
     def test_real_tk_check_waits_for_drawn_page_and_target(self):
         ledger = [entry(name, "f" * 64) for name in "abc"]
-        with patch("review_display.occurrence_preview", side_effect=self.preview_pixels):
+        with patch("review_display.occurrence_preview", side_effect=self.tall_preview_pixels):
             dialog = review_gui.ActualReadingDialog(
                 self.root, ledger[0], group_for(ledger), Path("unused"), wait=False,
             )
@@ -1381,9 +1394,17 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
                 dialog.show_sample_preview(1)
                 self.assertFalse(dialog.sample_available[1])
                 self.assertEqual(str(dialog.check_buttons[1].cget("state")), "disabled")
+                self.wait_for_gui(lambda: dialog._preview_drawn_for_sample(1, dialog.previews[1]))
+                self.assertFalse(dialog._target_in_viewport(dialog.previews[1]))
+                self.assertFalse(dialog.sample_available[1])
+                self.reveal_sample_target(dialog, 1)
                 self.wait_for_gui(lambda: dialog.sample_available[1])
+                self.assertTrue(dialog._viewed_target[1])
                 self.wait_for_gui(lambda: not dialog.previews[1]._needs_locate)
                 self.assertTrue(dialog.previews[1].canvas.find_withtag("target"))
+                dialog.show_sample_preview(2)
+                self.assertFalse(dialog._viewed_target[1])
+                self.assertFalse(dialog.sample_available[1])
                 for size in ("720x520", "980x760"):
                     dialog.geometry(size)
                     dialog.update()
@@ -1415,7 +1436,7 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
 
     def test_two_member_dialog_preloads_b_without_accepting_an_implicit_check(self):
         ledger = [entry(name, "f" * 64) for name in "ab"]
-        with patch("review_display.occurrence_preview", side_effect=self.preview_pixels):
+        with patch("review_display.occurrence_preview", side_effect=self.tall_preview_pixels):
             dialog = review_gui.ActualReadingDialog(
                 self.root, ledger[0], group_for(ledger), Path("unused"), wait=False,
             )
@@ -1425,15 +1446,95 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
                 self.assertFalse(any(var.get() for var in dialog.checked_vars))
                 self.assertEqual(str(dialog.check_buttons[1].cget("state")), "disabled")
                 dialog.wait_visibility()
-                self.wait_for_gui(lambda: all(dialog.sample_available))
+                self.wait_for_gui(lambda: dialog.sample_available[0])
+                self.wait_for_gui(lambda: dialog._preview_drawn_for_sample(1, dialog.previews[1]))
                 self.assertTrue(dialog.previews[1].canvas.find_withtag("page"))
                 self.assertTrue(dialog.previews[1].canvas.find_withtag("target"))
+                self.assertFalse(dialog._target_in_viewport(dialog.previews[1]))
+                self.assertFalse(dialog.sample_available[1])
+                dialog.check_buttons[1].focus_set()
+                dialog.check_buttons[1].event_generate("<space>")
+                dialog.update()
+                self.assertFalse(dialog.checked_vars[1].get())
+                self.reveal_sample_target(dialog, 1)
+                self.wait_for_gui(lambda: dialog.sample_available[1])
                 self.assertEqual(str(dialog.check_buttons[1].cget("state")), "normal")
                 self.assertFalse(dialog.checked_vars[1].get())
+                dialog.checked_vars[1].set(True)
+                dialog.show_sample_preview(1)
+                self.assertFalse(dialog._viewed_target[1])
+                self.assertFalse(dialog.checked_vars[1].get())
+                self.assertEqual(str(dialog.check_buttons[1].cget("state")), "disabled")
                 self.assertIn("A、B 兩張原頁會先載入", str(dialog.preview_guidance.cget("text")))
             finally:
                 dialog.grab_release()
                 dialog.destroy()
+
+    def test_unseen_b_cannot_be_submitted_by_setting_checkbox_variable(self):
+        ledger = [entry(name, "f" * 64) for name in "ab"]
+        with patch("review_display.occurrence_preview", side_effect=self.tall_preview_pixels):
+            dialog = review_gui.ActualReadingDialog(
+                self.root, ledger[0], group_for(ledger), Path("unused"), wait=False,
+            )
+            try:
+                dialog.wait_visibility()
+                self.wait_for_gui(lambda: dialog.sample_available[0])
+                self.wait_for_gui(lambda: dialog._preview_drawn_for_sample(1, dialog.previews[1]))
+                self.assertFalse(dialog._target_in_viewport(dialog.previews[1]))
+                dialog.checked_vars[0].set(True)
+                dialog.checked_vars[1].set(True)  # B was never visible or checked by the user.
+                dialog.reading.set("ㄓㄨㄢˇ")
+                dialog.submit()
+                self.assertEqual(dialog.result["checked_occurrence_ids"], ["a"])
+            finally:
+                if dialog.winfo_exists():
+                    dialog.grab_release()
+                    dialog.destroy()
+
+    def test_previously_staged_peer_does_not_require_a_new_view_or_checkbox(self):
+        ledger = [entry(name, "f" * 64) for name in "ab"]
+        with patch("review_display.occurrence_preview", side_effect=self.tall_preview_pixels):
+            dialog = review_gui.ActualReadingDialog(
+                self.root, ledger[0], group_for(ledger), Path("unused"),
+                verified_checked_occurrence_ids={"b"}, wait=False,
+            )
+            try:
+                dialog.wait_visibility()
+                self.wait_for_gui(lambda: dialog.sample_available[0])
+                self.assertEqual(dialog.previously_checked, [False, True])
+                self.assertIsNone(dialog.check_buttons[1])
+                self.assertFalse(dialog._viewed_target[1])
+                self.assertFalse(dialog.sample_available[1])
+                dialog.checked_vars[0].set(True)
+                dialog.reading.set("ㄓㄨㄢˇ")
+                dialog.submit()
+                self.assertEqual(dialog.result["checked_occurrence_ids"], ["a"])
+            finally:
+                if dialog.winfo_exists():
+                    dialog.grab_release()
+                    dialog.destroy()
+
+    def test_scroll_visibility_callback_is_cancelled_during_dialog_teardown(self):
+        current = entry("only", "f" * 64)
+        with patch("review_display.occurrence_preview", side_effect=self.preview_pixels):
+            dialog = review_gui.ActualReadingDialog(
+                self.root, current, group_for([current]), Path("unused"), wait=False,
+            )
+            try:
+                dialog.wait_visibility()
+                dialog._body_scrollbar.destroy()
+                dialog._body_scrolled("0", "1")  # Geometry can outlive its scrollbar during teardown.
+                dialog._schedule_visibility_check()
+                self.assertIsNotNone(dialog._visibility_after)
+                dialog.grab_release()
+                dialog.destroy()
+                self.assertIsNone(dialog._visibility_after)
+                self.root.update()  # Pending layout and scrollbar callbacks must not raise TclError.
+                dialog._body_scrolled("0", "1")
+            finally:
+                if dialog.winfo_exists():
+                    dialog.grab_release()
+                    dialog.destroy()
 
     def test_target_without_drawn_photo_times_out_and_cannot_be_checked(self):
         current = entry("only", "f" * 64)

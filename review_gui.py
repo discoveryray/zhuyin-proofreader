@@ -387,6 +387,8 @@ class ActualReadingDialog(tk.Toplevel):
         self.preview_buttons = []
         self.check_buttons = []
         self._preview_ready_after = []
+        self._visibility_after = None
+        self._destroying = False
         self._active_peer = None
         self.verified_checked_occurrence_ids = set(verified_checked_occurrence_ids)
 
@@ -400,6 +402,11 @@ class ActualReadingDialog(tk.Toplevel):
         )
         self.preview_guidance.pack(side="bottom", fill="x", padx=16, pady=(2, 4))
         body, self.body_canvas = create_scrollable_body(self)
+        self._body_scrollbar = next(
+            child for child in self.body_canvas.master.winfo_children() if isinstance(child, ttk.Scrollbar)
+        )
+        self.body_canvas.configure(yscrollcommand=self._body_scrolled)
+        self.body_canvas.bind("<Configure>", lambda _event: self._schedule_visibility_check(), add="+")
 
         WrappedLabel(body, text="只看 PDF 原頁，確認實際印出的注音", font=("Microsoft JhengHei UI", 13, "bold")).pack(fill="x", anchor="w", padx=16, pady=(14,4))
         WrappedLabel(
@@ -433,6 +440,7 @@ class ActualReadingDialog(tk.Toplevel):
             i > 0 and str(sample.get("occurrence_id") or "") in self.verified_checked_occurrence_ids
             for i, sample in enumerate(self.samples)
         ]
+        self._viewed_target = [False] * len(self.samples)
         WrappedLabel(
             body,
             text=(f"本核對群組共有 {len(self.samples)} 個位置，全部列在下方；同頁不同位置仍分開列出。"
@@ -520,16 +528,54 @@ class ActualReadingDialog(tk.Toplevel):
             self.after_cancel(pending)
             self._preview_ready_after[index] = None
 
+    def _body_scrolled(self, first, last):
+        if self._destroying or not self._body_scrollbar.winfo_exists():
+            return
+        self._body_scrollbar.set(first, last)
+        self._schedule_visibility_check()
+
+    def _schedule_visibility_check(self):
+        if not self._destroying and self._visibility_after is None:
+            self._visibility_after = self.after_idle(self._check_target_visibility)
+
+    def _preview_drawn_for_sample(self, index, preview):
+        return (preview._entry == self.samples[index] and preview.photo is not None
+                and preview.target is not None and preview._draw_pending is None
+                and preview._render_pending is None and preview.canvas.winfo_ismapped()
+                and preview.canvas.find_withtag("page") and preview.canvas.find_withtag("target"))
+
+    def _target_in_viewport(self, preview):
+        target = preview.canvas.find_withtag("target")
+        if not target:
+            return False
+        x0, y0, x1, y1 = preview.canvas.coords(target[-1])
+        left = preview.canvas.winfo_rootx() + x0 - preview.canvas.canvasx(0)
+        right = preview.canvas.winfo_rootx() + x1 - preview.canvas.canvasx(0)
+        top = preview.canvas.winfo_rooty() + y0 - preview.canvas.canvasy(0)
+        bottom = preview.canvas.winfo_rooty() + y1 - preview.canvas.canvasy(0)
+        outer = self.body_canvas
+        return (left >= outer.winfo_rootx() - 1 and right <= outer.winfo_rootx() + outer.winfo_width() + 1
+                and top >= outer.winfo_rooty() - 1 and bottom <= outer.winfo_rooty() + outer.winfo_height() + 1)
+
+    def _check_target_visibility(self):
+        self._visibility_after = None
+        if self._destroying or not self.winfo_exists() or not self.body_canvas.winfo_ismapped():
+            return
+        for index, preview in enumerate(self.previews):
+            if (preview is None or self.previously_checked[index] or self.sample_available[index]
+                    or not self._preview_drawn_for_sample(index, preview)):
+                continue
+            if self._target_in_viewport(preview):
+                self._viewed_target[index] = True
+                self.sample_available[index] = True
+                self.check_buttons[index].configure(state="normal")
+
     def _check_preview_ready(self, index, preview, remaining):
         self._preview_ready_after[index] = None
         if not self.winfo_exists() or self.previews[index] is not preview:
             return
-        if (preview._entry == self.samples[index] and preview.photo is not None
-                and preview.target is not None and preview._draw_pending is None
-                and preview._render_pending is None and preview.canvas.winfo_ismapped()
-                and preview.canvas.find_withtag("page") and preview.canvas.find_withtag("target")):
-            self.sample_available[index] = True
-            self.check_buttons[index].configure(state="normal")
+        if self._preview_drawn_for_sample(index, preview):
+            self._schedule_visibility_check()
             return
         if remaining > 0 and preview.pixmap is not None and preview.target is not None:
             self._preview_ready_after[index] = self.after(
@@ -542,6 +588,10 @@ class ActualReadingDialog(tk.Toplevel):
         self.preview_buttons[index].configure(text="原頁未顯示，請重新載入")
 
     def destroy(self):
+        self._destroying = True
+        if self._visibility_after is not None:
+            self.after_cancel(self._visibility_after)
+            self._visibility_after = None
         for index in range(len(getattr(self, "_preview_ready_after", []))):
             self._cancel_preview_ready(index)
         super().destroy()
@@ -560,6 +610,7 @@ class ActualReadingDialog(tk.Toplevel):
                 check.configure(state="disabled")
                 if not self.checked_vars[previous].get():
                     self.sample_available[previous] = False
+                    self._viewed_target[previous] = False
             self.preview_buttons[previous].configure(text="重新顯示原頁")
 
         if index:
@@ -579,6 +630,7 @@ class ActualReadingDialog(tk.Toplevel):
         def unavailable():
             self._cancel_preview_ready(index)
             self.sample_available[index] = False
+            self._viewed_target[index] = False
             self.checked_vars[index].set(False)
             check = self.check_buttons[index]
             if check is not None:
@@ -587,6 +639,8 @@ class ActualReadingDialog(tk.Toplevel):
 
         preview.on_failure = unavailable
         self.sample_available[index] = False
+        self._viewed_target[index] = False
+        self.checked_vars[index].set(False)
         check = self.check_buttons[index]
         if check is not None:
             check.configure(state="disabled")
@@ -607,9 +661,9 @@ class ActualReadingDialog(tk.Toplevel):
         if not reading:
             messagebox.showerror("注音格式不合法", "請輸入單一合法注音；聲調可放音節最前或最後。", parent=self)
             return
-        checked = [str(sample.get("occurrence_id") or "") for sample, var, available, previous in zip(
-            self.samples, self.checked_vars, self.sample_available, self.previously_checked,
-        ) if var.get() and available and not previous]
+        checked = [str(sample.get("occurrence_id") or "") for sample, var, available, previous, viewed in zip(
+            self.samples, self.checked_vars, self.sample_available, self.previously_checked, self._viewed_target,
+        ) if var.get() and available and viewed and not previous]
         target_id = str(self.entry.get("occurrence_id") or "")
         if target_id not in checked:
             messagebox.showerror("尚未核對目前位置", "樣本 A（目前位置）必須勾選已直接核對。", parent=self)
