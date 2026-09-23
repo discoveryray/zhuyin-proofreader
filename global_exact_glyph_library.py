@@ -442,17 +442,14 @@ def _sha256_text(value: Any, field: str) -> str:
 
 
 def _canonical_reading(value: Any, field: str = "reading") -> str:
-    if not isinstance(value, str):
-        raise GlobalLibraryValidationError(f"{field} 必須是文字")
-    text = value.strip()
-    if text != value:
-        raise GlobalLibraryValidationError(f"{field} 必須已 canonicalize 且不得有外圍空白")
-    if not text:
-        raise GlobalLibraryValidationError(f"{field} 不得空白")
-    if any(ord(ch) < 32 for ch in text):
-        raise GlobalLibraryValidationError(f"{field} 含控制字元")
-    # U+02D9 is canonical Bopomofo, although NFKC expands it to SPACE + U+0307.
-    # The Bopomofo round-trip below rejects every noncanonical spelling.
+    # The canonical neutral spelling is one prefix U+02D9. NFKC expands it to
+    # SPACE + U+0307, so validate the rest with the original strict text
+    # contract; canonical_bopomofo's multi-syllable path needs this guard.
+    if isinstance(value, str) and value.startswith("˙") and value.count("˙") == 1:
+        _strict_text(value[1:], field)
+        text = value
+    else:
+        text = _strict_text(value, field)
     if canonical_bopomofo(text) != text:
         raise GlobalLibraryValidationError(f"{field} 必須是 already-canonical Bopomofo")
     return text

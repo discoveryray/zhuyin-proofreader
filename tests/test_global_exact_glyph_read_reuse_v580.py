@@ -278,6 +278,7 @@ class ExactReusePrecedenceTests(unittest.TestCase):
         readings = tuple(sorted(("˙ㄒㄧ", "ㄒㄧ")))
         canonical = json.dumps(list(readings), ensure_ascii=False, separators=(",", ":"))
         self.assertEqual(library._canonical_reading("˙ㄒㄧ"), "˙ㄒㄧ")
+        self.assertEqual(library._canonical_reading("ㄒㄧˊㄒㄧˋ"), "ㄒㄧˊㄒㄧˋ")
         self.assertEqual(
             library._canonical_reading_list(canonical, "conflicting_readings_json", minimum=2),
             readings,
@@ -300,6 +301,22 @@ class ExactReusePrecedenceTests(unittest.TestCase):
         for raw in bad_lists:
             with self.subTest(raw=raw), self.assertRaises(library.GlobalLibraryValidationError):
                 library._canonical_reading_list(raw, "conflicting_readings_json", minimum=2)
+
+    def test_multisyllable_neutral_positions_fail_single_and_list_validation(self):
+        malformed = (
+            "ㄒㄧˊㄒㄧ˙",       # trailing neutral after another syllable
+            "ㄒㄧˊㄒㄧ˙ㄒㄧ",    # neutral inside a concatenated spelling
+            "ㄒㄧ˙ㄒㄧˋ",       # neutral mixed with a non-neutral tone
+            "ㄒㄧ˙ㄒㄧ˙",       # repeated neutral across syllables
+            "˙ㄒㄧ˙ㄒㄧ",       # prefix plus another neutral
+        )
+        for reading in malformed:
+            with self.subTest(reading=reading):
+                with self.assertRaises(library.GlobalLibraryValidationError):
+                    library._canonical_reading(reading)
+                raw = json.dumps(sorted(("ㄅ", reading)), ensure_ascii=False, separators=(",", ":"))
+                with self.assertRaises(library.GlobalLibraryValidationError):
+                    library._canonical_reading_list(raw, "conflicting_readings_json", minimum=2)
 
     def test_global_only_and_project_global_agreement_reuse(self):
         identity = _identity()

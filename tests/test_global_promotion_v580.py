@@ -142,6 +142,31 @@ class GlobalPromotionTests(unittest.TestCase):
         self.assertEqual(reopened.load_snapshot().generation, generation)
         self.assertEqual(len(sql_rows(reopened, "source_evidence")), 3)
 
+    def test_malformed_multisyllable_neutral_does_not_change_verified_global_truth(self):
+        self.deliver(intent(1, "˙ㄒㄧ"), intent(2, "˙ㄒㄧ"))
+        self.assertEqual(approve(self.repo)["state"], library.VERIFIED_GLOBAL)
+        generation = self.repo.load_snapshot().generation
+        before = {table: sql_rows(self.repo, table) for table in (
+            "glyph_truth", "source_evidence", "promotion_approval", "processed_intent",
+        )}
+        malformed_reading = "ㄒㄧˊㄒㄧ˙"
+        with self.assertRaises(library.GlobalLibraryValidationError):
+            intent(3, malformed_reading)
+
+        # Recompute the transport IDs so delivery must reject the reading,
+        # rather than merely a stale digest on a tampered payload.
+        malformed = copy.deepcopy(intent(3, "ㄒㄧ"))
+        payload = malformed["payload"]
+        payload["evidence"]["reading"] = malformed_reading
+        malformed["payload_digest"] = library._canonical_sha256(payload)
+        malformed["intent_id"] = "gpi_" + library._canonical_sha256(payload["evidence"])
+        with self.assertRaises(library.GlobalLibraryValidationError):
+            self.deliver(malformed)
+        self.assertEqual(self.repo.load_snapshot().generation, generation)
+        self.assertEqual(
+            {table: sql_rows(self.repo, table) for table in before}, before,
+        )
+
     def test_first_source_candidate_and_retry_receipt_no_extra_effect(self):
         first = self.deliver(intent())[0]
         again = self.deliver(intent())[0]
