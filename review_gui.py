@@ -353,20 +353,15 @@ class ExpectedDialog(tk.Toplevel):
 
 
 def actual_review_samples(entry, group, *, verified_checked_occurrence_ids=()):
-    """Show one new peer only; a previously verified check needs no repeat preview."""
+    """List every exact-group occurrence, putting validated staged peers last."""
     members = list(group.get("members") or [])
     target_id = str(entry.get("occurrence_id") or "")
-    members.sort(key=lambda member: 0 if str(member.get("occurrence_id") or "") == target_id else 1)
-    if not members:
-        return []
     checked = set(verified_checked_occurrence_ids)
-    samples = [members[0]]
-    for member in members[1:]:
-        member_id = str(member.get("occurrence_id") or "")
-        if member_id and member_id not in checked:
-            samples.append(member)
-            break
-    return samples
+    members.sort(key=lambda member: (
+        0 if str(member.get("occurrence_id") or "") == target_id else
+        2 if str(member.get("occurrence_id") or "") in checked else 1
+    ))
+    return members
 
 
 class ActualReadingDialog(tk.Toplevel):
@@ -384,6 +379,11 @@ class ActualReadingDialog(tk.Toplevel):
         self.grab_set()
         self.previews = []
         self.sample_available = []
+        self.preview_slots = []
+        self.preview_buttons = []
+        self.check_buttons = []
+        self._active_peer = None
+        self.verified_checked_occurrence_ids = set(verified_checked_occurrence_ids)
 
         footer = ActionRows(self, bd=1, relief="groove")
         footer.pack(side="bottom", fill="x")
@@ -406,32 +406,17 @@ class ActualReadingDialog(tk.Toplevel):
         self.samples = actual_review_samples(
             entry, group, verified_checked_occurrence_ids=verified_checked_occurrence_ids,
         )
-        self.checked_vars = []
-        for i, sample in enumerate(self.samples, 1):
-            frame = tk.LabelFrame(body, text=f"樣本 {chr(64+i)}")
-            frame.pack(fill="x", padx=16, pady=6)
-            info = f"{sample.get('pdf_name','')}  課本頁 {sample.get('printed_page','')}  字：{sample.get('char','')}  occurrence：{sample.get('occurrence_id','')}"
-            WrappedLabel(frame, text=info).pack(fill="x", padx=8, pady=(6, 2))
-            preview = OccurrencePreview(frame, expand_content=True,
-                                        on_locate=self.body_canvas.reveal if i == 1 else None,
-                                        on_layout=self.body_canvas.request_layout,
-                                        before_locate=self.body_canvas.flush_layout)
-            preview.pack(fill="x", padx=8, pady=5)
-            available = preview.load(sample, padding=(95, 60), output_dir=self.output_dir)
-            self.previews.append(preview)
-            self.sample_available.append(available)
-            var = tk.BooleanVar(value=(i == 1 and available))
-            self.checked_vars.append(var)
-            check = wrap_checkbutton(tk.Checkbutton(frame, text="我已直接核對這張 PDF 原頁", variable=var,
-                                                   state="normal" if available else "disabled"))
-            check.pack(fill="x", padx=8, pady=(2, 7))
-
-            def unavailable(index=i - 1, variable=var, button=check):
-                self.sample_available[index] = False
-                variable.set(False)
-                button.configure(state="disabled")
-
-            preview.on_failure = unavailable
+        self.previously_checked = [
+            i > 0 and str(sample.get("occurrence_id") or "") in self.verified_checked_occurrence_ids
+            for i, sample in enumerate(self.samples)
+        ]
+        WrappedLabel(
+            body,
+            text=(f"本核對群組共有 {len(self.samples)} 個位置，全部列在下方；同頁不同位置仍分開列出。"
+                  "為避免大量 PDF 影像使視窗停住，先載入目前位置 A；其他位置按『顯示原頁』逐張載入。"
+                  "同時最多保留 A 與一張其他位置的影像。已核對並暫存的位置仍列出，但不必重做。"),
+            fg="#555555", justify="left", wraplength=900,
+        ).pack(fill="x", anchor="w", padx=16, pady=(0, 8))
 
         form = tk.LabelFrame(body, text="實際注音")
         form.pack(fill="x", padx=16, pady=8)
@@ -444,16 +429,48 @@ class ActualReadingDialog(tk.Toplevel):
         scrollable_entry(form, self.note).grid(row=2,column=1,sticky="ew",padx=8,pady=(4,8))
         form.columnconfigure(0, weight=1, uniform="actual-form")
         form.columnconfigure(1, weight=3, uniform="actual-form")
+
+        self.checked_vars = []
+        for i, sample in enumerate(self.samples, 1):
+            index = i - 1
+            label = chr(64 + i) if i <= 26 else str(i)
+            frame = tk.LabelFrame(body, text=f"樣本 {label}" + ("（目前位置，必須核對）" if i == 1 else ""))
+            frame.pack(fill="x", padx=16, pady=6)
+            info = f"{sample.get('pdf_name','')}  課本頁 {sample.get('printed_page','')}  字：{sample.get('char','')}  occurrence：{sample.get('occurrence_id','')}"
+            WrappedLabel(frame, text=info).pack(fill="x", padx=8, pady=(6, 2))
+            self.previews.append(None)
+            self.sample_available.append(False)
+            slot = tk.Frame(frame)
+            slot.pack(fill="x", padx=8)
+            self.preview_slots.append(slot)
+            button = tk.Button(frame, text="顯示原頁", command=lambda j=index: self.show_sample_preview(j))
+            button.pack(anchor="w", padx=8, pady=(2, 4))
+            self.preview_buttons.append(button)
+            var = tk.BooleanVar(value=False)
+            self.checked_vars.append(var)
+            if self.previously_checked[index]:
+                WrappedLabel(frame, text="已直接核對並暫存；本次不必重新勾選。", fg="#555555").pack(fill="x", padx=8, pady=(2, 7))
+                self.check_buttons.append(None)
+            else:
+                check = wrap_checkbutton(tk.Checkbutton(
+                    frame, text="我已直接核對這張 PDF 原頁", variable=var, state="disabled",
+                ))
+                check.pack(fill="x", padx=8, pady=(2, 7))
+                self.check_buttons.append(check)
+
+        if self.samples:
+            self.show_sample_preview(0)
         kind = str(group.get("kind") or "")
         checked_peers = set(verified_checked_occurrence_ids) & {
             str(member.get("occurrence_id") or "") for member in group.get("members") or []
             if str(member.get("occurrence_id") or "") != str(entry.get("occurrence_id") or "")
         }
         if checked_peers:
-            hint = ("同組先前已直接核對的位置仍保留在暫存。請核對樣本 A；若有樣本 B，也可直接核對並勾選。"
+            hint = ("同組先前已直接核對的位置仍保留在暫存。請核對樣本 A；其他位置請逐張載入原頁核對。"
                     "本次讀音須與先前暫存一致，批次套用時才會一併驗證。")
         elif len(self.samples) > 1 and kind in {"TTF_GLYF_SHA256", "CFF_GLYPH_SHA256"}:
-            hint = "若 A、B 都勾選且讀音相同，批次套用時這個 exact 字形可升格為跨位置重用真值；只勾 A 則只修正本位置。"
+            hint = ("每個位置都要看過原頁並各自勾選；未勾選的位置不視為核對。"
+                    "暫存後批次套用時，才會依已核對位置及既有證據判斷能否重用 exact 字形。")
         else:
             hint = "目前沒有第二個可交叉核對的 exact glyph；本次會先暫存 occurrence-specific actual 修正。"
         WrappedLabel(body, text=hint, fg="#555555").pack(fill="x", anchor="w", padx=18, pady=(0,10))
@@ -461,12 +478,60 @@ class ActualReadingDialog(tk.Toplevel):
         if wait:
             self.wait_window(self)
 
+    def show_sample_preview(self, index):
+        """Render on demand, retaining at most A and one peer PDF image."""
+        if index and self._active_peer is not None and self._active_peer != index:
+            previous = self._active_peer
+            old = self.previews[previous]
+            if old is not None:
+                old.destroy()
+                self.previews[previous] = None
+            check = self.check_buttons[previous]
+            if check is not None:
+                check.configure(state="disabled")
+                if not self.checked_vars[previous].get():
+                    self.sample_available[previous] = False
+            self.preview_buttons[previous].configure(text="重新顯示原頁")
+
+        if index:
+            self._active_peer = index
+        preview = self.previews[index]
+        if preview is None:
+            preview = OccurrencePreview(
+                self.preview_slots[index], expand_content=True,
+                on_locate=self.body_canvas.reveal,
+                on_layout=self.body_canvas.request_layout,
+                before_locate=self.body_canvas.flush_layout,
+            )
+            preview.pack(fill="x", pady=5)
+            self.previews[index] = preview
+
+        def unavailable():
+            self.sample_available[index] = False
+            self.checked_vars[index].set(False)
+            check = self.check_buttons[index]
+            if check is not None:
+                check.configure(state="disabled")
+
+        preview.on_failure = unavailable
+        available = preview.load(self.samples[index], padding=(95, 60), output_dir=self.output_dir)
+        if self.previously_checked[index]:
+            self.sample_available[index] = False
+        else:
+            self.sample_available[index] = available
+            if not available:
+                self.checked_vars[index].set(False)
+            self.check_buttons[index].configure(state="normal" if available else "disabled")
+        self.preview_buttons[index].configure(text="重新載入原頁")
+
     def submit(self):
         reading = canonical_bopomofo(self.reading.get())
         if not reading:
             messagebox.showerror("注音格式不合法", "請輸入單一合法注音；聲調可放音節最前或最後。", parent=self)
             return
-        checked = [str(sample.get("occurrence_id") or "") for sample, var, available in zip(self.samples, self.checked_vars, self.sample_available) if var.get() and available]
+        checked = [str(sample.get("occurrence_id") or "") for sample, var, available, previous in zip(
+            self.samples, self.checked_vars, self.sample_available, self.previously_checked,
+        ) if var.get() and available and not previous]
         target_id = str(self.entry.get("occurrence_id") or "")
         if target_id not in checked:
             messagebox.showerror("尚未核對目前位置", "樣本 A（目前位置）必須勾選已直接核對。", parent=self)

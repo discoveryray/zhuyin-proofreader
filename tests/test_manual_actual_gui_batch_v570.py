@@ -723,20 +723,24 @@ class ImmediateThread:
 
 
 class ManualActualGuiBehaviorTests(unittest.TestCase):
-    def test_sample_b_advances_past_only_verified_checked_peers(self):
+    def test_all_exact_group_occurrences_are_listed_with_checked_peers_last(self):
         ledger = [entry(name, "f" * 64) for name in "abcd"]
         group = group_for(ledger, 2)
         select = review_gui.actual_review_samples
         self.assertEqual(
             [row["occurrence_id"] for row in select(ledger[2], group, verified_checked_occurrence_ids={"a", "b"})],
-            ["c", "d"],
+            ["c", "d", "a", "b"],
         )
-        # Simply displaying B never counts as a direct visual check.
-        self.assertEqual([row["occurrence_id"] for row in select(ledger[2], group)], ["c", "a"])
+        self.assertEqual([row["occurrence_id"] for row in select(ledger[2], group)], ["c", "a", "b", "d"])
         self.assertEqual(
             [row["occurrence_id"] for row in select(ledger[2], group, verified_checked_occurrence_ids={"a", "b", "d"})],
-            ["c"],
+            ["c", "a", "b", "d"],
         )
+        many = [entry(f"occ-{number}", "e" * 64, pdf_name="same.pdf", x0=float(number * 15))
+                for number in range(80)]
+        selected = select(many[0], group_for(many))
+        self.assertEqual(len(selected), 80)
+        self.assertEqual(len({row["occurrence_id"] for row in selected}), 80)
 
     def test_unvalidated_staging_does_not_hide_sample_b(self):
         app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
@@ -760,7 +764,7 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
         ):
             app.correct_actual()
         self.assertEqual(dialog.call_args.kwargs["verified_checked_occurrence_ids"], ())
-        self.assertEqual([row["occurrence_id"] for row in review_gui.actual_review_samples(ledger[2], group)], ["c", "a"])
+        self.assertEqual([row["occurrence_id"] for row in review_gui.actual_review_samples(ledger[2], group)], ["c", "a", "b"])
 
     def test_reload_records_excludes_checked_occurrences_and_reduces_denominator(self):
         ledger = [entry(name, str(index) * 64) for index, name in enumerate("abcde", start=1)]
@@ -1167,7 +1171,7 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
             dialog.grab_release()
             dialog.destroy()
 
-    def test_actual_dialog_shows_next_unchecked_peer_or_only_a(self):
+    def test_actual_dialog_lists_all_locations_and_marks_staged_peers(self):
         ledger = [entry(name, "f" * 64) for name in "abcd"]
         group = group_for(ledger, 2)
         with patch("review_display.occurrence_preview", side_effect=RuntimeError("no preview fixture")):
@@ -1176,10 +1180,15 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
                 verified_checked_occurrence_ids={"a", "b"}, wait=False,
             )
         try:
-            self.assertEqual([row["occurrence_id"] for row in dialog.samples], ["c", "d"])
-            self.assertEqual(len(dialog.checked_vars), 2)
+            self.assertEqual([row["occurrence_id"] for row in dialog.samples], ["c", "d", "a", "b"])
+            self.assertEqual(dialog.previously_checked, [False, False, True, True])
+            self.assertEqual(len(dialog.checked_vars), 4)
+            self.assertIsNone(dialog.previews[1])
+            self.assertIsNone(dialog.check_buttons[2])
             text = "\n".join(all_widget_text(dialog))
             self.assertIn("同組先前已直接核對的位置仍保留在暫存", text)
+            self.assertIn("本核對群組共有 4 個位置", text)
+            self.assertIn("已直接核對並暫存；本次不必重新勾選", text)
             self.assertNotIn("只勾 A 則只修正本位置", text)
         finally:
             dialog.grab_release()
@@ -1190,14 +1199,61 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
                 verified_checked_occurrence_ids={"a", "b", "d"}, wait=False,
             )
         try:
-            self.assertEqual([row["occurrence_id"] for row in dialog.samples], ["c"])
-            self.assertEqual(len(dialog.checked_vars), 1)
+            self.assertEqual([row["occurrence_id"] for row in dialog.samples], ["c", "a", "b", "d"])
+            self.assertEqual(len(dialog.checked_vars), 4)
+            self.assertEqual(dialog.previously_checked, [False, True, True, True])
             text = "\n".join(all_widget_text(dialog))
             self.assertIn("同組先前已直接核對的位置仍保留在暫存", text)
             self.assertNotIn("occurrence-specific actual 修正", text)
         finally:
             dialog.grab_release()
             dialog.destroy()
+
+    def test_lazy_preview_requires_successful_image_and_explicit_check(self):
+        ledger = [entry(name, "f" * 64) for name in "abc"]
+        created = []
+
+        def fake_preview(*_args, **_kwargs):
+            preview = MagicMock()
+            preview.load.return_value = True
+            created.append(preview)
+            return preview
+
+        with patch.object(review_gui, "OccurrencePreview", side_effect=fake_preview):
+            dialog = review_gui.ActualReadingDialog(
+                self.root, ledger[0], group_for(ledger), Path("unused"), wait=False,
+            )
+            try:
+                self.assertEqual(len(dialog.samples), 3)
+                self.assertEqual(len(created), 1)  # A only: no eager peer raster.
+                self.assertFalse(any(var.get() for var in dialog.checked_vars))
+                self.assertEqual(str(dialog.check_buttons[1].cget("state")), "disabled")
+                dialog.show_sample_preview(1)
+                self.assertEqual(len(created), 2)
+                self.assertEqual(str(dialog.check_buttons[1].cget("state")), "normal")
+                dialog.checked_vars[1].set(True)
+                dialog.show_sample_preview(2)
+                created[1].destroy.assert_called_once()
+                self.assertIsNone(dialog.previews[1])
+                self.assertEqual(str(dialog.check_buttons[1].cget("state")), "disabled")
+                self.assertTrue(dialog.checked_vars[1].get())
+                self.assertEqual(len(created), 3)
+                self.assertLessEqual(sum(preview is not None for preview in dialog.previews), 2)
+                created[2].load.return_value = False
+                dialog.show_sample_preview(2)
+                self.assertEqual(str(dialog.check_buttons[2].cget("state")), "disabled")
+                dialog.reading.set("ㄓㄨㄢˇ")
+                with patch.object(review_gui.messagebox, "showerror") as error:
+                    dialog.submit()
+                self.assertIsNone(dialog.result)
+                self.assertIn("樣本 A", error.call_args.args[1])
+                dialog.checked_vars[0].set(True)
+                dialog.submit()
+                self.assertEqual(dialog.result["checked_occurrence_ids"], ["a", "b"])
+            finally:
+                if dialog.winfo_exists():
+                    dialog.grab_release()
+                    dialog.destroy()
 
     def test_main_batch_button_is_visible_and_not_clipped_at_screen_safe_size(self):
         app_root = tk.Toplevel(self.root)
