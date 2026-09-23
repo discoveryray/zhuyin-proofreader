@@ -356,10 +356,12 @@ def actual_review_samples(entry, group, *, verified_checked_occurrence_ids=()):
     """List every exact-group occurrence, putting validated staged peers last."""
     members = list(group.get("members") or [])
     target_id = str(entry.get("occurrence_id") or "")
+    target_char = str(entry.get("char") or "")
     checked = set(verified_checked_occurrence_ids)
     members.sort(key=lambda member: (
         0 if str(member.get("occurrence_id") or "") == target_id else
-        2 if str(member.get("occurrence_id") or "") in checked else 1
+        2 if str(member.get("occurrence_id") or "") in checked else 1,
+        str(member.get("char") or "") != target_char,
     ))
     return members
 
@@ -406,6 +408,10 @@ class ActualReadingDialog(tk.Toplevel):
         self.samples = actual_review_samples(
             entry, group, verified_checked_occurrence_ids=verified_checked_occurrence_ids,
         )
+        target_char = str(entry.get("char") or "")
+        other_char_count = sum(
+            str(sample.get("char") or "") != target_char for sample in self.samples
+        )
         self.previously_checked = [
             i > 0 and str(sample.get("occurrence_id") or "") in self.verified_checked_occurrence_ids
             for i, sample in enumerate(self.samples)
@@ -413,6 +419,8 @@ class ActualReadingDialog(tk.Toplevel):
         WrappedLabel(
             body,
             text=(f"本核對群組共有 {len(self.samples)} 個位置，全部列在下方；同頁不同位置仍分開列出。"
+                  + (f"其中 {other_char_count} 個位置的文字與目前字不同，但屬於同一 exact 字形群組；"
+                     "請個別看原頁確認，不能依字形推定讀音。" if other_char_count else "") +
                   "為避免大量 PDF 影像使視窗停住，先載入目前位置 A；其他位置按『顯示原頁』逐張載入。"
                   "同時最多保留 A 與一張其他位置的影像。已核對並暫存的位置仍列出，但不必重做。"),
             fg="#555555", justify="left", wraplength=900,
@@ -434,7 +442,12 @@ class ActualReadingDialog(tk.Toplevel):
         for i, sample in enumerate(self.samples, 1):
             index = i - 1
             label = chr(64 + i) if i <= 26 else str(i)
-            frame = tk.LabelFrame(body, text=f"樣本 {label}" + ("（目前位置，必須核對）" if i == 1 else ""))
+            different_char = str(sample.get("char") or "") != target_char
+            frame = tk.LabelFrame(
+                body,
+                text=f"樣本 {label}" + ("（目前位置，必須核對）" if i == 1 else
+                                        "（字不同，須個別確認）" if different_char else ""),
+            )
             frame.pack(fill="x", padx=16, pady=6)
             info = f"{sample.get('pdf_name','')}  課本頁 {sample.get('printed_page','')}  字：{sample.get('char','')}  occurrence：{sample.get('occurrence_id','')}"
             WrappedLabel(frame, text=info).pack(fill="x", padx=8, pady=(6, 2))

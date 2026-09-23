@@ -1209,6 +1209,30 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
             dialog.grab_release()
             dialog.destroy()
 
+    def test_exact_glyph_group_includes_distinct_char_but_marks_it_for_review(self):
+        current = entry("current", "a" * 64)
+        other_char = entry("other", "a" * 64)
+        other_char["char"] = "壯"
+        same_char = entry("same", "a" * 64)
+        group = group_for([other_char, same_char, current], 2)
+        self.assertEqual(len(group["members"]), 3)
+        self.assertEqual(
+            [sample["occurrence_id"] for sample in review_gui.actual_review_samples(current, group)],
+            ["current", "same", "other"],
+        )
+        with patch("review_display.occurrence_preview", side_effect=RuntimeError("no preview fixture")):
+            dialog = review_gui.ActualReadingDialog(
+                self.root, current, group, Path("unused"), wait=False,
+            )
+        try:
+            text = "\n".join(all_widget_text(dialog))
+            self.assertIn("1 個位置的文字與目前字不同", text)
+            self.assertIn("字不同，須個別確認", text)
+            self.assertEqual(str(dialog.check_buttons[2].cget("state")), "disabled")
+        finally:
+            dialog.grab_release()
+            dialog.destroy()
+
     def test_lazy_preview_requires_successful_image_and_explicit_check(self):
         ledger = [entry(name, "f" * 64) for name in "abc"]
         created = []
