@@ -368,6 +368,8 @@ def actual_review_samples(entry, group, *, verified_checked_occurrence_ids=()):
 
 class ActualReadingDialog(tk.Toplevel):
     """Human visual confirmation for the actual evidence chain only."""
+    _PREVIEW_READY_RETRIES = 40
+
     def __init__(self, parent, entry, group, output_dir: Path, *, wait: bool = True,
                  verified_checked_occurrence_ids=()):
         super().__init__(parent)
@@ -384,6 +386,7 @@ class ActualReadingDialog(tk.Toplevel):
         self.preview_slots = []
         self.preview_buttons = []
         self.check_buttons = []
+        self._preview_ready_after = []
         self._active_peer = None
         self.verified_checked_occurrence_ids = set(verified_checked_occurrence_ids)
 
@@ -392,6 +395,10 @@ class ActualReadingDialog(tk.Toplevel):
         cancel = tk.Button(footer, text="取消", command=self.destroy)
         save = tk.Button(footer, text="暫存這筆 actual", command=self.submit)
         footer.set_items([save, cancel])
+        self.preview_guidance = WrappedLabel(
+            self, text="", fg="#555555", justify="left", wraplength=900,
+        )
+        self.preview_guidance.pack(side="bottom", fill="x", padx=16, pady=(2, 4))
         body, self.body_canvas = create_scrollable_body(self)
 
         WrappedLabel(body, text="只看 PDF 原頁，確認實際印出的注音", font=("Microsoft JhengHei UI", 13, "bold")).pack(fill="x", anchor="w", padx=16, pady=(14,4))
@@ -408,6 +415,10 @@ class ActualReadingDialog(tk.Toplevel):
         self.samples = actual_review_samples(
             entry, group, verified_checked_occurrence_ids=verified_checked_occurrence_ids,
         )
+        self.preview_guidance.configure(
+            text=f"本群組共 {len(self.samples)} 個位置：向下捲查看各張原頁與其下方的勾選框；"
+                 "A 必須核對。其他位置先按「顯示原頁」，再看圖片並親自勾選。",
+        )
         target_char = str(entry.get("char") or "")
         other_char_count = sum(
             str(sample.get("char") or "") != target_char for sample in self.samples
@@ -421,6 +432,7 @@ class ActualReadingDialog(tk.Toplevel):
             text=(f"本核對群組共有 {len(self.samples)} 個位置，全部列在下方；同頁不同位置仍分開列出。"
                   + (f"其中 {other_char_count} 個位置的文字與目前字不同，但屬於同一 exact 字形群組；"
                      "請個別看原頁確認，不能依字形推定讀音。" if other_char_count else "") +
+                  "請向下捲到原頁圖片及其下方的勾選框，逐個位置核對。"
                   "為避免大量 PDF 影像使視窗停住，先載入目前位置 A；其他位置按『顯示原頁』逐張載入。"
                   "同時最多保留 A 與一張其他位置的影像。已核對並暫存的位置仍列出，但不必重做。"),
             fg="#555555", justify="left", wraplength=900,
@@ -453,6 +465,7 @@ class ActualReadingDialog(tk.Toplevel):
             WrappedLabel(frame, text=info).pack(fill="x", padx=8, pady=(6, 2))
             self.previews.append(None)
             self.sample_available.append(False)
+            self._preview_ready_after.append(None)
             slot = tk.Frame(frame)
             slot.pack(fill="x", padx=8)
             self.preview_slots.append(slot)
@@ -491,10 +504,43 @@ class ActualReadingDialog(tk.Toplevel):
         if wait:
             self.wait_window(self)
 
+    def _cancel_preview_ready(self, index):
+        pending = self._preview_ready_after[index]
+        if pending is not None:
+            self.after_cancel(pending)
+            self._preview_ready_after[index] = None
+
+    def _check_preview_ready(self, index, preview, remaining):
+        self._preview_ready_after[index] = None
+        if not self.winfo_exists() or self.previews[index] is not preview:
+            return
+        if (preview._entry == self.samples[index] and preview.photo is not None
+                and preview.target is not None and preview._draw_pending is None
+                and preview._render_pending is None and preview.canvas.winfo_ismapped()
+                and preview.canvas.find_withtag("page") and preview.canvas.find_withtag("target")):
+            self.sample_available[index] = True
+            self.check_buttons[index].configure(state="normal")
+            return
+        if remaining > 0 and preview.pixmap is not None and preview.target is not None:
+            self._preview_ready_after[index] = self.after(
+                50, lambda: self._check_preview_ready(index, preview, remaining - 1),
+            )
+            return
+        self.sample_available[index] = False
+        self.checked_vars[index].set(False)
+        self.check_buttons[index].configure(state="disabled")
+        self.preview_buttons[index].configure(text="原頁未顯示，請重新載入")
+
+    def destroy(self):
+        for index in range(len(getattr(self, "_preview_ready_after", []))):
+            self._cancel_preview_ready(index)
+        super().destroy()
+
     def show_sample_preview(self, index):
         """Render on demand, retaining at most A and one peer PDF image."""
         if index and self._active_peer is not None and self._active_peer != index:
             previous = self._active_peer
+            self._cancel_preview_ready(previous)
             old = self.previews[previous]
             if old is not None:
                 old.destroy()
@@ -508,11 +554,11 @@ class ActualReadingDialog(tk.Toplevel):
 
         if index:
             self._active_peer = index
+        self._cancel_preview_ready(index)
         preview = self.previews[index]
         if preview is None:
             preview = OccurrencePreview(
                 self.preview_slots[index], expand_content=True,
-                on_locate=self.body_canvas.reveal,
                 on_layout=self.body_canvas.request_layout,
                 before_locate=self.body_canvas.flush_layout,
             )
@@ -520,22 +566,30 @@ class ActualReadingDialog(tk.Toplevel):
             self.previews[index] = preview
 
         def unavailable():
+            self._cancel_preview_ready(index)
             self.sample_available[index] = False
             self.checked_vars[index].set(False)
             check = self.check_buttons[index]
             if check is not None:
                 check.configure(state="disabled")
+            self.preview_buttons[index].configure(text="原頁無法顯示，請重新載入")
 
         preview.on_failure = unavailable
+        self.sample_available[index] = False
+        check = self.check_buttons[index]
+        if check is not None:
+            check.configure(state="disabled")
         available = preview.load(self.samples[index], padding=(95, 60), output_dir=self.output_dir)
-        if self.previously_checked[index]:
-            self.sample_available[index] = False
-        else:
-            self.sample_available[index] = available
-            if not available:
-                self.checked_vars[index].set(False)
-            self.check_buttons[index].configure(state="normal" if available else "disabled")
-        self.preview_buttons[index].configure(text="重新載入原頁")
+        if not available:
+            self.checked_vars[index].set(False)
+        elif not self.previously_checked[index]:
+            # load() only proves that a target was found in the PDF. The image
+            # may still be waiting for the canvas's first usable width.
+            self._preview_ready_after[index] = self.after_idle(
+                lambda: self._check_preview_ready(index, preview, self._PREVIEW_READY_RETRIES),
+            )
+        if available:
+            self.preview_buttons[index].configure(text="重新載入原頁")
 
     def submit(self):
         reading = canonical_bopomofo(self.reading.get())
@@ -842,9 +896,18 @@ class ReviewApp:
             # Do not retain an earlier trusted checked roster on a read failure.
             summary = {"staging_error": str(exc)}
         self.staging_summary = dict(summary)
-        self.staged_member_occurrence_ids = set(summary.get("staged_member_occurrence_ids") or [])
-        self.staged_checked_occurrence_ids = set(summary.get("staged_checked_occurrence_ids") or [])
-        count = int(summary.get("staged_group_count") or 0)
+        # An error-bearing summary cannot authorize hiding any pending row,
+        # even if it also carries an obsolete checked roster.
+        trusted = not summary.get("staging_error")
+        if not trusted:
+            self.staging_summary.update(
+                staged_group_count=0,
+                staged_member_occurrence_ids=[],
+                staged_checked_occurrence_ids=[],
+            )
+        self.staged_member_occurrence_ids = set(summary.get("staged_member_occurrence_ids") or []) if trusted else set()
+        self.staged_checked_occurrence_ids = set(summary.get("staged_checked_occurrence_ids") or []) if trusted else set()
+        count = int(self.staging_summary.get("staged_group_count") or 0)
         self.apply_actual_button.config(
             text="繼續 actual 更新（已提交）" if summary.get("actual_recovery_pending") else f"套用 actual 修正（{count}）",
             state="normal" if count > 0 or summary.get("actual_recovery_pending") else "disabled",
@@ -1091,8 +1154,15 @@ class ReviewApp:
             # Revalidate durable checks against this live ledger. On an invalid
             # summary, no occurrence is treated as already checked.
             self.reload_staging_summary(full_ledger)
+            # The checked roster also controls the actionable queue. Refresh it
+            # before the dialog, since cancelling must not leave positions hidden
+            # by checks that the revalidation just rejected.
+            self._set_actionable_records_from_ledger(full_ledger)
+            self.show()
         except Exception as exc:
             messagebox.showerror("無法建立 actual 核對群組", str(exc), parent=self.root)
+            return
+        if not self.current() or self.current().get("review_id") != entry.get("review_id"):
             return
         verified_checked = (
             self.staged_checked_occurrence_ids
