@@ -77,6 +77,16 @@ class ExportFeedbackTests(unittest.TestCase):
         self.assertIsNone(info)
         self.assertIn("無法確認", error.args[0])
 
+    def test_unreadable_output_path_does_not_break_tk_poll(self):
+        target = self.folder / "actual待判定_GPT包.zip"
+        with (patch.object(standalone_gui.Path, "is_file", side_effect=OSError("invalid path")),
+              patch.object(standalone_gui.messagebox, "showinfo") as info,
+              patch.object(standalone_gui.messagebox, "showerror") as error):
+            self.app.q.put(("__DONE__", None, 0, "actual", str(target)))
+            self.app.poll()
+            info.assert_not_called()
+            self.assertIn("無法確認", error.call_args.args[0])
+
 
 if __name__ == "__main__":
     unittest.main()
