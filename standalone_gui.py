@@ -576,8 +576,12 @@ class App:
         # left by an earlier export cannot turn today's zero-pending result
         # into a false success.
         filename = "待判定候選_給GPT.xlsx" if kind == "expected" else "actual待判定_GPT包.zip"
-        path = Path(result)
-        if path.name == filename and path.is_file():
+        try:
+            path = Path(result)
+            saved = path.name == filename and path.is_file()
+        except (OSError, ValueError):
+            saved = False
+        if saved:
             self.run_status.config(text=f"GPT 匯出完成：{path}")
             messagebox.showinfo("GPT 匯出完成", f"檔案已儲存至：\n{path}")
         elif kind == "actual" and result.startswith("目前沒有 ACTUAL_DECODE_ERROR／ACTUAL_UNRESOLVED 可匯出"):
