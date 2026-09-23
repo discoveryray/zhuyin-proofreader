@@ -8,7 +8,6 @@
 ```powershell
 python scripts/pr_review_gate.py validate <state.json>
 python scripts/pr_review_gate.py next-action <state.json>
-python -m unittest discover -s tests -p test_pr_review_gate.py
 python -m pytest tests/test_pr_review_gate.py -q
 ```
 
@@ -94,7 +93,7 @@ Merge 前重新查 PR 是否已 merged；回應不明先查遠端結果，不盲
 Gate 本身不能防止協調者忽略查詢或直接呼叫寫入工具；隔離 fake-service tests
 驗證的是協調者遵守此查詢／重核對契約時的 replay 與競態處理。
 
-## Closed schema v2
+## Closed schema v3
 
 Top-level 與列出的 nested objects 必須恰好包含指定欄位。未知欄位、未知 schema、
 缺欄位、重複 JSON keys、NaN／Infinity、短 SHA、零 SHA、boolean 冒充整數均拒絕。
@@ -104,7 +103,7 @@ Top-level 與列出的 nested objects 必須恰好包含指定欄位。未知欄
 
 ```json
 {
-  "schema": "zhuyin-pr-review-gate/2",
+  "schema": "zhuyin-pr-review-gate/3",
   "task": {
     "id": "example-task",
     "repository": "discoveryray/zhuyin-proofreader",
@@ -162,6 +161,7 @@ Review record 欄位：
   "blocker_kind": "evidence",
   "independent": true,
   "full_diff_reviewed": true,
+  "review_mode": "full_diff",
   "findings": ["REPLACE_WITH_ACTUAL_FINDING"],
   "report_ref": "REPLACE_WITH_ORIGINAL_REVIEW_REPORT",
   "supersedes_report_ref": null,
@@ -190,8 +190,7 @@ Nonblocking 建議另留原始報告。未知分類、空 BLOCKED、PASS 同時�
 
 ### 同 HEAD 補審與 append-only 歷史
 
-未補審的報告兩個 relation 欄位均為 null。補齊非 code 缺口後，獨立 reviewer 必須重新
-審查完整適用差異及原始 resolution 證據，產生新報告並 append，不覆寫／刪除舊報告：
+未補審的報告兩個 relation 欄位均為 null，review_mode 必須 full_diff。補齊非 code 缺口後，獨立 reviewer 產生新報告並 append，不覆寫／刪除舊報告。若程式、baseline、base、head、scope 完全未變，原 reviewer 可以 evidence_gap 核對缺口、原始 resolution 證據及既有完整結論，無須從頭重讀所有差異；換 reviewer 則必須讀足以自行負責整個 scope 的原始材料，以 full_diff 作結論，不能只採信舊 PASS。
 
 ```json
 {
@@ -200,24 +199,21 @@ Nonblocking 建議另留原始報告。未知分類、空 BLOCKED、PASS 同時�
 }
 ```
 
-這是附加到新完整 review record 的兩個欄位，不是可單獨宣告 PASS 的資料。
+這是附加到新 review record 的兩個欄位，不是可單獨宣告 PASS 的資料。
 Target 必須是 list 中更早、尚未被取代的 non-code BLOCKED；round、baseline、base、
-head、scope 必須完全相同，原／新報告均需有效獨立性及 full-diff 審查。
+head、scope 必須完全相同，原／新報告均需有效獨立性。review_mode=full_diff 對應 full_diff_reviewed=true；evidence_gap 必須 false，不能虛構重新讀完。Gate 只允許相同 reviewer 連到保留的合法 full_diff 起始鏈；無 relation、換 reviewer、scope 改變或未知 mode 均拒絕。
 第二輪補審可以 attestation 同一或新的 CI run/attempt，但其 PASS 仍須匹配最新適用 CI。
 Resolution 必須是協調者從原始平台驗證、logs、代理能力或契約依據取得並留存的 artifact；
 任意自填 reference 不證明缺口已解除，gate 不認證文字或 URL 的真實性。
 
 不存在／較晚／自身 target、同一 target 叉分兩份補審、跨 scope 或跨 round、
-缺 resolution、非獨立或未 full-diff 的原／新報告均拒絕。合法補審可形成單向 append-only
+缺 resolution、非獨立或不符合 review_mode 契約的原／新報告均拒絕。合法補審可形成單向 append-only
 鏈；每份舊原文持續保留。沒有明確 relation 的同 scope／CI 新報告是歧義，拒絕接受；
 只換 CI attempt 的無關 PASS 也不清除任何尚未解決的 BLOCKED。
 Confirmed code BLOCKED 不允許同 HEAD supersession，必須新增 corrective commit 並對
 新 HEAD 取得完整兩輪適用審查；CI rerun 不會修復 code finding。
 
-舊 `zhuyin-pr-review-gate/1` 不自動相容。協調者須保留全部原 v1 snapshots 與原始報告，
-另建 v2 snapshot，逐份核對原報告後明確分類；PASS 加入三個 null 欄位，BLOCKED
-不得從 verdict 或 CI failure 猜成 code。既有三輪計數、task ID、baseline、merge 歷史
-逐項保留；沒有原始分類／resolution 證據時，留在補證據／STOP，不生成新 PASS。
+舊 v1／v2 snapshots 不自動相容。新制度只由新任務採用，未收尾任務保持其凍結舊 gate、報告、CI 與修正次數；不得為取得 PASS 自行遷移。本次制度變更自身使用 baseline 的 v2 gate、兩輪 full-diff 舊審查及雙 Python／雙入口 transition CI，詳見 [驗證政策](VALIDATION_POLICY.md)。若使用者日後明確授權遷移個別舊任務，須逐份核對原始報告、保留全部歷史、task ID、baseline、修正計數、實際 merge，另建 v3 snapshot；禁止默認填入 review_mode 或捏造新 PASS。
 
 PR record 欄位：`number`、`url`、`state`（open/closed/merged）、`base_branch`、
 `head_branch`、`base_sha`、`head_sha`、`mergeable`、`protection_satisfied`、
@@ -240,13 +236,14 @@ PR／push CI 共用欄位：
 | `url`, `evidence_ref` | Run URL 與保留原始 metadata／logs／Git object 證據。 |
 | `jobs` | 全部 workflow jobs；不能只挑成功的 job。 |
 
-每個 job 欄位：`name`（Python 3.12／Python 3.13）、`runner`（實際 windows-* image）、
-`python_version`（實際 3.12.x／3.13.x）、`run_id`、`attempt`、`tested_sha`、
+每個 job 欄位：`name`（必要 job 為 Python 3.13）、`runner`（實際 windows-* image）、
+`python_version`（實際 3.13.0）、`run_id`、`attempt`、`tested_sha`、
 `conclusion`、`steps`、`evidence_ref`。每個 job 必須綁相同 run／attempt／checkout；
 steps 是 `{ "原始 step name": "原始 conclusion" }`，不能把 skipped 改成 success。
 必要 steps 對齊現有 workflow，包括 checkout/setup/dependencies、runtime integrity、
-完整 unittest／pytest、compile、event 適用 whitespace 與 clean-tree。
+entrypoint collection identity audit、完整 pytest、GUI execution proof、compile、event 適用 whitespace 與 clean-tree。
 非本 event 的 whitespace step 可按原狀保留 skipped。
+必要步驟包括 `Audit test entrypoint coverage` 與 `Verify GUI test execution`；後者必須核對 full pytest JUnit 的每個必要 GUI case，missing／skipped／failed／error 均不放行。依賴固定於 requirements-ci.txt，支援界線與沿用證據見 VALIDATION_POLICY.md。
 增加／變更 workflow gates 時，須同步更新此工具的 bounded contract 並受審，不能靜默省略。
 
 Actual merge record 欄位：`sha`、`parents`、`tree`、`develop_head`、

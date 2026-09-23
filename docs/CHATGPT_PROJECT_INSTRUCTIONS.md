@@ -8,13 +8,15 @@
 
 第一輪 PASS 後查找並建立／更新唯一 PR；第二輪 PASS 且必要 CI 全通過才 merge。BLOCKED 明確分類：code 是已證實的程式／設定／指令缺陷，才新增 corrective commit、使用同 task 最多三輪修正並重跑測試、重做新 HEAD 兩輪完整審查；evidence 先補證據，capability／contract 先 STOP。解決 non-code 限制後原 HEAD 完整補審，不耗次數、不新增空 commit；三輪用完仍可合法補證據，不能重設 task／count。HEAD／base 改變時舊 PASS 不適用，保留 task baseline，重做受影響審查與整合驗證。
 
-每份 review 保留唯一 report_ref、blocker_kind、findings 及原文；PASS 的 kind=null、findings為空。Non-code 補審依 gate v2 以 supersedes_report_ref 指向同 round／baseline／base／head／scope 的較早未取代 BLOCKED，附原始 resolution_evidence_ref；無補審時兩欄null。保留單向 append-only 歷史，原／新 reviewer 仍獨立 full-diff，第二輪補審核對最新適用 CI。Code BLOCKED 不可同 HEAD supersede，也不能只靠 CI rerun 或無關 PASS 清除。
+每份 review 保留唯一 report_ref、blocker_kind、findings 及原文；PASS 的 kind=null、findings為空。Non-code 補審依 gate v3 以 supersedes_report_ref 指向同 round／baseline／base／head／scope 的較早未取代 BLOCKED，附原始 resolution_evidence_ref；無補審時兩欄null。保留單向 append-only 歷史，原／新 reviewer 仍獨立，原 reviewer 可依 gate v3 核對缺口及原始證據，第二輪補審核對最新適用 CI。Code BLOCKED 不可同 HEAD supersede，也不能只靠 CI rerun 或無關 PASS 清除。
 
 合併前重新核對遠端、findings、保護規則、CI event／attempt／tested SHA／必要 jobs，綁定 reviewed HEAD。合併後查實際 merge SHA、parents、tree、develop HEAD，並核對該 merge SHA 的 develop push CI；不能以 PR CI 代替。保存兩輪 SHA／scope／verdict／證據及交接紀錄；所有門檻通過才宣告完成。
 
 永久維持 actual／expected 獨立、exact identity、quorum、交易、per-PDF fingerprint、runtime integrity 與 fail-closed 契約。不得修改 main、直接 push develop、squash／rebase merge、force push、降低保護規則、tag／release、live DB mutation 或未交付階段。代理不可用、結果缺失、CI 未通過都不是 PASS。只於 Codex 執行期間協調，不新增背景 AI 工作或額外 API 計費設定。
 
 以繁體中文回報實際檔案、SHA、兩輪審查、測試與限制、PR、merge、post-merge CI 及 working tree。
+
+支援 Windows Python 3.13.0，依賴及實際啟動證據見 docs/VALIDATION_POLICY.md。pytest 是唯一例行完整測試入口；保留必要針對性、GUI、runtime integrity、compile、diff、CI 與 post-merge 驗證。修正期間先受影響 tests，固定版本後必要完整測試。未受影響證據可沿用，但保留原測試 SHA、原始 logs 及新 HEAD 影響評估，不改稱新版本已執行。每次重跑須有修改影響、失敗線索或明確門檻，不因等待 CI／重開 session／整理報告無理由重跑。程式、baseline、base、HEAD、scope 未變的補證據，原 reviewer 核對缺口、原始補充證據和既有結論；換 reviewer 須讀足以自行負責完整 scope 的原始材料。新制度只供新任務採用，尚未收尾任務保留凍結舊契約；本次制度變更不得自行降低自身驗收門檻。只到 PR 的任務 operations 排除 merge，交付未合併 PR 不宣稱 COMPLETE。
 
 ## 日後最短啟動指令
 
