@@ -255,6 +255,52 @@ class GlobalFingerprintScopingTests(unittest.TestCase):
 
 
 class ExactReusePrecedenceTests(unittest.TestCase):
+    def test_neutral_tone_is_canonical_for_ttf_and_cff_project_exact_reuse(self):
+        for identity in (
+            _identity(),
+            _identity(SHA_B, kind=CFF_GLYPH_SHA256, style_group="BIAOKAI_W5"),
+        ):
+            with self.subTest(kind=identity.kind):
+                snapshot = _snapshot(trusted=(_record(identity, reading="˙ㄒㄧ"),))
+                result = library.resolve_exact_glyph_reuse(
+                    snapshot,
+                    identity,
+                    higher_priority_sources=(("PROJECT_VERIFIED_EXACT", "˙ㄒㄧ"),),
+                )
+                self.assertEqual(result.reading, "˙ㄒㄧ")
+                self.assertEqual(
+                    result.sources,
+                    ("PROJECT_VERIFIED_EXACT", "GLOBAL_VERIFIED_EXACT"),
+                )
+                self.assertFalse(result.conflict)
+
+    def test_neutral_tone_reading_list_keeps_json_and_whitespace_contracts(self):
+        readings = tuple(sorted(("˙ㄒㄧ", "ㄒㄧ")))
+        canonical = json.dumps(list(readings), ensure_ascii=False, separators=(",", ":"))
+        self.assertEqual(library._canonical_reading("˙ㄒㄧ"), "˙ㄒㄧ")
+        self.assertEqual(
+            library._canonical_reading_list(canonical, "conflicting_readings_json", minimum=2),
+            readings,
+        )
+        with self.assertRaises(library.GlobalLibraryValidationError):
+            library._canonical_string_list(
+                json.dumps(["˙ㄒㄧ"], ensure_ascii=False, separators=(",", ":")),
+                "non-reading list",
+            )
+        for bad_reading in (" ˙ㄒㄧ", "˙ㄒㄧ ", "˙ ㄒㄧ", "˙\tㄒㄧ", "ㄒㄧ˙", "‧ㄒㄧ"):
+            with self.subTest(reading=bad_reading), self.assertRaises(library.GlobalLibraryValidationError):
+                library._canonical_reading(bad_reading)
+        bad_lists = (
+            json.dumps(["˙ ㄒㄧ", "ㄒㄧ"], ensure_ascii=False, separators=(",", ":")),
+            json.dumps(list(reversed(readings)), ensure_ascii=False, separators=(",", ":")),
+            json.dumps(["˙ㄒㄧ", "˙ㄒㄧ"], ensure_ascii=False, separators=(",", ":")),
+            json.dumps(list(readings), ensure_ascii=False),
+            json.dumps("˙ㄒㄧ", ensure_ascii=False),
+        )
+        for raw in bad_lists:
+            with self.subTest(raw=raw), self.assertRaises(library.GlobalLibraryValidationError):
+                library._canonical_reading_list(raw, "conflicting_readings_json", minimum=2)
+
     def test_global_only_and_project_global_agreement_reuse(self):
         identity = _identity()
         snapshot = _snapshot(trusted=(_record(identity, reading="ㄅ"),))
