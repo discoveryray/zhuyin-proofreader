@@ -445,10 +445,18 @@ class ActualReadingDialog(tk.Toplevel):
         form.columnconfigure(0, weight=1, uniform="actual-form")
         form.columnconfigure(1, weight=3, uniform="actual-form")
         kind = str(group.get("kind") or "")
-        if len(self.samples) > 1 and kind in {"TTF_GLYF_SHA256", "CFF_GLYPH_SHA256"}:
-            WrappedLabel(body, text="若 A、B 都勾選且讀音相同，批次套用時這個 exact 字形可升格為跨位置重用真值；只勾 A 則只修正本位置。", fg="#555555").pack(fill="x", anchor="w", padx=18, pady=(0,10))
+        checked_peers = set(verified_checked_occurrence_ids) & {
+            str(member.get("occurrence_id") or "") for member in group.get("members") or []
+            if str(member.get("occurrence_id") or "") != str(entry.get("occurrence_id") or "")
+        }
+        if checked_peers:
+            hint = ("同組先前已直接核對的位置仍保留在暫存。請核對樣本 A；若有樣本 B，也可直接核對並勾選。"
+                    "本次讀音須與先前暫存一致，批次套用時才會一併驗證。")
+        elif len(self.samples) > 1 and kind in {"TTF_GLYF_SHA256", "CFF_GLYPH_SHA256"}:
+            hint = "若 A、B 都勾選且讀音相同，批次套用時這個 exact 字形可升格為跨位置重用真值；只勾 A 則只修正本位置。"
         else:
-            WrappedLabel(body, text="目前沒有第二個可交叉核對的 exact glyph；本次會先暫存 occurrence-specific actual 修正。", fg="#555555").pack(fill="x", anchor="w", padx=18, pady=(0,10))
+            hint = "目前沒有第二個可交叉核對的 exact glyph；本次會先暫存 occurrence-specific actual 修正。"
+        WrappedLabel(body, text=hint, fg="#555555").pack(fill="x", anchor="w", padx=18, pady=(0,10))
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         if wait:
             self.wait_window(self)

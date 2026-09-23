@@ -1178,6 +1178,9 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
         try:
             self.assertEqual([row["occurrence_id"] for row in dialog.samples], ["c", "d"])
             self.assertEqual(len(dialog.checked_vars), 2)
+            text = "\n".join(all_widget_text(dialog))
+            self.assertIn("同組先前已直接核對的位置仍保留在暫存", text)
+            self.assertNotIn("只勾 A 則只修正本位置", text)
         finally:
             dialog.grab_release()
             dialog.destroy()
@@ -1189,6 +1192,9 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
         try:
             self.assertEqual([row["occurrence_id"] for row in dialog.samples], ["c"])
             self.assertEqual(len(dialog.checked_vars), 1)
+            text = "\n".join(all_widget_text(dialog))
+            self.assertIn("同組先前已直接核對的位置仍保留在暫存", text)
+            self.assertNotIn("occurrence-specific actual 修正", text)
         finally:
             dialog.grab_release()
             dialog.destroy()
