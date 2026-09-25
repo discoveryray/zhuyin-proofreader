@@ -324,24 +324,39 @@ class PR29GateTests(unittest.TestCase):
         text = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         expression = re.search(r"- name: Run full unittest suite\s+if: \$\{\{ (.+?) \}\}", text)[1]
         self.assertIn(expression, re.search(r"python-version: \$\{\{ fromJSON\((.+)\) \}\}", text)[1])
+        job_env = re.search(r"    env:\n(.*?)    strategy:", text, re.S)[1]
+        capture_expression = re.search(r"PYTEST_ADDOPTS: \$\{\{ (.+?) \}\}", job_env)[1]
+        self.assertEqual(text.count("PYTEST_ADDOPTS:"), 1)
+        capture_condition, capture_choice = capture_expression.rsplit(" && ", 1)
+        self.assertEqual(capture_choice, "'--capture=sys' || ''")
+        self.assertIn(capture_condition, expression)
         context = {"github.event_name": "pull_request", "github.repository": gate.REPOSITORY,
                    "github.event.pull_request.head.repo.full_name": gate.REPOSITORY,
                    "github.event.pull_request.number": 29, "github.head_ref": gate.BRANCH,
                    "github.event.pull_request.base.ref": "develop", "github.event.pull_request.base.sha": gate.DEVELOP}
 
-        def evaluate(values):
-            code = expression
+        def evaluate(values, actual_expression=expression):
+            code = actual_expression
             for name in sorted(values, key=len, reverse=True): code = code.replace(name, repr(values[name]))
             code = code.replace("&&", " and ").replace("||", " or ")
             self.assertNotIn("github.", code)
             return eval(code, {"__builtins__": {}}, {})
 
         self.assertTrue(evaluate(context))
+        self.assertEqual(evaluate(context, capture_expression), "--capture=sys")
         for key in context:
             changed = {**context, key: "wrong" if key != "github.event.pull_request.number" else 30}
             self.assertFalse(evaluate(changed), key)
+            self.assertEqual(evaluate(changed, capture_expression), "", key)
         for event in ("push", "workflow_dispatch"):
-            self.assertFalse(evaluate({**context, "github.event_name": event}))
+            changed = {**context, "github.event_name": event}
+            self.assertFalse(evaluate(changed))
+            self.assertEqual(evaluate(changed, capture_expression), "")
+        pr30 = {**context, "github.event.pull_request.number": 30,
+                "github.head_ref": "codex/simplify-validation",
+                "github.event.pull_request.base.sha": gate.BASELINE}
+        self.assertTrue(evaluate(pr30))
+        self.assertEqual(evaluate(pr30, capture_expression), "")
         for step in gate.COMMON_STEPS:
             self.assertIn("- name: " + step, text)
 

@@ -71,6 +71,8 @@ CI 僅在 `pull_request`、上述精確 head branch 且 base SHA 恰等於固定
 
 使用者於 2026-09-25 明確採納 [PR29 接續附約](PR29_CONTINUATION_CONTRACT.md)。僅原 PR29、同 repository/head repository、`codex/review-confirm-responsive`、base `develop` SHA `502414b3b38e004a6d8d9cb693cf21b65148765a`，保留 Windows Python 3.12／3.13、full unittest＋full pytest，另保留本政策的 test identity audit／GUI execution verifier。3.13 固定3.13.0；本機亦依凍結契約取得新候選完整雙入口、Tk、runtime、compile、diff證據。
 
+僅上述精確 PR29 條件的 CI job 設 `PYTEST_ADDOPTS=--capture=sys`，供 runtime pytest、清冊收集的 pytest 子程序及 full pytest 使用；PR30、其他 PR、push／dispatch 不套用此 capture 例外。保留全部測試、JUnit GUI execution verifier 與失敗／跳過證據，不以 capture 模式宣稱 Tcl 根因已確定。對照結果及限制見接續附約；新候選仍須取得自己的完整本機與適用 CI 證據。
+
 一般 gate 三輪限制不變；限定 adapter 保留已知四輪再追加第五輪，採納原文及歷史缺件有可回取副本。不把新任務單版本規則套到舊任務，不追認缺失舊授權／PASS。未授權 merge/release，不新增 post-merge push例外；其他任務及不同base不適用。
 
 ## 可同步文件

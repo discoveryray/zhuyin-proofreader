@@ -60,6 +60,10 @@ CLI：`python scripts/pr29_review_gate.py validate <snapshot.json>`／`next-acti
 
 本機 Windows3.13.0 新候選 full unittest＋full pytest、native Tk、runtime、compileall、B→N/D→N diff及clean tree；CI取得3.12／3.13雙入口。workflow僅同repo/headrepo的PR29、指定branch、base develop D啟用例外；3.13固定3.13.0。一般CI與PR30原transition保留，push/dispatch不擴充。
 
+精確 PR29 條件的 CI job 使用 `PYTEST_ADDOPTS=--capture=sys`；runtime pytest、清冊收集的 pytest 子程序及 full pytest 均繼承此設定，PR30／一般 CI／push／dispatch 不套用。原完整 unittest、測試清冊與 GUI verifier 不變，GUI skip 仍拒絕驗收。
+
+第五輪交審前的固定候選 `7ea227d02715c54ced04d402380a77827ae720bc` 在同一 Windows Python3.13.0 環境，full unittest 762項通過；default fd capture 的 full pytest 為827 passed／2 Tk setup skipped／887 subtests，嚴格 GUI verifier 拒絕。相同來源的 `--capture=sys` 對照為829 passed／887 subtests、零skip，GUI verifier通過；兩次原始logs及來源不變核對均保留。這是本次可執行 capture 模式的證據，不證明 Tcl `init.tcl` 讀取失敗的底層根因，也不把其他任務的診斷冒充本次結果。新候選及Windows CI仍須各自驗證，不能以此舊SHA結果冒稱新SHA已執行。
+
 兩jobs均須runtime、fullunittest/fullpytest、entrypointaudit、JUnit GUI verifier、compile、event whitespace、clean tree。adapter增加audit/GUI核對且保留v2run/attempt/checkout/parents/Windows/version要求。一般單版本綠燈或skipped step不夠。
 
 保留背景保存／增量更新／Tk owner-thread釋放、PR28導覽等待套用、PR31全部位置／A不預勾／原頁紅框實際可見後人工勾選、PR32合法輕聲。測試真Tk、可見紅框後invoke checkbox，保留finalizer/main-thread/workerGC及timer資源釋放。不得偽造viewed、刪斷言或改skip。
