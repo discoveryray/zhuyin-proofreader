@@ -21,6 +21,3 @@
 
 # PR29 adoption evidence is bound to its original UTF-8 LF bytes.
 /docs/evidence/pr29_round5_user_adopted_contract.md text eol=lf
-
-# Preserve the original raw benchmark checksum sidecar bytes.
-/docs/evidence/pr29_round5/benchmark-replay-v5.sha256.json -text whitespace=cr-at-eol
