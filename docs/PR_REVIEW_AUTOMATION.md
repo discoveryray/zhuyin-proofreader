@@ -22,6 +22,8 @@ Reviewer 應使用全新 context（例如本環境 `fork_turns="none"`），提�
 
 ## 一次任務的執行步驟
 
+先採用 [驗證政策](VALIDATION_POLICY.md) 的版本與證據適用規則。新任務才使用 v3；未完成舊任務維持原 gate、審查與 CI 契約，不因本次改版自動降門檻。修正期間優先受影響 tests，固定版本後必要 full pytest；不因等待 CI、session 恢復或報告整理重跑已具可追溯適用性的測試／效能量測。
+
 1. Fetch，核對 origin/develop、branch、working tree、現有 PR 與舊任務。建立獨立 task branch。保存固定 task baseline、原始需求與驗收條件，使用者指定固定 base 時不得改動。
 2. 建立 `tmp/pr-review-automation/<task-id>/` evidence 目錄；保存角色分工及 correction round（初始 0）。只有協調者安排 Git mutation；同一時間不得有兩個代理操作同一 index／checkout。可平行編輯明確互不重疊的檔案；跨帳號仍須 clone／worktree 隔離。
 3. 委派實作代理，完成必要修改及測試，以新 commit 固定審查 HEAD。Coordinator 若也修改檔案，將自己記為實作者。停止寫入受審來源，產生 baseline→HEAD changed-files／patch、parent chain、測試 logs。
@@ -32,12 +34,12 @@ Reviewer 應使用全新 context（例如本環境 `fork_turns="none"`），提�
 8. 協調者從原始代理輸出及即時遠端建立 gate state，依 [gate 契約](PR_REVIEW_GATE.md) 執行 `validate` 和 `next-action`。不能自行寫入 PASS 來取得 merge proposal。Gate 僅驗證提供資料的一致性，不能認證 reviewer 身分或取代 GitHub 的保護規則；需留存原始來源供追溯。
 9. Merge 前緊接著重讀 base/head、PR open／mergeability、最新 review findings、保護規則與最新 CI；差異先使現有 proposal 失效。確認授權仍有效後，只呼叫 merge method `merge`，綁 `expected_head_sha`。不得自行 approve／resolve／刪 branch，或在 API 被保護規則拒絕後繞過。
 10. 保存實際 merge 回傳，再從 GitHub／Git object 交叉核對 SHA、兩個 parents、tree。預期 tree 取自通過整合檢查的 synthetic merge；若 base 是 feature 的 ancestor，也可核對 feature tree。GitHub 沒有 base SHA CAS，若合併瞬間 base 競態發生，記錄已發生的實際 merge，停止完成宣告並交回受影響 integration review，不自行 revert／force push。
-11. Fetch 後讀取 origin/develop；取得實際 merge SHA 的 `push` CI，逐項核對 Windows Python 3.12／3.13 的完整 unittest／pytest、runtime integrity、compile、push whitespace 及 clean-tree。缺失或 pending 就繼續適度等待，failed 調查並如實報告，不能用 PR CI 代替。已知 post-merge code blocker 先 STOP 並保留實際 merge／task／count；確認仍在授權 scope 及三輪上限內，才可另以 corrective branch／PR 走兩輪流程，不再次 merge 舊 PR、直接 push develop 或自動 revert。Non-code 限制僅補證據／STOP 與同 HEAD 補審，不另開 branch 或消耗修正輪次。
+11. Fetch 後讀取 origin/develop；取得實際 merge SHA 的 `push` CI，逐項核對 Windows Python 3.13.0 的完整 pytest、runtime integrity、compile、push whitespace 及 clean-tree。缺失或 pending 就繼續適度等待，failed 調查並如實報告，不能用 PR CI 代替。已知 post-merge code blocker 先 STOP 並保留實際 merge／task／count；確認仍在授權 scope 及三輪上限內，才可另以 corrective branch／PR 走兩輪流程，不再次 merge 舊 PR、直接 push develop 或自動 revert。Non-code 限制僅補證據／STOP 與同 HEAD 補審，不另開 branch 或消耗修正輪次。
 12. 所有 gates 通過才宣告該 task COMPLETE。附 merge SHA、parents、目前 develop HEAD、post-merge CI run／attempt／tested SHA／jobs 與 working tree；未交付的下一階段不自動開始。
 
 ## BLOCKED 分類與同 HEAD 補審
 
-兩輪使用相同 [gate v2 契約](PR_REVIEW_GATE.md)，在安排 corrective write 或更新 count 前先查核分類與原始證據：
+兩輪使用相同 [gate v3 契約](PR_REVIEW_GATE.md)，在安排 corrective write 或更新 count 前先查核分類與原始證據：
 
 - `code`：已證實違反明確採納契約的程式、測試、設定或指令缺陷；只有此類新增 corrective commit、使用同 task 最多三輪修正並對新 HEAD 重做兩輪完整適用審查。
 - `evidence`：必要驗證或原始證據不足，先 `REFRESH_EVIDENCE`；不猜成程式錯誤。
@@ -45,9 +47,9 @@ Reviewer 應使用全新 context（例如本環境 `fork_turns="none"`），提�
 
 BLOCKED 必須有明確 `blocker_kind`、非空 findings、唯一 `report_ref`；PASS 的 kind=null、findings 為空。`pr.new_blockers` 只放協調者已查明、與目前 PR snapshot 同 scope 的 confirmed code findings。未確認的 CI failure 只調查；non-code 缺口留在分類的正式報告。
 
-解除 non-code 限制後，保持 HEAD、baseline、corrective count，以新獨立 full-diff 報告 append 補審。新報告的 `supersedes_report_ref` 指向較早、尚未被取代、相同 round／baseline／base／head／scope 的 non-code BLOCKED，`resolution_evidence_ref` 指向協調者已查核並保存的原始 resolution artifact；沒有補審時兩欄均 null。保留所有舊原文、單向 relation、分類與證據，不覆寫、刪除或製造空 commit。第三輪程式修正已用完也可合法補證據，不藉重啟或另開 task 重設上限。
+解除 non-code 限制後，保持 HEAD、baseline、corrective count，依 gate v3 以新的獨立報告 append 補審。新報告的 `supersedes_report_ref` 指向較早、尚未被取代、相同 round／baseline／base／head／scope 的 non-code BLOCKED，`resolution_evidence_ref` 指向協調者已查核並保存的原始 resolution artifact；沒有補審時兩欄均 null。保留所有舊原文、單向 relation、分類與證據，不覆寫、刪除或製造空 commit。第三輪程式修正已用完也可合法補證據，不藉重啟或另開 task 重設上限。
 
-原／新 reviewer 均須獨立於實作者，第二輪 reviewer 不得參與同 code scope 第一輪；補審仍親自審完整適用差異，第二輪 PASS 綁最新適用 CI。未知／較晚／自身 target、叉分、跨 scope、缺 resolution、非獨立或未 full-diff 的補審均 fail closed。Code BLOCKED 不可同 HEAD supersede，CI rerun 或無關 PASS 不能清除。JSON reference 不是原始證據真偽的認證。
+原／新 reviewer 均須獨立於實作者，第二輪 reviewer 不得參與同 code scope 第一輪；補審依 gate v3 核對完整 scope 的既有結論與缺口；同原 reviewer 且版本完全未變時無須從頭重讀全部差異，第二輪 PASS 綁最新適用 CI。未知／較晚／自身 target、叉分、跨 scope、缺 resolution、非獨立或不符合 gate v3 review_mode 的補審均 fail closed。Code BLOCKED 不可同 HEAD supersede，CI rerun 或無關 PASS 不能清除。JSON reference 不是原始證據真偽的認證。
 
 ## 證據與中斷恢復
 
@@ -68,7 +70,7 @@ Evidence 至少包含：
 
 `tests/test_pr_review_gate.py` 使用虛構狀態及假服務驗證轉移與副作用決策，不連線 GitHub，不將 synthetic fixture verdict 當正式審查。必須覆蓋 PASS 接續、BLOCKED 分類、同 HEAD append-only 補審及無效取代、CI failure 禁止 merge、HEAD／base 改變失效、PR／merge replay、代理不可用／report 缺失及三輪程式修正上限。另逐一核對所有角色及規範入口的指令一致性，不能以 gate tests 取代。
 
-本次流程建置本身另走真實兩輪審查及既有 `.github/workflows/ci.yml`，不增加背景 AI workflow。即使隔離 tests 通過，仍不能省略正式 reviewer 或實際 post-merge CI。
+本次制度精簡本身依 VALIDATION_POLICY 的 transition 走真實兩輪舊契約審查及既有雙版本／雙入口 gates，不增加背景 AI workflow。即使隔離 tests 通過，仍不能省略正式 reviewer 或實際 post-merge CI。
 
 ## 日後啟動
 

@@ -1,4 +1,7 @@
-"""Read-only decisions for the repository's two-review development contract.
+"""Read-only PR29 fifth-round continuation; frozen v2 safety plus user addendum.
+
+Derived from 1593e7af65596d320b4427f1b15bb2bc0bdc949c:scripts/pr_review_gate.py.
+The ordinary gate is unchanged. Historical gaps are never review evidence.
 
 This validates coordinator-collected evidence, not its authenticity. It has no
 network, credential, Git write, agent-launch, or merge capability.
@@ -13,16 +16,35 @@ import re
 import sys
 
 
-SCHEMA = "zhuyin-pr-review-gate/3"
+SCHEMA = "zhuyin-pr29-continuation/1"
+BASELINE = "1593e7af65596d320b4427f1b15bb2bc0bdc949c"
+START = "a38bdf1c84889c52e7281a0c23c9458e3762afa8"
+DEVELOP = "502414b3b38e004a6d8d9cb693cf21b65148765a"
+TASK = "review-confirm-responsive"
+BRANCH = "codex/review-confirm-responsive"
+PR_URL = "https://github.com/discoveryray/zhuyin-proofreader/pull/29"
+AUTHORIZATION_REF = "pr29-round5/user-adopted-contract"
+AUTHORIZATION_SHA256 = "53790b7433d64197d046dbaad0e61c6ebb0ad5775a1d5ad3ec36e142371a0b26"
+HISTORY = (
+    "e53f44d2da29b46dfe0bd0f2c06af9919808b99f",
+    "89e0297bd6e5b9b08d077b2216029fb6224976fc",
+    "bb4c136fbc49c706fecfd48d1dacf81b4d97584e",
+    "bd6b4789a646f8bed075c256447f54922a5c4f90",
+    START,
+)
+LOCAL_CHECKS = ("unittest", "pytest", "gui", "runtime", "compile", "diff", "performance")
+KNOWN_FINDING_IDS = {*(f"KF-{number:02d}" for number in range(1, 8)),
+                     *(f"RC-{number:02d}" for number in range(1, 5))}
 REPOSITORY = "discoveryray/zhuyin-proofreader"
 WORKFLOW = ".github/workflows/ci.yml"
-PYTHONS = ("3.13",)
-OPERATIONS = {"implement", "delegate", "test", "commit", "push", "pr", "merge"}
+PYTHONS = ("3.12", "3.13")
+OPERATIONS = {"implement", "delegate", "test", "commit", "push", "pr"}
 COMMON_STEPS = (
     "Check out repository", "Set up Python", "Show Python version",
     "Upgrade pip", "Install development dependencies",
-    "Validate runtime asset integrity", "Audit test entrypoint coverage",
-    "Run full pytest suite", "Verify GUI test execution", "Compile Python sources",
+    "Validate runtime asset integrity", "Run full unittest suite",
+    "Run full pytest suite", "Audit test entrypoint coverage",
+    "Verify GUI test execution", "Compile Python sources",
     "Check repository working tree",
 )
 
@@ -107,7 +129,7 @@ def _ci_schema(ci, where):
 def validate_state(state):
     """Validate the closed input schema. This does not grant permission."""
     _fields(state, "schema task authorization current implementers corrections reviews "
-            "unavailable_review_rounds pr pr_ci merge push_ci handoffs", "state")
+            "unavailable_review_rounds pr pr_ci handoffs continuation remote local_validation", "state")
     _require(state["schema"] == SCHEMA, "unsupported schema")
     task = state["task"]
     _fields(task, "id repository baseline base_branch head_branch", "task")
@@ -120,14 +142,14 @@ def validate_state(state):
              re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*", task["head_branch"]) is not None,
              "invalid feature branch")
     auth = state["authorization"]
-    _fields(auth, "task_id active operations source_ref", "authorization")
+    _fields(auth, "task_id active operations source_ref source_sha256", "authorization")
     _text(auth["source_ref"], "authorization.source_ref")
     _boolean(auth["active"], "authorization.active")
     _texts(auth["operations"], "authorization.operations")
     _require(set(auth["operations"]) <= OPERATIONS, "unknown authorized operation")
     _require(auth["task_id"] == task["id"], "authorization belongs to another task")
     current = state["current"]
-    _fields(current, "base head working_tree_clean evidence_ref", "current")
+    _fields(current, "base head tree working_tree_clean evidence_ref", "current")
     for field in ("base", "head"):
         _sha(current[field], f"current.{field}")
     _boolean(current["working_tree_clean"], "current.working_tree_clean")
@@ -137,8 +159,8 @@ def validate_state(state):
     _require(type(state["unavailable_review_rounds"]) is list and
              all(type(n) is int and n in (1, 2) for n in state["unavailable_review_rounds"]),
              "invalid unavailable review rounds")
-    _require(type(state["corrections"]) is list and len(state["corrections"]) <= 3,
-             "at most three correction rounds")
+    _require(type(state["corrections"]) is list and len(state["corrections"]) == 5,
+             "this continuation retains exactly four prior rounds and the fifth candidate")
     previous = None
     for number, correction in enumerate(state["corrections"], 1):
         _fields(correction, "number from_head to_head evidence_ref", "correction")
@@ -155,10 +177,7 @@ def validate_state(state):
     for review in state["reviews"]:
         _fields(review, "round reviewer baseline base head scope verdict independent "
                 "full_diff_reviewed findings report_ref ci blocker_kind "
-                "supersedes_report_ref resolution_evidence_ref review_mode", "review")
-        _require(review["review_mode"] in ("full_diff", "evidence_gap"), "unknown review mode")
-        _require(review["full_diff_reviewed"] == (review["review_mode"] == "full_diff"),
-                 "review mode must accurately describe the work performed")
+                "supersedes_report_ref resolution_evidence_ref", "review")
         _require(type(review["round"]) is int and review["round"] in (1, 2), "invalid review round")
         for field in ("reviewer", "scope", "report_ref"):
             _text(review[field], f"review.{field}")
@@ -191,41 +210,30 @@ def validate_state(state):
     pr = state["pr"]
     if pr is not None:
         _fields(pr, "number url state base_branch head_branch base_sha head_sha mergeable "
-                "protection_satisfied findings_checked new_blockers evidence_ref", "pr")
+                "protection_satisfied findings_checked new_blockers evidence_ref draft", "pr")
         _integer(pr["number"], "pr.number")
         for field in ("url", "base_branch", "head_branch", "evidence_ref"):
             _text(pr[field], f"pr.{field}")
         for field in ("base_sha", "head_sha"):
             _sha(pr[field], f"pr.{field}")
         _require(pr["state"] in ("open", "closed", "merged"), "invalid PR state")
-        for field in ("mergeable", "protection_satisfied", "findings_checked"):
+        for field in ("mergeable", "protection_satisfied", "findings_checked", "draft"):
             _boolean(pr[field], f"pr.{field}")
         _texts(pr["new_blockers"], "pr.new_blockers")
     _ci_schema(state["pr_ci"], "pr_ci")
-    _ci_schema(state["push_ci"], "push_ci")
-    merge = state["merge"]
-    if merge is not None:
-        _fields(merge, "sha parents tree develop_head develop_contains_merge evidence_ref", "merge")
-        for field in ("sha", "tree", "develop_head"):
-            _sha(merge[field], f"merge.{field}")
-        _require(type(merge["parents"]) is list, "merge.parents: expected list")
-        for parent in merge["parents"]:
-            _sha(parent, "merge.parent")
-        _boolean(merge["develop_contains_merge"], "merge.develop_contains_merge")
-        _text(merge["evidence_ref"], "merge.evidence_ref")
     _require(type(state["handoffs"]) is list, "handoffs: expected list")
     for handoff in state["handoffs"]:
         _fields(handoff, "from to head evidence_ref", "handoff")
         for field in ("from", "to", "evidence_ref"):
             _text(handoff[field], f"handoff.{field}")
         _sha(handoff["head"], "handoff.head")
+    _continuation_schema(state)
 
 
 def _decision(state, action, reason, **details):
     needed = {
         "REQUEST_REVIEW_1": {"delegate"}, "REQUEST_REVIEW_2": {"delegate"},
-        "ENSURE_PR": {"pr"}, "MERGE_PROPOSAL": {"merge"},
-        "CORRECT_IMPLEMENTATION": {"implement", "test", "commit", "push", "delegate"},
+        "PUSH_CANDIDATE": {"push", "pr"},
     }.get(action, set())
     missing = needed - set(state["authorization"]["operations"])
     if missing:
@@ -234,26 +242,6 @@ def _decision(state, action, reason, **details):
                 "head": state["current"]["head"], "action": action}
     key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()
     return {"action": action, "reason": reason, "idempotency_key": key, **details}
-
-
-def _correct(state, reason):
-    count = len(state["corrections"])
-    if count >= 3:
-        return _decision(state, "STOP", "three corrective rounds exhausted: " + reason)
-    return _decision(state, "CORRECT_IMPLEMENTATION", reason, correction_round=count + 1)
-
-
-def _post_merge_blocked(state, reason, *, code=True):
-    if code and len(state["corrections"]) >= 3:
-        reason += "; three corrective rounds exhausted"
-    return _decision(
-        state, "STOP", "post-merge blocker: " + reason,
-        handoff="retain this task ledger and correction limit; do not reset the task; "
-                "do not re-merge, push develop, or revert",
-        task_id=state["task"]["id"], baseline=state["task"]["baseline"],
-        merge_sha=state["merge"]["sha"] if state["merge"] is not None else None,
-        corrections_used=len(state["corrections"]), correction_limit=3,
-    )
 
 
 def _review_scope(review):
@@ -268,7 +256,6 @@ def _validate_review_history(state):
         _require(ref not in reports, "report_ref must uniquely identify an original report")
         if prior is None:
             _require(review["resolution_evidence_ref"] is None, "resolution needs a supersession target")
-            _require(review["review_mode"] == "full_diff", "gap review needs a retained full-review chain")
         else:
             _require(prior in reports and prior not in superseded,
                      "supersession target must be earlier, retained, and not already superseded")
@@ -277,9 +264,6 @@ def _validate_review_history(state):
                      "only non-code BLOCKED reports may be supplemented at unchanged HEAD")
             _require(_review_scope(review) == _review_scope(old), "supersession must retain the exact code scope")
             _text(review["resolution_evidence_ref"], "supersession resolution evidence")
-            if review["review_mode"] == "evidence_gap":
-                _require(review["reviewer"] == old["reviewer"],
-                         "only the original reviewer may perform a gap-only supplement")
             for candidate in (old, review):
                 problem = _review_problem(state, candidate, candidate["round"])
                 _require(problem is None, "invalid supersession review: " + str(problem))
@@ -311,7 +295,7 @@ def _review(state, number, base, head):
 def _review_problem(state, review, number):
     if not review["independent"] or review["reviewer"] in state["implementers"]:
         return "reviewer must be independent of every implementation actor"
-    if not review["full_diff_reviewed"] and review["review_mode"] != "evidence_gap":
+    if not review["full_diff_reviewed"]:
         return "full applicable diff has not been reviewed"
     scope = "baseline_to_head" if number == 1 else "cumulative_and_full_pr_with_ci"
     if review["scope"] != scope:
@@ -349,8 +333,10 @@ def _ci_problem(ci, event, branch, head, parents):
             return "REFRESH_EVIDENCE", f"required Windows runner is missing: {name}"
         if job["conclusion"] != "success":
             return "INVESTIGATE_CI", f"required Windows job did not succeed: {name}"
-        if job["python_version"] != "3.13.0":
+        if not re.fullmatch(re.escape(version) + r"\.\d+", job["python_version"]):
             return "REFRESH_EVIDENCE", f"wrong actual Python version: {name}"
+        if version == "3.13" and job["python_version"] != "3.13.0":
+            return "REFRESH_EVIDENCE", "Python 3.13 must retain the current pinned 3.13.0 environment"
         if (job["run_id"], job["attempt"], job["tested_sha"]) != (
                 ci["run_id"], ci["attempt"], ci["tested_sha"]):
             return "REFRESH_EVIDENCE", f"job is from another run attempt or checkout: {name}"
@@ -359,13 +345,87 @@ def _ci_problem(ci, event, branch, head, parents):
             return "REFRESH_EVIDENCE", f"required step evidence is missing: {name}"
         if any(job["steps"].get(step) != "success" for step in required):
             return "INVESTIGATE_CI", f"required step skipped or unsuccessful: {name}"
+        event_whitespace = f"Check committed whitespace ({'pull request' if event == 'pull_request' else 'push'})"
+        optional_skips = {"Check committed whitespace (pull request)", "Check committed whitespace (push)",
+                          "Check committed whitespace (workflow dispatch)"} - {event_whitespace}
+        if any(result != "success" and not (result == "skipped" and step in optional_skips)
+               for step, result in job["steps"].items()):
+            return "INVESTIGATE_CI", f"another workflow step did not succeed: {name}"
     if any(job["conclusion"] != "success" for job in jobs.values()):
         return "INVESTIGATE_CI", "another workflow job has not succeeded"
     return None
 
 
+def _continuation_schema(state):
+    """Only the adopted fixed PR29 continuation, never a general round override."""
+    task, auth, current = state["task"], state["authorization"], state["current"]
+    _require(task == {"id": TASK, "repository": REPOSITORY, "baseline": BASELINE,
+                      "base_branch": "develop", "head_branch": BRANCH}, "wrong fixed task")
+    _require(auth["source_ref"] == AUTHORIZATION_REF and
+             auth["source_sha256"] == AUTHORIZATION_SHA256, "wrong adopted authorization source")
+    _require(current["base"] == DEVELOP, "develop target drifted")
+    _sha(current["tree"], "current.tree")
+    _require(current["head"] not in (*HISTORY, BASELINE, DEVELOP), "new candidate required")
+    chain = (*HISTORY, current["head"])
+    for index, correction in enumerate(state["corrections"]):
+        _require((correction["from_head"], correction["to_head"]) == chain[index:index + 2],
+                 "immutable four-round history or fifth candidate changed")
+    continuation = state["continuation"]
+    _fields(continuation, "created_at reconstructed history_ref missing_originals known_findings "
+            "finding_inventory_ref original_stop_ref candidate_head integration_ref contains_start "
+            "contains_develop", "continuation")
+    _require(continuation["reconstructed"] is True, "must label reconstructed history")
+    for field in ("created_at", "history_ref", "finding_inventory_ref", "original_stop_ref", "integration_ref"):
+        _text(continuation[field], "continuation." + field)
+    _texts(continuation["missing_originals"], "missing_originals")
+    _require(continuation["candidate_head"] == current["head"], "frozen candidate mismatch")
+    for field in ("contains_start", "contains_develop"):
+        _require(continuation[field] is True, "integration ancestry evidence required")
+    _require(type(continuation["known_findings"]) is list, "known_findings must be a list")
+    identifiers = []
+    for finding in continuation["known_findings"]:
+        _fields(finding, "id source_ref description status verification_ref", "known_finding")
+        for field in ("id", "source_ref", "description"):
+            _text(finding[field], "finding." + field)
+        _require(finding["status"] in ("verified_on_candidate", "open", "unknown"), "unknown finding status")
+        if finding["status"] == "verified_on_candidate":
+            _text(finding["verification_ref"], "finding.verification_ref")
+        else:
+            _require(finding["verification_ref"] is None, "unresolved finding cannot claim verification")
+        identifiers.append(finding["id"])
+    _require(len(identifiers) == len(set(identifiers)), "duplicate historical finding")
+    _require(KNOWN_FINDING_IDS <= set(identifiers), "known finding inventory is incomplete")
+    remote = state["remote"]
+    _fields(remote, "base head evidence_ref", "remote")
+    _sha(remote["base"], "remote.base")
+    _sha(remote["head"], "remote.head")
+    _text(remote["evidence_ref"], "remote.evidence_ref")
+    _require(remote["base"] == DEVELOP and remote["head"] in (START, current["head"]),
+             "unexpected external remote drift")
+    checks = state["local_validation"]
+    _fields(checks, "head platform python_version evidence_ref checks", "local_validation")
+    _require(checks["head"] == current["head"] and checks["platform"] == "Windows"
+             and checks["python_version"] == "3.13.0", "local validation scope/runtime mismatch")
+    _text(checks["evidence_ref"], "local_validation.evidence_ref")
+    _fields(checks["checks"], " ".join(LOCAL_CHECKS), "local_validation.checks")
+    for name, check in checks["checks"].items():
+        _fields(check, "status evidence_ref", "local_validation." + name)
+        _require(check["status"] in ("success", "failure", "missing"), "unknown local check status")
+        _text(check["evidence_ref"], "local check evidence_ref")
+    pr = state["pr"]
+    _require(pr is not None and type(pr["number"]) is int and pr["number"] == 29
+             and pr["url"] == PR_URL, "the original PR29 must be retained")
+    _require((pr["base_branch"], pr["head_branch"]) == ("develop", BRANCH), "wrong PR branch pair")
+    _require(pr["draft"] is True, "original PR must remain draft")
+    # Historical reports remain in the retained reconstruction, not in current
+    # review records. No fabricated role/session is needed to model a gap.
+    for review in state["reviews"]:
+        _require((review["baseline"], review["base"], review["head"]) ==
+                 (BASELINE, DEVELOP, current["head"]), "review is not for this candidate")
+
+
 def next_action(state):
-    """Return an advisory action; never perform or acknowledge external writes."""
+    """Advise review/push/evidence only. Never authorize merge or completion."""
     try:
         validate_state(state)
     except (EvidenceError, TypeError, KeyError) as exc:
@@ -374,82 +434,69 @@ def next_action(state):
         return _decision(state, "STOP", "task authorization is absent or revoked")
     if not state["current"]["working_tree_clean"]:
         return _decision(state, "STOP", "working tree is not clean")
-    pr, merge = state["pr"], state["merge"]
-    merged = pr is not None and pr["state"] == "merged"
-    if merge is not None and not merged:
-        return _decision(state, "STOP", "merge evidence contradicts PR state")
-    base, head = (pr["base_sha"], pr["head_sha"]) if merged else (
-        state["current"]["base"], state["current"]["head"])
-    if pr is not None:
-        if (pr["base_branch"], pr["head_branch"]) != (
-                state["task"]["base_branch"], state["task"]["head_branch"]):
-            return _decision(state, "STOP", "existing PR belongs to a different branch pair")
-        if pr["state"] == "closed":
-            return _decision(state, "STOP", "existing PR is closed without merge; do not duplicate it")
-        if not merged and (pr["base_sha"], pr["head_sha"]) != (base, head):
-            return _decision(state, "REFRESH_EVIDENCE", "remote PR base/head changed; invalidate stale reviews")
-        if not pr["findings_checked"]:
-            return _decision(state, "REFRESH_EVIDENCE", "check the latest findings for this PR scope")
-        if pr["new_blockers"]:
-            return _post_merge_blocked(state, "unresolved PR findings") if merged else _correct(
-                state, "confirmed PR blockers require correction and both reviews")
+    if state["pr"]["state"] != "open":
+        return _decision(state, "STOP", "original PR must remain open and unmerged")
+    if any(f["status"] != "verified_on_candidate" for f in state["continuation"]["known_findings"]):
+        return _decision(state, "STOP", "known historical findings lack candidate resolution evidence")
+    pr, remote = state["pr"], state["remote"]
+    head = state["current"]["head"]
+    before_push = remote["head"] == START
+    if before_push:
+        if pr["head_sha"] != START or pr["base_sha"] not in (BASELINE, DEVELOP):
+            return _decision(state, "REFRESH_EVIDENCE", "pre-push PR metadata differs from the retained original")
+        if state["pr_ci"] is not None:
+            return _decision(state, "STOP", "old PR CI cannot stand for unpublished candidate CI")
+    elif (pr["base_sha"], pr["head_sha"]) != (DEVELOP, head):
+        return _decision(state, "REFRESH_EVIDENCE", "post-push PR API scope is not synchronized")
+    if not pr["findings_checked"]:
+        return _decision(state, "REFRESH_EVIDENCE", "check latest PR findings and map them to the candidate")
+    if pr["new_blockers"]:
+        return _decision(state, "STOP", "confirmed candidate code findings require an unauthorized sixth round")
     for number in (1, 2):
-        # A valid confirmed blocker remains actionable while CI is failed/pending.
-        # Successful CI is required for advancement, not for reaching correction.
-        review = _review(state, number, base, head)
+        reported = _review(state, number, DEVELOP, head)
+        if reported is not None:
+            problem = _review_problem(state, reported, number)
+            if problem:
+                return _decision(state, "STOP", problem)
+            if reported["verdict"] == "BLOCKED" and reported["blocker_kind"] == "code":
+                return _decision(state, "STOP", "fifth round exhausted; confirmed code finding requires unauthorized sixth round",
+                                 blocked_report_ref=reported["report_ref"])
+    if any(c["status"] != "success" for c in state["local_validation"]["checks"].values()):
+        return _decision(state, "REFRESH_EVIDENCE", "candidate requires all local acceptance evidence")
+    for number in (1, 2):
+        review = _review(state, number, DEVELOP, head)
         if review is not None:
             problem = _review_problem(state, review, number)
             if problem:
                 return _decision(state, "STOP", problem)
-            if number == 2:
-                first = _review(state, 1, base, head)
-                if review["reviewer"] == first["reviewer"] or review["report_ref"] == first["report_ref"]:
-                    return _decision(state, "STOP", "two separately produced independent reviews are required")
             if review["verdict"] == "BLOCKED":
                 kind = review["blocker_kind"]
+                action = "REFRESH_EVIDENCE" if kind == "evidence" else "STOP"
                 reason = f"round {number} is BLOCKED ({kind})"
                 if kind == "code":
-                    return _post_merge_blocked(state, reason) if merged else _correct(
-                        state, reason + "; re-review both full scopes after correction")
-                if kind == "evidence":
-                    return _decision(state, "REFRESH_EVIDENCE", reason + "; retain report and obtain a supplement",
-                                     blocked_report_ref=review["report_ref"])
-                return _post_merge_blocked(state, reason, code=False) if merged else _decision(
-                    state, "STOP", reason + "; resolve the non-code limitation and obtain a supplement")
+                    reason += "; fifth round exhausted; no sixth-round code changes authorized"
+                return _decision(state, action, reason, blocked_report_ref=review["report_ref"])
         if number == 2:
-            if pr is None:
-                return _decision(state, "ENSURE_PR", "round one passed; look up the branch pair before creation",
-                                 base_branch="develop", head_branch=state["task"]["head_branch"])
+            if before_push:
+                return _decision(state, "PUSH_CANDIDATE", "round one passed; recheck direct refs and ordinary-push original branch",
+                                 expected_remote_head=START, expected_base_sha=DEVELOP, candidate_head=head)
             ci = state["pr_ci"]
             if ci is None or ci["status"] in ("queued", "in_progress"):
-                return _decision(state, "WAIT_PR_CI", "matching completed PR CI evidence is required")
-            problem = _ci_problem(ci, "pull_request", state["task"]["head_branch"], head, [base, head])
+                return _decision(state, "WAIT_PR_CI", "matching completed candidate PR CI is required")
+            problem = _ci_problem(ci, "pull_request", BRANCH, head, [DEVELOP, head])
             if problem:
-                return _decision(state, "STOP", problem[1]) if merged else _decision(state, *problem)
+                return _decision(state, *problem)
+            if ci["tree"] != state["current"]["tree"]:
+                return _decision(state, "REFRESH_EVIDENCE", "tested integration tree differs from candidate tree")
         if review is None:
-            if merged or number in state["unavailable_review_rounds"]:
-                return _decision(state, "STOP", f"round {number} review evidence is unavailable")
-            return _decision(state, f"REQUEST_REVIEW_{number}", "no review for the exact current scope")
-    if merged:
-        if merge is None:
-            return _decision(state, "VERIFY_MERGE", "obtain the actual merge commit; never merge again")
-        if merge["parents"] != [base, head] or merge["tree"] != state["pr_ci"]["tree"]:
-            return _decision(state, "STOP", "actual merge parents/tree differ from reviewed integration")
-        if merge["develop_head"] != state["current"]["base"] or not merge["develop_contains_merge"]:
-            return _decision(state, "STOP", "fetched develop does not prove the actual merge is retained")
-        ci = state["push_ci"]
-        if ci is None or ci["status"] in ("queued", "in_progress"):
-            return _decision(state, "WAIT_PUSH_CI", "actual merge SHA requires its own develop push CI")
-        problem = _ci_problem(ci, "push", "develop", merge["sha"], [base, head])
-        if problem or ci["tree"] != merge["tree"]:
-            return _decision(state, "STOP", problem[1] if problem else "push CI tree does not match the actual merge")
-        return _decision(state, "COMPLETE", "both reviews, PR CI, actual merge and post-merge CI verified",
-                         merge_sha=merge["sha"], develop_head=merge["develop_head"])
-    if not pr["mergeable"] or not pr["protection_satisfied"]:
-        return _decision(state, "STOP", "mergeability or repository protection requirements are not satisfied")
-    return _decision(state, "MERGE_PROPOSAL", "recheck remote base/head and protection immediately before write",
-                     pr_number=pr["number"], merge_method="merge", expected_head_sha=head,
-                     expected_base_sha=base)
+            if number in state["unavailable_review_rounds"]:
+                return _decision(state, "STOP", f"round {number} reviewer unavailable")
+            return _decision(state, f"REQUEST_REVIEW_{number}", "independent complete candidate review required")
+    if "pr" not in state["authorization"]["operations"]:
+        return _decision(state, "STOP", "updating original PR evidence is not authorized")
+    return _decision(state, "STOP", "unmerged draft PR may be delivered; merge is not authorized",
+                     delivery_ready=True, pr_number=29, candidate_head=head,
+                     mergeable=pr["mergeable"], protection_satisfied=pr["protection_satisfied"])
 
 
 def _unique_object(pairs):

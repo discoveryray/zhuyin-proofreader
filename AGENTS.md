@@ -229,6 +229,8 @@ fetch 只更新遠端 refs，不代表可以自行 merge、rebase 或 pull unrel
 
 ## 11. 測試原則
 
+支援 Windows Python 3.13.0；實際啟動環境、依賴版本、唯一完整測試入口與沿用證據規則見 [驗證政策](docs/VALIDATION_POLICY.md)。修正期間先跑受影響測試，固定版本後完成必要 full pytest；重跑必須有修改影響、失敗線索或明確門檻，不因等待 CI、重開 session 或整理報告而無理由重跑。
+
 Production 修改至少應依風險執行：
 
 1. objective-specific tests
@@ -236,7 +238,7 @@ Production 修改至少應依風險執行：
 3. cross-version / architecture tests（若適用）
 4. integration tests（若適用）
 5. runtime asset validation（若涉及正式 runtime）
-6. full unittest / pytest-style suite（正式 merge 前依專案現況執行）
+6. full pytest suite（固定版本後、正式 merge 前依 VALIDATION_POLICY 執行）
 7. `compileall`
 8. `git diff --check`
 9. `git status`
@@ -404,6 +406,8 @@ Codex 不得僅依自己的 implementation、tests 或自我 code review
 
 ## 17. 兩輪獨立審查與 Codex 執行期間自動接續
 
+新制度只適用採用後的新任務；未收尾任務維持其凍結契約。制度變更本身的過渡驗收見 [驗證政策](docs/VALIDATION_POLICY.md)，不得用受審新制度跳過既有門檻。
+
 適用完整規範為 [v5.8 完整規範](docs/V58_MASTER_DEVELOPMENT_REVIEW_PLAN_v1.1.md)，其中第 1、5～8 節及 [執行手冊](docs/PR_REVIEW_AUTOMATION.md) 定義自動協調契約；安全契約仍依本文件及完整規範第 3～4 節。
 
 - 協調者必須委派實作代理與兩位獨立 reviewer，並收集結果、核對原始證據及接續下一步。Work 或符合相同契約的獨立代理均可擔任正式 reviewer，不再限定 Work。
@@ -412,7 +416,7 @@ Codex 不得僅依自己的 implementation、tests 或自我 code review
 - 第二輪自行審查 PR 全部差異、當前 base/head/merge-base、整合情境與適用 CI。第二輪 PASS 且必要 CI 全通過才可提出 merge；立即重新核對遠端及 findings，綁定 reviewed HEAD 合併。
 - BLOCKED 必須明確回報 `blocker_kind` 與非空 findings。只有 `code`（已證實的程式、測試、設定或指令缺陷）交回實作代理，新增 corrective commit、重跑必要測試並計入同一 task 最多三輪自動修正；新 HEAD 兩輪均須重新取得完整適用 PASS，不能只審最後一個 commit。第三輪後仍需程式修正則停止回報，不降低標準，也不重設 task／計數。
 - `evidence` BLOCKED 先 `REFRESH_EVIDENCE`；`capability`／`contract` BLOCKED 先 STOP 並交回能力缺口／尚待釐清契約。解決 non-code 限制後，在原 HEAD append 完整適用補審，不改 corrective count、不新增空 commit；三輪已用完也不妨礙合法補證據。不得把缺證據、代理不可用或未釐清契約猜成 code finding。
-- 每份報告使用唯一 `report_ref`；PASS 的 `blocker_kind=null`、findings 為空。補審依 [gate v2 契約](docs/PR_REVIEW_GATE.md) 填 `supersedes_report_ref` 與原始 `resolution_evidence_ref`，只能指向較早、尚未被取代、相同 round／baseline／base／head／scope 的 non-code BLOCKED；原／新報告均須獨立及 full-diff。保留舊原文與單向補審歷史，不允許未知／跨 scope／叉分或無 resolution 的取代。Code BLOCKED 不可同 HEAD supersede，CI rerun 或無關 PASS 不能清除它；第二輪補審仍須核對最新適用 CI。
+- 每份報告使用唯一 `report_ref`；PASS 的 `blocker_kind=null`、findings 為空。補審依 [gate v3 契約](docs/PR_REVIEW_GATE.md) 填 `supersedes_report_ref` 與原始 `resolution_evidence_ref`，只能指向較早、尚未被取代、相同 round／baseline／base／head／scope 的 non-code BLOCKED；原／新報告均須獨立，full-diff 或同 reviewer 缺口補審依 gate v3。保留舊原文與單向補審歷史，不允許未知／跨 scope／叉分或無 resolution 的取代。Code BLOCKED 不可同 HEAD supersede，CI rerun 或無關 PASS 不能清除它；第二輪補審仍須核對最新適用 CI。
 - HEAD 或 PR base 改變會使當前兩輪結果失效；保留原 task baseline，重做受影響的完整審查與整合驗證。固定 SHA 任務不得自行改 scope；不自行 rebase 或改 baseline。Base 前進本身不授權合併 develop 到 feature。
 - 代理不可用、必要結果缺失／不完整、CI 失敗或未完成，一律不視為 PASS。已完成的測試與 CI 僅是審查證據，不能取代 reviewer 實際讀取差異及追蹤契約。
 - 協調者使用 `scripts/pr_review_gate.py` 核對已收集的狀態，再執行副作用；gate 不提供新授權、不證明輸入真實性。每次寫入前重新讀取遠端；不確定結果先查詢，不盲目重試建立 PR 或 merge。

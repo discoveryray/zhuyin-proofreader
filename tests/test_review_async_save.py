@@ -601,8 +601,17 @@ class AsyncOwnerTkTests(unittest.TestCase):
                             [value.set(True) for value in dialog.vars]
                         else:
                             dialog = gui.ActualReadingDialog(owner, row, {"members": [row]}, self.output, wait=False)
-                            dialog.update()
-                            self.assertTrue(dialog.sample_available[0])
+                            deadline = time.monotonic() + 5
+                            while not dialog.sample_available[0]:
+                                self.assertLess(time.monotonic(), deadline)
+                                dialog.update()
+                                time.sleep(.005)
+                            self.assertFalse(dialog.checked_vars[0].get())
+                            self.assertTrue(dialog.previews[0].canvas.find_withtag("target"))
+                            self.assertTrue(dialog._target_in_viewport(dialog.previews[0]))
+                            self.assertEqual(dialog.check_buttons[0]["state"], "normal")
+                            dialog.check_buttons[0].invoke()
+                            self.assertTrue(dialog.checked_vars[0].get())
                             self.assertIsNotNone(dialog.previews[0].photo)
                             resources = [weakref.ref(value) for value in dialog.checked_vars]
                             resources.extend([weakref.ref(dialog.reading), weakref.ref(dialog.note),
@@ -632,6 +641,82 @@ class AsyncOwnerTkTests(unittest.TestCase):
                     finally:
                         if owner.winfo_exists():
                             owner.destroy()
+
+    def test_lazy_peer_rotation_and_owner_destroy_release_images_and_only_owned_timers(self):
+        row = self.app.current()
+        members = [dict(row, occurrence_id=row["occurrence_id"] + str(index)) for index in range(3)]
+        owner = tk.Toplevel(self.window)
+        with traced_tk_finalizers() as finalized:
+            dialog = gui.ActualReadingDialog(owner, members[0], {"members": members}, self.output, wait=False)
+            dialog.update()
+            dialog.show_sample_preview(1)
+            dialog.update()
+            old_photo = weakref.ref(dialog.previews[1].photo)
+            old_id = id(old_photo())
+            dialog.show_sample_preview(2)
+            self.assertIsNone(dialog.previews[1])
+            self.assertIsNone(old_photo())
+            resources = [weakref.ref(value) for value in dialog.checked_vars]
+            resources.extend([weakref.ref(dialog.reading), weakref.ref(dialog.note)])
+            resources.extend(weakref.ref(preview.photo) for preview in dialog.previews
+                             if preview is not None and preview.photo is not None)
+            identities = {id(ref()) for ref in resources} | {old_id}
+            owned = set(filter(None, dialog._preview_ready_after))
+            dialog._schedule_visibility_check()
+            if dialog._visibility_after is not None:
+                owned.add(dialog._visibility_after)
+            self.assertTrue(owned)
+            seen = []
+            unrelated = self.root.after_idle(lambda: seen.append("unrelated"))
+            owner.destroy()
+            pending = set(self.interpreter.splitlist(self.interpreter.call("after", "info")))
+            self.assertFalse(owned & pending)
+            self.assertIn(unrelated, pending)
+            self.assertTrue(all(ref() is None for ref in resources))
+            for attribute in dialog._widget_attributes:
+                self.assertNotIn(attribute, dialog.__dict__)
+            collector = threading.Thread(target=gc.collect)
+            collector.start()
+            collector.join(10)
+            self.assertFalse(collector.is_alive())
+            self.assertEqual({identity for identity, _ in finalized} & identities, identities)
+            self.assertTrue(all(thread == threading.get_ident() for identity, thread in finalized
+                                if identity in identities))
+            self.root.update()
+            self.assertEqual(seen, ["unrelated"])
+
+    def test_native_tcl_owner_destroy_cancels_only_owned_preview_callbacks(self):
+        row = self.app.current()
+        owner = tk.Toplevel(self.window)
+        with traced_tk_finalizers() as finalized:
+            dialog = gui.ActualReadingDialog(owner, row, {"members": [row]}, self.output, wait=False)
+            resources = [weakref.ref(value) for value in dialog.checked_vars]
+            resources.extend([weakref.ref(dialog.reading), weakref.ref(dialog.note)])
+            identities = {id(ref()) for ref in resources}
+            dialog._schedule_visibility_check()
+            owned = set(filter(None, dialog._preview_ready_after))
+            if dialog._visibility_after is not None:
+                owned.add(dialog._visibility_after)
+            self.assertTrue(owned)
+            unrelated = self.root.after_idle(lambda: None)
+            # This exercises the native destruction event, deliberately bypassing
+            # Python's Toplevel.destroy override and its normal cancellation path.
+            self.interpreter.call("destroy", owner._w)
+            pending = set(self.interpreter.splitlist(self.interpreter.call("after", "info")))
+            self.assertFalse(owned & pending)
+            self.assertIn(unrelated, pending)
+            self.assertTrue(dialog._destroying)
+            self.assertTrue(all(ref() is None for ref in resources))
+            self.assertTrue(all(timer is None for timer in dialog._preview_ready_after))
+            self.assertIsNone(dialog._visibility_after)
+            collector = threading.Thread(target=gc.collect)
+            collector.start()
+            collector.join(10)
+            self.assertFalse(collector.is_alive())
+            self.assertEqual({identity for identity, _ in finalized} & identities, identities)
+            self.assertTrue(all(thread == threading.get_ident() for identity, thread in finalized
+                                if identity in identities))
+            self.root.update()
 
     def test_owner_close_releases_preview_before_pending_save_worker_collects(self):
         app = self.app

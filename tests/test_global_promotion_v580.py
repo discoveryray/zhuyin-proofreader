@@ -94,6 +94,79 @@ class GlobalPromotionTests(unittest.TestCase):
     def deliver(self, *items):
         return library.deliver_global_direct_evidence(self.repo, list(items))
 
+    def test_neutral_tone_direct_evidence_promotes_reopens_and_retries_idempotently(self):
+        first = intent(1, "˙ㄒㄧ")
+        second = intent(2, "˙ㄒㄧ")
+        self.deliver(first, second)
+        self.assertEqual(sql_rows(self.repo, "glyph_truth")[0]["state"], library.PROMOTION_READY)
+        self.assertEqual(approve(self.repo)["state"], library.VERIFIED_GLOBAL)
+        identity = library.canonical_global_exact_identity(**first["payload"]["identity"])
+        reopened = library.GlobalExactGlyphRepository.resolved(self.root / "store")
+        result = library.resolve_exact_glyph_reuse(
+            reopened.load_snapshot(),
+            identity,
+            higher_priority_sources=(("PROJECT_VERIFIED_EXACT", "˙ㄒㄧ"),),
+        )
+        self.assertEqual(result.reading, "˙ㄒㄧ")
+        self.assertFalse(result.conflict)
+        generation = reopened.load_snapshot().generation
+        retry = library.deliver_global_direct_evidence(reopened, [first])[0]
+        self.assertTrue(retry.already_processed)
+        self.assertEqual(reopened.load_snapshot().generation, generation)
+        self.assertEqual(len(sql_rows(reopened, "source_evidence")), 2)
+
+    def test_neutral_tone_conflict_remains_quarantined_after_reopen_and_retry(self):
+        self.deliver(intent(1, "˙ㄒㄧ"), intent(2, "˙ㄒㄧ"))
+        approve(self.repo)
+        contradictory = intent(3, "ㄒㄧ")
+        self.deliver(contradictory)
+        reopened = library.GlobalExactGlyphRepository.resolved(self.root / "store")
+        snapshot = reopened.load_snapshot()
+        self.assertEqual(len(snapshot.trusted_identities), 0)
+        self.assertEqual(len(snapshot.quarantined_identities), 1)
+        self.assertEqual(snapshot.quarantined_identities[0].conflicting_readings,
+                         tuple(sorted(("˙ㄒㄧ", "ㄒㄧ"))))
+        conflict = sql_rows(reopened, "glyph_conflict")[0]
+        self.assertEqual(json.loads(conflict["conflicting_readings_json"]),
+                         list(sorted(("˙ㄒㄧ", "ㄒㄧ"))))
+        identity = library.canonical_global_exact_identity(**contradictory["payload"]["identity"])
+        reuse = library.resolve_exact_glyph_reuse(
+            snapshot, identity,
+            higher_priority_sources=(("PROJECT_VERIFIED_EXACT", "˙ㄒㄧ"),),
+        )
+        self.assertTrue(reuse.conflict)
+        self.assertEqual(reuse.reading, "")
+        generation = snapshot.generation
+        retry = library.deliver_global_direct_evidence(reopened, [contradictory])[0]
+        self.assertTrue(retry.already_processed)
+        self.assertEqual(reopened.load_snapshot().generation, generation)
+        self.assertEqual(len(sql_rows(reopened, "source_evidence")), 3)
+
+    def test_malformed_multisyllable_neutral_does_not_change_verified_global_truth(self):
+        self.deliver(intent(1, "˙ㄒㄧ"), intent(2, "˙ㄒㄧ"))
+        self.assertEqual(approve(self.repo)["state"], library.VERIFIED_GLOBAL)
+        generation = self.repo.load_snapshot().generation
+        before = {table: sql_rows(self.repo, table) for table in (
+            "glyph_truth", "source_evidence", "promotion_approval", "processed_intent",
+        )}
+        malformed_reading = "ㄒㄧˊㄒㄧ˙"
+        with self.assertRaises(library.GlobalLibraryValidationError):
+            intent(3, malformed_reading)
+
+        # Recompute the transport IDs so delivery must reject the reading,
+        # rather than merely a stale digest on a tampered payload.
+        malformed = copy.deepcopy(intent(3, "ㄒㄧ"))
+        payload = malformed["payload"]
+        payload["evidence"]["reading"] = malformed_reading
+        malformed["payload_digest"] = library._canonical_sha256(payload)
+        malformed["intent_id"] = "gpi_" + library._canonical_sha256(payload["evidence"])
+        with self.assertRaises(library.GlobalLibraryValidationError):
+            self.deliver(malformed)
+        self.assertEqual(self.repo.load_snapshot().generation, generation)
+        self.assertEqual(
+            {table: sql_rows(self.repo, table) for table in before}, before,
+        )
+
     def test_first_source_candidate_and_retry_receipt_no_extra_effect(self):
         first = self.deliver(intent())[0]
         again = self.deliver(intent())[0]

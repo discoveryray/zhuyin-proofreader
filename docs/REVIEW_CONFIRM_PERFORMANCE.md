@@ -1,5 +1,7 @@
 # 人工應標確認：效能與正確性驗證
 
+目前候選效能請讀文末「第五輪最終 source：final-v5」；前方 B→H 與 final-v4 均保留為各自來源的歷史紀錄。
+
 任務基準為 develop `1593e7af65596d320b4427f1b15bb2bc0bdc949c`，修正分支為 `codex/review-confirm-responsive`。本次不合併、不發布版本。
 
 ## 瓶頸與變更
@@ -124,3 +126,157 @@ git status --short
 2. 分別用無 actual 暫存、有效暫存與失效暫存測試；失效時不得把該群組視為已處理。檢查稍後處理及 actual 批次套用導覽。
 3. 在專案副本中修改來源 PDF／session bytes 或使 DB 無法寫入，再保存；應留在原筆、顯示原因且不覆寫既有 DB。先成功保存一次後修改 project actual／可重用規則，確認重試、稍後處理再返回仍持續拒絕；恢復原證據或正常 refresh 後再確認可恢復。
 4. 關閉重開確認已保存事件；更新報告時仍執行完整驗證。若畫面提示「已保存，但畫面更新失敗」，先重開恢復，不重複輸入判定。
+
+## 第五輪先前 source：final-v4（已由下方 final-v5 取代）
+
+本節只保留修正原生祖先 destroy 清理前的 source 與樣本。該 source 不再是交審候選；最終效能以文末 final-v5 的全新20程序為準。
+
+前面各節保留原 B→H 第四輪的歷史數字；本節才是指定 D 與本輪整合版本的新比較。
+
+- D：502414b3b38e004a6d8d9cb693cf21b65148765a，由 Git archive 匯出。
+- 新版量測時尚未固定交審 commit，標為 round5-integrated-uncommitted-source-manifest。交審候選須與被測 application／fixture constructor／harness bytes 相同，不能把後來產生的 SHA 偽稱為當時已存在。
+- Harness SHA256：c8e2b5e92c50f3e3a890ff9d1760a054e2e6992b30340795202ed5d7ccb92b0d。
+- 新版 source 清冊 SHA256：41a3526bee8485b1ae89bacbb6fc556b961189259c3f393a1dd12e0433ff94bf。JSON保存各檔案raw-byte SHA256；它不是Git blob SHA，另核對checkout與LF-normalized blob的對應。
+- [本輪完整 benchmark JSON](evidence/review_confirm_round5_benchmark.json) 保存20份逐筆原始結果、22次程序（含兩次fixture準備）的命令／exit／log/result hashes、環境與全檔清冊，可跨電腦查阅。stdout/stderr、原fixture bytes、失敗批次及獨立重算audit另見PR本輪evidence索引。
+
+環境：Windows 11 build 26200、Python 3.13.0 AMD64、Tcl/Tk 8.6.14、PyMuPDF 1.26.7、openpyxl 3.1.5、fonttools 4.63.0；螢幕2194×1234、Tk scaling 1.334473。全部依賴版本見JSON。两版本共用interpreter與harness，LOCALAPPDATA／Global隔離，不用正式資料。
+
+各情境2000 rows、500初始事件、0或8 staging groups。先以獨立程序建立fixture，再跑5對fresh processes，奇數對D→新版、偶數對新版→D。每次完整還原DB、staging、PDF、XLSX、session與正式delivery lock的初始bytes。20個量測程序全exit 0，420次真實按鈕保存；10ms Tk heartbeat、預覽、500ms防連點均保留。其他代理重負荷測試暫停，未宣稱控制所有OS背景工作。
+- 0-group fixture全檔清冊SHA256：46e0ed6a83b926dbdcb2d5ce0d7762a09c65ae297a51f6ffba42eda13db1b81b。
+- 8-group fixture全檔清冊SHA256：43710b6b983cc1175cbcbd9acaa00d4ef8d02fef4fa922cdc19d0c3081c4883e。
+
+首次＝fresh service第一筆（n=5），不是清空OS filesystem cache；穩態＝每程序第2～21筆（n=100，但同程序資料相關，非100個獨立實驗）。P95用nearest rank；首次n=5的P95就是最大值，尾端估計有限。單位ms，表格為median / P95。
+
+| 暫存 | 階段 | 指標 | D | 本輪整合 |
+| --- | --- | --- | ---: | ---: |
+| 0 | 首次 | 按下至保存及畫面完成 | 165.06 / 170.05 | 304.25 / 311.46 |
+| 0 | 首次 | 按鈕callback | 151.89 / 154.92 | 1.56 / 1.77 |
+| 0 | 首次 | 每筆最長Tk heartbeat gap | 152.31 / 155.10 | 140.69 / 142.67 |
+| 0 | 穩態 | 按下至保存及畫面完成 | 215.19 / 237.33 | 166.51 / 188.08 |
+| 0 | 穩態 | 按鈕callback | 197.84 / 220.13 | 1.80 / 2.35 |
+| 0 | 穩態 | 每筆最長Tk heartbeat gap | 198.22 / 220.36 | 67.56 / 78.76 |
+| 8 | 首次 | 按下至保存及畫面完成 | 413.38 / 424.09 | 353.87 / 365.53 |
+| 8 | 首次 | 按鈕callback | 399.29 / 407.88 | 1.55 / 1.72 |
+| 8 | 首次 | 每筆最長Tk heartbeat gap | 399.43 / 408.27 | 167.29 / 175.92 |
+| 8 | 穩態 | 按下至保存及畫面完成 | 434.60 / 572.32 | 224.38 / 255.24 |
+| 8 | 穩態 | 按鈕callback | 421.70 / 553.80 | 1.75 / 2.16 |
+| 8 | 穩態 | 每筆最長Tk heartbeat gap | 421.84 / 553.98 | 62.92 / 77.38 |
+
+主要8-group情境，五對各自穩態median的新版／D總耗時比0.428～0.551（每對都改善），heartbeat比0.124～0.160。合併100筆的total median減少48.4%、heartbeat median減少85.1%。這支持主要暫存情境保有加速並減少卡頓，不代表所有情境或真教材都有相同比例。
+
+**無暫存首次仍退化：165.06→304.25ms，增加139.19ms（約84%）。** Callback 151.89→1.56ms、heartbeat 152.31→140.69ms；按鈕較快歸還，但完成保存並不更快，不能宣稱全情境加速。
+
+已對照ReviewSaveService._save冷路徑與逐筆timing：首次解析／驗證sealed manifest、schema、DB，建立baseline/ledger/index，核對完整內容依賴並於寫入前再核對，再作含DB hash guard的flush/fsync/atomic replacement。0-group新版首次backend median 228.12ms，其中full rebuild86.72、dependency hashing53.71、JSON save25.14ms；D首次full materialize85.43、JSON save4.20ms。這說明新增冷驗證／持久化及初始化成本；inclusive階段不能直接相加，未獨立分段的解析時間也未被臆測為精確歸因。
+
+後20筆新版full rebuild全部為0；0-group incremental replay median 0.31ms、hashing37.65ms。8-group穩態actual staging inclusive median258.64→59.20ms，D full materialize218.64ms，新版incremental replay0.26ms。8-group預覽median45.68→49.73ms，仍在主執行緒且計入總耗時。沒有扣掉預覽、防連點、來源驗證或durability換數字；本輪保留無暫存首次成本，不為降低139ms放寬安全檢查。
+
+### 記憶體與視窗生命週期
+
+使用一次初始化的Windows GetProcessMemoryInfo，包含native Tk/PyMuPDF配置。每筆開始／完成與heartbeat採樣working set、private bytes，另保存OS process peak working set。Private-byte peak只是採樣值；同步D阻塞期間没有Tk heartbeat，不能冒稱精確瞬間峰值。下表為操作完成後median / P95，單位MiB。
+
+| 暫存 | 階段 | 指標 | D | 本輪整合 |
+| --- | --- | --- | ---: | ---: |
+| 0 | 首次完成 | Working set | 152.94 / 153.71 | 167.97 / 168.05 |
+| 0 | 首次完成 | Private bytes | 137.88 / 139.06 | 153.23 / 154.44 |
+| 0 | 穩態完成 | Working set | 191.96 / 223.62 | 205.09 / 237.10 |
+| 0 | 穩態完成 | Private bytes | 176.56 / 208.51 | 190.17 / 221.99 |
+| 8 | 首次完成 | Working set | 163.99 / 164.45 | 169.69 / 170.20 |
+| 8 | 首次完成 | Private bytes | 147.45 / 147.86 | 152.90 / 153.35 |
+| 8 | 穩態完成 | Working set | 204.88 / 237.06 | 206.26 / 239.02 |
+| 8 | 穩態完成 | Private bytes | 188.48 / 220.58 | 190.46 / 222.38 |
+
+0-group穩態private median增加13.61MiB；8-group增加1.98MiB。新服務保留baseline/ledger/index與完整依賴hash，是相對D的額外狀態；未精確歸因每個native allocation，不能把全部OS保留量都宣称為這些資料結構。
+
+每程序另跑6次三位置actual dialog（submit／cancel／owner destroy各2次），共120次dialog、360次可見後checkbox invoke。使用真PDF render，畫出target、捲進viewport、等待checkbox啟用後才invoke；不寫viewed flags、不預勾A，同時影像不得超過A＋一張peer。這是display-only合成群組，不寫reusable truth或staging，也不是人工閱讀驗收。
+
+| 暫存 | 時點／指標（五程序median，MiB） | D | 本輪整合 |
+| --- | --- | ---: | ---: |
+| 0 | root/window destroy後working set | 405.39 | 411.50 |
+| 0 | root/window destroy後private bytes | 387.82 | 393.58 |
+| 0 | 全程序peak working set | 446.07 | 436.34 |
+| 8 | root/window destroy後working set | 443.32 | 413.53 |
+| 8 | root/window destroy後private bytes | 423.95 | 393.74 |
+| 8 | 全程序peak working set | 500.38 | 438.70 |
+
+**兩側都有OS記憶體保留上升，未證明没有native leak。** 8-group第1～6次dialog關閉後，D private median為266.48、308.16、350.44、392.12、434.15、475.84MiB；新版為257.65、287.19、316.73、346.27、375.81、405.35MiB。新版增幅較低，但仍上升；root destroy後OS記憶體也不必立即歸還。六次短跑不能推斷長期穩態，或分辨allocator retention與leak。Tk物件及owner-thread釋放另由原生資源清理回歸查核，本表不能取代該測試。
+
+### 量測工具修正、排除與重現
+
+Smoke原先查詢不存在的optional pytest-subtests metadata失敗，改列真實installed distributions。第一批在0-group第二對開始前發現新增delivery lock，改由正式context manager先acquire/release，再快照全部初始bytes，仍拒絕未知檔案。其後自行發現逐次動態ctypes Structure/POINTER定義可能污染記憶體，停止該部分批次，改為一次初始化API/type；10000-call probe的pointer-type數21→21，working set/private bytes均不變。
+
+上述smoke／失敗／中止資料全保留，不混入本表。最終paired-final-v4全部重測；harness/fixture/environment/source hashes一致，另從原始run檔獨立重算所有cold/steady median/P95、核對22次程序exit/log/result hashes；native logs未見Traceback、Exception ignored、Tcl_AsyncDelete或main-thread錯誤。這是量測一致性查核，不是正式PR審查。
+
+當前harness新增必填--revision-label；前方B→H命令屬當時工具。以下新工具對D及整合版共用同一全新fixture；準備使用獨立程序且不計入cold。舊B若只重跑保存量測須明寫--dialog-cycles 0，因其沒有PR31三位置介面，不會拿它取代本輪D比較。
+
+~~~powershell
+python scripts/benchmark_review_confirm.py --repository <D-checkout> --revision-label 502414b3b38e004a6d8d9cb693cf21b65148765a --fixture <isolated-fixture-8> --rows 2000 --events 500 --groups 8 --operations 21 --dialog-cycles 6 --prepare-fixture-only --output <prepare.json>
+python scripts/benchmark_review_confirm.py --repository <D-checkout> --revision-label 502414b3b38e004a6d8d9cb693cf21b65148765a --fixture <isolated-fixture-8> --rows 2000 --events 500 --groups 8 --operations 21 --dialog-cycles 6 --output <D-pair1.json>
+python scripts/benchmark_review_confirm.py --repository <integrated-checkout> --revision-label <verified-source-label> --fixture <isolated-fixture-8> --rows 2000 --events 500 --groups 8 --operations 21 --dialog-cycles 6 --output <integrated-pair1.json>
+~~~
+
+先設定該interpreter的TCL_LIBRARY／TK_LIBRARY及隔離LOCALAPPDATA。重複5對、交錯次序；0-group用另一新fixture。未知／缺失fixture檔案會拒絕重置，不可忽略。原fixture含絕對路徑；跨電腦重現須生成該電腦自己的共同fixture，再於兩版本間重用相同bytes，不能稱重建後等於本次原始bytes。
+
+未測真教材、大型複雜PDF、打包EXE、長時間記憶體穩態；不補造這些驗收，也不代替完整Windows／runtime／compile／diff／CI或兩輪獨立審查。
+
+## 第五輪最終 source：final-v5（原生 destroy 修正後）
+
+首次正式交審前，新增原生Tcl祖先destroy probe發現兩個owned after callbacks仍pending。實作者將ActualReadingDialog的preview／visibility取消收斂至共用方法，令Python destroy及Destroy事件release都執行。這改變review_gui.py bytes且涉及dialog生命週期，因此沒有把final-v4樣本換標成新候選；使用同一harness、相同實際fixture目錄／全檔bytes，完整另跑20個fresh processes。
+
+- 最終被測 application/fixture constructor 清冊SHA256：0f1c9b99f03b8ed48b4d688aa2244025905891c10211663d49db8b2149707bd3。
+- review_gui.py實際被測bytes SHA256：6944ab054f18e16900ee34723c871310a57ec53be7af16a65649b62ff2013458。
+- Harness仍為SHA256 c8e2b5e92c50f3e3a890ff9d1760a054e2e6992b30340795202ed5d7ccb92b0d；D仍為502414b3b38e004a6d8d9cb693cf21b65148765a。
+- 相對final-v4，被測source清冊只有review_gui.py變更；fixture、interpreter、依賴、螢幕及harness一致。量測時仍是未提交的working source，交審N須由相同bytes綁定。
+- 本輪JSON的active_batch=paired-final-v5、raw_runs是20份新原始結果；previous_source_measurements保留完整final-v4聚合及source，沒有改寫其原樣本hash。
+
+兩組各5對、每程序21 saves及6 dialogs；兩次fixture重置準備及20個量測程序全exit 0。所有median/P95從新raw檔独立重算，log/result hashes與native-error掃描通過。統計／採樣限制沿用上節：首次n=5、穩態n=100相關觀測、nearest-rank P95、500ms防連點及真實預覽均保留。
+
+| 暫存 | 階段 | 指標（median / P95，ms） | D | 修正後整合版 |
+| --- | --- | --- | ---: | ---: |
+| 0 | 首次 | 按下至保存及畫面完成 | 163.30 / 169.79 | 307.24 / 317.89 |
+| 0 | 首次 | 按鈕callback | 150.57 / 155.26 | 1.54 / 1.66 |
+| 0 | 首次 | 每筆最長Tk heartbeat gap | 150.73 / 155.47 | 126.44 / 138.62 |
+| 0 | 穩態 | 按下至保存及畫面完成 | 168.11 / 217.87 | 149.64 / 173.22 |
+| 0 | 穩態 | 按鈕callback | 154.91 / 200.55 | 1.59 / 2.11 |
+| 0 | 穩態 | 每筆最長Tk heartbeat gap | 155.07 / 200.94 | 55.44 / 71.77 |
+| 8 | 首次 | 按下至保存及畫面完成 | 415.20 / 424.29 | 368.83 / 379.33 |
+| 8 | 首次 | 按鈕callback | 401.07 / 410.70 | 1.66 / 1.91 |
+| 8 | 首次 | 每筆最長Tk heartbeat gap | 401.24 / 410.91 | 167.80 / 174.44 |
+| 8 | 穩態 | 按下至保存及畫面完成 | 425.08 / 587.30 | 205.10 / 237.76 |
+| 8 | 穩態 | 按鈕callback | 412.59 / 571.25 | 1.58 / 1.98 |
+| 8 | 穩態 | 每筆最長Tk heartbeat gap | 412.76 / 571.44 | 59.87 / 67.61 |
+
+主要8-group五對各自穩態median總耗時比為0.466～0.490，heartbeat比為0.136～0.144，每對都改善。合併資料total median減少51.8%、heartbeat median減少85.5%。因此主要暫存情境仍保有加速及減少卡頓；不是全情境皆加速的宣稱。
+
+**0-group首次完成延遲增加143.93ms，仍明列為退化。** 新版首次backend median 228.22ms，full rebuild 87.45ms、dependency hashing 56.18ms、JSON save 24.97ms。對照前節所述冷路徑，保留manifest/schema/DB驗證、內容hash前後重驗、snapshot/index建立及fsync/atomic guard，沒有為追速度跳過。後20筆full rebuild全部為0；首次callback及heartbeat仍較D短。分段inclusive且解析等仍有未細分成本，不虛稱精確分配了全部差額。
+
+| 暫存 | 階段 | 記憶體（median / P95，MiB） | D | 修正後整合版 |
+| --- | --- | --- | ---: | ---: |
+| 0 | 首次完成 | Working set | 155.96 / 156.47 | 169.73 / 170.05 |
+| 0 | 首次完成 | Private bytes | 138.92 / 139.33 | 152.80 / 153.15 |
+| 0 | 穩態完成 | Working set | 193.64 / 225.99 | 206.67 / 239.90 |
+| 0 | 穩態完成 | Private bytes | 177.61 / 209.16 | 190.18 / 222.74 |
+| 8 | 首次完成 | Working set | 164.14 / 165.73 | 169.78 / 170.20 |
+| 8 | 首次完成 | Private bytes | 147.18 / 149.03 | 152.62 / 153.27 |
+| 8 | 穩態完成 | Working set | 205.27 / 237.10 | 206.97 / 240.14 |
+| 8 | 穩態完成 | Private bytes | 188.56 / 221.19 | 190.67 / 222.86 |
+
+穩態private median差額：0-group +12.57MiB，8-group +2.11MiB。服務額外保留baseline/ledger/index；沒有精確allocation歸因，因此不將所有OS保留量都歸入cache。
+
+| 暫存 | destroy後／全程（五程序median，MiB） | D | 修正後整合版 |
+| --- | --- | ---: | ---: |
+| 0 | root/window destroy後working set | 407.34 | 414.18 |
+| 0 | root/window destroy後private bytes | 387.46 | 394.33 |
+| 0 | 全程序peak working set | 448.54 | 439.31 |
+| 8 | root/window destroy後working set | 443.50 | 414.20 |
+| 8 | root/window destroy後private bytes | 423.85 | 394.09 |
+| 8 | 全程序peak working set | 500.40 | 439.13 |
+
+8-group D第1～6次dialog close後private median：266.11、308.05、350.00、391.92、433.96、475.65MiB。
+
+8-group 新版第1～6次dialog close後private median：257.95、287.49、317.04、346.57、376.11、405.90MiB。
+
+兩側OS記憶體仍有保留上升，不能宣稱沒有native leak或已達長期穩態。此benchmark的owner close使用Python owner.destroy；新增Tcl-native ancestor destroy分支由另行原生回歸驗證，不冒稱benchmark直接走過它。仍無真教材、EXE或長期記憶體驗收。
+
+### 可攜原始fixture與重現
+
+任務evidence提供benchmark-replay-v5.zip及逐entry SHA256清冊：包含兩個原始marker（全檔initial bytes）、解碼後原始fixture、固定harness、runner/index、stdout/stderr與獨立audit；20份大raw JSON已在本文件連結的candidate JSON，不再重複打包。原fixture含絕對PDF/artifact路徑，exact replay必須重建原路徑及原bytes；若改路徑重新生成fixture，應重新標示新fixture，不得稱與本次bytes相同。ZIP也不包含正式Global資料。

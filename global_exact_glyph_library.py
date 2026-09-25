@@ -442,7 +442,14 @@ def _sha256_text(value: Any, field: str) -> str:
 
 
 def _canonical_reading(value: Any, field: str = "reading") -> str:
-    text = _strict_text(value, field)
+    # The canonical neutral spelling is one prefix U+02D9. NFKC expands it to
+    # SPACE + U+0307, so validate the rest with the original strict text
+    # contract; canonical_bopomofo's multi-syllable path needs this guard.
+    if isinstance(value, str) and value.startswith("˙") and value.count("˙") == 1:
+        _strict_text(value[1:], field)
+        text = value
+    else:
+        text = _strict_text(value, field)
     if canonical_bopomofo(text) != text:
         raise GlobalLibraryValidationError(f"{field} 必須是 already-canonical Bopomofo")
     return text
@@ -770,7 +777,10 @@ def _nonnegative_int(value: Any, field: str) -> int:
     return value
 
 
-def _canonical_string_list(raw: Any, field: str, *, minimum: int = 0) -> tuple[str, ...]:
+def _canonical_string_list(
+    raw: Any, field: str, *, minimum: int = 0,
+    item_validator: Callable[[Any, str], str] = _strict_text,
+) -> tuple[str, ...]:
     if not isinstance(raw, str):
         raise GlobalLibraryValidationError(f"{field} 必須是 canonical JSON string")
     try:
@@ -779,7 +789,7 @@ def _canonical_string_list(raw: Any, field: str, *, minimum: int = 0) -> tuple[s
         raise GlobalLibraryValidationError(f"{field} JSON 無效") from exc
     if not isinstance(parsed, list):
         raise GlobalLibraryValidationError(f"{field} 必須是 JSON list")
-    values = tuple(_strict_text(value, field) for value in parsed)
+    values = tuple(item_validator(value, field) for value in parsed)
     if tuple(sorted(set(values))) != values:
         raise GlobalLibraryValidationError(f"{field} 必須排序且不得重複")
     if len(values) < minimum:
@@ -790,10 +800,9 @@ def _canonical_string_list(raw: Any, field: str, *, minimum: int = 0) -> tuple[s
 
 
 def _canonical_reading_list(raw: Any, field: str, *, minimum: int = 0) -> tuple[str, ...]:
-    values = _canonical_string_list(raw, field, minimum=minimum)
-    for value in values:
-        _canonical_reading(value, field)
-    return values
+    return _canonical_string_list(
+        raw, field, minimum=minimum, item_validator=_canonical_reading,
+    )
 
 
 _TABLE_SQL: dict[str, str] = {

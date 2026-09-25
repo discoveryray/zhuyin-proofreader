@@ -24,9 +24,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version:
-          - "3.12"
-          - "3.13"
+        # Frozen PR30 transition and the explicitly adopted PR29 continuation only.
+        # Push/dispatch and other tasks keep the current single-version contract.
+        python-version: ${{ fromJSON(((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a')) && '["3.12", "3.13"]' || '["3.13"]') }}
 
     steps:
       - name: Check out repository
@@ -37,7 +37,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: ${{ matrix.python-version == '3.13' && '3.13.0' || matrix.python-version }}
 
       - name: Show Python version
         run: python --version
@@ -46,17 +46,25 @@ jobs:
         run: python -m pip install --upgrade pip
 
       - name: Install development dependencies
-        run: python -m pip install -r requirements-dev.txt
+        run: python -m pip install -r requirements-ci.txt
 
       - name: Validate runtime asset integrity
-        run: python -m unittest discover -s tests -p "test_runtime_asset_manifest_integrity_v562.py"
+        run: python -m pytest tests/test_runtime_asset_manifest_integrity_v562.py -q
+
+      - name: Audit test entrypoint coverage
+        run: python scripts/test_entrypoint_audit.py collect tmp/ci-test-inventory.json
 
       - name: Run full unittest suite
+        if: ${{ ((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a')) }}
         run: python -m unittest discover -s tests -p "test_*.py"
 
       - name: Run full pytest suite
         if: ${{ !cancelled() }}
-        run: python -m pytest tests/ -q -rs
+        run: python -m pytest tests/ -q -rs --junitxml=tmp/ci-pytest.xml
+
+      - name: Verify GUI test execution
+        if: ${{ !cancelled() }}
+        run: python scripts/test_entrypoint_audit.py verify-gui tmp/ci-test-inventory.json --junit tmp/ci-pytest.xml
 
       - name: Compile Python sources
         if: ${{ !cancelled() }}
