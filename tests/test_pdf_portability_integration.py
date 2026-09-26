@@ -9,6 +9,7 @@ import hashlib
 import json
 import sys
 import tkinter as tk
+from threading import Barrier, Event, Thread, current_thread
 from pathlib import Path
 from unittest.mock import patch
 
@@ -784,6 +785,130 @@ def test_actual_excel_prepared_and_post_ack_crash_windows_can_resume(tmp_path, m
             after_refresh / "校對工作階段.json")["session_id"]
         assert sp.import_actual_gpt_decisions(after_refresh, filled)[0] == 0
     assert not list((tmp_path / "isolated-localappdata").rglob("*.sqlite*"))
+
+
+@pytest.mark.parametrize("crash_after_commit", [False, True])
+def test_parallel_actual_excel_imports_preserve_marker_and_recovery(tmp_path, monkeypatch, crash_after_commit):
+    import global_glyph_promotion as promotion
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
+    first, second = _pdfs(tmp_path)
+    source, target = tmp_path / "source", tmp_path / "target"
+    with patch.object(sp, "decode", side_effect=_synthetic_unresolved_decode), \
+         patch.object(sp, "actual_workbook_global_exact_dependencies", return_value=()), \
+         patch("check_pronunciation_candidates.actual_workbook_global_exact_dependencies", return_value=()):
+        sp.run_pipeline_pdfs([first], source, defer_excel_reports=True)
+        sp.run_pipeline_pdfs([second], target, defer_excel_reports=True)
+        sp.export_actual_pending_for_gpt(source)
+        workbook = load_workbook(source / "actual待判定_GPT包" / "actual待判定_給GPT.xlsx")
+        sheet = workbook["actual待判定"]
+        headers = [cell.value for cell in sheet[1]]
+        for key, value in {"decision": "VERIFIED", "actual_reading": "ㄐㄩㄝˊ",
+                           "confidence": "高", "sample_a_checked": "Y"}.items():
+            sheet.cell(2, headers.index(key) + 1, value)
+        filled = tmp_path / "filled-actual.xlsx"
+        workbook.save(filled)
+        workbook.close()
+        root = sp.project_actual_evidence_root(target)
+        original_overrides = ar._read_csv(root / ar.OCCURRENCE_OVERRIDE_FILE, ar.OVERRIDE_HEADERS)
+        simultaneous_preflight = Barrier(2)
+        first_marker = Event()
+        second_resume = Event()
+        first_done = Event()
+        marker_owner = []
+        results, errors = {}, {}
+        original_proof = portability.load_excel_content_proof
+        original_save = sp.json_save
+        original_resume = portability.resume_actual_excel_project
+
+        def preflight(*args, **kwargs):
+            result = original_proof(*args, **kwargs)
+            simultaneous_preflight.wait(20)
+            return result
+
+        def delayed_marker(path, value, **kwargs):
+            if Path(path).name == portability.INCOMPLETE_FILE and value.get("status") == "ACTUAL_EXCEL_REFRESH_PENDING":
+                if current_thread().name == "first":
+                    result = original_save(path, value, **kwargs)
+                    marker_owner.append(current_thread().name)
+                    first_marker.set()
+                    second_resume.wait(3)
+                    return result
+                first_marker.wait(3)
+                result = original_save(path, value, **kwargs)
+                marker_owner.append(current_thread().name)
+                return result
+            return original_save(path, value, **kwargs)
+
+        def delayed_resume(path):
+            if current_thread().name == "second":
+                second_resume.set()
+                first_done.wait(3)
+            if crash_after_commit and marker_owner == [current_thread().name]:
+                raise SystemExit("power loss after COMMITTED actual Excel")
+            return original_resume(path)
+
+        def run():
+            try:
+                results[current_thread().name] = sp.import_actual_gpt_decisions(target, filled)
+            except BaseException as exc:
+                errors[current_thread().name] = exc
+            finally:
+                if current_thread().name == "first":
+                    first_done.set()
+
+        with patch.object(portability, "load_excel_content_proof", side_effect=preflight), \
+             patch.object(sp, "json_save", side_effect=delayed_marker), \
+             patch.object(portability, "resume_actual_excel_project", side_effect=delayed_resume):
+            threads = [Thread(target=run, name=name) for name in ("first", "second")]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(30)
+        assert not any(thread.is_alive() for thread in threads)
+        if crash_after_commit:
+            assert not results
+            assert len(errors) == 2
+            assert any(isinstance(error, SystemExit) for error in errors.values())
+            assert (target / portability.INCOMPLETE_FILE).exists()
+            assert promotion.committed_project_recovery(root) is not None
+            resumed = portability.resume_actual_excel_project(target)
+            assert resumed["project_actual_commit"] == "COMMITTED"
+            assert resumed["global_promotion_delivery"]["status"] == "NO_PENDING"
+        else:
+            assert len(results) == 1, {name: str(error) for name, error in errors.items()}
+            assert len(errors) == 1
+            result = next(iter(results.values()))
+            assert result[0] == 1
+            assert result.status["global_promotion_delivery"]["status"] == "NO_PENDING"
+        assert not (target / portability.INCOMPLETE_FILE).exists()
+        assert not (root / promotion.PROJECT_TRANSACTION_FILE).exists()
+        assert promotion.committed_project_recovery(root) is None
+        overrides = ar._read_csv(root / ar.OCCURRENCE_OVERRIDE_FILE, ar.OVERRIDE_HEADERS)
+        assert len(overrides) == len(original_overrides) + 1
+        imported = [row for row in overrides if row["pdf_contains"] == second.stem]
+        assert len(imported) == 1 and "source_excel_sha256" in imported[0]["note"]
+        assert sp.json_load_strict(target / "pipeline_status.json")["user_report"] == str(
+            target / "注音校對_最終報告.xlsx")
+        assert portability._load_project(target)[0]["session_id"] == sp.json_load_strict(
+            target / "校對工作階段.json")["session_id"]
+        if not crash_after_commit:
+            assert sp.import_actual_gpt_decisions(target, filled)[0] == 0
+            original_load = portability.load_excel_content_proof
+            def incomplete_after_preflight(*args, **kwargs):
+                result = original_load(*args, **kwargs)
+                sp.json_save(target / portability.INCOMPLETE_FILE, {
+                    "status": "ACTUAL_EXCEL_REFRESH_PENDING",
+                    "source_excel_sha256": portability._sha(filled),
+                    "pre_state": portability._actual_excel_file_snapshot(target),
+                })
+                return result
+            with patch.object(portability, "load_excel_content_proof", side_effect=incomplete_after_preflight):
+                with pytest.raises(ValueError, match="待專用恢復"):
+                    sp.import_actual_gpt_decisions(target, filled)
+            assert (target / portability.INCOMPLETE_FILE).exists()
+            assert portability.resume_actual_excel_project(target)["project_actual_commit"] == "ROLLED_BACK"
+        assert not list((tmp_path / "isolated-localappdata").rglob("*.sqlite*"))
 
 
 def test_existing_target_event_cannot_bypass_six_gate_actual_evidence_match(tmp_path, monkeypatch):

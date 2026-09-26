@@ -970,7 +970,7 @@ def import_actual_excel(target_dir: Path, xlsx: Path):
     import standalone_proofread as sp
     from global_glyph_promotion import (
         direct_visual_project_transaction, load_promotion_outbox,
-        post_commit_recovery_plan_from_results,
+        post_commit_recovery_plan_from_results, PROJECT_TRANSACTION_FILE,
     )
 
     target_dir, xlsx = Path(target_dir).resolve(), Path(xlsx).resolve()
@@ -1152,40 +1152,57 @@ def import_actual_excel(target_dir: Path, xlsx: Path):
                 sp.json_save(receipt, {"version": 1, "conflicts": all_conflicts},
                              expected_sha256=previous_sha)
         raise ValueError("Excel actual 同位置已有不同判定；既有與本次來源均保留於跨Excel_actual衝突.json，目標未覆寫")
+    marker = target_dir / INCOMPLETE_FILE
     if not changed:
+        with sp.project_delivery_lock(root):
+            if marker.exists() or (root / PROJECT_TRANSACTION_FILE).exists():
+                raise ValueError("目標 actual Excel 交易待專用恢復；不能回報匯入完成")
+            if ar._read_csv(override_path, ar.OVERRIDE_HEADERS) != original_rows:
+                raise ValueError("目標 actual occurrence 證據於匯入期間變動；請重新匯入核對")
         return sp.ActualImportResult(0, 0, target_dir / "注音校對_最終報告.xlsx",
                                      {"project_actual_commit": "NO_CHANGES", "global_promotion_delivery": "NOT_ATTEMPTED"})
-    marker = target_dir / INCOMPLETE_FILE
-    sp.json_save(marker, {"status": "ACTUAL_EXCEL_REFRESH_PENDING",
-                          "source_excel_sha256": workbook_sha,
-                          "pre_state": _actual_excel_file_snapshot(target_dir)})
-    committed = False
-    try:
-        with direct_visual_project_transaction(root) as bind_recovery_plan:
-            if any(item["status"] == "PENDING" for item in load_promotion_outbox(root)["items"]):
-                raise ValueError("目標 Global outbox 於匯入期間變動；未寫入 actual")
-            live_manifest = sp.json_load_strict(target_dir / "校對工作階段.json")
-            sp.validate_manifest_integrity(live_manifest)
-            if live_manifest["manifest_integrity_sha256"] != target_manifest["manifest_integrity_sha256"]:
-                raise ValueError("目標封印於 actual Excel 匯入期間變動；未寫入")
-            if ar._read_csv(override_path, ar.OVERRIDE_HEADERS) != original_rows:
-                raise ValueError("目標 actual occurrence 證據於匯入期間變動；未覆寫")
-            ar._write_csv(override_path, ar.OVERRIDE_HEADERS,
-                          sorted(by_key.values(), key=lambda row: tuple(row[field] for field in fields)))
-            bind_recovery_plan(post_commit_recovery_plan_from_results(recovery_results))
-        committed = True
-    except Exception:
-        if not committed:
-            marker.unlink(missing_ok=True)
-        raise
-    recovered = resume_actual_excel_project(target_dir)
-    if recovered.get("project_actual_commit") != "COMMITTED":
-        raise ValueError("Excel actual 交易未取得 COMMITTED 恢復紀錄")
-    return sp.ActualImportResult(len(decisions), recovered["cleared_actual_dependent_event_count"],
-                                 Path(recovered["refresh_report"]),
-                                 {"project_actual_commit": "COMMITTED",
-                                  "global_promotion_delivery": recovered["global_promotion_delivery"],
-                                  "project_refresh": recovered["project_refresh"]})
+    # Preflight may take time, so bind the live target, marker and durable
+    # transaction under one lock. A second import must never own our marker.
+    with sp.project_delivery_lock(root):
+        if marker.exists() or (root / PROJECT_TRANSACTION_FILE).exists():
+            raise ValueError("目標 actual Excel 交易待專用恢復；未開始新匯入")
+        live_manifest = sp.json_load_strict(target_dir / "校對工作階段.json")
+        sp.validate_manifest_integrity(live_manifest)
+        sp.validate_output_artifact_hashes(live_manifest)
+        if live_manifest["manifest_integrity_sha256"] != target_manifest["manifest_integrity_sha256"]:
+            raise ValueError("目標封印於 actual Excel 匯入期間變動；未寫入")
+        live_db = sp.normalize_db(sp.json_load_strict(target_dir / "人工判定資料庫.json"))
+        if live_db != target_db or _actual_transfer_state(target_dir, live_manifest)["status"] != "NONE":
+            raise ValueError("目標人工判定或 actual 暫存於匯入期間變動；未寫入")
+        if ar._read_csv(override_path, ar.OVERRIDE_HEADERS) != original_rows:
+            raise ValueError("目標 actual occurrence 證據於匯入期間變動；未覆寫")
+        if any(item["status"] == "PENDING" for item in load_promotion_outbox(root)["items"]):
+            raise ValueError("目標 Global outbox 於匯入期間變動；未寫入 actual")
+        owned_marker = {"status": "ACTUAL_EXCEL_REFRESH_PENDING",
+                        "source_excel_sha256": workbook_sha,
+                        "import_token": uuid.uuid4().hex,
+                        "pre_state": _actual_excel_file_snapshot(target_dir)}
+        sp.json_save(marker, owned_marker)
+        try:
+            with direct_visual_project_transaction(root) as bind_recovery_plan:
+                ar._write_csv(override_path, ar.OVERRIDE_HEADERS,
+                              sorted(by_key.values(), key=lambda row: tuple(row[field] for field in fields)))
+                bind_recovery_plan(post_commit_recovery_plan_from_results(recovery_results))
+        except Exception:
+            # A PREPARED/COMMITTED journal owns recovery. Only remove our own
+            # marker after a fully rolled-back precommit failure.
+            if not (root / PROJECT_TRANSACTION_FILE).exists() and marker.exists():
+                if sp.json_load_strict(marker) == owned_marker:
+                    marker.unlink()
+            raise
+        recovered = resume_actual_excel_project(target_dir)
+        if recovered.get("project_actual_commit") != "COMMITTED":
+            raise ValueError("Excel actual 交易未取得 COMMITTED 恢復紀錄")
+        return sp.ActualImportResult(len(decisions), recovered["cleared_actual_dependent_event_count"],
+                                     Path(recovered["refresh_report"]),
+                                     {"project_actual_commit": "COMMITTED",
+                                      "global_promotion_delivery": recovered["global_promotion_delivery"],
+                                      "project_refresh": recovered["project_refresh"]})
 
 
 def _legacy_actual_already_imported(target_dir, manifest, db, xlsx, rows):
@@ -1257,6 +1274,14 @@ def _actual_excel_file_snapshot(output_dir: Path):
 
 def resume_actual_excel_project(output_dir: Path):
     """Resolve only the durable actual-Excel marker, never a publication marker."""
+    import standalone_proofread as sp
+
+    output_dir = Path(output_dir).resolve()
+    with sp.project_delivery_lock(sp.project_actual_evidence_root(output_dir)):
+        return _resume_actual_excel_project_locked(output_dir)
+
+
+def _resume_actual_excel_project_locked(output_dir: Path):
     import standalone_proofread as sp
     from global_glyph_promotion import (
         acknowledge_project_refresh, committed_project_recovery,
