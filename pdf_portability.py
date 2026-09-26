@@ -385,21 +385,35 @@ def import_project_decisions(source_dir: Path, target_dir: Path) -> dict[str, An
         # target direct visual checks: doing so would mint an independent Global
         # admission without anyone inspecting the local PDF. The normal actual
         # review UI must perform a new visual check on the target project.
-        receipt = {
+        source_receipt = {
             **source_actual,
             "target_session_id": target_manifest["session_id"],
+            "source_pdf_sha256": [info["pdf_sha256"] for info in source_manifest["pdfs"]],
             "mapped_occurrences": {
                 source["occurrence_id"]: target["occurrence_id"]
                 for source, target in reviews.values()
             },
         }
         receipt_path = target_dir / PENDING_ACTUAL_FILE
-        if receipt_path.exists():
-            existing = sp.json_load_strict(receipt_path)
-            if existing != receipt:
-                raise ValueError("目標已有不同來源 actual 待核對狀態；未覆寫")
-        else:
-            sp.json_save(receipt_path, receipt)
+        with sp.project_delivery_lock(sp.project_actual_evidence_root(target_dir)):
+            existing = (sp.json_load_strict(receipt_path) if receipt_path.exists()
+                        else {"status": "RECHECK_LOCAL_PDF_REQUIRED", "sources": []})
+            if (existing.get("status") != "RECHECK_LOCAL_PDF_REQUIRED"
+                    or not isinstance(existing.get("sources"), list)):
+                raise ValueError("目標來源 actual 暫存紀錄格式無法驗證；未覆寫")
+            sources = existing["sources"]
+            same_identity = [item for item in sources if (
+                item.get("source_session_id"), item.get("source_manifest_integrity_sha256")
+            ) == (
+                source_receipt["source_session_id"], source_receipt["source_manifest_integrity_sha256"]
+            )]
+            if same_identity and same_identity != [source_receipt]:
+                raise ValueError("同一來源 actual 暫存與既存紀錄不同；未覆寫")
+            if not same_identity:
+                sp.json_save(receipt_path, {
+                    "status": "RECHECK_LOCAL_PDF_REQUIRED",
+                    "sources": [*sources, source_receipt],
+                }, expected_sha256=_sha(receipt_path) if receipt_path.exists() else None)
     if imported:
         path = target_dir / "人工判定資料庫.json"
         before = _sha(path)

@@ -343,8 +343,10 @@ def test_source_actual_staging_is_preserved_as_recheck_not_new_global_evidence(t
     result = portable.import_project_decisions(source, target)
     assert result["actual_staging"] == "RECHECK_LOCAL_PDF_REQUIRED"
     receipt = sp.json_load_strict(target / portable.PENDING_ACTUAL_FILE)
-    assert receipt["staging"] == source_staging
-    assert receipt["source_session_id"] == "source"
+    assert receipt["status"] == "RECHECK_LOCAL_PDF_REQUIRED"
+    assert len(receipt["sources"]) == 1
+    assert receipt["sources"][0]["staging"] == source_staging
+    assert receipt["sources"][0]["source_session_id"] == "source"
     assert ar.load_manual_actual_staging(sp.project_actual_evidence_root(target))["staged_groups"] == []
     from standalone_gui import project_status_details
     assert "重新核對" in project_status_details(target)[0]
@@ -481,6 +483,77 @@ def test_two_independent_projects_merge_in_new_project_and_preserve_sources(tmp_
     assert (first / "人工判定資料庫.json").read_bytes() == original_a
     assert (second / "人工判定資料庫.json").read_bytes() == original_b
     assert not (merged / portable.INCOMPLETE_FILE).exists()
+
+
+def test_two_sources_keep_both_actual_staging_originals_without_promotion(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
+    files = [tmp_path / f"{letter}.pdf" for letter in "ABC"]
+    for letter, path in zip("ABC", files):
+        pdf(path, title=letter)
+    first, second, merged = [tmp_path / name for name in ("first", "second", "merged")]
+    first_manifest, _ = project(first, files[0], session="A", event_positions=(0,))
+    second_manifest, _ = project(second, files[1], session="B", event_positions=(1,))
+    originals = []
+    for folder, manifest, index in ((first, first_manifest, 0), (second, second_manifest, 1)):
+        group = ar.build_actual_group_for_entry(manifest["records"], manifest["records"][index])
+        evidence_root = sp.project_actual_evidence_root(folder)
+        ar.stage_manual_actual_group(
+            evidence_root, group, "ㄐㄩㄝˊ",
+            checked_occurrence_ids=[manifest["records"][index]["occurrence_id"]],
+            source="manual visual actual confirmation",
+        )
+        originals.append(ar.load_manual_actual_staging(evidence_root))
+
+    def build_target(paths, output_dir):
+        project(output_dir, files[2], session="C")
+
+    with patch.object(sp, "run_pipeline_pdfs", side_effect=build_target):
+        result = portable.merge_projects([first, second], files[2], merged)
+    assert result["imported"] == 2
+    receipt = sp.json_load_strict(merged / portable.PENDING_ACTUAL_FILE)
+    assert [source["source_session_id"] for source in receipt["sources"]] == ["A", "B"]
+    assert [source["staging"] for source in receipt["sources"]] == originals
+    assert portable.import_project_decisions(first, merged)["duplicates"] == 1
+    assert sp.json_load_strict(merged / portable.PENDING_ACTUAL_FILE) == receipt
+    assert ar.load_manual_actual_staging(sp.project_actual_evidence_root(merged))["staged_groups"] == []
+    assert not (tmp_path / "isolated-localappdata").exists()
+    assert not (merged / portable.INCOMPLETE_FILE).exists()
+
+
+def test_b_new_actual_override_returns_to_a_in_new_project(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
+    first_pdf, b_pdf = tmp_path / "first.pdf", tmp_path / "download-b.pdf"
+    pdf(first_pdf, title="A")
+    pdf(b_pdf, title="B")
+    first, b, back = [tmp_path / name for name in ("first-project", "b-project", "back-on-a")]
+    project(first, first_pdf, session="A", event_positions=(0,))
+    portable.prepare_portable_project(first)
+    first_pdf.rename(tmp_path / "missing-on-b.pdf")
+
+    def build_target(paths, output_dir):
+        project(output_dir, paths[0], session="B" if output_dir == b else "A-return")
+
+    def refresh_target(output_dir):
+        reseal_actual_dynamic(output_dir, b_pdf if output_dir == b else first_pdf)
+
+    with patch.object(sp, "run_pipeline_pdfs", side_effect=build_target), \
+         patch.object(sp, "refresh_actual_project", side_effect=refresh_target):
+        portable.continue_project(first, b_pdf, b)
+        b_manifest = sp.json_load_strict(b / "校對工作階段.json")
+        add_override(b, b_manifest["records"][1])
+        reseal_actual_dynamic(b, b_pdf)
+        portable.prepare_portable_project(b)
+        (tmp_path / "missing-on-b.pdf").rename(first_pdf)
+        result = portable.merge_projects([first, b], first_pdf, back)
+    assert result["matched_actual_overrides"] == 1
+    assert result["sources"][1]["duplicates"] == 1
+    returned = ar._read_csv(sp.project_actual_evidence_root(back) / ar.OCCURRENCE_OVERRIDE_FILE,
+                            ar.OVERRIDE_HEADERS)
+    assert len(returned) == 1
+    assert returned[0]["actual_reading"] == "ㄐㄩㄝˊ"
+    assert b_manifest["records"][1]["occurrence_id"] in returned[0]["note"]
+    assert len(sp.json_load_strict(back / "人工判定資料庫.json")["events"]) == 1
+    assert not (tmp_path / "isolated-localappdata").exists()
 
 
 def test_two_project_conflicting_decisions_keep_both_sources(tmp_path):
