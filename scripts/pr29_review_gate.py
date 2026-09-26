@@ -614,8 +614,10 @@ def validate_merge_state(state):
         _fields(finding, "id source_ref description status verification_ref verified_head", "known_finding")
         for field in ("id", "source_ref", "description"):
             _text(finding[field], "known_finding." + field)
-        _require(finding["status"] in ("verified_on_candidate", "open", "unknown"),
+        _require(finding["status"] in ("verified_on_candidate", "pending_pr_ci", "open", "unknown"),
                  "unknown historical finding status")
+        if finding["status"] == "pending_pr_ci":
+            _require(finding["id"] == "KF-07", "only KF-07 may await the new candidate PR CI")
         if finding["status"] == "verified_on_candidate":
             _text(finding["verification_ref"], "known_finding.verification_ref")
             _require(finding["verified_head"] == current["head"],
@@ -821,8 +823,11 @@ def next_merge_action(state):
         return _merge_decision(state, "STOP", "sixth-round user authorization is absent or revoked")
     if not current["working_tree_clean"]:
         return _merge_decision(state, "STOP", "candidate working tree is not clean")
-    if any(f["status"] != "verified_on_candidate" for f in state["continuation"]["known_findings"]):
+    findings = state["continuation"]["known_findings"]
+    if any(f["status"] != "verified_on_candidate" and not
+           (f["id"] == "KF-07" and f["status"] == "pending_pr_ci") for f in findings):
         return _merge_decision(state, "STOP", "known finding lacks sixth-candidate verification")
+    ci_finding = next(f for f in findings if f["id"] == "KF-07")
     if not pr["findings_checked"]:
         return _merge_decision(state, "REFRESH_EVIDENCE", "latest PR findings have not been checked")
     if pr["new_blockers"]:
@@ -850,6 +855,9 @@ def next_merge_action(state):
             return _merge_decision(state, *problem)
         if ci["tree"] != current["tree"]:
             return _merge_decision(state, "REFRESH_EVIDENCE", "merged record has mismatched PR CI tree")
+        if (ci_finding["status"] != "verified_on_candidate" or
+                ci_finding["verification_ref"] != ci["evidence_ref"]):
+            return _merge_decision(state, "REFRESH_EVIDENCE", "KF-07 lacks exact C PR CI raw evidence")
         merge = state["merge"]
         if merge is None:
             return _merge_decision(state, "VERIFY_MERGE", "read actual PR merge record and Git object")
@@ -890,6 +898,8 @@ def next_merge_action(state):
     if remote["base"] != DEVELOP or pr["base_sha"] != DEVELOP or remote["head"] not in (FIFTH_HEAD, head):
         return _merge_decision(state, "STOP", "external base or feature ref drifted from fixed D/N/C")
     before_push = remote["head"] == FIFTH_HEAD
+    if before_push and ci_finding["status"] != "pending_pr_ci":
+        return _merge_decision(state, "STOP", "unpublished C cannot claim its own PR CI finding resolved")
     if pr["head_sha"] != remote["head"]:
         return _merge_decision(state, "REFRESH_EVIDENCE", "direct feature ref and original PR API disagree")
     if before_push and (not pr["draft"] or state["pr_ci"] is not None or
@@ -918,6 +928,9 @@ def next_merge_action(state):
         return _merge_decision(state, *problem)
     if ci["tree"] != current["tree"]:
         return _merge_decision(state, "REFRESH_EVIDENCE", "PR CI tested a different integration tree")
+    if (ci_finding["status"] != "verified_on_candidate" or
+            ci_finding["verification_ref"] != ci["evidence_ref"]):
+        return _merge_decision(state, "REFRESH_EVIDENCE", "KF-07 awaits exact C PR CI raw evidence")
     second = _review(state, 2, DEVELOP, head)
     if second is not None and second["verdict"] == "BLOCKED":
         kind = second["blocker_kind"]

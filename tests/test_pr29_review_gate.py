@@ -103,6 +103,8 @@ def sixth_state(stage="draft"):
                                     contains_fifth=True)
     for finding in evidence["continuation"]["known_findings"]:
         finding["verified_head"] = HEAD
+        if finding["id"] == "KF-07":
+            finding["verification_ref"] = evidence["pr_ci"]["evidence_ref"]
     evidence["local_validation"] = {"head": HEAD, "platform": "Windows",
                                     "python_version": "3.13.0", "evidence_ref": "fixture://local",
                                     "checks": {name: {"status": "success", "evidence_ref": "fixture://" + name}
@@ -123,6 +125,8 @@ def sixth_state(stage="draft"):
         evidence["pr"]["head_sha"] = gate.FIFTH_HEAD
         evidence["pr_ci"] = None
         evidence["reviews"] = [report(1)]
+        ci_finding = next(f for f in evidence["continuation"]["known_findings"] if f["id"] == "KF-07")
+        ci_finding.update(status="pending_pr_ci", verification_ref=None, verified_head=None)
     if stage in ("ready", "merged"):
         evidence["pr"]["draft"] = False
         evidence["ready_transition"] = {
@@ -518,6 +522,39 @@ class PR29MergeContinuationTests(unittest.TestCase):
             self.action(evidence, "STOP")
         evidence = sixth_state("ready"); evidence["authorization"]["operations"].remove("merge")
         self.action(evidence, "STOP")
+
+    def test_kf07_c_ci_is_pending_only_until_exact_new_pr_run(self):
+        local = sixth_state("local")
+        self.action(local, "PUSH_CANDIDATE")
+        local["reviews"] = []
+        self.action(local, "REQUEST_REVIEW_1")
+        local = sixth_state("local")
+        ci_finding = next(f for f in local["continuation"]["known_findings"] if f["id"] == "KF-07")
+        ci_finding.update(status="verified_on_candidate", verification_ref="fixture://old-N-ci",
+                          verified_head=HEAD)
+        self.action(local, "STOP")
+        for ci_status, conclusion, expected in ((None, None, "WAIT_PR_CI"),
+                                                 ("queued", None, "WAIT_PR_CI"),
+                                                 ("completed", "failure", "INVESTIGATE_CI"),
+                                                 ("completed", "success", "REFRESH_EVIDENCE")):
+            evidence = sixth_state()
+            ci_finding = next(f for f in evidence["continuation"]["known_findings"] if f["id"] == "KF-07")
+            ci_finding.update(status="pending_pr_ci", verification_ref=None, verified_head=None)
+            if ci_status is None: evidence["pr_ci"] = None
+            else: evidence["pr_ci"].update(status=ci_status, conclusion=conclusion)
+            self.action(evidence, expected)
+        evidence = sixth_state(); evidence["reviews"] = [report(1)]
+        self.action(evidence, "REQUEST_REVIEW_2")
+        self.action(sixth_state(), "READY_FOR_REVIEW")
+        evidence = sixth_state(); ci_finding = next(f for f in evidence["continuation"]["known_findings"] if f["id"] == "KF-07")
+        ci_finding["verification_ref"] = "fixture://old-N-ci"
+        self.action(evidence, "REFRESH_EVIDENCE")
+        evidence = sixth_state(); finding = next(f for f in evidence["continuation"]["known_findings"] if f["id"] == "KF-01")
+        finding.update(status="pending_pr_ci", verification_ref=None, verified_head=None)
+        self.action(evidence, "STOP")
+        evidence = sixth_state("merged"); ci_finding = next(f for f in evidence["continuation"]["known_findings"] if f["id"] == "KF-07")
+        ci_finding.update(status="pending_pr_ci", verification_ref=None, verified_head=None)
+        self.assertNotEqual(self.action(evidence, gate.next_action(evidence)["action"])["action"], "COMPLETE")
 
     def test_reviews_are_fresh_independent_and_no_seventh_code_fix(self):
         for number in (0, 1):
