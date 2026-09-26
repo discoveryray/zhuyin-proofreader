@@ -1179,7 +1179,7 @@ class ReviewApp:
         )
 
     def current(self):
-        return self.focused_entry or (self.records[self.index] if self.records else None)
+        return getattr(self, "focused_entry", None) or (self.records[self.index] if self.records else None)
 
     def return_to_pending(self):
         if self._save_busy() or getattr(self, "_apply_in_progress", False):
@@ -1206,8 +1206,8 @@ class ReviewApp:
             self.show()
 
     def _last_expected_target(self):
-        review_id = self.last_expected_review_id
-        event = self.db.get("events", {}).get(review_id)
+        review_id = getattr(self, "last_expected_review_id", None)
+        event = getattr(self, "db", {}).get("events", {}).get(review_id)
         if not isinstance(event, dict) or "manual_expected_decision" not in event:
             return None
         return review_id
@@ -1229,7 +1229,7 @@ class ReviewApp:
         self.save_event(entry, copy.deepcopy(previous), focus_after_save=True)
 
     def _remember_previous_expected_event(self, entry, event):
-        previous = copy.deepcopy(self.db.get("events", {}).get(entry["review_id"]))
+        previous = copy.deepcopy(getattr(self, "db", {}).get("events", {}).get(entry["review_id"]))
         if previous is not None:
             previous.pop("undo_previous_event", None)
         event["undo_previous_event"] = previous
@@ -1336,7 +1336,7 @@ class ReviewApp:
                    "db": self.db, "output_dir": self.output_dir,
                    "entry": entry, "event": event, "explain_expected": explain_expected,
                    "current_review_id": current.get("review_id") if current else None,
-                   "focus_after_save": focus_after_save or self.focused_entry is not None,
+                   "focus_after_save": focus_after_save or getattr(self, "focused_entry", None) is not None,
                    "started": started}
         self._save_request = request
         completed = queue.Queue(maxsize=1)
@@ -1464,7 +1464,7 @@ class ReviewApp:
     def next(self):
         if self._save_busy() or getattr(self, "_apply_in_progress", False):
             return
-        if self.focused_entry is not None:
+        if getattr(self, "focused_entry", None) is not None:
             self.focused_entry = None
         if not self.records:
             return
@@ -1877,7 +1877,7 @@ class ReviewApp:
         lane = review_lane(entry)
         primary_text, secondary_text = review_action_labels(state)
         primary_command = secondary_command = None
-        if self.focused_entry is not None and valid_manual_expected_decision(entry):
+        if getattr(self, "focused_entry", None) is not None and valid_manual_expected_decision(entry):
             primary_text = "輸入其他應標注音"
             primary_command = self.resolve_expected
             if (can_confirm_current_expected(entry)
@@ -1908,13 +1908,16 @@ class ReviewApp:
             self.secondary.config(text=secondary_text, state="normal", command=secondary_command)
             buttons.append(self.secondary)
         if hasattr(self, "decision_actions"):
-            self.decision_actions.set_items(buttons + ([] if self.focused_entry is not None else [self.later]) + [self.more_button])
+            self.decision_actions.set_items(buttons + ([] if getattr(self, "focused_entry", None) is not None else [self.later]) + [self.more_button])
 
     def show(self):
         self._show_staging_status()
-        self.undo_expected_button.config(state="normal" if self._last_expected_target() else "disabled")
-        self.return_button.config(state="normal" if self.focused_entry is not None else "disabled")
-        self.navigation.refresh()
+        if hasattr(self, "undo_expected_button"):
+            self.undo_expected_button.config(state="normal" if self._last_expected_target() else "disabled")
+        if hasattr(self, "return_button"):
+            self.return_button.config(state="normal" if getattr(self, "focused_entry", None) is not None else "disabled")
+        if hasattr(self, "navigation"):
+            self.navigation.refresh()
         entry = self.current()
         if not entry:
             title, detail, primary_text = self._empty_actionable_state()
@@ -1945,7 +1948,7 @@ class ReviewApp:
         self.status.config(text=(
             f"{'已確認項目' if self._last_expected_target() == entry.get('review_id') else '返回此項目'}"
             f"｜課本頁 {entry.get('printed_page', '')}｜{state}"
-            if self.focused_entry is not None else
+            if getattr(self, "focused_entry", None) is not None else
             f"{LANE_LABELS[lane]}｜本組剩餘 {lane_count} 筆｜稍後 {deferred} 筆{staged_status}"
         ))
         help_text = STATE_HELP.get(state, "這一筆需要人工處理。")
