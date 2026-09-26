@@ -395,6 +395,122 @@ def add_override(root: Path, entry, reading="ㄐㄩㄝˊ"):
     return row
 
 
+def pending_actual_excel_conflict(target: Path, target_manifest, source_manifest):
+    """Model a sealed, internally valid unresolved actual-import receipt."""
+    target_entry, source_entry = target_manifest["records"][0], source_manifest["records"][0]
+    previous = ar._read_csv(sp.project_actual_evidence_root(target) / ar.OCCURRENCE_OVERRIDE_FILE,
+                            ar.OVERRIDE_HEADERS)[0]
+    group_id, snapshot = "verified-source-group", "verified-source-snapshot"
+    source_reading = "ㄐㄩㄝˇ"
+    provenance = {
+        "source_session_id": source_manifest["session_id"],
+        "source_manifest_integrity_sha256": source_manifest["manifest_integrity_sha256"],
+        "source_pdf_sha256": [source_entry["pdf_sha256"]],
+        "source_group_id": group_id, "source_group_snapshot": snapshot,
+        "source_occurrence_ids": [source_entry["occurrence_id"]],
+        "source_review_ids": [source_entry["review_id"]],
+        "source_roster": [{"occurrence_id": source_entry["occurrence_id"],
+                           "review_id": source_entry["review_id"],
+                           "pdf_sha256": source_entry["pdf_sha256"]}],
+        "target_session_id": target_manifest["session_id"],
+        "target_occurrence_ids": [target_entry["occurrence_id"]],
+        "source_excel_sha256": "b" * 64, "source_excel_row": 2,
+        "source_decision": {"decision": "VERIFIED", "actual_reading": source_reading,
+                            "group_id": group_id, "group_snapshot": snapshot,
+                            "sample_a_occurrence_id": source_entry["occurrence_id"]},
+    }
+    receipt = portable._sealed_actual_excel_conflicts([{
+        "target_occurrence_id": target_entry["occurrence_id"],
+        "target_review_id": target_entry["review_id"],
+        "target_pdf_sha256": target_entry["pdf_sha256"],
+        "target_record": previous, "source_record": provenance,
+        "source_reading": source_reading,
+    }])
+    path = target / portable.ACTUAL_EXCEL_CONFLICT_FILE
+    sp.json_save(path, receipt)
+    assert portable.actual_excel_conflict_state(
+        target, target_manifest, sp.json_load_strict(target / "人工判定資料庫.json")) == [target_entry["review_id"]]
+    return path.read_bytes()
+
+
+@pytest.mark.parametrize("malformed", [False, True])
+def test_expected_excel_rechecks_actual_conflict_after_preflight(tmp_path, monkeypatch, malformed):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
+    a_pdf, b_pdf = tmp_path / "A.pdf", tmp_path / "B.pdf"
+    pdf(a_pdf, title="A")
+    pdf(b_pdf, title="B")
+    a, b = tmp_path / "A", tmp_path / "B"
+    source_manifest, _ = project(a, a_pdf, session="A")
+    target_manifest, _ = project(b, b_pdf, session="B")
+    add_override(b, target_manifest["records"][0])
+    reseal_actual_dynamic(b, b_pdf)
+    target_manifest = sp.json_load_strict(b / "校對工作階段.json")
+    filled = _filled_expected_excel(a, tmp_path / "filled.xlsx", action="補建expected證據")
+    watched = [b / name for name in ("人工判定資料庫.json", "校對工作階段.json",
+                                    portable.INCOMPLETE_FILE, portable.CONFLICT_FILE,
+                                    "待人工確認.json", "注音校對_最終報告.xlsx", "pipeline_status.json")]
+    before = {path: path.read_bytes() if path.exists() else None for path in watched}
+    real = portable.load_excel_content_proof
+    injected = {}
+
+    def after_preflight(*args, **kwargs):
+        result = real(*args, **kwargs)
+        injected["receipt"] = pending_actual_excel_conflict(b, target_manifest, source_manifest)
+        if malformed:
+            receipt_path = b / portable.ACTUAL_EXCEL_CONFLICT_FILE
+            receipt = sp.json_load_strict(receipt_path)
+            receipt["integrity_sha256"] = "0" * 64
+            sp.json_save(receipt_path, receipt)
+            injected["receipt"] = receipt_path.read_bytes()
+        return result
+
+    with patch.object(portable, "load_excel_content_proof", side_effect=after_preflight):
+        with pytest.raises(ValueError, match="actual.*衝突|衝突.*actual|完整性"):
+            sp.import_gpt_decisions(b, filled)
+    assert (b / portable.ACTUAL_EXCEL_CONFLICT_FILE).read_bytes() == injected["receipt"]
+    assert {path: path.read_bytes() if path.exists() else None for path in watched} == before
+    assert not list((tmp_path / "isolated-localappdata").rglob("*.sqlite*"))
+
+
+@pytest.mark.parametrize("malformed", [False, True])
+def test_project_import_rechecks_actual_conflict_after_preflight(tmp_path, monkeypatch, malformed):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
+    a_pdf, b_pdf = tmp_path / "A.pdf", tmp_path / "B.pdf"
+    pdf(a_pdf, title="A")
+    pdf(b_pdf, title="B")
+    source, target = tmp_path / "source", tmp_path / "target"
+    source_manifest, _ = project(source, a_pdf, session="A", event_positions=(0,))
+    target_manifest, _ = project(target, b_pdf, session="B")
+    add_override(target, target_manifest["records"][0])
+    reseal_actual_dynamic(target, b_pdf)
+    target_manifest = sp.json_load_strict(target / "校對工作階段.json")
+    portable.prepare_portable_project(source)
+    watched = [target / name for name in ("人工判定資料庫.json", "校對工作階段.json",
+                                         portable.INCOMPLETE_FILE, portable.CONFLICT_FILE,
+                                         "待人工確認.json", "注音校對_最終報告.xlsx", "pipeline_status.json")]
+    before = {path: path.read_bytes() if path.exists() else None for path in watched}
+    real = portable._mapped_occurrence_overrides
+    injected = {}
+
+    def after_preflight(*args, **kwargs):
+        result = real(*args, **kwargs)
+        injected["receipt"] = pending_actual_excel_conflict(target, target_manifest, source_manifest)
+        if malformed:
+            receipt_path = target / portable.ACTUAL_EXCEL_CONFLICT_FILE
+            receipt = sp.json_load_strict(receipt_path)
+            receipt["integrity_sha256"] = "0" * 64
+            sp.json_save(receipt_path, receipt)
+            injected["receipt"] = receipt_path.read_bytes()
+        return result
+
+    with patch.object(portable, "_mapped_occurrence_overrides", side_effect=after_preflight):
+        with pytest.raises(ValueError, match="actual.*衝突|衝突.*actual|完整性"):
+            portable.import_project_decisions(source, target)
+    assert (target / portable.ACTUAL_EXCEL_CONFLICT_FILE).read_bytes() == injected["receipt"]
+    assert {path: path.read_bytes() if path.exists() else None for path in watched} == before
+    assert not list((tmp_path / "isolated-localappdata").rglob("*.sqlite*"))
+
+
 def test_different_sha_same_pages_a_to_b_to_a_with_reopen(tmp_path):
     a_pdf, b_pdf = tmp_path / "A.pdf", tmp_path / "B.pdf"
     pdf(a_pdf, title="download A")

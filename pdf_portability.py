@@ -1086,8 +1086,12 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
         raw_db = sp.json_load_strict(db_path)
         if not isinstance(raw_db, dict):
             raise ValueError("目標判定資料庫根節點不是物件")
-        if sp.normalize_db(raw_db) != target_db:
+        live_db = sp.normalize_db(raw_db)
+        if live_db != target_db:
             raise ValueError("Excel 匯入期間目標判定資料庫已變動")
+        pending_actual = actual_excel_conflict_state(target_dir, live_manifest, live_db)
+        if pending_actual:
+            raise ValueError(f"Excel 匯入期間目標出現未裁決 actual 衝突；未寫入判定：{pending_actual}")
         receipt_path = target_dir / CONFLICT_FILE
         prior_conflicts = []
         if receipt_path.exists():
@@ -1885,6 +1889,9 @@ def import_project_decisions(source_dir: Path, target_dir: Path, *,
         target_db = sp.normalize_db(raw_db)
         if (target_dir / INCOMPLETE_FILE).exists() and not _allow_incomplete_target:
             raise ValueError("目標跨電腦接續未完成；匯入期間不得寫入判定")
+        pending_actual = actual_excel_conflict_state(target_dir, live_manifest, target_db)
+        if pending_actual:
+            raise ValueError(f"目標匯入期間出現未裁決 actual 衝突；未匯入判定：{pending_actual}")
         unresolved = validate_conflict_state(target_dir, live_manifest, target_db)
         if unresolved:
             raise ValueError(f"目標匯入期間出現未裁決衝突；未匯入判定：{unresolved}")
