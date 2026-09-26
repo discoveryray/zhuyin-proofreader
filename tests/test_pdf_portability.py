@@ -116,6 +116,148 @@ def project(root: Path, source_pdf: Path, *, session: str, event_positions=(), b
     return manifest, db
 
 
+def _filled_expected_excel(source: Path, target: Path, *, action: str = "解決expected證據") -> Path:
+    exported = sp.export_pending_for_gpt(source)
+    workbook = load_workbook(exported)
+    sheet = workbook["待判定候選"]
+    headers = [cell.value for cell in sheet[1]]
+    for key, value in {"action": action, "proposed_expected_set": "ㄐㄩㄝˊ",
+                       "proposed_expected_evidence": "A independent rule",
+                       "proposed_context_evidence": "角色/角@1"}.items():
+        sheet.cell(2, headers.index(key) + 1, value)
+    workbook.save(target)
+    workbook.close()
+    return target
+
+
+@pytest.mark.parametrize("action,reading,actual,state", [
+    ("解決expected證據", "ㄐㄩㄝˇ", "ㄐㄩㄝˊ", "DIFFERENCE_PENDING_CONFIRMATION"),
+    ("解決expected證據", "ㄐㄩㄝˊ", "ㄐㄩㄝˇ", "DIFFERENCE_PENDING_CONFIRMATION"),
+    ("解決expected證據", "ㄐㄩㄝˊ", "ㄐㄩㄝˊ", "PASS"),
+    ("補建expected證據", "ㄐㄩㄝˊ", "ㄐㄩㄝˇ", "DIFFERENCE_PENDING_CONFIRMATION"),
+])
+def test_cross_session_expected_excel_preserves_formal_target_expected(
+        tmp_path, monkeypatch, action, reading, actual, state):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
+    a_pdf, b_pdf = tmp_path / "A.pdf", tmp_path / "B.pdf"
+    pdf(a_pdf, title="A")
+    pdf(b_pdf, title="B")
+    a, b = tmp_path / "A", tmp_path / "B"
+    project(a, a_pdf, session="A")
+    manifest, _ = project(b, b_pdf, session="B")
+    entry = manifest["records"][0]
+    entry.update(state=state, actual=actual, expected_status="RESOLVED",
+                 expected_set=[reading], expected_evidence="B independent rule",
+                 context_evidence="角色/角@1")
+    sp.seal_manifest(manifest)
+    sp.json_save(b / "校對工作階段.json", manifest)
+    filled = _filled_expected_excel(a, tmp_path / "filled.xlsx", action=action)
+    watched = [b / name for name in ("人工判定資料庫.json", portable.INCOMPLETE_FILE,
+                                    portable.CONFLICT_FILE, "待人工確認.json",
+                                    "注音校對_最終報告.xlsx", "pipeline_status.json")]
+    before = {path: path.read_bytes() if path.exists() else None for path in watched}
+    before_row = sp.materialize_ledger(manifest, sp.json_load_strict(b / "人工判定資料庫.json"))[0]
+    with pytest.raises(ValueError, match="正式 expected|獨立 expected"):
+        sp.import_gpt_decisions(b, filled)
+    assert {path: path.read_bytes() if path.exists() else None for path in watched} == before
+    after_row = sp.materialize_ledger(manifest, sp.json_load_strict(b / "人工判定資料庫.json"))[0]
+    assert (after_row["state"], after_row["expected_set"], after_row["expected_evidence"]) == (
+        before_row["state"], before_row["expected_set"], before_row["expected_evidence"])
+
+
+def test_expected_excel_rechecks_incomplete_marker_after_preflight(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
+    a_pdf, b_pdf = tmp_path / "A.pdf", tmp_path / "B.pdf"
+    pdf(a_pdf, title="A")
+    pdf(b_pdf, title="B")
+    a, b = tmp_path / "A", tmp_path / "B"
+    project(a, a_pdf, session="A")
+    project(b, b_pdf, session="B")
+    filled = _filled_expected_excel(a, tmp_path / "filled.xlsx", action="補建expected證據")
+    marker = b / portable.INCOMPLETE_FILE
+    watched = [b / name for name in ("人工判定資料庫.json", portable.CONFLICT_FILE,
+                                    "待人工確認.json", "注音校對_最終報告.xlsx",
+                                    "pipeline_status.json")]
+    before = {path: path.read_bytes() if path.exists() else None for path in watched}
+    real = portable.load_excel_content_proof
+    injected = {}
+    def after_preflight(*args, **kwargs):
+        result = real(*args, **kwargs)
+        sp.json_save(marker, {"status": "ACTUAL_EXCEL_REFRESH_PENDING", "source": "concurrent actual"})
+        injected["marker"] = marker.read_bytes()
+        return result
+    with patch.object(portable, "load_excel_content_proof", side_effect=after_preflight):
+        with pytest.raises(ValueError, match="未完成|恢復|標記"):
+            sp.import_gpt_decisions(b, filled)
+    assert marker.read_bytes() == injected["marker"]
+    assert {path: path.read_bytes() if path.exists() else None for path in watched} == before
+
+
+@pytest.mark.parametrize("publish_fails", [False, True])
+def test_expected_excel_does_not_clear_another_publication_marker(tmp_path, monkeypatch, publish_fails):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
+    a_pdf, b_pdf = tmp_path / "A.pdf", tmp_path / "B.pdf"
+    pdf(a_pdf, title="A")
+    pdf(b_pdf, title="B")
+    a, b = tmp_path / "A", tmp_path / "B"
+    project(a, a_pdf, session="A")
+    project(b, b_pdf, session="B")
+    filled = _filled_expected_excel(a, tmp_path / "filled.xlsx", action="補建expected證據")
+    marker = b / portable.INCOMPLETE_FILE
+    foreign = {"status": "ACTUAL_EXCEL_REFRESH_PENDING", "source": "concurrent actual"}
+    def replace_during_publish(*_args):
+        assert sp.json_load_strict(marker)["status"] == "PRESENTATION_PENDING"
+        sp.json_save(marker, foreign)
+        if publish_fails:
+            raise OSError("report disk full after foreign marker")
+    with patch.object(portable, "_publish_portable_outputs", side_effect=replace_during_publish):
+        with pytest.raises((ValueError, OSError), match="標記|其他|未完成|foreign marker"):
+            sp.import_gpt_decisions(b, filled)
+    assert sp.json_load_strict(marker) == foreign
+    assert sp.json_load_strict(b / "人工判定資料庫.json")["events"]
+
+
+def test_expected_excel_precommit_rollback_preserves_foreign_marker_and_receipt(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
+    a_pdf, b_pdf = tmp_path / "A.pdf", tmp_path / "B.pdf"
+    pdf(a_pdf, title="A")
+    pdf(b_pdf, title="B")
+    a, b = tmp_path / "A", tmp_path / "B"
+    project(a, a_pdf, session="A")
+    project(b, b_pdf, session="B")
+    first = _filled_expected_excel(a, tmp_path / "first.xlsx")
+    assert sp.import_gpt_decisions(b, first)[0] == 1
+    workbook = load_workbook(first)
+    sheet = workbook["待判定候選"]
+    headers = [cell.value for cell in sheet[1]]
+    sheet.cell(2, headers.index("proposed_expected_evidence") + 1, "different independent rule")
+    second = tmp_path / "second.xlsx"
+    workbook.save(second)
+    workbook.close()
+    db_path = b / "人工判定資料庫.json"
+    receipt = b / portable.CONFLICT_FILE
+    marker = b / portable.INCOMPLETE_FILE
+    before_db = db_path.read_bytes()
+    foreign_marker = {"status": "ACTUAL_EXCEL_REFRESH_PENDING", "source": "other transaction"}
+    foreign_receipt = {"version": 1, "conflicts": [], "source": "other transaction"}
+    original_save = sp.json_save
+    injected = {}
+    def fail_after_handoff(path, value, **kwargs):
+        if Path(path) == db_path:
+            original_save(marker, foreign_marker)
+            original_save(receipt, foreign_receipt)
+            injected["marker"] = marker.read_bytes()
+            injected["receipt"] = receipt.read_bytes()
+            raise OSError("disk full after marker handoff")
+        return original_save(path, value, **kwargs)
+    with patch.object(sp, "json_save", side_effect=fail_after_handoff):
+        with pytest.raises(ValueError, match="標記|其他交易"):
+            sp.import_gpt_decisions(b, second)
+    assert db_path.read_bytes() == before_db
+    assert marker.read_bytes() == injected["marker"]
+    assert receipt.read_bytes() == injected["receipt"]
+
+
 @pytest.mark.parametrize("difference", ["same", "reading", "evidence", "expected",
                                          "expected_missing", "expected_evidence", "context",
                                          "source_snapshot", "missing_snapshot"])

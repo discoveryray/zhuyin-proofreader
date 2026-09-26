@@ -839,10 +839,11 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
                     source.get(key) != target.get(key) for key in
                     ("actual", "actual_evidence", "expected_set", "expected_evidence", "context_evidence")):
                 raise ValueError(f"Excel row {number} 目標當前 actual/expected 證據不同；六個確認 gate 不可沿用")
-        proposed = list(sp.normalize_expected_set(row.get("proposed_expected_set")))
-        if (not prior_event and action == "補建expected證據" and sp.infer_expected_status(target) == "RESOLVED"
-                and proposed != list(sp.normalize_expected_set(target.get("expected_set")))):
-            raise ValueError(f"Excel row {number} 目標已有不同正式 expected，須明確解決衝突")
+        if not prior_event and expected_only and sp.infer_expected_status(target) == "RESOLVED":
+            # A separate session may not replace B's independent resolver truth,
+            # even when the reading matches: the evidence or pending comparison
+            # could change, and a new event would outlive B's future resolver.
+            raise ValueError(f"Excel row {number} 目標已有正式 expected；保留雙方獨立證據，須在目標明確裁決")
         event = {
             "action": action, "expected_set": str(row.get("proposed_expected_set") or "").strip(),
             "expected_evidence": str(row.get("proposed_expected_evidence") or "").strip(),
@@ -873,6 +874,9 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
 
     written_candidate_sha = None
     with sp.project_delivery_lock(sp.project_actual_evidence_root(target_dir)):
+        marker_path = target_dir / INCOMPLETE_FILE
+        if marker_path.exists():
+            raise ValueError("Excel 匯入期間目標出現未完成標記；未寫入任何判定，先完成專用恢復")
         live_manifest = sp.json_load_strict(target_dir / "校對工作階段.json")
         sp.validate_manifest_integrity(live_manifest)
         if live_manifest["manifest_integrity_sha256"] != target_manifest["manifest_integrity_sha256"]:
@@ -931,7 +935,6 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
         if any(row.get("review_event_replay_status") for row in ledger):
             raise ValueError("Excel 匯入後判定無法在目標安全重播")
         if imported or duplicates or conflicts:
-            marker_path = target_dir / INCOMPLETE_FILE
             receipt_path = target_dir / CONFLICT_FILE
             presentation_paths = [target_dir / name for name in
                                   ("待人工確認.json", "注音校對_最終報告.xlsx", "pipeline_status.json")]
@@ -939,17 +942,22 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
                               for path in [db_path, receipt_path, marker_path, *presentation_paths]}
             marker_before = marker_path.read_bytes() if marker_path.exists() else None
             receipt_before = receipt_path.read_bytes() if receipt_path.exists() else None
+            owned_marker = {"status": "PRESENTATION_PENDING", "source_excel_sha256": _sha(xlsx),
+                            "import_token": uuid.uuid4().hex}
             db_committed = False
             try:
-                sp.json_save(marker_path,
-                             {"status": "PRESENTATION_PENDING", "source_excel_sha256": _sha(xlsx)})
+                sp.json_save(marker_path, owned_marker)
                 if conflicts:
                     sp.json_save(receipt_path, {"version": 1, "conflicts": [*prior_conflicts, *conflicts]})
+                if sp.json_load_strict(marker_path) != owned_marker:
+                    raise ValueError("Excel expected 匯入標記已由其他交易變動；未寫入判定")
                 sp.json_save(db_path, candidate, expected_sha256=before)
                 db_committed = True
                 written_candidate_sha = _sha(db_path)
-            except Exception:
+            except Exception as exc:
                 if not db_committed and _sha(db_path) == before:
+                    if not marker_path.exists() or sp.json_load_strict(marker_path) != owned_marker:
+                        raise ValueError("Excel expected 寫入失敗且未完成標記已由其他交易變動；保留衝突紀錄與現場待查核") from exc
                     _restore_exact_file(receipt_path, receipt_before)
                     _restore_exact_file(marker_path, marker_before)
                 raise
@@ -959,8 +967,9 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
         except Exception:
             with sp.project_delivery_lock(sp.project_actual_evidence_root(target_dir)):
                 if (_sha(target_dir / "人工判定資料庫.json") != written_candidate_sha
-                        or not (target_dir / INCOMPLETE_FILE).exists()):
-                    raise ValueError("Excel expected 發布失敗且目標資料已再變動；保留未完成標記待查核")
+                        or not (target_dir / INCOMPLETE_FILE).exists()
+                        or sp.json_load_strict(target_dir / INCOMPLETE_FILE) != owned_marker):
+                    raise ValueError("Excel expected 發布失敗且目標資料或未完成標記已由其他交易變動；保留現場待查核")
                 # Restore the original user views, conflict receipt and DB;
                 # leave the fail-closed marker in place until every restore succeeds.
                 for path in [*presentation_paths, target_dir / CONFLICT_FILE,
@@ -969,7 +978,12 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
                 _restore_exact_file(target_dir / INCOMPLETE_FILE,
                                     original_files[target_dir / INCOMPLETE_FILE])
             raise
-        (target_dir / INCOMPLETE_FILE).unlink()
+        with sp.project_delivery_lock(sp.project_actual_evidence_root(target_dir)):
+            if (_sha(target_dir / "人工判定資料庫.json") != written_candidate_sha
+                    or not marker_path.exists()
+                    or sp.json_load_strict(marker_path) != owned_marker):
+                raise ValueError("Excel expected 發布後目標資料或未完成標記已由其他交易變動；未清除標記且未回報成功")
+            marker_path.unlink()
     if conflicts:
         raise ValueError(f"Excel expected 同位置有 {len(conflicts)} 筆不同判定；兩份來源已保留於 {CONFLICT_FILE}，目標位置已標待人工裁決（不是寫入回滾）")
     return imported, skipped + duplicates, target_dir / "注音校對_最終報告.xlsx"
