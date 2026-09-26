@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import queue
 import re
 import sys
@@ -14,7 +15,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from occurrence_ledger import (
     CONFIRMATION_GATES, NON_TERMINAL_STATES, HARD_BLOCKING_STATES, EXCLUDED_STATES,
-    canonical_bopomofo, infer_actual_status, infer_expected_status,
+    canonical_bopomofo, infer_actual_status, infer_expected_status, valid_manual_expected_decision,
 )
 from standalone_proofread import (
     ManualActualPostApplyError,
@@ -226,9 +227,10 @@ def review_lane(entry):
 
 
 def can_confirm_current_expected(entry):
+    redecision = valid_manual_expected_decision(entry)
     return (
-        review_lane(entry) == "expected"
-        and entry.get("state") in NON_TERMINAL_STATES
+        (review_lane(entry) == "expected" and entry.get("state") in NON_TERMINAL_STATES
+         or redecision and entry.get("state") not in HARD_BLOCKING_STATES)
         and infer_actual_status(entry) == "RESOLVED"
         and bool(canonical_bopomofo(entry.get("actual")))
         and bool(str(entry.get("actual_evidence") or "").strip())
@@ -877,6 +879,73 @@ class ConfirmationDialog(_ReviewDialog):
         self.destroy()
 
 
+class ConfirmedItemsDialog(_ReviewDialog):
+    """Find a durable local expected decision without using the pending queue."""
+
+    _variable_attributes = ("pdf_filter", "page_filter", "text_filter")
+
+    def __init__(self, parent, entries, *, wait=True):
+        super().__init__(parent)
+        self.result = None
+        self.entries = list(entries)
+        self.title("查看已確認項目")
+        apply_screen_safe_geometry(self, 900, 560, min_width=650, min_height=400)
+        self.transient(parent)
+        self.grab_set()
+        filters = tk.Frame(self)
+        filters.pack(fill="x", padx=12, pady=10)
+        self.pdf_filter = tk.StringVar()
+        self.page_filter = tk.StringVar()
+        self.text_filter = tk.StringVar()
+        for column, (label, value) in enumerate((
+                ("教材", self.pdf_filter), ("頁碼", self.page_filter), ("文字", self.text_filter))):
+            tk.Label(filters, text=label).grid(row=0, column=column, sticky="w")
+            field = tk.Entry(filters, textvariable=value)
+            field.grid(row=1, column=column, sticky="ew", padx=(0, 8))
+            field.bind("<Return>", lambda _event: self.refresh())
+            filters.columnconfigure(column, weight=1)
+        tk.Button(filters, text="查找", command=self.refresh).grid(row=1, column=3)
+        columns = ("pdf", "page", "context", "char", "expected")
+        self.table = ttk.Treeview(self, columns=columns, show="headings", selectmode="browse")
+        for key, title, width in (("pdf", "教材", 190), ("page", "頁碼", 70),
+                                  ("context", "文字／語境", 330), ("char", "字", 55),
+                                  ("expected", "應標注音", 140)):
+            self.table.heading(key, text=title)
+            self.table.column(key, width=width, stretch=key in {"pdf", "context"})
+        self.table.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        self.table.bind("<Double-1>", lambda _event: self.choose())
+        buttons = ActionRows(self)
+        buttons.pack(fill="x", padx=12, pady=(0, 10))
+        buttons.set_items([tk.Button(buttons, text="查看原頁與判定", command=self.choose),
+                           tk.Button(buttons, text="關閉", command=self.destroy)])
+        self.refresh()
+        if wait:
+            self.wait_window()
+
+    def refresh(self):
+        self.table.delete(*self.table.get_children())
+        pdf = self.pdf_filter.get().strip().casefold()
+        page = self.page_filter.get().strip().casefold()
+        text = self.text_filter.get().strip().casefold()
+        for entry in self.entries:
+            source = entry.get("source_record") or {}
+            context = " ".join(str(value or "") for value in (
+                source.get("所在行"), source.get("局部詞境"), entry.get("char")))
+            if (pdf not in str(entry.get("pdf_name") or "").casefold()
+                    or page not in str(entry.get("printed_page") or "").casefold()
+                    or text not in context.casefold()):
+                continue
+            self.table.insert("", "end", iid=entry["review_id"], values=(
+                entry.get("pdf_name", ""), entry.get("printed_page", ""), context,
+                entry.get("char", ""), " | ".join(entry.get("expected_set") or [])))
+
+    def choose(self):
+        selected = self.table.selection()
+        if selected:
+            self.result = selected[0]
+            self.destroy()
+
+
 class ReviewApp:
     def __init__(self, root, output_dir: Path):
         self.root = root
@@ -888,6 +957,8 @@ class ReviewApp:
         self.index = 0
         self.photo = None
         self.records = []
+        self.focused_entry = None
+        self.last_expected_review_id = None
         self.tech_visible = False
         self.staging_summary = {}
         self.staged_member_occurrence_ids = set()
@@ -914,8 +985,11 @@ class ReviewApp:
         navigation = ActionRows(top)
         navigation.pack(fill="x")
         self.revisit_button = tk.Button(navigation, text="重新查看稍後處理（0）", command=self.revisit_deferred, state="disabled")
+        self.confirmed_button = tk.Button(navigation, text="查看已確認項目", command=self.open_confirmed_items)
+        self.undo_expected_button = tk.Button(navigation, text="撤銷上一次判定", command=self.undo_last_expected, state="disabled")
         navigation.set_items([tk.Button(navigation, text="上一筆", command=self.prev),
-                              tk.Button(navigation, text="下一筆", command=self.next), self.revisit_button])
+                              tk.Button(navigation, text="下一筆", command=self.next), self.revisit_button,
+                              self.confirmed_button, self.undo_expected_button])
         self.navigation = navigation
 
         self.summary = tk.LabelFrame(body, text="這一筆要確認什麼")
@@ -945,6 +1019,7 @@ class ReviewApp:
         self.more_menu.add_command(label="此處不需校對…", command=self.exclude)
         self.more_menu.add_command(label="實際注音辨識有誤…", command=self.correct_actual)
         self.more_menu.add_command(label="撤銷本筆人工判定", command=self.clear)
+        self.more_menu.add_command(label="返回待辦", command=self.return_to_pending)
         self.more_menu.add_command(label="另行建立上筆應標可重用規則…", command=self.create_reusable_expected_rule)
         self.more_menu.add_separator()
         self.more_menu.add_command(label="查看／隱藏技術資訊", command=self.toggle_tech)
@@ -979,6 +1054,7 @@ class ReviewApp:
     def reload_records(self, *, advance_from=None):
         if getattr(self, "_save_in_progress", False):
             return
+        self.focused_entry = None
         self._invalidate_save_snapshot()
         if getattr(self, "_character_order_manifest", None) is not self.manifest:
             self.__dict__.pop("_character_order", None)
@@ -1103,7 +1179,62 @@ class ReviewApp:
         )
 
     def current(self):
-        return self.records[self.index] if self.records else None
+        return getattr(self, "focused_entry", None) or (self.records[self.index] if self.records else None)
+
+    def return_to_pending(self):
+        if self._save_busy() or getattr(self, "_apply_in_progress", False):
+            return
+        self.focused_entry = None
+        self.show()
+
+    def open_confirmed_items(self):
+        if self._save_busy() or getattr(self, "_apply_in_progress", False):
+            return
+        try:
+            ledger = materialize_ledger(self.manifest, self.db)
+            events = self.db.get("events", {})
+            entries = [entry for entry in ledger
+                       if isinstance(events.get(entry["review_id"]), dict)
+                       and "manual_expected_decision" in events[entry["review_id"]]]
+        except Exception as exc:
+            messagebox.showerror("無法查看已確認項目", str(exc), parent=self.root)
+            return
+        dialog = ConfirmedItemsDialog(self.root, entries)
+        if dialog.result:
+            self.focused_entry = next(entry for entry in entries if entry["review_id"] == dialog.result)
+            self.last_expected_review_id = dialog.result
+            self.show()
+
+    def _last_expected_target(self):
+        review_id = getattr(self, "last_expected_review_id", None)
+        event = getattr(self, "db", {}).get("events", {}).get(review_id)
+        if (not isinstance(event, dict) or "manual_expected_decision" not in event
+                or "undo_previous_event" not in event):
+            return None
+        return review_id
+
+    @guarded_review_action
+    def undo_last_expected(self):
+        review_id = self._last_expected_target()
+        if not review_id:
+            return
+        try:
+            entry = next(row for row in materialize_ledger(self.manifest, self.db)
+                         if row["review_id"] == review_id)
+        except Exception as exc:
+            messagebox.showerror("無法撤銷應標判定", str(exc), parent=self.root)
+            return
+        if not messagebox.askyesno("撤銷上一次判定", "確定撤銷這次應標判定並回到這一筆？", parent=self.root):
+            return
+        previous = self.db["events"][review_id]["undo_previous_event"]
+        self.save_event(entry, copy.deepcopy(previous), focus_after_save=True)
+
+    def _remember_previous_expected_event(self, entry, event):
+        previous = copy.deepcopy(getattr(self, "db", {}).get("events", {}).get(entry["review_id"]))
+        if previous is not None:
+            previous.pop("undo_previous_event", None)
+        event["undo_previous_event"] = previous
+        return event
 
     def _save_busy(self):
         return (getattr(self, "_save_in_progress", False)
@@ -1162,7 +1293,8 @@ class ReviewApp:
 
     def _disable_save_controls(self):
         widgets = [getattr(self, name, None) for name in
-                   ("primary", "secondary", "later", "more_button", "apply_actual_button", "revisit_button")]
+                   ("primary", "secondary", "later", "more_button", "apply_actual_button", "revisit_button",
+                    "confirmed_button", "undo_expected_button")]
         navigation = getattr(self, "navigation", None)
         if navigation is not None:
             widgets.extend(navigation.winfo_children())
@@ -1188,12 +1320,12 @@ class ReviewApp:
         if hasattr(self, "status") and hasattr(self, "_saved_status_text"):
             self.status.config(text=self._saved_status_text)
 
-    def save_event(self, entry, event, *, explain_expected=False):
+    def save_event(self, entry, event, *, explain_expected=False, focus_after_save=False):
         """Start one durable save; publish only from the Tk polling callback."""
         if self._save_busy() or getattr(self, "_apply_in_progress", False):
             return False
         current = self.current()
-        if not current or current.get("review_id") != entry.get("review_id"):
+        if not focus_after_save and (not current or current.get("review_id") != entry.get("review_id")):
             return False
         self._save_in_progress = True
         self._last_event_saved = self._last_event_refreshed = False
@@ -1204,6 +1336,8 @@ class ReviewApp:
                    "review_id": entry["review_id"], "manifest": self.manifest,
                    "db": self.db, "output_dir": self.output_dir,
                    "entry": entry, "event": event, "explain_expected": explain_expected,
+                   "current_review_id": current.get("review_id") if current else None,
+                   "focus_after_save": focus_after_save or getattr(self, "focused_entry", None) is not None,
                    "started": started}
         self._save_request = request
         completed = queue.Queue(maxsize=1)
@@ -1259,7 +1393,7 @@ class ReviewApp:
         applies = (request["generation"] == getattr(self, "_project_generation", 0)
                    and request["manifest"] is self.manifest and request["db"] is self.db
                    and request["output_dir"] == self.output_dir
-                   and current is not None and current.get("review_id") == request["review_id"])
+                   and (current.get("review_id") if current else None) == request["current_review_id"])
         self._last_event_saved = result is not None
         self._last_event_refreshed = False
         self.last_save_timings = dict(result.timings) if result is not None else {}
@@ -1285,12 +1419,18 @@ class ReviewApp:
             self._saved_version_token = result.version_token
             if request["event"] and "manual_expected_decision" in request["event"]:
                 self.last_saved_expected = result.resolved_entry
+                if "undo_previous_event" in request["event"]:
+                    self.last_expected_review_id = request["review_id"]
+            elif request["focus_after_save"]:
+                self.last_expected_review_id = None
             try:
                 self._restore_save_controls()
                 if error is not None:
                     raise error
                 self._publish_staging_summary(result.staging_summary)
                 self._publish_review_queue(prepared)
+                if request["focus_after_save"]:
+                    self.focused_entry = result.resolved_entry
                 render_started = time.perf_counter()
                 self.show()
                 self.last_save_timings["preview_and_show"] = time.perf_counter() - render_started
@@ -1318,12 +1458,15 @@ class ReviewApp:
     def prev(self):
         if self._save_busy() or getattr(self, "_apply_in_progress", False):
             return
+        self.focused_entry = None
         self.index = max(0, self.index - 1)
         self.show()
 
     def next(self):
         if self._save_busy() or getattr(self, "_apply_in_progress", False):
             return
+        if getattr(self, "focused_entry", None) is not None:
+            self.focused_entry = None
         if not self.records:
             return
         self.index = min(len(self.records) - 1, self.index + 1)
@@ -1347,12 +1490,14 @@ class ReviewApp:
         except Exception as exc:
             messagebox.showerror("無法儲存人工判定", str(exc), parent=self.root)
             return
-        self.save_event(entry, event, explain_expected=True)
+        self.save_event(entry, self._remember_previous_expected_event(entry, event), explain_expected=True)
 
     @guarded_review_action
     def resolve_expected(self):
         entry = self.current()
-        if not entry or review_lane(entry) not in {"expected", "other"} or entry.get("state") in HARD_BLOCKING_STATES:
+        if (not entry or entry.get("state") in HARD_BLOCKING_STATES
+                or (review_lane(entry) not in {"expected", "other"}
+                    and not valid_manual_expected_decision(entry))):
             return
         dialog = ExpectedDialog(self.root, entry, "輸入其他應標注音")
         if not dialog.result:
@@ -1367,7 +1512,7 @@ class ReviewApp:
         except Exception as exc:
             messagebox.showerror("無法儲存人工判定", str(exc), parent=self.root)
             return
-        self.save_event(entry, event, explain_expected=True)
+        self.save_event(entry, self._remember_previous_expected_event(entry, event), explain_expected=True)
 
     def _explain_saved_expected(self, entry):
         if not getattr(self, "_last_event_refreshed", False):
@@ -1431,6 +1576,8 @@ class ReviewApp:
             "expected_resolution_note": str(entry.get("note") or ""),
             "confirmation_actual_snapshot": actual_confirmation_snapshot(entry),
             **({"manual_expected_decision": entry["manual_expected_decision"]} if "manual_expected_decision" in entry else {}),
+            **({"undo_previous_event": copy.deepcopy(self.db["events"][entry["review_id"]]["undo_previous_event"])}
+               if "undo_previous_event" in self.db.get("events", {}).get(entry["review_id"], {}) else {}),
             "source": "人工 GUI 現版六閘門",
             "updated_at": datetime.now().isoformat(timespec="seconds"),
         })
@@ -1731,7 +1878,16 @@ class ReviewApp:
         lane = review_lane(entry)
         primary_text, secondary_text = review_action_labels(state)
         primary_command = secondary_command = None
-        if lane == "expected":
+        if getattr(self, "focused_entry", None) is not None and valid_manual_expected_decision(entry):
+            primary_text = "輸入其他應標注音"
+            primary_command = self.resolve_expected
+            if (can_confirm_current_expected(entry)
+                    and str(entry.get("occurrence_id") or "") not in self.staged_checked_occurrence_ids):
+                primary_text = "確認目前注音就是應標注音"
+                primary_command = lambda rid=entry["review_id"]: self.confirm_current_expected(rid)
+                secondary_text = "輸入其他應標注音"
+                secondary_command = self.resolve_expected
+        elif lane == "expected":
             primary_text = "輸入其他應標注音"
             primary_command = self.resolve_expected
             if (can_confirm_current_expected(entry)
@@ -1753,10 +1909,12 @@ class ReviewApp:
             self.secondary.config(text=secondary_text, state="normal", command=secondary_command)
             buttons.append(self.secondary)
         if hasattr(self, "decision_actions"):
-            self.decision_actions.set_items(buttons + [self.later, self.more_button])
+            self.decision_actions.set_items(buttons + ([] if getattr(self, "focused_entry", None) is not None else [self.later]) + [self.more_button])
 
     def show(self):
         self._show_staging_status()
+        if hasattr(self, "undo_expected_button"):
+            self.undo_expected_button.config(state="normal" if self._last_expected_target() else "disabled")
         entry = self.current()
         if not entry:
             title, detail, primary_text = self._empty_actionable_state()
@@ -1784,7 +1942,12 @@ class ReviewApp:
         staged_status = "｜actual 已暫存，等待批次套用" if is_staged else ""
         lane_count = sum(review_lane(item) == lane for item in self.records)
         deferred = len(getattr(self, "deferred_items", set()))
-        self.status.config(text=f"{LANE_LABELS[lane]}｜本組剩餘 {lane_count} 筆｜稍後 {deferred} 筆{staged_status}")
+        self.status.config(text=(
+            f"{'已確認項目' if self._last_expected_target() == entry.get('review_id') else '返回此項目'}"
+            f"｜課本頁 {entry.get('printed_page', '')}｜{state}"
+            if getattr(self, "focused_entry", None) is not None else
+            f"{LANE_LABELS[lane]}｜本組剩餘 {lane_count} 筆｜稍後 {deferred} 筆{staged_status}"
+        ))
         help_text = STATE_HELP.get(state, "這一筆需要人工處理。")
         if lane == "expected":
             help_text = "請先依原文與語境判定應標注音；目前注音待辨識時，儲存後再進第二組。依據選填。"
