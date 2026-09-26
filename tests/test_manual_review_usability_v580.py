@@ -274,6 +274,124 @@ class ManualReviewGuiTests(unittest.TestCase):
         actual_root = sp.project_actual_evidence_root(self.output)
         self.assertEqual({p.name for p in actual_root.iterdir()}, {".global_exact_glyph_delivery.lock"})
 
+    def test_last_pending_confirmation_can_be_undone_after_it_leaves_queue(self):
+        app = self.app
+        first = app.current()
+        other = next(row for row in app.records if row["review_id"] != first["review_id"])
+        # Leave only this item in the visible queue; durable events still cover
+        # the full manifest and the other occurrence remains untouched.
+        app.deferred_items = {(gui.review_lane(row), row["occurrence_id"])
+                              for row in app.records if row["review_id"] != first["review_id"]}
+        app.reload_records()
+        self.assertEqual(len(app.records), 1)
+        app.primary.invoke()
+        wait_for_save(app)
+        self.assertEqual(app.records, [])
+        self.assertIn(first["review_id"], app.db["events"])
+        app._review_action_cooldown_until = 0
+        with patch.object(gui.messagebox, "askyesno", return_value=True):
+            app.undo_expected_button.invoke()
+            wait_for_save(app)
+        self.assertEqual(app.current()["review_id"], first["review_id"])
+        self.assertNotIn(first["review_id"], app.db["events"])
+        self.assertEqual(ol.infer_expected_status(app.current()), "UNRESOLVED")
+        self.assertNotIn("manual_expected_decision", app.current())
+        self.assertNotIn(other["review_id"], app.db["events"])
+        self.assertIn(first["review_id"], [row["review_id"] for row in app.records])
+
+    def test_correction_undo_restores_previous_manual_decision(self):
+        app = self.app
+        first = app.current()
+        with patch.object(gui, "ExpectedDialog") as dialog, patch.object(gui.messagebox, "showwarning"):
+            dialog.return_value.result = {"expected_set": "ㄎㄢ", "expected_evidence": "", "resolution_reason": ""}
+            app.resolve_expected()
+            wait_for_save(app)
+        prior = copy.deepcopy(app.db["events"][first["review_id"]])
+        prior.pop("undo_previous_event")
+        app._review_action_cooldown_until = 0
+        app._shortcut_cooldown_until = 0
+        app.focused_entry = next(row for row in app.records if row["review_id"] == first["review_id"])
+        app.show()
+        self.assertEqual(app.primary.cget("text"), "確認目前注音就是應標注音")
+        app.primary.invoke()
+        wait_for_save(app)
+        self.assertNotIn(first["review_id"], [row["review_id"] for row in app.records])
+        self.assertEqual(app.db["events"][first["review_id"]]["undo_previous_event"], prior)
+        app._review_action_cooldown_until = 0
+        with patch.object(gui.messagebox, "askyesno", return_value=True):
+            app.undo_last_expected()
+            wait_for_save(app)
+        self.assertEqual(app.current()["review_id"], first["review_id"])
+        self.assertEqual(app.current()["expected_set"], ["ㄎㄢ"])
+        self.assertEqual(app.current()["state"], "DIFFERENCE_PENDING_CONFIRMATION")
+        self.assertEqual(app.db["events"][first["review_id"]], prior)
+
+    def test_confirmed_lookup_reopens_with_filters_and_corrects_one_item(self):
+        app = self.app
+        first = app.current()
+        app.primary.invoke()
+        wait_for_save(app)
+        reopened_window = tk.Toplevel(self.root)
+        try:
+            reopened = gui.ReviewApp(reopened_window, self.output)
+            reopened_window.update()
+            ledger = sp.materialize_ledger(reopened.manifest, reopened.db)
+            confirmed = [row for row in ledger if row["review_id"] == first["review_id"]]
+            dialog = gui.ConfirmedItemsDialog(reopened_window, confirmed, wait=False)
+            dialog.pdf_filter.set("隔離操作樣本")
+            dialog.page_filter.set("1")
+            dialog.text_filter.set("窗外")
+            dialog.refresh()
+            self.assertEqual(dialog.table.get_children(), (first["review_id"],))
+            dialog.text_filter.set("不存在")
+            dialog.refresh()
+            self.assertEqual(dialog.table.get_children(), ())
+            dialog.destroy()
+            with patch.object(gui, "ConfirmedItemsDialog") as choose:
+                choose.return_value.result = first["review_id"]
+                reopened.open_confirmed_items()
+            self.assertEqual(reopened.current()["review_id"], first["review_id"])
+            self.assertEqual(reopened.primary.cget("text"), "確認目前注音就是應標注音")
+            with patch.object(gui, "ExpectedDialog") as correction, patch.object(gui.messagebox, "showwarning"):
+                correction.return_value.result = {"expected_set": "ㄎㄢ", "expected_evidence": "", "resolution_reason": ""}
+                reopened.resolve_expected()
+                wait_for_save(reopened)
+            self.assertEqual(reopened.current()["expected_set"], ["ㄎㄢ"])
+            self.assertIn(first["review_id"], [row["review_id"] for row in reopened.records])
+            self.assertEqual(sp.materialize_ledger(reopened.manifest, reopened.db)[1]["expected_status"], "UNRESOLVED")
+            persisted = sp.load_or_initialize_db(self.output)
+            self.assertEqual(persisted["events"][first["review_id"]]["expected_set"], ["ㄎㄢ"])
+            reopened._review_action_cooldown_until = 0
+            with patch.object(gui.messagebox, "askyesno", return_value=True):
+                reopened.undo_last_expected()
+                wait_for_save(reopened)
+            self.assertEqual(reopened.current()["review_id"], first["review_id"])
+            self.assertEqual(reopened.current()["expected_set"], ["ㄎㄢˋ"])
+            self.assertEqual(reopened.current()["state"], "PASS")
+            self.assertEqual(sp.load_or_initialize_db(self.output)["events"][first["review_id"]]["expected_set"], ["ㄎㄢˋ"])
+        finally:
+            reopened_window.destroy()
+
+    def test_failed_undo_keeps_saved_decision_and_does_not_show_success(self):
+        app = self.app
+        first = app.current()
+        app.primary.invoke()
+        wait_for_save(app)
+        before = (self.output / "人工判定資料庫.json").read_bytes()
+        old_current = app.current()
+        app._review_action_cooldown_until = 0
+        with patch.object(gui.messagebox, "askyesno", return_value=True), \
+                patch.object(sp, "json_save", side_effect=OSError("isolated undo failure")), \
+                patch.object(gui.messagebox, "showerror") as error, \
+                patch.object(gui.messagebox, "showinfo") as success:
+            app.undo_last_expected()
+            wait_for_save(app)
+        error.assert_called_once()
+        success.assert_not_called()
+        self.assertEqual(app.current(), old_current)
+        self.assertEqual((self.output / "人工判定資料庫.json").read_bytes(), before)
+        self.assertIn(first["review_id"], app.db["events"])
+
     def test_optional_blank_dialog_actual_unresolved_then_actual_group(self):
         app = self.app
         both = next(e for e in app.records if not e["actual"] and ol.infer_expected_status(e) == "UNRESOLVED")

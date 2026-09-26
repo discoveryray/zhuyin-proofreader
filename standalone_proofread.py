@@ -2444,13 +2444,15 @@ def build_manual_expected_event(
     CONFIRM_CURRENT_AS_EXPECTED freezes the human-selected current reading now;
     replay only consumes that saved expected value, regardless of later actual.
     """
-    if entry.get("state") not in NON_TERMINAL_STATES or entry.get("state") in {
+    redecision = valid_manual_expected_decision(entry)
+    if (entry.get("state") not in NON_TERMINAL_STATES
+            and not (redecision and entry.get("state") in {"PASS", "TEXTBOOK_ERROR_CONFIRMED"})) or entry.get("state") in {
         "SOURCE_INVALID", "DATA_INTEGRITY_ERROR", "REGRESSION_BLOCKED",
     }:
         raise InvalidTransitionError("此項目目前不可保存人工應標判定")
     if operation == "CONFIRM_CURRENT_AS_EXPECTED":
         reading = canonical_bopomofo(entry.get("actual"))
-        if (infer_expected_status(entry) not in {"UNRESOLVED", "AMBIGUOUS", "CONFLICT"}
+        if (not redecision and infer_expected_status(entry) not in {"UNRESOLVED", "AMBIGUOUS", "CONFLICT"}
                 or infer_actual_status(entry) != "RESOLVED" or not reading
                 or not str(entry.get("actual_evidence") or "").strip()):
             raise InvalidTransitionError("目前注音尚未有效確定，不能快捷確認")
@@ -3677,6 +3679,8 @@ def _clear_actual_dependent_events(output_dir: Path, ledger: list[dict[str, Any]
                 }
                 if "manual_expected_decision" in event:
                     events[rid]["manual_expected_decision"] = copy.deepcopy(event["manual_expected_decision"])
+                if "undo_previous_event" in event:
+                    events[rid]["undo_previous_event"] = copy.deepcopy(event["undo_previous_event"])
             else:
                 events.pop(rid, None)
             removed += 1
