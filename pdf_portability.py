@@ -29,6 +29,8 @@ ACTUAL_EXCEL_CONFLICT_FILE = "跨Excel_actual衝突.json"
 CONFLICT_FILE = "跨專案判定衝突.json"
 EXCEL_PROOF_SHEET = "跨電腦內容證據"
 EXCEL_PROOF_VERSION = 1
+PRESENTATION_PLAN_VERSION = 1
+PRESENTATION_RECEIPTS = (CONFLICT_FILE, PENDING_ACTUAL_FILE)
 
 
 def _sha(path: Path) -> str:
@@ -44,11 +46,16 @@ def _canonical(value: Any) -> bytes:
 
 
 def _page_signatures(path: Path) -> list[dict[str, Any]]:
-    """Bind all visible page content and page geometry, including images and glyphs.
+    """Bind rendered content and the text actually consumed by candidate building.
 
-    PyMuPDF renders embedded fonts and images, rather than relying on a PDF's
-    text layer. Exact raster equality intentionally refuses uncertain transfers.
+    The candidate resolver uses RAWDICT text even when a PDF marks it invisible.
+    Comparing its normalized characters in displayed coordinates prevents a
+    same-raster PDF from silently changing proofreading context. Font names and
+    PDF object identifiers are storage details, so they are not part of proof.
     """
+    from check_pronunciation_candidates import build_pdf_line_index
+
+    line_index = build_pdf_line_index(path)
     signatures = []
     with fitz.open(path) as document:
         if not document.page_count:
@@ -57,6 +64,20 @@ def _page_signatures(path: Path) -> list[dict[str, Any]]:
             if page.rect.is_empty:
                 raise ValueError("PDF 頁面尺寸無效")
             pix = page.get_pixmap(matrix=fitz.Matrix(3, 3), colorspace=fitz.csRGB, alpha=False, annots=True)
+            display = page.rotation_matrix
+            candidate_blocks = []
+            for block in line_index.get(page.number + 1, []):
+                chars = []
+                for char in block.get("chars", []):
+                    box = fitz.Rect(char["bbox"]) * display
+                    chars.append((char["c"], *(round(value, 2) for value in box)))
+                box = fitz.Rect(block["bbox"]) * display
+                candidate_blocks.append({
+                    "text": block["text"],
+                    "bbox": [round(value, 2) for value in box],
+                    "chars": chars,
+                })
+            candidate_blocks.sort(key=lambda item: (item["bbox"], item["text"], item["chars"]))
             signatures.append({
                 "width": round(page.rect.width, 4),
                 "height": round(page.rect.height, 4),
@@ -65,6 +86,7 @@ def _page_signatures(path: Path) -> list[dict[str, Any]]:
                 "pixels_width": pix.width,
                 "pixels_height": pix.height,
                 "rgb_sha256": hashlib.sha256(pix.samples).hexdigest(),
+                "candidate_text_sha256": hashlib.sha256(_canonical(candidate_blocks)).hexdigest(),
             })
     return signatures
 
@@ -822,6 +844,23 @@ def _load_proof(output_dir: Path, manifest: Mapping[str, Any]):
         observed = [(info.get("pdf_sha256"), info.get("pdf_name")) for info in proof.get("pdfs", [])]
         if observed != expected:
             raise ValueError("跨電腦 PDF 內容證據與來源 PDF 清單不符")
+        if any("candidate_text_sha256" not in page
+               for item in proof["pdfs"] for page in item.get("pages", [])):
+            # A legacy visual-only proof cannot establish the candidate text
+            # of different PDF bytes. Rebuild from the exact sealed source only.
+            upgraded = copy.deepcopy(proof)
+            for saved, info in zip(upgraded["pdfs"], manifest["pdfs"]):
+                try:
+                    original = _source_pdf(manifest, info, output_dir)
+                except FileNotFoundError:
+                    # _match_pdfs may still prove byte-for-byte identity with
+                    # the target; different bytes require this missing layer.
+                    return proof
+                fresh = _page_signatures(original)
+                if not _pages_visual_equivalent(saved["pages"], fresh):
+                    raise ValueError("舊 PDF 內容證據與來源原頁不符；未補證")
+                saved["pages"] = fresh
+            return upgraded
         return proof
     # Source bytes may still be present without a previously exported proof.
     return _proof_payload(output_dir, manifest)
@@ -841,7 +880,7 @@ def _proof_from_explicit_local(output_dir: Path, manifest: Mapping[str, Any],
                            "pdf_name": infos[0]["pdf_name"], "pages": local_pages}]}
 
 
-def _pages_equivalent(source_pages, target_pages):
+def _pages_visual_equivalent(source_pages, target_pages):
     if len(source_pages) != len(target_pages):
         return False
     for source, target in zip(source_pages, target_pages):
@@ -851,6 +890,13 @@ def _pages_equivalent(source_pages, target_pages):
         if any(source.get(field) != target.get(field) for field in fields):
             return False
     return True
+
+
+def _pages_equivalent(source_pages, target_pages):
+    return (_pages_visual_equivalent(source_pages, target_pages)
+            and all(source.get("candidate_text_sha256")
+                    and source.get("candidate_text_sha256") == target.get("candidate_text_sha256")
+                    for source, target in zip(source_pages, target_pages)))
 
 
 def _match_pdfs(proof: Mapping[str, Any], source_manifest: Mapping[str, Any],
@@ -866,17 +912,26 @@ def _match_pdfs(proof: Mapping[str, Any], source_manifest: Mapping[str, Any],
     mapping = {}
     geometry = {}
     for source in source_pdfs:
-        candidates = [(target, pages) for target, pages in rendered
-                      if _pages_equivalent(source["pages"], pages)]
+        missing_text = any("candidate_text_sha256" not in page for page in source["pages"])
+        candidates = []
+        for target, pages in rendered:
+            exact_bytes = source["pdf_sha256"] == target["pdf_sha256"]
+            source_pages = pages if missing_text and exact_bytes else source["pages"]
+            if (not missing_text or exact_bytes) and _pages_visual_equivalent(source["pages"], pages) \
+                    and _pages_equivalent(source_pages, pages):
+                candidates.append((target, pages, source_pages))
         if len(candidates) != 1:
+            if missing_text and not any(source["pdf_sha256"] == target["pdf_sha256"]
+                                        for target, _ in rendered):
+                raise ValueError("舊 PDF 內容證據缺少校對文字層；不同 SHA 須由 A 原 PDF 精確 SHA 補證")
             raise ValueError(
                 f"PDF 頁面內容/圖片/文字/注音字形或頁面位置無法唯一對應：{source['pdf_name']}；"
                 "請確認是同版完整教材"
             )
-        target, target_pages = candidates[0]
-        rendered.remove(candidates[0])
+        target, target_pages, source_pages = candidates[0]
+        rendered.remove((target, target_pages))
         mapping[source["pdf_sha256"]] = target["pdf_sha256"]
-        geometry[source["pdf_sha256"]] = (source["pages"], target_pages)
+        geometry[source["pdf_sha256"]] = (source_pages, target_pages)
     return mapping, geometry
 
 
@@ -957,6 +1012,153 @@ def _restore_exact_file(path: Path, original: bytes | None) -> None:
         os.replace(temporary, path)
     finally:
         Path(temporary).unlink(missing_ok=True)
+
+
+def _document_digest(value: Any) -> str:
+    return hashlib.sha256(_canonical(value)).hexdigest()
+
+
+def _presentation_receipt_plan(target_dir: Path, planned: Mapping[str, Any]):
+    """Freeze both receipt preimages and the intended post-commit documents."""
+    import standalone_proofread as sp
+
+    receipts = {}
+    for name in PRESENTATION_RECEIPTS:
+        path = target_dir / name
+        old = path.read_bytes() if path.exists() else None
+        current = sp.json_load_strict(path) if old is not None else None
+        desired = planned.get(name, current)
+        receipts[name] = {
+            "before_bytes": base64.b64encode(old).decode("ascii") if old is not None else None,
+            "before_digest": _document_digest(current) if current is not None else None,
+            "after_digest": _document_digest(desired) if desired is not None else None,
+        }
+    return receipts
+
+
+def _new_presentation_marker(target_dir: Path, manifest, before_db_sha: str,
+                             candidate_db, planned_receipts: Mapping[str, Any], *,
+                             phase: str, export_pending: bool = False):
+    if phase not in {"PROJECT_IMPORT", "NEW_PROJECT_FINAL", "SAME_SESSION_EXPECTED"}:
+        raise ValueError("未知專案發布階段")
+    payload = {
+        "status": "PRESENTATION_PENDING", "plan_version": PRESENTATION_PLAN_VERSION,
+        "owner_token": uuid.uuid4().hex, "phase": phase,
+        "manifest_file_sha256": _sha(target_dir / "校對工作階段.json"),
+        "manifest_integrity_sha256": manifest["manifest_integrity_sha256"],
+        "db_before_sha256": before_db_sha,
+        "db_after_digest": _document_digest(candidate_db),
+        "receipts": _presentation_receipt_plan(target_dir, planned_receipts),
+        "export_pending": bool(export_pending),
+    }
+    return {**payload, "plan_integrity_sha256": _document_digest(payload)}
+
+
+def _validated_presentation_marker(value):
+    if not isinstance(value, dict) or set(value) != {
+        "status", "plan_version", "owner_token", "phase", "manifest_file_sha256",
+        "manifest_integrity_sha256", "db_before_sha256", "db_after_digest",
+        "receipts", "export_pending", "plan_integrity_sha256",
+    }:
+        raise ValueError("未完成專案缺少專用發布恢復計畫；不可猜測清除標記")
+    payload = {key: item for key, item in value.items() if key != "plan_integrity_sha256"}
+    if (value["status"] != "PRESENTATION_PENDING"
+            or value["plan_version"] != PRESENTATION_PLAN_VERSION
+            or value["phase"] not in {"PROJECT_IMPORT", "NEW_PROJECT_FINAL", "SAME_SESSION_EXPECTED"}
+            or not isinstance(value["owner_token"], str) or len(value["owner_token"]) != 32
+            or any(char not in "0123456789abcdef" for char in value["owner_token"])
+            or type(value["export_pending"]) is not bool
+            or not isinstance(value["receipts"], dict)
+            or set(value["receipts"]) != set(PRESENTATION_RECEIPTS)
+            or any(not isinstance(value[name], str) or len(value[name]) != 64
+                   for name in ("manifest_file_sha256", "manifest_integrity_sha256",
+                                "db_before_sha256", "db_after_digest", "plan_integrity_sha256"))
+            or value["plan_integrity_sha256"] != _document_digest(payload)):
+        raise ValueError("未完成專案發布計畫格式或完整性無法驗證")
+    for item in value["receipts"].values():
+        if (not isinstance(item, dict)
+                or set(item) != {"before_bytes", "before_digest", "after_digest"}
+                or any(digest is not None and (not isinstance(digest, str) or len(digest) != 64)
+                       for digest in (item["before_digest"], item["after_digest"]))):
+            raise ValueError("未完成專案來源回執恢復材料無法驗證")
+        encoded = item["before_bytes"]
+        if encoded is None:
+            if item["before_digest"] is not None:
+                raise ValueError("未完成專案回執原狀不一致")
+        else:
+            try:
+                original = base64.b64decode(encoded, validate=True)
+                if _document_digest(json.loads(original)) != item["before_digest"]:
+                    raise ValueError("未完成專案回執原文與摘要不符")
+            except (ValueError, TypeError) as exc:
+                raise ValueError("未完成專案回執原文無法驗證") from exc
+    return value
+
+
+def _presentation_current_receipts(target_dir: Path):
+    import standalone_proofread as sp
+
+    return {name: (_document_digest(sp.json_load_strict(target_dir / name))
+                   if (target_dir / name).exists() else None)
+            for name in PRESENTATION_RECEIPTS}
+
+
+def resume_portable_project(output_dir: Path):
+    """Redo only a fully bound committed presentation, or undo precommit receipts."""
+    import standalone_proofread as sp
+
+    output_dir = Path(output_dir).resolve()
+    root = sp.project_actual_evidence_root(output_dir)
+    with sp.project_delivery_lock(root):
+        marker_path = output_dir / INCOMPLETE_FILE
+        marker = _validated_presentation_marker(sp.json_load_strict(marker_path))
+        manifest_path = output_dir / "校對工作階段.json"
+        if _sha(manifest_path) != marker["manifest_file_sha256"]:
+            raise ValueError("未完成專案封印檔已變動；未恢復或清標記")
+        manifest = sp.json_load_strict(manifest_path)
+        sp.validate_manifest_integrity(manifest)
+        sp.validate_output_artifact_hashes(manifest)
+        if manifest["manifest_integrity_sha256"] != marker["manifest_integrity_sha256"]:
+            raise ValueError("未完成專案封印與發布計畫不符")
+        db_path = output_dir / "人工判定資料庫.json"
+        raw_db = sp.json_load_strict(db_path)
+        if not isinstance(raw_db, dict):
+            raise ValueError("未完成專案判定資料庫格式錯誤")
+        db = sp.normalize_db(raw_db)
+        db_after = _document_digest(db) == marker["db_after_digest"]
+        current_receipts = _presentation_current_receipts(output_dir)
+        receipt_after = all(current_receipts[name] == marker["receipts"][name]["after_digest"]
+                            for name in PRESENTATION_RECEIPTS)
+        if db_after and receipt_after:
+            _load_project(output_dir, allow_incomplete=True, allow_unresolved_conflict=True)
+            _actual_transfer_state(output_dir, manifest)
+            published_report = _publish_portable_outputs(output_dir, manifest, db)
+            if marker["export_pending"]:
+                if any(sp.needs_expected_review(row) for row in sp.materialize_ledger(manifest, db)):
+                    sp.export_pending_for_gpt(output_dir, _allow_internal_portable=True)
+            if (sp.json_load_strict(marker_path) != marker
+                    or _sha(manifest_path) != marker["manifest_file_sha256"]
+                    or _document_digest(sp.normalize_db(sp.json_load_strict(db_path))) != marker["db_after_digest"]
+                    or _presentation_current_receipts(output_dir) != current_receipts):
+                raise ValueError("發布期間來源資料或未完成標記已由其他交易變動；保留標記")
+            marker_path.unlink()
+            return {"status": "PRESENTATION_RECOVERED", "report": str(published_report)}
+        if (_sha(db_path) == marker["db_before_sha256"]
+                and all(current_receipts[name] in {
+                    marker["receipts"][name]["before_digest"],
+                    marker["receipts"][name]["after_digest"]
+                } for name in PRESENTATION_RECEIPTS)):
+            if sp.json_load_strict(marker_path) != marker:
+                raise ValueError("未完成標記已由其他交易變動；未回滾")
+            for name in PRESENTATION_RECEIPTS:
+                encoded = marker["receipts"][name]["before_bytes"]
+                _restore_exact_file(output_dir / name,
+                                    base64.b64decode(encoded) if encoded is not None else None)
+            if sp.json_load_strict(marker_path) != marker:
+                raise ValueError("回滾期間未完成標記已變動；保留現場")
+            marker_path.unlink()
+            return {"status": "PRECOMMIT_ROLLED_BACK"}
+        raise ValueError("未完成專案 DB／來源回執與專用恢復計畫不符；保留資料及標記")
 
 
 def _require_transferable_expected_lane(action: str, target, prior_event, label: str) -> None:
@@ -1847,7 +2049,7 @@ def _publish_portable_outputs(target_dir: Path, manifest, db):
     import standalone_proofread as sp
 
     sp.save_pending_json(target_dir, manifest, db)
-    sp.generate_report(target_dir, manifest, db)
+    return sp.generate_report(target_dir, manifest, db)
 
 
 def import_project_decisions(source_dir: Path, target_dir: Path, *,
@@ -1976,11 +2178,7 @@ def import_project_decisions(source_dir: Path, target_dir: Path, *,
             raise ValueError(f"目標 actual/expected 證據已改變，判定不能直接沿用：{invalid[:10]}")
         mutations = bool(imported or provenance_updates or conflict_records
                          or source_actual["status"] == "RECHECK_LOCAL_PDF_REQUIRED")
-        if mutations and not _allow_incomplete_target:
-            sp.json_save(target_dir / INCOMPLETE_FILE, {
-                "status": "PRESENTATION_PENDING",
-                "reason": "匯入後待辦、狀態與報告須由正式資料庫重新產生",
-            })
+        planned_receipts = {}
         if conflict_records:
             conflict_path = target_dir / CONFLICT_FILE
             existing_conflicts = (sp.json_load_strict(conflict_path) if conflict_path.exists()
@@ -1989,10 +2187,10 @@ def import_project_decisions(source_dir: Path, target_dir: Path, *,
                     or existing_conflicts.get("version") != 1
                     or not isinstance(existing_conflicts.get("conflicts"), list)):
                 raise ValueError("目標既有衝突紀錄格式無法驗證；未覆寫")
-            sp.json_save(conflict_path, {
+            planned_receipts[CONFLICT_FILE] = {
                 "version": 1,
                 "conflicts": [*existing_conflicts["conflicts"], *conflict_records],
-            }, expected_sha256=_sha(conflict_path) if conflict_path.exists() else None)
+            }
         if source_actual["status"] == "RECHECK_LOCAL_PDF_REQUIRED":
             # Every original group remains a read-only receipt across hops.
             # No checked ID becomes a fresh local direct visual or Global vote.
@@ -2035,15 +2233,24 @@ def import_project_decisions(source_dir: Path, target_dir: Path, *,
                 if source_receipt not in sources:
                     sources.append(source_receipt)
             if sources != existing["sources"]:
-                sp.json_save(receipt_path, {
+                planned_receipts[PENDING_ACTUAL_FILE] = {
                     "status": "RECHECK_LOCAL_PDF_REQUIRED",
                     "sources": sources,
-                }, expected_sha256=_sha(receipt_path) if receipt_path.exists() else None)
+                }
+        marker_path = target_dir / INCOMPLETE_FILE
+        if mutations and not _allow_incomplete_target:
+            owned_marker = _new_presentation_marker(
+                target_dir, live_manifest, before, candidate, planned_receipts,
+                phase="PROJECT_IMPORT")
+            sp.json_save(marker_path, owned_marker, expected_sha256="")
+        for name, document in planned_receipts.items():
+            receipt_path = target_dir / name
+            sp.json_save(receipt_path, document,
+                         expected_sha256=_sha(receipt_path) if receipt_path.exists() else None)
         if imported or provenance_updates or conflict_records:
             sp.json_save(path, candidate, expected_sha256=before)
     if not _allow_incomplete_target and mutations:
-        _publish_portable_outputs(target_dir, target_manifest, candidate)
-        (target_dir / INCOMPLETE_FILE).unlink()
+        resume_portable_project(target_dir)
     return {"imported": imported, "duplicates": duplicates, "conflicts": conflicts,
             "provenance_updates": provenance_updates,
             "matched_actual_overrides": len(mapped_overrides),
@@ -2141,10 +2348,13 @@ def merge_projects(source_dirs, local_pdf: Path, target_dir: Path):
                                                   allow_unresolved_conflict=True)
         if final_manifest.get("session_id") != target_manifest.get("session_id"):
             raise ValueError("匯入期間目標工作階段改變；未發布")
-        _publish_portable_outputs(target_dir, final_manifest, final_db)
-        if any(sp.needs_expected_review(row) for row in sp.materialize_ledger(final_manifest, final_db)):
-            sp.export_pending_for_gpt(target_dir, _allow_internal_portable=True)
-        marker.unlink()
+        with sp.project_delivery_lock(sp.project_actual_evidence_root(target_dir)):
+            final_db_path = target_dir / "人工判定資料庫.json"
+            owned_marker = _new_presentation_marker(
+                target_dir, final_manifest, _sha(final_db_path), final_db, {},
+                phase="NEW_PROJECT_FINAL", export_pending=True)
+            sp.json_save(marker, owned_marker, expected_sha256=_sha(marker))
+        resume_portable_project(target_dir)
         return {"sources": results, "conflicts": conflicts,
                 "imported": sum(item["imported"] for item in results),
                 "duplicates": sum(item["duplicates"] for item in results),

@@ -468,7 +468,7 @@ def test_real_pipeline_actual_override_refresh_publishes_current_manifest(tmp_pa
     assert not list((tmp_path / "isolated-localappdata").rglob("*.sqlite*"))
 
 
-def test_partial_portable_publication_blocks_report_and_repair_until_new_success(tmp_path, monkeypatch):
+def test_partial_portable_publication_requires_bound_repair_or_new_success(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
     first, second = _pdfs(tmp_path)
     source, partial, completed, partial_proof = [tmp_path / name for name in
@@ -492,12 +492,16 @@ def test_partial_portable_publication_blocks_report_and_repair_until_new_success
                    partial / "待人工確認.json", partial / "pipeline_status.json",
                    partial / "注音校對_最終報告.xlsx"]
         before = {path: path.read_bytes() if path.exists() else None for path in watched}
-        for operation in ("--report-only", "--repair-project"):
-            with patch.object(sys, "argv", ["standalone_proofread.py", "-o", str(partial), operation]):
-                with pytest.raises(ValueError, match="接續未完成"):
-                    sp.main()
-            assert {path: path.read_bytes() if path.exists() else None for path in watched} == before
-        assert marker.is_file()
+        with patch.object(sys, "argv", ["standalone_proofread.py", "-o", str(partial), "--report-only"]):
+            with pytest.raises(ValueError, match="接續未完成"):
+                sp.main()
+        assert {path: path.read_bytes() if path.exists() else None for path in watched} == before
+        # A bound, already-committed presentation is resumed only by the
+        # explicit repair entrypoint. The original source remains untouched.
+        with patch.object(sys, "argv", ["standalone_proofread.py", "-o", str(partial), "--repair-project"]):
+            assert sp.main() == 0
+        assert not marker.exists()
+        assert (partial / "注音校對_最終報告.xlsx").is_file()
 
         source_db_before = (source / "人工判定資料庫.json").read_bytes()
         original_writer = portability.write_excel_content_proof
@@ -513,6 +517,10 @@ def test_partial_portable_publication_blocks_report_and_repair_until_new_success
         with patch.object(sys, "argv", ["standalone_proofread.py", "-o", str(partial_proof), "--report-only"]):
             with pytest.raises(ValueError, match="接續未完成"):
                 sp.main()
+        with patch.object(sys, "argv", ["standalone_proofread.py", "-o", str(partial_proof), "--repair-project"]):
+            assert sp.main() == 0
+        assert not (partial_proof / portability.INCOMPLETE_FILE).exists()
+        assert (partial_proof / "待判定候選_給GPT.xlsx").is_file()
 
         portability.continue_project(source, second, completed)
         assert not (completed / portability.INCOMPLETE_FILE).exists()

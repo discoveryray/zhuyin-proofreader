@@ -163,6 +163,24 @@ class ActualImportResult(tuple):
         return result
 
 
+def _serialized_user_project_entry(operation):
+    """Hold the project lock from the first user-facing gate through delivery."""
+    @wraps(operation)
+    def locked(output_dir, *args, **kwargs):
+        output_dir = resolve_existing_project_dir(Path(output_dir))
+        with project_delivery_lock(project_actual_evidence_root(output_dir)):
+            if operation.__name__ == "repair_project_state":
+                from pdf_portability import INCOMPLETE_FILE, resume_portable_project
+                if (output_dir / INCOMPLETE_FILE).exists():
+                    result = resume_portable_project(output_dir)
+                    if result["status"] != "PRESENTATION_RECOVERED":
+                        raise ValueError("未完成專案仍無可發布判定；已還原提交前回執，請重試操作")
+                    return Path(result["report"])
+            _reject_incomplete_portable_project(output_dir)
+            return operation(output_dir, *args, **kwargs)
+    return locked
+
+
 def _global_direct_source_context(output_dir, manifest):
     # Called only after the controller validates the sealed manifest/artifacts.
     # No expected fields cross this boundary.
@@ -1585,6 +1603,7 @@ def plan_gpt_auto_imports(paths: Iterable[str | Path]) -> list[tuple[Path, str]]
     return sorted(items, key=lambda item: (order.get(item[1], 99), str(item[0])))
 
 
+@_serialized_user_project_entry
 def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False) -> tuple[int, int, Path]:
     _reject_incomplete_portable_project(output_dir)
     manifest = json_load_strict(output_dir / "校對工作階段.json")
@@ -1633,6 +1652,9 @@ def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False)
     assert_unique_ids(rows, "review_id")
 
     db = load_or_initialize_db(output_dir)
+    manifest_before_sha = sha256_file(output_dir / "校對工作階段.json")
+    db_path = output_dir / "人工判定資料庫.json"
+    db_before_sha = sha256_file(db_path)
     current_ledger = materialize_ledger(manifest, db)
     assert_unique_ids(current_ledger, "occurrence_id")
     assert_unique_ids(current_ledger, "review_id")
@@ -1728,9 +1750,16 @@ def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False)
         # Bundle preflight: validate expected actions before any actual evidence
         # is committed.  This prevents avoidable half-applied bundles.
         return len(staged_events), ignored_noop_rows, output_dir / "注音校對_最終報告.xlsx"
-    json_save(output_dir / "人工判定資料庫.json", staged_db)
-    save_pending_json(output_dir, manifest, staged_db)
-    report = generate_report(output_dir, manifest, staged_db)
+    _reject_incomplete_portable_project(output_dir)
+    if sha256_file(output_dir / "校對工作階段.json") != manifest_before_sha:
+        raise ValueError("匯入期間工作階段已變動；未寫入判定")
+    from pdf_portability import INCOMPLETE_FILE, _new_presentation_marker, resume_portable_project
+    marker = output_dir / INCOMPLETE_FILE
+    owned_marker = _new_presentation_marker(
+        output_dir, manifest, db_before_sha, staged_db, {}, phase="SAME_SESSION_EXPECTED")
+    json_save(marker, owned_marker, expected_sha256="")
+    json_save(db_path, staged_db, expected_sha256=db_before_sha)
+    report = Path(resume_portable_project(output_dir)["report"])
     # skipped counts only explicit no-op/keep rows; safe rebases are successful
     # imports and remain included in len(staged_events).
     return len(staged_events), ignored_noop_rows, report
@@ -4449,6 +4478,7 @@ def _refresh_manifest_from_outputs_legacy_disabled(output_dir: Path, old_manifes
     return manifest
 
 
+@_serialized_user_project_entry
 def regenerate_report(output_dir: Path) -> Path:
     _reject_incomplete_portable_project(output_dir)
     old_manifest=json_load_strict(output_dir/"校對工作階段.json")
@@ -4531,6 +4561,7 @@ def _reject_incomplete_portable_project(output_dir: Path) -> None:
             raise ValueError("Excel actual 衝突尚未在原頁重新核對；不得匯出、重新產生一般報告或修復專案")
 
 
+@_serialized_user_project_entry
 def repair_project_state(output_dir: Path, *, runtime_root: Path | None = None) -> Path:
     """Rebuild expected candidates and completion state without forcing actual decode.
 
