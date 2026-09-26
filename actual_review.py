@@ -1326,6 +1326,7 @@ def export_actual_review_package(
     session_schema_version: str,
     workbook_schema_version: str,
     review_id_schema_version: str,
+    portable_source=None,
 ) -> Path:
     output_dir = Path(output_dir)
     groups = build_actual_review_groups(ledger)
@@ -1417,6 +1418,10 @@ def export_actual_review_package(
         ws.column_dimensions[get_column_letter(headers.index(col_name) + 1)].hidden = True
     for sheet in wb.worksheets:
         _style_sheet(sheet)
+    if portable_source is not None:
+        from pdf_portability import write_excel_content_proof
+        manifest, db = portable_source
+        write_excel_content_proof(wb, output_dir, manifest, db, kind="actual")
     xlsx = package_dir / "actual待判定_給GPT.xlsx"
     wb.save(xlsx)
 

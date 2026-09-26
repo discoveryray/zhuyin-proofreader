@@ -1069,7 +1069,8 @@ def needs_expected_review(entry: Mapping[str, Any]) -> bool:
     return state in {"DIFFERENCE_PENDING_CONFIRMATION", "REVIEW_PENDING"}
 
 
-def export_pending_for_gpt(output_dir: Path) -> Path:
+def export_pending_for_gpt(output_dir: Path, *, _allow_unpublished_pipeline: bool = False,
+                           _allow_internal_portable: bool = False) -> Path:
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
     validate_output_artifact_hashes(manifest)
@@ -1168,6 +1169,11 @@ def export_pending_for_gpt(output_dir: Path) -> Path:
             ws.column_dimensions[get_column_letter(headers.index(col_name) + 1)].hidden = True
     for sheet in wb.worksheets:
         _style_sheet(sheet)
+    from pdf_portability import write_excel_content_proof
+    from pdf_portability import INCOMPLETE_FILE
+    if not (_allow_unpublished_pipeline and (Path(output_dir) / INCOMPLETE_FILE).exists()):
+        write_excel_content_proof(wb, output_dir, manifest, db, kind="expected",
+                                  allow_internal_incomplete=_allow_internal_portable)
     out = output_dir / "待判定候選_給GPT.xlsx"
     wb.save(out)
     return out
@@ -1573,6 +1579,9 @@ def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False)
         raise ValueError("SESSION_SCHEMA_INCOMPATIBLE：工作階段／review ID 無法直接沿用")
 
     metadata = workbook_metadata(xlsx, "匯入中繼資料")
+    if str(metadata.get("session_id") or "") != str(manifest.get("session_id") or ""):
+        from pdf_portability import import_expected_excel
+        return import_expected_excel(output_dir, xlsx, dry_run=dry_run)
     mismatched = {}
     if str(metadata.get("session_id") or "") != str(manifest.get("session_id") or ""):
         mismatched["session_id"] = (manifest.get("session_id"), metadata.get("session_id"))
@@ -3449,6 +3458,7 @@ def export_actual_pending_for_gpt(output_dir: Path) -> Path | None:
         session_schema_version=SESSION_SCHEMA_VERSION,
         workbook_schema_version=WORKBOOK_SCHEMA_VERSION,
         review_id_schema_version=REVIEW_ID_SCHEMA_VERSION,
+        portable_source=(manifest, db),
     )
 
 
@@ -3710,6 +3720,10 @@ def import_actual_gpt_decisions(output_dir: Path, xlsx: Path) -> tuple[int, int,
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
     validate_output_artifact_hashes(manifest)
+    metadata = workbook_metadata(Path(xlsx), "匯入中繼資料")
+    if str(metadata.get("session_id") or "") != str(manifest.get("session_id") or ""):
+        from pdf_portability import import_actual_excel
+        return import_actual_excel(output_dir, xlsx)
     recover_pending_project_actual_write(project_actual_evidence_root(output_dir))
     db = load_or_initialize_db(output_dir)
     ledger = materialize_ledger(manifest, db)
@@ -4320,7 +4334,7 @@ def run_pipeline_pdfs(
             gpt_report = None
         else:
             report=generate_report(output_dir,manifest,db,runtime_root=root)
-            gpt_report = export_pending_for_gpt(output_dir) if pending else None
+            gpt_report = export_pending_for_gpt(output_dir, _allow_unpublished_pipeline=True) if pending else None
         if gate["status"] == PROOFREAD_COMPLETE:
             print(f"全冊注音校對完成。\n報告：{report}",flush=True)
         else:
@@ -4389,6 +4403,7 @@ def _refresh_manifest_from_outputs_legacy_disabled(output_dir: Path, old_manifes
 
 
 def regenerate_report(output_dir: Path) -> Path:
+    _reject_incomplete_portable_project(output_dir)
     old_manifest=json_load_strict(output_dir/"校對工作階段.json")
     validate_manifest_integrity(old_manifest)
     validate_output_artifact_hashes(old_manifest)
@@ -4456,6 +4471,13 @@ def regenerate_report(output_dir: Path) -> Path:
     return generate_report(output_dir,manifest,db)
 
 
+def _reject_incomplete_portable_project(output_dir: Path) -> None:
+    from pdf_portability import INCOMPLETE_FILE
+
+    if (Path(output_dir) / INCOMPLETE_FILE).exists():
+        raise ValueError("跨電腦接續未完成；不得重新產生一般報告或修復專案")
+
+
 def repair_project_state(output_dir: Path, *, runtime_root: Path | None = None) -> Path:
     """Rebuild expected candidates and completion state without forcing actual decode.
 
@@ -4466,6 +4488,7 @@ def repair_project_state(output_dir: Path, *, runtime_root: Path | None = None) 
     then replays durable manual decisions and regenerates the completion gate.
     """
     output_dir = resolve_existing_project_dir(Path(output_dir))
+    _reject_incomplete_portable_project(output_dir)
     old_manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(old_manifest)
     validate_output_artifact_hashes(old_manifest)
@@ -4545,11 +4568,13 @@ def main():
     ap.add_argument("--import-actual-gpt",help="匯入 GPT 已填寫的 actual待判定_給GPT.xlsx，驗證後自動重新解碼")
     ap.add_argument("--refresh-actual",action="store_true",help="依目前 user actual 證據重新解碼現有工作階段")
     ap.add_argument("--prepare-portable",action="store_true",help="原 PDF 仍可讀時建立跨電腦全頁內容證據")
+    ap.add_argument("--attach-portable-excel",help="A 原專案及 PDF 仍可讀時，核對並為舊已填 Excel 補上跨電腦內容證據")
+    ap.add_argument("--resume-portable-excel",action="store_true",help="恢復或回滾未完成的跨電腦 actual Excel 交易")
     ap.add_argument("--continue-from-project",help="以來源專案與當地 PDF 建立新的接續專案")
     ap.add_argument("--merge-with-project",help="接續時一併匯入另一來源專案，原兩專案均不修改")
     ap.add_argument("--local-pdf",help="跨電腦接續時指定當地下載的 PDF")
     args=ap.parse_args()
-    if args.report_only or args.repair_project or args.export_gpt or args.import_gpt or args.import_gpt_auto or args.export_actual_gpt or args.import_actual_gpt or args.refresh_actual or args.prepare_portable or args.continue_from_project:
+    if args.report_only or args.repair_project or args.export_gpt or args.import_gpt or args.import_gpt_auto or args.export_actual_gpt or args.import_actual_gpt or args.refresh_actual or args.prepare_portable or args.attach_portable_excel or args.resume_portable_excel or args.continue_from_project:
         if not args.output_dir: raise SystemExit("此操作需要 -o 輸出資料夾")
         if args.continue_from_project:
             if not args.local_pdf:
@@ -4567,6 +4592,12 @@ def main():
         if args.prepare_portable:
             from pdf_portability import prepare_portable_project
             print(prepare_portable_project(outdir)); return 0
+        if args.attach_portable_excel:
+            from pdf_portability import attach_filled_excel_proof
+            print(attach_filled_excel_proof(outdir, Path(args.attach_portable_excel))); return 0
+        if args.resume_portable_excel:
+            from pdf_portability import resume_actual_excel_project
+            print(json.dumps(resume_actual_excel_project(outdir), ensure_ascii=False)); return 0
         if args.repair_project:
             print(repair_project_state(outdir)); return 0
         if args.export_actual_gpt:
