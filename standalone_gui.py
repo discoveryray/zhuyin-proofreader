@@ -134,6 +134,23 @@ def project_status_details(folder: Path) -> tuple[str, str]:
         " 匯入的同位置判定有衝突；雙方原判定已保留，請查看進度詳細資訊並人工核對。"
         if conflict_path.exists() else ""
     )
+    actual_conflict_path = folder / "跨Excel_actual衝突.json"
+    actual_conflict_notice = ""
+    pending_actual_conflicts = []
+    if actual_conflict_path.exists():
+        try:
+            import pdf_portability
+            import standalone_proofread as sp
+            manifest = sp.json_load_strict(session_path)
+            db = sp.normalize_db(sp.json_load_strict(folder / "人工判定資料庫.json"))
+            pending_actual_conflicts = pdf_portability.actual_excel_conflict_state(folder, manifest, db)
+            if pending_actual_conflicts:
+                actual_conflict_notice = (
+                    " Excel actual 同位置判定衝突尚待原頁重核；雙方來源已保留，"
+                    "不能當完成專案轉送。"
+                )
+        except Exception as exc:
+            return "Excel actual 衝突紀錄無法驗證；不得視為完成。", f"{actual_conflict_path}\n{exc}"
     try:
         has_session = session_path.is_file()
         if status_path.exists():
@@ -149,10 +166,19 @@ def project_status_details(folder: Path) -> tuple[str, str]:
                 diagnostics += f"\n\n{pending_actual}\n{recheck_notice}"
             if conflict_notice:
                 diagnostics += f"\n\n{conflict_path}\n{conflict_notice}"
-            return summarize_project_status(data, has_session=has_session) + recheck_notice + conflict_notice, diagnostics
+            if actual_conflict_notice:
+                diagnostics += f"\n\n{actual_conflict_path}\n{actual_conflict_notice}"
+            if (actual_conflict_path.exists() and not pending_actual_conflicts
+                    and data.get("excel_report_deferred") is True):
+                return (
+                    "本地 actual 衝突已重核；Excel 報告尚待更新，不能視為報告完成。"
+                    + recheck_notice + conflict_notice + actual_conflict_notice,
+                    diagnostics,
+                )
+            return summarize_project_status(data, has_session=has_session) + recheck_notice + conflict_notice + actual_conflict_notice, diagnostics
         if not has_session:
             return "這是新的校對專案資料夾；尚未建立工作階段。請選擇教材後按『開始新校對』。", str(folder)
-        return _UNKNOWN_PROGRESS + recheck_notice + conflict_notice, f"已有工作階段，但找不到 {status_path}"
+        return _UNKNOWN_PROGRESS + recheck_notice + conflict_notice + actual_conflict_notice, f"已有工作階段，但找不到 {status_path}"
     except Exception as exc:
         return _UNKNOWN_PROGRESS, f"{status_path}\n{exc}"
 
@@ -549,6 +575,31 @@ class App:
         out = self.output.get().strip()
         if not out:
             return
+        project = Path(out)
+        if (project / "跨電腦接續未完成.json").exists():
+            messagebox.showerror("報告尚未完成", "跨電腦接續尚未完成；請先完成專用恢復。")
+            return
+        if (project / "跨Excel_actual衝突.json").exists():
+            try:
+                import pdf_portability
+                import standalone_proofread as sp
+                manifest = sp.json_load_strict(project / "校對工作階段.json")
+                sp.validate_manifest_integrity(manifest)
+                sp.validate_output_artifact_hashes(manifest)
+                db = sp.json_load_strict(project / "人工判定資料庫.json")
+                pending = pdf_portability.actual_excel_conflict_state(project, manifest, db)
+                status = sp.json_load_strict(project / "pipeline_status.json")
+                if not isinstance(status, dict):
+                    raise ValueError("專案報告狀態格式無法驗證")
+            except Exception as exc:
+                messagebox.showerror("報告無法驗證", f"Excel actual 衝突紀錄無法驗證：{exc}")
+                return
+            if pending:
+                messagebox.showerror("報告尚未完成", "Excel actual 衝突尚待在原頁重新核對；既有報告已失效。")
+                return
+            if status.get("excel_report_deferred") is True:
+                messagebox.showerror("報告尚待更新", "本地 actual 已保存，但 Excel 報告尚未重新產生；請按『更新報告』。")
+                return
         report = Path(out) / filename
         if not report.exists():
             messagebox.showinfo("尚無報告", missing_message)

@@ -163,6 +163,223 @@ def test_full_pipeline_different_sha_continues_and_returns(tmp_path, monkeypatch
     assert not list((tmp_path / "isolated-localappdata").rglob("*.sqlite*"))
 
 
+def test_actual_excel_conflict_requires_fresh_local_visual_adjudication(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
+    first, second = _pdfs(tmp_path)
+    a, b = tmp_path / "source", tmp_path / "target"
+    with patch.object(sp, "decode", side_effect=_synthetic_unresolved_decode), \
+         patch.object(sp, "actual_workbook_global_exact_dependencies", return_value=()), \
+         patch("check_pronunciation_candidates.actual_workbook_global_exact_dependencies", return_value=()):
+        sp.run_pipeline_pdfs([first], a, defer_excel_reports=True)
+        sp.run_pipeline_pdfs([second], b, defer_excel_reports=True)
+        sp.export_actual_pending_for_gpt(a)
+        workbook = load_workbook(a / "actual待判定_GPT包" / "actual待判定_給GPT.xlsx")
+        sheet = workbook["actual待判定"]
+        headers = [cell.value for cell in sheet[1]]
+        for key, value in {"decision": "VERIFIED", "actual_reading": "ㄐㄩㄝˊ",
+                           "confidence": "高", "sample_a_checked": "Y"}.items():
+            sheet.cell(2, headers.index(key) + 1, value)
+        first_excel = tmp_path / "first-actual.xlsx"
+        workbook.save(first_excel)
+        sheet.cell(2, headers.index("actual_reading") + 1, "ㄐㄩㄝˇ")
+        conflict_excel = tmp_path / "conflict-actual.xlsx"
+        workbook.save(conflict_excel)
+        sheet.cell(2, headers.index("actual_reading") + 1, "ㄐㄩㄝˋ")
+        later_conflict_excel = tmp_path / "later-conflict-actual.xlsx"
+        workbook.save(later_conflict_excel)
+        workbook.close()
+        assert sp.import_actual_gpt_decisions(b, first_excel)[0] == 1
+        report_read = Event()
+        release_report = Event()
+        import_started = Event()
+        import_done = Event()
+        race_errors = []
+        original_hold = portability.hold_actual_excel_completion
+
+        def pause_after_report_gate(*args):
+            result = original_hold(*args)
+            if current_thread().name == "actual-conflict-report":
+                report_read.set()
+                assert release_report.wait(20)
+            return result
+
+        def report_worker():
+            try:
+                sp.regenerate_report(b)
+            except Exception as exc:
+                race_errors.append(("report", exc))
+
+        def import_worker():
+            import_started.set()
+            try:
+                sp.import_actual_gpt_decisions(b, conflict_excel)
+            except ValueError as exc:
+                if "不同判定" not in str(exc):
+                    race_errors.append(("import", exc))
+            else:
+                race_errors.append(("import", AssertionError("conflicting import succeeded")))
+            finally:
+                import_done.set()
+
+        with patch.object(portability, "hold_actual_excel_completion", side_effect=pause_after_report_gate):
+            report_thread = Thread(target=report_worker, name="actual-conflict-report")
+            report_thread.start()
+            try:
+                assert report_read.wait(20)
+                import_thread = Thread(target=import_worker, name="actual-conflict-import")
+                import_thread.start()
+                assert import_started.wait(5)
+                assert not import_done.wait(0.3), "衝突匯入在報告發布鎖外寫入"
+            finally:
+                release_report.set()
+                report_thread.join(20)
+                if "import_thread" in locals():
+                    import_thread.join(20)
+        assert not report_thread.is_alive() and not import_thread.is_alive()
+        assert not race_errors
+        gate = sp.json_load_strict(b / "pipeline_status.json")["completion_gate"]
+        assert gate["hard_gates"]["actual_excel_conflicts_zero"] is False
+        receipt_path = b / portability.ACTUAL_EXCEL_CONFLICT_FILE
+        receipt_bytes = receipt_path.read_bytes()
+        blocked_paths = [receipt_path, b / "人工判定資料庫.json",
+                         b / "pipeline_status.json", b / "注音校對_最終報告.xlsx"]
+        blocked_bytes = {path: path.read_bytes() if path.exists() else None for path in blocked_paths}
+        for operation in ("--report-only", "--repair-project"):
+            with patch.object(sys, "argv", ["standalone_proofread.py", "-o", str(b), operation]):
+                with pytest.raises(ValueError, match="actual.*衝突"):
+                    sp.main()
+            assert {path: path.read_bytes() if path.exists() else None
+                    for path in blocked_paths} == blocked_bytes
+        with pytest.raises(ValueError, match="actual.*衝突"):
+            sp.export_actual_pending_for_gpt(b)
+        assert {path: path.read_bytes() if path.exists() else None
+                for path in blocked_paths} == blocked_bytes
+        from standalone_gui import App as ProjectApp
+        report_gui = ProjectApp.__new__(ProjectApp)
+        report_gui.output = type("SelectedProject", (), {"get": lambda self: str(b)})()
+        with patch("standalone_gui.messagebox.showerror") as report_error, \
+             patch("standalone_gui.os.startfile", create=True) as startfile, \
+             patch("standalone_gui.subprocess.Popen") as open_other:
+            report_gui.open_user_report()
+            report_gui.open_technical_report()
+            assert report_error.call_count == 2
+            startfile.assert_not_called()
+            open_other.assert_not_called()
+        manifest = sp.json_load_strict(b / "校對工作階段.json")
+        db = sp.json_load_strict(b / "人工判定資料庫.json")
+        pending = portability.actual_excel_conflict_state(b, manifest, db)
+        assert len(pending) == 1
+        review_id = pending[0]
+        ledger = sp.materialize_ledger(manifest, db)
+        queue = review_gui.prepare_review_queue(manifest, ledger, [], 0, set(), set(),
+                                                actual_conflict_review_ids=pending)
+        assert review_id in [item["review_id"] for item in queue["records"]]
+        window_root = tk.Tk()
+        window_root.withdraw()
+        try:
+            window = tk.Toplevel(window_root)
+            try:
+                app = review_gui.ReviewApp(window, b)
+                app.index = next(index for index, item in enumerate(app.records)
+                                 if item["review_id"] == review_id)
+                app.show()
+                window.update()
+                assert app.primary.cget("state") == "normal"
+                assert "actual 衝突" in app.primary.cget("text")
+                assert app.image.photo is not None
+            finally:
+                window.destroy()
+        finally:
+            window_root.destroy()
+        watched = [b / name for name in ("校對工作階段.json", "人工判定資料庫.json",
+                                          "注音校對_最終報告.xlsx", "pipeline_status.json",
+                                          portability.INCOMPLETE_FILE)]
+        before = {path: path.read_bytes() if path.exists() else None for path in watched}
+        before_override = (sp.project_actual_evidence_root(b) / ar.OCCURRENCE_OVERRIDE_FILE).read_bytes()
+        with patch.object(sp, "stage_manual_actual_group", side_effect=OSError("staging disk full")):
+            with pytest.raises(OSError, match="staging disk full"):
+                sp.stage_manual_actual_correction(b, review_id, "ㄐㄩㄝˊ")
+        assert receipt_path.read_bytes() == receipt_bytes
+        assert (sp.project_actual_evidence_root(b) / ar.OCCURRENCE_OVERRIDE_FILE).read_bytes() == before_override
+        assert {path: path.read_bytes() if path.exists() else None for path in watched} == before
+        tampered = sp.json_load_strict(receipt_path)
+        tampered["conflicts"][0]["target_review_id"] = "foreign-review"
+        sp.json_save(receipt_path, tampered)
+        with pytest.raises(ValueError, match="完整性"):
+            portability._load_project(b)
+        receipt_path.write_bytes(receipt_bytes)
+        for mutation in ("target_session", "source_occurrence", "source_review",
+                         "source_decision", "source_pdf_sha", "duplicate"):
+            altered = sp.json_load_strict(receipt_path)
+            item = altered["conflicts"][0]
+            source = item["source_record"]
+            if mutation == "target_session":
+                source["target_session_id"] = "foreign-session"
+            elif mutation == "source_occurrence":
+                source["source_occurrence_ids"] = ["foreign-occurrence"]
+            elif mutation == "source_review":
+                source["source_review_ids"] = ["foreign-review"]
+            elif mutation == "source_decision":
+                source["source_decision"]["actual_reading"] = "ㄐㄩㄝˋ"
+            elif mutation == "source_pdf_sha":
+                source["source_pdf_sha256"] = ["0" * 64]
+            else:
+                altered["conflicts"].append(copy.deepcopy(item))
+            altered = portability._sealed_actual_excel_conflicts(altered["conflicts"])
+            sp.json_save(receipt_path, altered)
+            with pytest.raises(ValueError, match="衝突.*識別|衝突.*格式|衝突.*完整性"):
+                portability._load_project(b)
+            receipt_path.write_bytes(receipt_bytes)
+        sp.stage_manual_actual_correction(b, review_id, "ㄐㄩㄝˊ", note="原頁重新核對")
+        staged = ar.load_manual_actual_staging(sp.project_actual_evidence_root(b))["staged_groups"]
+        assert len(staged) == 1 and "portable_actual_conflict:" in staged[0]["note"]
+        old_report = (b / "注音校對_最終報告.xlsx").read_bytes()
+        with patch.object(sp, "regenerate_report", side_effect=OSError("report disk full")):
+            with pytest.raises(sp.ManualActualPostApplyError, match="report disk full"):
+                sp.apply_staged_manual_actual_corrections(b)
+        assert (b / "注音校對_最終報告.xlsx").read_bytes() == old_report
+        assert sp.json_load_strict(b / "pipeline_status.json")["excel_report_deferred"] is True
+        assert receipt_path.read_bytes() == receipt_bytes
+        reopened_manifest, _ = portability._load_project(b)
+        assert reopened_manifest["session_id"] == manifest["session_id"]
+        assert portability.actual_excel_conflict_state(
+            b, reopened_manifest, sp.json_load_strict(b / "人工判定資料庫.json")) == []
+        assert "報告尚待更新" in __import__("standalone_gui").project_status_details(b)[0]
+        with patch("standalone_gui.messagebox.showerror") as report_error, \
+             patch("standalone_gui.os.startfile", create=True) as startfile, \
+             patch("standalone_gui.subprocess.Popen") as open_other:
+            report_gui.open_user_report()
+            assert report_error.call_count == 1
+            startfile.assert_not_called()
+            open_other.assert_not_called()
+        assert sp.regenerate_report(b).is_file()
+        assert "actual 同位置判定衝突尚待" not in __import__("standalone_gui").project_status_details(b)[0]
+        with patch("standalone_gui.messagebox.showerror") as report_error, \
+             patch("standalone_gui.os.startfile", create=True) as startfile, \
+             patch("standalone_gui.subprocess.Popen") as open_other:
+            report_gui.open_user_report()
+            report_error.assert_not_called()
+            assert startfile.called or open_other.called
+        provenance = ar._read_csv(sp.project_actual_evidence_root(b) / ar.GLYPH_PROVENANCE_FILE,
+                                  ar.GLYPH_PROVENANCE_HEADERS)
+        assert any("portable_actual_conflict:" in row["note"]
+                   and row["source"] == "人工 GUI actual 視覺確認" for row in provenance)
+        with pytest.raises(ValueError, match="不同判定"):
+            sp.import_actual_gpt_decisions(b, later_conflict_excel)
+        later_receipt = sp.json_load_strict(receipt_path)
+        assert len(later_receipt["conflicts"]) == 2
+        assert portability.actual_excel_conflict_state(
+            b, sp.json_load_strict(b / "校對工作階段.json"),
+            sp.json_load_strict(b / "人工判定資料庫.json")) == [review_id]
+        sp.stage_manual_actual_correction(b, review_id, "ㄐㄩㄝˊ", note="第二次原頁核對")
+        sp.apply_staged_manual_actual_corrections(b)
+        assert len(sp.json_load_strict(receipt_path)["conflicts"]) == 2
+        assert portability.actual_excel_conflict_state(
+            b, sp.json_load_strict(b / "校對工作階段.json"),
+            sp.json_load_strict(b / "人工判定資料庫.json")) == []
+        assert portability._load_project(b)[0]["session_id"] == manifest["session_id"]
+
+
 def test_real_pipeline_actual_override_refresh_publishes_current_manifest(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
     first, second = _pdfs(tmp_path)
@@ -726,6 +943,25 @@ def test_actual_excel_conflict_and_precommit_write_failure_preserve_target(tmp_p
         assert sp.import_actual_gpt_decisions(b, filled)[0] == 1
         root_b = sp.project_actual_evidence_root(b)
         original_b = (root_b / ar.OCCURRENCE_OVERRIDE_FILE).read_bytes()
+        receipt_path = b / portability.ACTUAL_EXCEL_CONFLICT_FILE
+        preserved = {path: path.read_bytes() for path in (
+            b / "人工判定資料庫.json", b / "校對工作階段.json",
+            b / "pipeline_status.json", root_b / ar.OCCURRENCE_OVERRIDE_FILE,
+        )}
+        original_json_save = sp.json_save
+
+        def fail_receipt_write(path, *args, **kwargs):
+            if Path(path) == receipt_path:
+                raise OSError("receipt disk full")
+            return original_json_save(path, *args, **kwargs)
+
+        with patch.object(sp, "json_save", side_effect=fail_receipt_write):
+            with pytest.raises(OSError, match="receipt disk full"):
+                sp.import_actual_gpt_decisions(b, different)
+        assert not receipt_path.exists()
+        assert not (b / portability.INCOMPLETE_FILE).exists()
+        for path, before in preserved.items():
+            assert path.read_bytes() == before
         with pytest.raises(ValueError, match="不同判定"):
             sp.import_actual_gpt_decisions(b, different)
         with pytest.raises(ValueError, match="不同判定"):
@@ -733,10 +969,18 @@ def test_actual_excel_conflict_and_precommit_write_failure_preserve_target(tmp_p
         with pytest.raises(ValueError, match="不同判定"):
             sp.import_actual_gpt_decisions(b, third)
         assert (root_b / ar.OCCURRENCE_OVERRIDE_FILE).read_bytes() == original_b
-        receipt = sp.json_load_strict(b / "跨Excel_actual衝突.json")
+        receipt = sp.json_load_strict(receipt_path)
         assert receipt["conflicts"][0]["source_reading"] == "ㄐㄩㄝˇ"
         assert receipt["conflicts"][0]["target_record"]["actual_reading"] == "ㄐㄩㄝˊ"
         assert [item["source_reading"] for item in receipt["conflicts"]] == ["ㄐㄩㄝˇ", "ㄐㄩㄝˋ"]
+        with pytest.raises(ValueError, match="actual.*衝突|衝突.*actual"):
+            portability._load_project(b)
+        with pytest.raises(ValueError, match="actual.*衝突|衝突.*actual"):
+            portability.prepare_portable_project(b)
+        with pytest.raises(ValueError, match="actual.*衝突|衝突.*actual"):
+            sp.regenerate_report(b)
+        from standalone_gui import project_status_details
+        assert "actual" in project_status_details(b)[0] and "衝突" in project_status_details(b)[0]
     assert not list((tmp_path / "isolated-localappdata").rglob("*.sqlite*"))
 
 

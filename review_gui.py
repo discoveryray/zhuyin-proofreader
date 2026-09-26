@@ -249,7 +249,8 @@ def _waits_for_actual(item, checked):
 
 
 def prepare_review_queue(manifest, ledger, previous, index, checked, deferred,
-                         character_order=None, *, advance_from=None):
+                         character_order=None, *, advance_from=None,
+                         actual_conflict_review_ids=()):
     """Prepare navigation without Tk calls; synchronous reload and save share it."""
     old = previous[index] if 0 <= index < len(previous) else None
     lane = review_lane(old) if old else None
@@ -262,7 +263,9 @@ def prepare_review_queue(manifest, ledger, previous, index, checked, deferred,
     waiting = {
         str(item.get("occurrence_id") or "") for item in ledger if _waits_for_actual(item, checked)
     }
-    pending = [item for item in ledger if item.get("state") in NON_TERMINAL_STATES
+    conflict_ids = set(actual_conflict_review_ids)
+    pending = [item for item in ledger if (item.get("state") in NON_TERMINAL_STATES
+                                           or item.get("review_id") in conflict_ids)
                and not _waits_for_actual(item, checked)]
     live_keys = {(review_lane(item), str(item.get("occurrence_id") or "")) for item in pending}
     deferred = deferred & live_keys
@@ -958,6 +961,8 @@ class ReviewApp:
         self.db = load_or_initialize_db(output_dir)
         from pdf_portability import validate_conflict_state
         self.unresolved_portability_conflicts = validate_conflict_state(output_dir, self.manifest, self.db)
+        from pdf_portability import actual_excel_conflict_state
+        self.actual_excel_conflict_review_ids = set(actual_excel_conflict_state(output_dir, self.manifest, self.db))
         self.index = 0
         self.photo = None
         self.records = []
@@ -1087,10 +1092,14 @@ class ReviewApp:
                 dict(self._character_order) if hasattr(self, "_character_order") else None)
 
     def _set_actionable_records_from_ledger(self, ledger, *, advance_from=None):
+        from pdf_portability import actual_excel_conflict_state
+        self.actual_excel_conflict_review_ids = set(actual_excel_conflict_state(
+            self.output_dir, self.manifest, self.db))
         manifest, previous, index, deferred, character_order = self._queue_inputs()
         prepared = prepare_review_queue(manifest, ledger, previous, index,
                                         self.staged_checked_occurrence_ids, deferred,
-                                        character_order, advance_from=advance_from)
+                                        character_order, advance_from=advance_from,
+                                        actual_conflict_review_ids=self.actual_excel_conflict_review_ids)
         self._publish_review_queue(prepared)
 
     def _publish_review_queue(self, prepared):
@@ -1370,7 +1379,8 @@ class ReviewApp:
                 prepared = prepare_review_queue(
                     manifest, result.ledger, previous, index,
                     set(result.staging_summary.get("staged_checked_occurrence_ids") or []),
-                    deferred, character_order, advance_from=request["review_id"])
+                    deferred, character_order, advance_from=request["review_id"],
+                    actual_conflict_review_ids=self.actual_excel_conflict_review_ids)
                 result.timings["todo_update"] = time.perf_counter() - queue_started
             except Exception as exc:
                 error = exc
@@ -1895,7 +1905,10 @@ class ReviewApp:
         lane = review_lane(entry)
         primary_text, secondary_text = review_action_labels(state)
         primary_command = secondary_command = None
-        if getattr(self, "focused_entry", None) is not None and valid_manual_expected_decision(entry):
+        if entry.get("review_id") in getattr(self, "actual_excel_conflict_review_ids", set()):
+            primary_text = "重新核對 actual 衝突"
+            primary_command = self.correct_actual
+        elif getattr(self, "focused_entry", None) is not None and valid_manual_expected_decision(entry):
             primary_text = "輸入其他應標注音"
             primary_command = self.resolve_expected
             if (can_confirm_current_expected(entry)
@@ -1966,6 +1979,8 @@ class ReviewApp:
             f"{LANE_LABELS[lane]}｜本組剩餘 {lane_count} 筆｜稍後 {deferred} 筆{staged_status}"
         ))
         help_text = STATE_HELP.get(state, "這一筆需要人工處理。")
+        if entry.get("review_id") in getattr(self, "actual_excel_conflict_review_ids", set()):
+            help_text = "跨電腦 Excel actual 在此位置有不同讀音；請查看原頁並重新核對，未套用匯入讀音。"
         if lane == "expected":
             help_text = "請先依原文與語境判定應標注音；目前注音待辨識時，儲存後再進第二組。依據選填。"
         staged_line = "\nactual 狀態：已暫存人工核對結果，等待批次套用；上方目前注音是套用前的正式結果，應標仍須依語境獨立判定。" if is_staged else ""

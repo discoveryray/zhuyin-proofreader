@@ -16,7 +16,7 @@ import uuid
 import zlib
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 import fitz
 
@@ -25,6 +25,7 @@ PROOF_FILE = "PDF內容對應證據.json"
 PROOF_VERSION = 2
 PENDING_ACTUAL_FILE = "來源actual待重新核對.json"
 INCOMPLETE_FILE = "跨電腦接續未完成.json"
+ACTUAL_EXCEL_CONFLICT_FILE = "跨Excel_actual衝突.json"
 CONFLICT_FILE = "跨專案判定衝突.json"
 EXCEL_PROOF_SHEET = "跨電腦內容證據"
 EXCEL_PROOF_VERSION = 1
@@ -92,7 +93,8 @@ def _artifact(output_dir: Path, info: Mapping[str, Any], kind: str) -> Path:
 
 
 def _load_project(output_dir: Path, *, allow_incomplete: bool = False,
-                  allow_unresolved_conflict: bool = False):
+                  allow_unresolved_conflict: bool = False,
+                  allow_actual_excel_conflict: bool = False):
     import standalone_proofread as sp
 
     output_dir = Path(output_dir).resolve()
@@ -110,11 +112,199 @@ def _load_project(output_dir: Path, *, allow_incomplete: bool = False,
     unresolved = validate_conflict_state(output_dir, manifest, db)
     if unresolved and not allow_unresolved_conflict:
         raise ValueError(f"來源專案有未裁決的同位置判定衝突，不能再轉送：{unresolved}")
+    actual_conflicts = actual_excel_conflict_state(output_dir, manifest, db)
+    if actual_conflicts and not allow_actual_excel_conflict:
+        raise ValueError(f"Excel actual 衝突尚未經本地原頁重核，不能當完整專案轉送：{actual_conflicts}")
     ledger = sp.materialize_ledger(manifest, db)
     stale = [row["review_id"] for row in ledger if row.get("review_event_replay_status")]
     if stale:
         raise ValueError(f"來源/目標工作階段已有失效判定，不能當有效成果轉用：{stale[:10]}")
     return manifest, db
+
+
+def _actual_excel_conflict_token(conflict: Mapping[str, Any]) -> str:
+    return "portable_actual_conflict:" + hashlib.sha256(_canonical(conflict)).hexdigest()
+
+
+def _sealed_actual_excel_conflicts(conflicts: list[dict[str, Any]]) -> dict[str, Any]:
+    payload = {"version": 1, "conflicts": conflicts}
+    return {**payload, "integrity_sha256": hashlib.sha256(_canonical(payload)).hexdigest()}
+
+
+def _validated_actual_excel_receipt(path: Path) -> dict[str, Any]:
+    import standalone_proofread as sp
+
+    receipt = sp.json_load_strict(path)
+    if (not isinstance(receipt, dict)
+            or set(receipt) != {"version", "conflicts", "integrity_sha256"}
+            or receipt.get("version") != 1
+            or not isinstance(receipt.get("conflicts"), list) or not receipt["conflicts"]):
+        raise ValueError("Excel actual 衝突紀錄格式無法驗證")
+    expected = hashlib.sha256(_canonical({"version": 1, "conflicts": receipt["conflicts"]})).hexdigest()
+    if receipt["integrity_sha256"] != expected:
+        raise ValueError("Excel actual 衝突紀錄完整性無法驗證")
+    return receipt
+
+
+def actual_excel_conflict_state(output_dir: Path, manifest: Mapping[str, Any],
+                                db: Mapping[str, Any]) -> list[str]:
+    """Keep imported actual disagreements pending until new local visual proof exists."""
+    import actual_review as ar
+    import standalone_proofread as sp
+    from global_glyph_promotion import committed_project_recovery
+
+    receipt_path = Path(output_dir) / ACTUAL_EXCEL_CONFLICT_FILE
+    if not receipt_path.exists():
+        return []
+    receipt = _validated_actual_excel_receipt(receipt_path)
+    entries = {entry["review_id"]: entry for entry in manifest.get("records", [])}
+    ledger = {entry["review_id"]: entry for entry in sp.materialize_ledger(manifest, db)}
+    root = sp.project_actual_evidence_root(output_dir)
+    override_rows = ar._read_csv(root / ar.OCCURRENCE_OVERRIDE_FILE, ar.OVERRIDE_HEADERS)
+    overrides = {tuple(row[field] for field in (
+        "pdf_contains", "pdf_excludes", "page", "target_char", "stable_key", "x0", "y0"
+    )): row for row in override_rows}
+    provenance = ar._read_csv(root / ar.GLYPH_PROVENANCE_FILE, ar.GLYPH_PROVENANCE_HEADERS)
+    refresh_pending = committed_project_recovery(root) is not None
+    pending = []
+    seen = set()
+    for conflict in receipt["conflicts"]:
+        if not isinstance(conflict, dict) or set(conflict) != {
+            "target_occurrence_id", "target_review_id", "target_pdf_sha256",
+            "target_record", "source_record", "source_reading",
+        }:
+            raise ValueError("Excel actual 衝突來源格式無法驗證")
+        review_id = conflict.get("target_review_id")
+        entry = entries.get(review_id)
+        source = conflict.get("source_record")
+        target = conflict.get("target_record")
+        reading = ar._canon(conflict.get("source_reading"))
+        decision = source.get("source_decision") if isinstance(source, dict) else None
+        source_occurrences = source.get("source_occurrence_ids") if isinstance(source, dict) else None
+        source_reviews = source.get("source_review_ids") if isinstance(source, dict) else None
+        source_pdfs = source.get("source_pdf_sha256") if isinstance(source, dict) else None
+        source_roster = source.get("source_roster") if isinstance(source, dict) else None
+        identity = (conflict.get("target_occurrence_id"),
+                    source.get("source_excel_sha256") if isinstance(source, dict) else None,
+                    source.get("source_excel_row") if isinstance(source, dict) else None,
+                    reading)
+        if (entry is None or conflict.get("target_occurrence_id") != entry.get("occurrence_id")
+                or conflict.get("target_pdf_sha256") != entry.get("pdf_sha256")
+                or not isinstance(source, dict) or not isinstance(target, dict)
+                or not reading or reading != conflict.get("source_reading")
+                or not isinstance(decision, dict) or decision.get("decision") != "VERIFIED"
+                or decision.get("actual_reading") != reading
+                or decision.get("group_id") != source.get("source_group_id")
+                or decision.get("group_snapshot") != source.get("source_group_snapshot")
+                or decision.get("sample_a_occurrence_id") not in (source_occurrences or [])
+                or not isinstance(source_occurrences, list) or not source_occurrences
+                or not isinstance(source_reviews, list) or len(source_reviews) != len(source_occurrences)
+                or not all(isinstance(item, str) and item for item in source_reviews)
+                or not isinstance(source_roster, list) or len(source_roster) != len(source_occurrences)
+                or [(item.get("occurrence_id"), item.get("review_id"))
+                    for item in source_roster if isinstance(item, dict)]
+                != list(zip(source_occurrences, source_reviews))
+                or not isinstance(source_pdfs, list) or not source_pdfs
+                or not all(isinstance(item, str) and len(item) == 64
+                           and all(char in "0123456789abcdef" for char in item) for item in source_pdfs)
+                or any(item.get("pdf_sha256") not in source_pdfs for item in source_roster)
+                or not isinstance(source.get("source_manifest_integrity_sha256"), str)
+                or len(source["source_manifest_integrity_sha256"]) != 64
+                or not source.get("source_session_id")
+                or source.get("target_session_id") != manifest.get("session_id")
+                or not isinstance(source.get("source_excel_sha256"), str)
+                or len(source["source_excel_sha256"]) != 64
+                or not all(char in "0123456789abcdef" for char in source["source_excel_sha256"])
+                or type(source.get("source_excel_row")) is not int or source["source_excel_row"] < 2
+                or entry["occurrence_id"] not in (source.get("target_occurrence_ids") or [])
+                or not ar._canon(target.get("actual_reading"))
+                or ar._canon(target.get("actual_reading")) == reading
+                or tuple(target.get(field) for field in (
+                    "pdf_contains", "pdf_excludes", "page", "target_char", "stable_key", "x0", "y0"
+                )) != ar._override_key_from_entry(entry)):
+            raise ValueError("Excel actual 衝突來源或目標位置識別無法驗證")
+        if identity in seen:
+            raise ValueError("Excel actual 衝突來源識別重複，無法驗證")
+        seen.add(identity)
+        token = _actual_excel_conflict_token(conflict)
+        current = overrides.get(ar._override_key_from_entry(entry))
+        current_reading = ar._canon((current or {}).get("actual_reading"))
+        if (current is None or current.get("source") != "人工 GUI actual 視覺確認"
+                or token not in current.get("note", "")
+                or current_reading != ar._canon(ledger[review_id].get("actual"))
+                or refresh_pending):
+            pending.append(review_id)
+            continue
+        matched = any(
+            row.get("event_type") == "OCCURRENCE_OVERRIDE"
+            and row.get("source") == "人工 GUI actual 視覺確認"
+            and token in row.get("note", "")
+            and entry["occurrence_id"] in str(row.get("occurrence_ids") or "").split("|")
+            and ar._canon(row.get("bopomofo")) == current_reading
+            for row in provenance
+        )
+        if not matched:
+            pending.append(review_id)
+    return sorted(set(pending))
+
+
+def actual_excel_conflict_notes(output_dir: Path, manifest: Mapping[str, Any],
+                                db: Mapping[str, Any], checked_ids: Sequence[str]) -> str:
+    """Bind a fresh local visual action to every pending conflict it checks."""
+    import standalone_proofread as sp
+
+    receipt_path = Path(output_dir) / ACTUAL_EXCEL_CONFLICT_FILE
+    if not receipt_path.exists():
+        return ""
+    pending = set(actual_excel_conflict_state(output_dir, manifest, db))
+    if not pending:
+        return ""
+    receipt = _validated_actual_excel_receipt(receipt_path)
+    checked = set(checked_ids)
+    tokens = sorted({_actual_excel_conflict_token(item) for item in receipt["conflicts"]
+                     if item["target_review_id"] in pending
+                     and item["target_occurrence_id"] in checked})
+    return "；".join(tokens)
+
+
+def hold_actual_excel_completion(output_dir: Path, manifest: Mapping[str, Any],
+                                 db: Mapping[str, Any], gate: dict[str, Any]) -> dict[str, Any]:
+    """Keep an independently computed ledger from declaring conflict completion."""
+    pending = actual_excel_conflict_state(output_dir, manifest, db)
+    if not pending:
+        return gate
+    from occurrence_ledger import PROCESSING_FINISHED, PROOFREAD_COMPLETE
+
+    held = copy.deepcopy(gate)
+    held["hard_gates"]["actual_excel_conflicts_zero"] = False
+    held["failed_gates"].append("actual_excel_conflicts_zero")
+    held["complete"] = False
+    if held["status"] == PROOFREAD_COMPLETE:
+        held["status"] = PROCESSING_FINISHED
+    held["actual_excel_conflict_review_ids"] = pending
+    return held
+
+
+def _actual_excel_conflict_status(status: Mapping[str, Any], conflicts: list[dict[str, Any]]) -> dict[str, Any]:
+    from occurrence_ledger import PROCESSING_FINISHED, PROOFREAD_COMPLETE
+
+    updated = copy.deepcopy(dict(status))
+    if updated.get("status") == PROOFREAD_COMPLETE:
+        updated["status"] = PROCESSING_FINISHED
+    updated["status_text"] = "Excel actual 同位置判定衝突尚待原頁重新核對。"
+    ids = sorted({item["target_review_id"] for item in conflicts})
+    updated["actual_excel_conflict_review_ids"] = ids
+    gate = updated.get("completion_gate")
+    if isinstance(gate, dict):
+        gate["hard_gates"] = dict(gate.get("hard_gates") or {})
+        gate["hard_gates"]["actual_excel_conflicts_zero"] = False
+        gate["failed_gates"] = list(dict.fromkeys([*(gate.get("failed_gates") or []),
+                                                     "actual_excel_conflicts_zero"]))
+        gate["complete"] = False
+        if gate.get("status") == PROOFREAD_COMPLETE:
+            gate["status"] = PROCESSING_FINISHED
+        gate["actual_excel_conflict_review_ids"] = ids
+    return updated
 
 
 def validate_conflict_state(output_dir: Path, manifest: Mapping[str, Any], db: Mapping[str, Any]):
@@ -1009,7 +1199,8 @@ def import_actual_excel(target_dir: Path, xlsx: Path):
     )
 
     target_dir, xlsx = Path(target_dir).resolve(), Path(xlsx).resolve()
-    target_manifest, target_db = _load_project(target_dir)
+    target_manifest, target_db = _load_project(target_dir, allow_actual_excel_conflict=True)
+    existing_actual_conflicts = actual_excel_conflict_state(target_dir, target_manifest, target_db)
     target_actual_state = _actual_transfer_state(target_dir, target_manifest)
     if target_actual_state["status"] != "NONE":
         raise ValueError("目標尚有未核對的 actual 暫存/來源轉送；先完成本地恢復")
@@ -1108,10 +1299,15 @@ def import_actual_excel(target_dir: Path, xlsx: Path):
             target_entries.append(by_target_occ[pair[1]["occurrence_id"]])
         provenance = {
             "source_session_id": source_manifest["session_id"],
+            "source_manifest_integrity_sha256": source_manifest["manifest_integrity_sha256"],
             "source_pdf_sha256": [item["pdf_sha256"] for item in source_manifest["pdfs"]],
             "source_group_id": group_id, "source_group_snapshot": group["group_snapshot"],
             "source_occurrence_ids": [item["occurrence_id"] for item in selected],
             "source_review_ids": [item["review_id"] for item in selected],
+            "source_roster": [
+                {"occurrence_id": item["occurrence_id"], "review_id": item["review_id"],
+                 "pdf_sha256": item["pdf_sha256"]} for item in selected
+            ],
             "target_session_id": target_manifest["session_id"],
             "target_occurrence_ids": [item["occurrence_id"] for item in target_entries],
             "source_excel_sha256": workbook_sha, "source_excel_row": number,
@@ -1138,6 +1334,7 @@ def import_actual_excel(target_dir: Path, xlsx: Path):
             if old is not None and ar._canon(old["actual_reading"]) not in {"", reading}:
                 conflict_records.append({"target_occurrence_id": entry["occurrence_id"],
                                          "target_review_id": entry["review_id"],
+                                         "target_pdf_sha256": entry["pdf_sha256"],
                                          "target_record": copy.deepcopy(old),
                                          "source_record": copy.deepcopy(provenance),
                                          "source_reading": reading})
@@ -1158,15 +1355,12 @@ def import_actual_excel(target_dir: Path, xlsx: Path):
                                      "verified_occurrence_ids": sorted(target_ids),
                                      "affected_occurrence_ids": sorted(target_ids)})
     if conflict_records:
-        receipt = target_dir / "跨Excel_actual衝突.json"
+        receipt = target_dir / ACTUAL_EXCEL_CONFLICT_FILE
         with sp.project_delivery_lock(root):
             if ar._read_csv(override_path, ar.OVERRIDE_HEADERS) != original_rows:
                 raise ValueError("目標 actual 證據於衝突登記前已變動；未覆寫任何紀錄")
             previous_sha = _sha(receipt) if receipt.exists() else None
-            previous = sp.json_load_strict(receipt) if receipt.exists() else {"version": 1, "conflicts": []}
-            if (not isinstance(previous, dict) or previous.get("version") != 1
-                    or not isinstance(previous.get("conflicts"), list)):
-                raise ValueError("既有 Excel actual 衝突紀錄格式無效；未覆寫")
+            previous = _validated_actual_excel_receipt(receipt) if receipt.exists() else {"conflicts": []}
             all_conflicts = copy.deepcopy(previous["conflicts"])
             for conflict in conflict_records:
                 source = conflict["source_record"]
@@ -1184,12 +1378,31 @@ def import_actual_excel(target_dir: Path, xlsx: Path):
                 else:
                     all_conflicts.append(conflict)
             if all_conflicts != previous["conflicts"]:
-                sp.json_save(receipt, {"version": 1, "conflicts": all_conflicts},
-                             expected_sha256=previous_sha)
+                status_path = target_dir / "pipeline_status.json"
+                original_status = status_path.read_bytes() if status_path.exists() else None
+                status_written = False
+                try:
+                    if original_status is not None:
+                        live_status = sp.json_load_strict(status_path)
+                        if not isinstance(live_status, dict):
+                            raise ValueError("既有 pipeline status 無法驗證；未登記 actual 衝突")
+                        sp.json_save(status_path, _actual_excel_conflict_status(live_status, all_conflicts),
+                                     expected_sha256=hashlib.sha256(original_status).hexdigest())
+                        status_written = True
+                    sp.json_save(receipt, _sealed_actual_excel_conflicts(all_conflicts),
+                                 expected_sha256=previous_sha)
+                except Exception:
+                    if status_written:
+                        _restore_exact_file(status_path, original_status)
+                    raise
         raise ValueError("Excel actual 同位置已有不同判定；既有與本次來源均保留於跨Excel_actual衝突.json，目標未覆寫")
+    if existing_actual_conflicts:
+        raise ValueError("Excel actual 衝突尚未在原頁重新核對；未匯入其他判定或回報完成")
     marker = target_dir / INCOMPLETE_FILE
     if not changed:
         with sp.project_delivery_lock(root):
+            if actual_excel_conflict_state(target_dir, target_manifest, target_db):
+                raise ValueError("Excel actual 衝突於匯入期間仍待本地核對；不能回報完成")
             if marker.exists() or (root / PROJECT_TRANSACTION_FILE).exists():
                 raise ValueError("目標 actual Excel 交易待專用恢復；不能回報匯入完成")
             if ar._read_csv(override_path, ar.OVERRIDE_HEADERS) != original_rows:
@@ -1199,6 +1412,8 @@ def import_actual_excel(target_dir: Path, xlsx: Path):
     # Preflight may take time, so bind the live target, marker and durable
     # transaction under one lock. A second import must never own our marker.
     with sp.project_delivery_lock(root):
+        if actual_excel_conflict_state(target_dir, target_manifest, target_db):
+            raise ValueError("Excel actual 衝突於匯入期間仍待本地核對；未寫入")
         if marker.exists() or (root / PROJECT_TRANSACTION_FILE).exists():
             raise ValueError("目標 actual Excel 交易待專用恢復；未開始新匯入")
         live_manifest = sp.json_load_strict(target_dir / "校對工作階段.json")

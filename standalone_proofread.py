@@ -196,6 +196,19 @@ def _deliver_after_actual_commit(output_dir, result):
         ) from exc
 
 
+def _publish_local_actual_conflict_resolution(output_dir: Path, report: Path) -> Path:
+    """Republish only after a new visual commit has cleared the durable conflict."""
+    from pdf_portability import ACTUAL_EXCEL_CONFLICT_FILE, actual_excel_conflict_state
+
+    if not (Path(output_dir) / ACTUAL_EXCEL_CONFLICT_FILE).exists():
+        return Path(report)
+    manifest = json_load_strict(Path(output_dir) / "校對工作階段.json")
+    db = load_or_initialize_db(output_dir)
+    if actual_excel_conflict_state(output_dir, manifest, db):
+        return Path(report)
+    return regenerate_report(output_dir)
+
+
 def recover_committed_actual_project(output_dir: Path, *, acknowledge: bool = True):
     """Explicit restart recovery; staging is never reapplied here.
 
@@ -237,6 +250,7 @@ def recover_committed_actual_project(output_dir: Path, *, acknowledge: bool = Tr
             phase = "acknowledge_project_refresh"
             if acknowledge:
                 acknowledge_project_refresh(root, token)
+                report = _publish_local_actual_conflict_resolution(output_dir, report)
         except Exception as exc:
             raise ManualActualPostApplyError(
                 phase, exc, batch_result=result, cleared_event_count=removed,
@@ -281,6 +295,7 @@ def _finish_direct_actual_commit(output_dir, ledger, result, *, refresh=True, ac
                 acknowledge_project_refresh(
                     project_actual_evidence_root(output_dir), result.get("project_refresh_token"),
                 )
+                report = _publish_local_actual_conflict_resolution(output_dir, report)
         else:
             report = Path(output_dir) / "注音校對_最終報告.xlsx"
             result["project_refresh"] = "NOT_REQUIRED"
@@ -3025,6 +3040,19 @@ def generate_report(
     *,
     runtime_root: Path | None = None,
 ) -> Path:
+    # The conflict receipt and completion report are one publication boundary.
+    # The delivery lock is reentrant for local visual actual refresh/recovery.
+    with project_delivery_lock(project_actual_evidence_root(output_dir)):
+        return _generate_report_locked(output_dir, manifest, db, runtime_root=runtime_root)
+
+
+def _generate_report_locked(
+    output_dir: Path,
+    manifest: dict[str, Any],
+    db: dict[str, Any],
+    *,
+    runtime_root: Path | None = None,
+) -> Path:
     """Render mutually-exclusive ledger views and the v2.5 completion gate."""
     validate_manifest_integrity(manifest)
     validate_output_artifact_hashes(manifest)
@@ -3070,6 +3098,8 @@ def generate_report(
         manifest.get("regression_gate") or {},
         source_validation_ok=bool(source_validation.get("ok")),
     )
+    from pdf_portability import hold_actual_excel_completion
+    gate = hold_actual_excel_completion(output_dir, manifest, db, gate)
 
     wb = Workbook()
     ws = wb.active
@@ -3439,6 +3469,7 @@ def _resolve_session_pdfs(output_dir: Path, manifest: Mapping[str, Any]) -> list
 
 def export_actual_pending_for_gpt(output_dir: Path) -> Path | None:
     output_dir = Path(output_dir)
+    _reject_incomplete_portable_project(output_dir)
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
     validate_output_artifact_hashes(manifest)
@@ -3624,6 +3655,10 @@ def stage_manual_actual_correction(
         if checked_occurrence_ids is None
         else list(checked_occurrence_ids)
     )
+    from pdf_portability import actual_excel_conflict_notes
+    conflict_note = actual_excel_conflict_notes(output_dir, manifest, db, checked_ids)
+    if conflict_note:
+        note = f"{note}；{conflict_note}" if note else conflict_note
     if prior:
         # The lower-level API intentionally replaces a whole group's decision.
         # This GUI service instead accumulates individually checked peers, but
@@ -3719,7 +3754,9 @@ def refresh_actual_project(output_dir: Path, *, defer_excel_reports: bool = True
 
 def import_actual_gpt_decisions(output_dir: Path, xlsx: Path) -> tuple[int, int, Path]:
     output_dir = Path(output_dir)
-    _reject_incomplete_portable_project(output_dir)
+    from pdf_portability import INCOMPLETE_FILE
+    if (output_dir / INCOMPLETE_FILE).exists():
+        _reject_incomplete_portable_project(output_dir)
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
     validate_output_artifact_hashes(manifest)
@@ -3727,6 +3764,7 @@ def import_actual_gpt_decisions(output_dir: Path, xlsx: Path) -> tuple[int, int,
     if str(metadata.get("session_id") or "") != str(manifest.get("session_id") or ""):
         from pdf_portability import import_actual_excel
         return import_actual_excel(output_dir, xlsx)
+    _reject_incomplete_portable_project(output_dir)
     recover_pending_project_actual_write(project_actual_evidence_root(output_dir))
     db = load_or_initialize_db(output_dir)
     ledger = materialize_ledger(manifest, db)
@@ -3764,6 +3802,10 @@ def apply_manual_actual_correction(
         raise ValueError("找不到目前 review_id；請重新開啟人工校對畫面")
     group = build_actual_group_for_entry(ledger, entry)
     checked = list(checked_occurrence_ids) if checked_occurrence_ids else [entry["occurrence_id"]]
+    from pdf_portability import actual_excel_conflict_notes
+    conflict_note = actual_excel_conflict_notes(output_dir, manifest, db, checked)
+    if conflict_note:
+        note = f"{note}；{conflict_note}" if note else conflict_note
     transaction_result = apply_direct_visual_actual_batch(
         project_actual_evidence_root(output_dir),
         [{"group": group, "reading": reading, "checked_occurrence_ids": checked,
@@ -3821,6 +3863,7 @@ def apply_manual_actual_correction(
         acknowledge_project_refresh(
             project_actual_evidence_root(output_dir), transaction_result.get("project_refresh_token"),
         )
+        report = _publish_local_actual_conflict_resolution(output_dir, report)
     except Exception as exc:
         raise ManualActualPostApplyError(
             "post_refresh_actual_verification", exc, batch_result=transaction_result,
@@ -4030,6 +4073,7 @@ def apply_staged_manual_actual_corrections(output_dir: Path) -> dict[str, Any]:
 
     try:
         acknowledge_project_refresh(actual_root, batch_result.get("project_refresh_token"))
+        report = _publish_local_actual_conflict_resolution(output_dir, report)
     except Exception as exc:
         raise ManualActualPostApplyError(
             "acknowledge_project_refresh", exc, batch_result=batch_result,
@@ -4306,38 +4350,39 @@ def run_pipeline_pdfs(
         if session_id_override:
             manifest["session_id"] = str(session_id_override)
             seal_manifest(manifest)
-        json_save(output_dir/"校對工作階段.json",manifest)
-        db=load_or_initialize_db(output_dir)
-        json_save(output_dir/"人工判定資料庫.json",db)
-        pending=save_pending_json(output_dir,manifest,db)
-        ledger = materialize_ledger(manifest, db)
-        reconciliation = reconcile_ledger(ledger, manifest.get("actual_source_ids") or [])
-        gate = completion_gate(ledger, reconciliation, manifest.get("regression_gate") or {}, source_validation_ok=True)
-        if defer_excel_reports:
-            # Interactive actual correction should refresh the authoritative
-            # ledger quickly.  The large Excel technical/user reports and GPT
-            # workbook are presentation artifacts and can be regenerated from
-            # the sealed manifest on demand via「更新 Excel 報告」.
-            report = output_dir / "注音校對_最終報告.xlsx"
-            status_text = {
-                PROCESSING_FINISHED: "處理結束；校對尚未完成。",
-                PROOFREAD_COMPLETE: "全冊注音校對完成。",
-                PIPELINE_BLOCKED: "處理被阻擋。",
-            }[gate["status"]]
-            json_save(output_dir / "pipeline_status.json", {
-                "version": VERSION,
-                "status": gate["status"],
-                "status_text": status_text,
-                "completion_gate": gate,
-                "reconciliation": reconciliation.as_dict(),
-                "user_report": str(report),
-                "technical_audit_report": str(output_dir / "注音校對_技術稽核.xlsx"),
-                "excel_report_deferred": True,
-            })
-            gpt_report = None
-        else:
-            report=generate_report(output_dir,manifest,db,runtime_root=root)
-            gpt_report = export_pending_for_gpt(output_dir, _allow_unpublished_pipeline=True) if pending else None
+        with project_delivery_lock(project_actual_evidence_root(output_dir)):
+            json_save(output_dir/"校對工作階段.json",manifest)
+            db=load_or_initialize_db(output_dir)
+            json_save(output_dir/"人工判定資料庫.json",db)
+            pending=save_pending_json(output_dir,manifest,db)
+            ledger = materialize_ledger(manifest, db)
+            reconciliation = reconcile_ledger(ledger, manifest.get("actual_source_ids") or [])
+            gate = completion_gate(ledger, reconciliation, manifest.get("regression_gate") or {}, source_validation_ok=True)
+            from pdf_portability import hold_actual_excel_completion
+            gate = hold_actual_excel_completion(output_dir, manifest, db, gate)
+            if defer_excel_reports:
+                # Interactive actual correction should refresh the authoritative
+                # ledger quickly. The large reports can be regenerated on demand.
+                report = output_dir / "注音校對_最終報告.xlsx"
+                status_text = {
+                    PROCESSING_FINISHED: "處理結束；校對尚未完成。",
+                    PROOFREAD_COMPLETE: "全冊注音校對完成。",
+                    PIPELINE_BLOCKED: "處理被阻擋。",
+                }[gate["status"]]
+                json_save(output_dir / "pipeline_status.json", {
+                    "version": VERSION,
+                    "status": gate["status"],
+                    "status_text": status_text,
+                    "completion_gate": gate,
+                    "reconciliation": reconciliation.as_dict(),
+                    "user_report": str(report),
+                    "technical_audit_report": str(output_dir / "注音校對_技術稽核.xlsx"),
+                    "excel_report_deferred": True,
+                })
+                gpt_report = None
+            else:
+                report=generate_report(output_dir,manifest,db,runtime_root=root)
+                gpt_report = export_pending_for_gpt(output_dir, _allow_unpublished_pipeline=True) if pending else None
         if gate["status"] == PROOFREAD_COMPLETE:
             print(f"全冊注音校對完成。\n報告：{report}",flush=True)
         else:
@@ -4475,10 +4520,16 @@ def regenerate_report(output_dir: Path) -> Path:
 
 
 def _reject_incomplete_portable_project(output_dir: Path) -> None:
-    from pdf_portability import INCOMPLETE_FILE
+    from pdf_portability import INCOMPLETE_FILE, actual_excel_conflict_state
 
     if (Path(output_dir) / INCOMPLETE_FILE).exists():
         raise ValueError("跨電腦接續未完成；不得匯入判定、重新產生一般報告或修復專案")
+    if (Path(output_dir) / "跨Excel_actual衝突.json").exists():
+        manifest = json_load_strict(Path(output_dir) / "校對工作階段.json")
+        validate_manifest_integrity(manifest)
+        db = load_or_initialize_db(output_dir)
+        if actual_excel_conflict_state(output_dir, manifest, db):
+            raise ValueError("Excel actual 衝突尚未在原頁重新核對；不得匯出、重新產生一般報告或修復專案")
 
 
 def repair_project_state(output_dir: Path, *, runtime_root: Path | None = None) -> Path:
