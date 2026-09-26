@@ -1,0 +1,17 @@
+{
+  "round": 1,
+  "reviewer": "/root/review1_round6",
+  "baseline": "1593e7af65596d320b4427f1b15bb2bc0bdc949c",
+  "base": "502414b3b38e004a6d8d9cb693cf21b65148765a",
+  "head": "bcf93bf1e0f8a670d840694545f0c3749d96135c",
+  "scope": "baseline_to_head",
+  "verdict": "PASS",
+  "independent": true,
+  "full_diff_reviewed": true,
+  "findings": [],
+  "report_ref": "pr29-round6-r1-20260926T013739Z-bcf93bf1e0f8",
+  "ci": null,
+  "blocker_kind": null,
+  "supersedes_report_ref": null,
+  "resolution_evidence_ref": null
+}

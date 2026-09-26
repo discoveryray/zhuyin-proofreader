@@ -1,0 +1,21 @@
+{
+  "round": 2,
+  "reviewer": "/root/review2_round6",
+  "baseline": "1593e7af65596d320b4427f1b15bb2bc0bdc949c",
+  "base": "502414b3b38e004a6d8d9cb693cf21b65148765a",
+  "head": "bcf93bf1e0f8a670d840694545f0c3749d96135c",
+  "scope": "cumulative_and_full_pr_with_ci",
+  "verdict": "PASS",
+  "independent": true,
+  "full_diff_reviewed": true,
+  "findings": [],
+  "report_ref": "review-confirm-responsive/round6/review2/bcf93bf/20260926T0235Z-full-pr-01",
+  "ci": {
+    "run_id": 36209339359,
+    "attempt": 1,
+    "tested_sha": "0e7fc39a06a652e2e4ba24cc2fcce6d26261c0d0"
+  },
+  "blocker_kind": null,
+  "supersedes_report_ref": null,
+  "resolution_evidence_ref": null
+}
