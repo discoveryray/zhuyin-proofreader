@@ -299,6 +299,51 @@ class ManualReviewGuiTests(unittest.TestCase):
         self.assertNotIn(other["review_id"], app.db["events"])
         self.assertIn(first["review_id"], [row["review_id"] for row in app.records])
 
+    def _assert_browsing_older_confirmation_keeps_last_undo_target(self, return_to_pending):
+        app = self.app
+        first = app.current()
+        app.primary.invoke()  # Save A.
+        wait_for_save(app)
+        first_event = copy.deepcopy(app.db["events"][first["review_id"]])
+        second = app.current()
+        self.assertNotEqual(second["review_id"], first["review_id"])
+        app._review_action_cooldown_until = 0
+        app._shortcut_cooldown_until = 0
+        app.primary.invoke()  # Save B.
+        wait_for_save(app)
+        self.assertEqual(app.last_expected_review_id, second["review_id"])
+        self.assertIsNone(app.db["events"][second["review_id"]]["undo_previous_event"])
+
+        with patch.object(gui, "ConfirmedItemsDialog") as choose:
+            choose.return_value.result = first["review_id"]
+            app.open_confirmed_items()
+        self.assertEqual(app.current()["review_id"], first["review_id"])
+        self.assertIn("已確認項目", app.status.cget("text"))
+        self.assertEqual(app.last_expected_review_id, second["review_id"])
+        self.assertEqual(app.undo_expected_button.cget("state"), "normal")
+        if return_to_pending:
+            app.return_to_pending()
+            self.assertIsNone(app.focused_entry)
+            self.assertEqual(app.last_expected_review_id, second["review_id"])
+
+        app._review_action_cooldown_until = 0
+        with patch.object(gui.messagebox, "askyesno", return_value=True):
+            app.undo_last_expected()
+            wait_for_save(app)
+        self.assertEqual(app.current()["review_id"], second["review_id"])
+        self.assertEqual(app.db["events"][first["review_id"]], first_event)
+        self.assertNotIn(second["review_id"], app.db["events"])
+        persisted = sp.load_or_initialize_db(self.output)["events"]
+        self.assertEqual(persisted[first["review_id"]], first_event)
+        self.assertNotIn(second["review_id"], persisted)
+        self.assertIsNone(app.last_expected_review_id)
+
+    def test_browsing_older_confirmation_keeps_last_undo_target(self):
+        self._assert_browsing_older_confirmation_keeps_last_undo_target(False)
+
+    def test_returning_from_older_confirmation_keeps_last_undo_target(self):
+        self._assert_browsing_older_confirmation_keeps_last_undo_target(True)
+
     def test_correction_undo_restores_previous_manual_decision(self):
         app = self.app
         first = app.current()

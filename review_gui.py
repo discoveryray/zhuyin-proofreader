@@ -1202,7 +1202,6 @@ class ReviewApp:
         dialog = ConfirmedItemsDialog(self.root, entries)
         if dialog.result:
             self.focused_entry = next(entry for entry in entries if entry["review_id"] == dialog.result)
-            self.last_expected_review_id = dialog.result
             self.show()
 
     def _last_expected_target(self):
@@ -1943,7 +1942,7 @@ class ReviewApp:
         lane_count = sum(review_lane(item) == lane for item in self.records)
         deferred = len(getattr(self, "deferred_items", set()))
         self.status.config(text=(
-            f"{'已確認項目' if self._last_expected_target() == entry.get('review_id') else '返回此項目'}"
+            f"{'已確認項目' if entry.get('review_id') in self.db.get('events', {}) else '返回此項目'}"
             f"｜課本頁 {entry.get('printed_page', '')}｜{state}"
             if getattr(self, "focused_entry", None) is not None else
             f"{LANE_LABELS[lane]}｜本組剩餘 {lane_count} 筆｜稍後 {deferred} 筆{staged_status}"
