@@ -369,6 +369,9 @@ class ManualReviewGuiTests(unittest.TestCase):
             self.assertEqual(reopened.current()["expected_set"], ["ㄎㄢˋ"])
             self.assertEqual(reopened.current()["state"], "PASS")
             self.assertEqual(sp.load_or_initialize_db(self.output)["events"][first["review_id"]]["expected_set"], ["ㄎㄢˋ"])
+            reopened.more_menu.invoke(reopened.more_menu.index("返回待辦"))
+            self.assertIsNone(reopened.focused_entry)
+            self.assertNotEqual(reopened.current()["review_id"], first["review_id"])
         finally:
             reopened_window.destroy()
 

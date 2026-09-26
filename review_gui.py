@@ -987,10 +987,9 @@ class ReviewApp:
         self.revisit_button = tk.Button(navigation, text="重新查看稍後處理（0）", command=self.revisit_deferred, state="disabled")
         self.confirmed_button = tk.Button(navigation, text="查看已確認項目", command=self.open_confirmed_items)
         self.undo_expected_button = tk.Button(navigation, text="撤銷上一次判定", command=self.undo_last_expected, state="disabled")
-        self.return_button = tk.Button(navigation, text="返回待辦", command=self.return_to_pending, state="disabled")
         navigation.set_items([tk.Button(navigation, text="上一筆", command=self.prev),
                               tk.Button(navigation, text="下一筆", command=self.next), self.revisit_button,
-                              self.confirmed_button, self.undo_expected_button, self.return_button])
+                              self.confirmed_button, self.undo_expected_button])
         self.navigation = navigation
 
         self.summary = tk.LabelFrame(body, text="這一筆要確認什麼")
@@ -1020,6 +1019,7 @@ class ReviewApp:
         self.more_menu.add_command(label="此處不需校對…", command=self.exclude)
         self.more_menu.add_command(label="實際注音辨識有誤…", command=self.correct_actual)
         self.more_menu.add_command(label="撤銷本筆人工判定", command=self.clear)
+        self.more_menu.add_command(label="返回待辦", command=self.return_to_pending)
         self.more_menu.add_command(label="另行建立上筆應標可重用規則…", command=self.create_reusable_expected_rule)
         self.more_menu.add_separator()
         self.more_menu.add_command(label="查看／隱藏技術資訊", command=self.toggle_tech)
@@ -1293,7 +1293,7 @@ class ReviewApp:
     def _disable_save_controls(self):
         widgets = [getattr(self, name, None) for name in
                    ("primary", "secondary", "later", "more_button", "apply_actual_button", "revisit_button",
-                    "confirmed_button", "undo_expected_button", "return_button")]
+                    "confirmed_button", "undo_expected_button")]
         navigation = getattr(self, "navigation", None)
         if navigation is not None:
             widgets.extend(navigation.winfo_children())
@@ -1914,10 +1914,6 @@ class ReviewApp:
         self._show_staging_status()
         if hasattr(self, "undo_expected_button"):
             self.undo_expected_button.config(state="normal" if self._last_expected_target() else "disabled")
-        if hasattr(self, "return_button"):
-            self.return_button.config(state="normal" if getattr(self, "focused_entry", None) is not None else "disabled")
-        if hasattr(self, "navigation"):
-            self.navigation.refresh()
         entry = self.current()
         if not entry:
             title, detail, primary_text = self._empty_actionable_state()
