@@ -1334,6 +1334,31 @@ def _transfer_event(event, source, target):
     return transferred
 
 
+def _validate_project_confirmation_transfer(event, source, target):
+    """Bind a transferred six-gate verdict to the target's independent evidence."""
+    import standalone_proofread as sp
+
+    if event.get("action") != "確認現版差異":
+        return
+    source_actual = sp.actual_confirmation_snapshot(source)
+    recorded = event.get("confirmation_actual_snapshot")
+    if (not isinstance(recorded, dict) or set(recorded) != set(source_actual)
+            or recorded != source_actual):
+        raise ValueError("來源六閘門缺少有效 actual 確認 snapshot；不能跨專案沿用")
+    if source_actual != sp.actual_confirmation_snapshot(target):
+        raise ValueError("目標 actual 讀音或證據不同；來源六閘門確認不可直接沿用")
+    event_expected = list(sp.normalize_expected_set(event.get("expected_set")))
+    source_expected = list(sp.normalize_expected_set(source.get("expected_set")))
+    target_expected = list(sp.normalize_expected_set(target.get("expected_set")))
+    if (not event_expected or event_expected != source_expected or source_expected != target_expected
+            or any(not str(event.get(key) or "")
+                   or str(event.get(key) or "") != str(source.get(key) or "")
+                   or str(source.get(key) or "") != str(target.get(key) or "")
+                   for key in ("expected_evidence", "context_evidence"))
+            or any(event.get(gate) is not True for gate in sp.CONFIRMATION_GATES)):
+        raise ValueError("目標 expected、詞境或六閘門證據不同；來源確認不可直接沿用")
+
+
 def _mapped_occurrence_overrides(source_dir: Path, source_manifest, target_manifest, reviews):
     """Carry occurrence-local actual only; never mint Global glyph evidence."""
     import actual_review as ar
@@ -1419,6 +1444,8 @@ def import_project_decisions(source_dir: Path, target_dir: Path, *,
         raise ValueError("來源與目標專案必須不同")
     source_manifest, source_db = _load_project(source_dir)
     target_manifest, _ = _load_project(target_dir, allow_incomplete=_allow_incomplete_target)
+    source_current = {entry["review_id"]: entry for entry in
+                      sp.materialize_ledger(source_manifest, source_db)}
     source_actual = _actual_transfer_state(source_dir, source_manifest)
     _actual_transfer_state(target_dir, target_manifest)
     if _selected_local_pdf is None:
@@ -1464,6 +1491,13 @@ def import_project_decisions(source_dir: Path, target_dir: Path, *,
         if not isinstance(raw_db, dict):
             raise ValueError("DATA_INTEGRITY_ERROR：目標人工判定資料庫根節點必須是物件")
         target_db = sp.normalize_db(raw_db)
+        if (target_dir / INCOMPLETE_FILE).exists() and not _allow_incomplete_target:
+            raise ValueError("目標跨電腦接續未完成；匯入期間不得寫入判定")
+        unresolved = validate_conflict_state(target_dir, live_manifest, target_db)
+        if unresolved:
+            raise ValueError(f"目標匯入期間出現未裁決衝突；未匯入判定：{unresolved}")
+        target_current = {entry["review_id"]: entry for entry in
+                          sp.materialize_ledger(live_manifest, target_db)}
         candidate = copy.deepcopy(target_db)
         imported, duplicates, provenance_updates, conflicts, conflict_records = 0, 0, 0, [], []
         for source_id, event in source_db["events"].items():
@@ -1473,6 +1507,8 @@ def import_project_decisions(source_dir: Path, target_dir: Path, *,
             target_id = target["review_id"]
             current = candidate["events"].get(target_id)
             identity = _source_identity(source_manifest, source, source_id, target_manifest, target, event)
+            _validate_project_confirmation_transfer(
+                event, source_current[source_id], target_current[target_id])
             transferred = _transfer_event(event, source, target)
             if current is not None:
                 if _event_payload(current) == _event_payload(transferred):

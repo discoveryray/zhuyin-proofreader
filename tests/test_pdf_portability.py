@@ -116,6 +116,113 @@ def project(root: Path, source_pdf: Path, *, session: str, event_positions=(), b
     return manifest, db
 
 
+@pytest.mark.parametrize("difference", ["same", "reading", "evidence", "expected",
+                                         "expected_missing", "expected_evidence", "context",
+                                         "source_snapshot", "missing_snapshot"])
+def test_project_six_gate_transfer_requires_target_actual_snapshot(tmp_path, monkeypatch, difference):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
+    first, second = tmp_path / "source.pdf", tmp_path / "target.pdf"
+    pdf(first, title="A")
+    pdf(second, title="B")
+    source, target = tmp_path / "source", tmp_path / "target"
+    source_manifest, source_db = project(source, first, session="A")
+    target_manifest, target_db = project(target, second, session="B")
+    expected = "ㄐㄧㄠˇ"
+    for manifest, reading in ((source_manifest, "ㄐㄩㄝˊ"),
+                              (target_manifest, "ㄐㄩㄝˇ" if difference == "reading" else "ㄐㄩㄝˊ")):
+        entry = manifest["records"][0]
+        entry.update(state="DIFFERENCE_PENDING_CONFIRMATION", actual=reading,
+                     actual_evidence="independent glyph " + reading,
+                     expected_set=[expected], expected_evidence="independent expected rule",
+                     context_evidence="same printed context")
+        if manifest is target_manifest:
+            if difference == "evidence":
+                entry["actual_evidence"] = "other independent glyph evidence"
+            elif difference == "expected":
+                entry["expected_set"] = ["ㄐㄧㄠˊ"]
+            elif difference == "expected_missing":
+                entry["expected_set"] = []
+                entry["state"] = "EXPECTED_UNRESOLVED"
+            elif difference == "expected_evidence":
+                entry["expected_evidence"] = "different expected rule"
+            elif difference == "context":
+                entry["context_evidence"] = "different printed context"
+        sp.seal_manifest(manifest)
+    sp.json_save(source / "校對工作階段.json", source_manifest)
+    sp.json_save(target / "校對工作階段.json", target_manifest)
+    source_row = source_manifest["records"][0]
+    source_db["events"][source_row["review_id"]] = {
+        "action": "確認現版差異", "expected_set": [expected],
+        "expected_evidence": "independent expected rule",
+        "context_evidence": "same printed context",
+        "confirmation_actual_snapshot": sp.actual_confirmation_snapshot(source_row),
+        **{gate: True for gate in sp.CONFIRMATION_GATES},
+    }
+    if difference == "source_snapshot":
+        source_db["events"][source_row["review_id"]]["confirmation_actual_snapshot"]["actual_evidence"] = "stale"
+    elif difference == "missing_snapshot":
+        source_db["events"][source_row["review_id"]].pop("confirmation_actual_snapshot")
+    sp.json_save(source / "人工判定資料庫.json", source_db)
+    db_path = target / "人工判定資料庫.json"
+    before = db_path.read_bytes()
+    assert sp.materialize_ledger(source_manifest, source_db)[0]["state"] == "TEXTBOOK_ERROR_CONFIRMED"
+    if difference != "same":
+        with pytest.raises(ValueError, match="actual|確認|證據"):
+            portable.import_project_decisions(source, target)
+        assert db_path.read_bytes() == before
+        assert not (target / portable.INCOMPLETE_FILE).exists()
+        assert sp.materialize_ledger(target_manifest, target_db)[0]["state"] != "TEXTBOOK_ERROR_CONFIRMED"
+    else:
+        assert portable.import_project_decisions(source, target)["imported"] == 1
+        imported = sp.json_load_strict(db_path)
+        assert sp.materialize_ledger(target_manifest, imported)[0]["state"] == "TEXTBOOK_ERROR_CONFIRMED"
+        assert imported["events"][target_manifest["records"][0]["review_id"]][
+            "portability_source"]["pdf_sha256"] == sha(first)
+
+
+def test_project_import_rechecks_conflict_receipt_after_preflight(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
+    first, second = tmp_path / "source.pdf", tmp_path / "target.pdf"
+    pdf(first, title="A")
+    pdf(second, title="B")
+    source, target = tmp_path / "source", tmp_path / "target"
+    source_manifest, _ = project(source, first, session="A", event_positions=(0,))
+    target_manifest, _ = project(target, second, session="B", event_positions=(1,))
+    source_row, target_row = source_manifest["records"][0], target_manifest["records"][0]
+    receipt_path = target / portable.CONFLICT_FILE
+    conflict = {
+        "source_review_id": source_row["review_id"],
+        "target_review_id": target_row["review_id"],
+        "source_pdf_sha256": source_row["pdf_sha256"],
+        "target_pdf_sha256": target_row["pdf_sha256"],
+        "source_event": {"action": "補建expected證據"},
+        "target_event": {"action": "確認非校對範圍"},
+    }
+    db_path = target / "人工判定資料庫.json"
+    before_db = db_path.read_bytes()
+    pending_path = target / "待人工確認.json"
+    status_path = target / "pipeline_status.json"
+    report_path = target / "注音校對_最終報告.xlsx"
+    sp.json_save(pending_path, {"pending": [target_row["review_id"]]})
+    sp.json_save(status_path, {"status": "PENDING_LOCAL_ADJUDICATION"})
+    report_path.write_bytes(b"previous report")
+    prior_views = {path: path.read_bytes() for path in (pending_path, status_path, report_path)}
+    original_mapper = portable._mapped_occurrence_overrides
+    def completed_concurrent_conflict(*args):
+        sp.json_save(receipt_path, {"version": 1, "conflicts": [conflict]})
+        return original_mapper(*args)
+    with patch.object(portable, "_mapped_occurrence_overrides", side_effect=completed_concurrent_conflict):
+        with pytest.raises(ValueError, match="衝突|未裁決"):
+            portable.import_project_decisions(source, target)
+    assert db_path.read_bytes() == before_db
+    assert {path: path.read_bytes() for path in prior_views} == prior_views
+    assert target_manifest["records"][1]["review_id"] in sp.json_load_strict(db_path)["events"]
+    assert sp.json_load_strict(receipt_path)["conflicts"] == [conflict]
+    assert portable.validate_conflict_state(target, target_manifest, sp.json_load_strict(db_path)) == [
+        target_row["review_id"]]
+    assert not (target / portable.INCOMPLETE_FILE).exists()
+
+
 def reseal_actual_dynamic(root: Path, source_pdf: Path):
     """Test producer: bind a changed project-local CSV to its sealed workbook."""
     evidence_root = sp.project_actual_evidence_root(root)
