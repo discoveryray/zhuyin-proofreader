@@ -1482,6 +1482,7 @@ def import_gpt_decision_bundle(output_dir: Path, bundle: Path) -> tuple[int, int
     """
     output_dir = Path(output_dir)
     bundle = Path(bundle)
+    _reject_incomplete_portable_project(output_dir)
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
     validate_output_artifact_hashes(manifest)
@@ -1569,6 +1570,7 @@ def plan_gpt_auto_imports(paths: Iterable[str | Path]) -> list[tuple[Path, str]]
 
 
 def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False) -> tuple[int, int, Path]:
+    _reject_incomplete_portable_project(output_dir)
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
     validate_output_artifact_hashes(manifest)
@@ -3717,6 +3719,7 @@ def refresh_actual_project(output_dir: Path, *, defer_excel_reports: bool = True
 
 def import_actual_gpt_decisions(output_dir: Path, xlsx: Path) -> tuple[int, int, Path]:
     output_dir = Path(output_dir)
+    _reject_incomplete_portable_project(output_dir)
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
     validate_output_artifact_hashes(manifest)
@@ -4475,7 +4478,7 @@ def _reject_incomplete_portable_project(output_dir: Path) -> None:
     from pdf_portability import INCOMPLETE_FILE
 
     if (Path(output_dir) / INCOMPLETE_FILE).exists():
-        raise ValueError("跨電腦接續未完成；不得重新產生一般報告或修復專案")
+        raise ValueError("跨電腦接續未完成；不得匯入判定、重新產生一般報告或修復專案")
 
 
 def repair_project_state(output_dir: Path, *, runtime_root: Path | None = None) -> Path:
@@ -4605,6 +4608,7 @@ def main():
             print(package if package is not None else NO_ACTUAL_PENDING_MESSAGE)
             return 0
         if args.import_gpt_auto:
+            _reject_incomplete_portable_project(outdir)
             planned = plan_gpt_auto_imports(args.import_gpt_auto)
             if not planned:
                 raise ValueError("沒有可匯入的 GPT 判定檔")

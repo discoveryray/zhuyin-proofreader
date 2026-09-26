@@ -252,6 +252,74 @@ def test_partial_portable_publication_blocks_report_and_repair_until_new_success
         assert (completed / "注音校對_最終報告.xlsx").is_file()
         assert sp.json_load_strict(completed / "pipeline_status.json")["user_report"] == str(
             completed / "注音校對_最終報告.xlsx")
+        # The successfully published B project can still use its ordinary
+        # same-session Excel import after a separate interrupted B was denied.
+        exported = sp.export_pending_for_gpt(completed)
+        workbook = load_workbook(exported)
+        sheet = workbook["待判定候選"]
+        headers = [cell.value for cell in sheet[1]]
+        assert sheet.max_row == 2
+        sheet.cell(2, headers.index("action") + 1, "確認非校對範圍")
+        sheet.cell(2, headers.index("exclusion_reason") + 1, "completed B local visual")
+        sheet.cell(2, headers.index("exclusion_evidence") + 1, "B PDF page 1")
+        filled = tmp_path / "completed-same-session.xlsx"
+        workbook.save(filled)
+        workbook.close()
+        assert sp.import_gpt_decisions(completed, filled)[0] == 1
+        assert not (completed / portability.INCOMPLETE_FILE).exists()
+    assert not list((tmp_path / "isolated-localappdata").rglob("*.sqlite*"))
+
+
+@pytest.mark.parametrize("kind", ["expected", "actual"])
+@pytest.mark.parametrize("entrypoint", ["direct", "auto"])
+def test_incomplete_portable_project_rejects_same_session_excel_before_writes(
+        tmp_path, monkeypatch, kind, entrypoint):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
+    first, _ = _pdfs(tmp_path)
+    target = tmp_path / "target"
+    decoder = _synthetic_decode if kind == "expected" else _synthetic_unresolved_decode
+    with patch.object(sp, "decode", side_effect=decoder), \
+         patch.object(sp, "actual_workbook_global_exact_dependencies", return_value=()), \
+         patch("check_pronunciation_candidates.actual_workbook_global_exact_dependencies", return_value=()):
+        sp.run_pipeline_pdfs([first], target, defer_excel_reports=True)
+        if kind == "expected":
+            workbook_path = sp.export_pending_for_gpt(target)
+            sheet_name = "待判定候選"
+            values = {"action": "確認非校對範圍", "exclusion_reason": "local visual",
+                      "exclusion_evidence": "PDF page 1"}
+        else:
+            sp.export_actual_pending_for_gpt(target)
+            workbook_path = target / "actual待判定_GPT包" / "actual待判定_給GPT.xlsx"
+            sheet_name = "actual待判定"
+            values = {"decision": "VERIFIED", "actual_reading": "ㄐㄩㄝˊ",
+                      "confidence": "高", "sample_a_checked": "Y"}
+        workbook = load_workbook(workbook_path)
+        sheet = workbook[sheet_name]
+        headers = [cell.value for cell in sheet[1]]
+        for key, value in values.items():
+            sheet.cell(2, headers.index(key) + 1, value)
+        filled = tmp_path / f"{kind}-filled.xlsx"
+        workbook.save(filled)
+        workbook.close()
+        marker = target / portability.INCOMPLETE_FILE
+        sp.json_save(marker, {"status": "PRESENTATION_PENDING", "source": "interrupted transfer"})
+        watched = [marker, target / "人工判定資料庫.json", target / "pipeline_status.json",
+                   target / "注音校對_最終報告.xlsx", target / "待人工確認.json",
+                   sp.project_actual_evidence_root(target) / ar.OCCURRENCE_OVERRIDE_FILE]
+        before = {path: path.read_bytes() if path.exists() else None for path in watched}
+        with pytest.raises(ValueError, match="接續未完成"):
+            if entrypoint == "direct":
+                (sp.import_gpt_decisions if kind == "expected" else sp.import_actual_gpt_decisions)(target, filled)
+            else:
+                with patch.object(sys, "argv", ["standalone_proofread.py", "-o", str(target),
+                                                "--import-gpt-auto", str(filled)]):
+                    sp.main()
+        assert {path: path.read_bytes() if path.exists() else None for path in watched} == before
+        marker.unlink()
+        if kind == "expected":
+            assert sp.import_gpt_decisions(target, filled)[0] == 1
+        else:
+            assert sp.import_actual_gpt_decisions(target, filled)[0] == 1
     assert not list((tmp_path / "isolated-localappdata").rglob("*.sqlite*"))
 
 
@@ -455,6 +523,84 @@ def test_excel_expected_conflict_and_same_decision_keep_sources(tmp_path, monkey
         assert receipt["conflicts"][0]["source_event"]["exclusion_reason"] == "different judgment"
         assert receipt["conflicts"][0]["target_event"]["exclusion_reason"] == "same judgment"
         assert target_id not in sp.json_load_strict(b / "人工判定資料庫.json")["events"]
+    assert not list((tmp_path / "isolated-localappdata").rglob("*.sqlite*"))
+
+
+def test_expected_excel_sequential_conflicts_keep_local_adjudication_and_history(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
+    first, second = _pdfs(tmp_path)
+    source, target = tmp_path / "source", tmp_path / "target"
+    with patch.object(sp, "decode", side_effect=_synthetic_decode), \
+         patch.object(sp, "actual_workbook_global_exact_dependencies", return_value=()), \
+         patch("check_pronunciation_candidates.actual_workbook_global_exact_dependencies", return_value=()):
+        sp.run_pipeline_pdfs([first], source, defer_excel_reports=True)
+        sp.run_pipeline_pdfs([second], target, defer_excel_reports=True)
+        exported = sp.export_pending_for_gpt(source)
+        workbook = load_workbook(exported)
+        sheet = workbook["待判定候選"]
+        headers = [cell.value for cell in sheet[1]]
+        paths = []
+        for label in ("first", "second", "third"):
+            sheet.cell(2, headers.index("action") + 1, "確認非校對範圍")
+            sheet.cell(2, headers.index("exclusion_reason") + 1, label)
+            sheet.cell(2, headers.index("exclusion_evidence") + 1, "PDF page 1")
+            path = tmp_path / f"{label}.xlsx"
+            workbook.save(path)
+            paths.append(path)
+        workbook.close()
+        manifest = sp.json_load_strict(target / "校對工作階段.json")
+        conflicted_id, other_id = [record["review_id"] for record in manifest["records"]]
+        ReviewSaveService(target).save_event(other_id, {
+            "action": "確認非校對範圍", "exclusion_reason": "unrelated position",
+            "exclusion_evidence": "PDF page 1"})
+        assert sp.import_gpt_decisions(target, paths[0])[0] == 1
+        with pytest.raises(ValueError, match="不同判定"):
+            sp.import_gpt_decisions(target, paths[1])
+        first_receipt = sp.json_load_strict(target / portability.CONFLICT_FILE)
+        assert len(first_receipt["conflicts"]) == 1
+        ReviewSaveService(target).save_event(conflicted_id, {
+            "action": "確認非校對範圍", "exclusion_reason": "local adjudication",
+            "exclusion_evidence": "B PDF direct visual"})
+        adjudication = sp.json_load_strict(target / "人工判定資料庫.json")["events"][conflicted_id]
+        assert adjudication["portability_conflict_resolution"]["original_conflicts"] == first_receipt["conflicts"]
+        watched = [target / "人工判定資料庫.json", target / portability.CONFLICT_FILE,
+                   target / portability.INCOMPLETE_FILE, target / "待人工確認.json",
+                   target / "注音校對_最終報告.xlsx", target / "pipeline_status.json"]
+        before_failed_write = {path: path.read_bytes() if path.exists() else None for path in watched}
+        original_save = sp.json_save
+        def fail_new_conflict_db(path, *args, **kwargs):
+            if Path(path) == target / "人工判定資料庫.json":
+                raise OSError("second conflict DB disk full")
+            return original_save(path, *args, **kwargs)
+        with patch.object(sp, "json_save", side_effect=fail_new_conflict_db):
+            with pytest.raises(OSError, match="second conflict DB disk full"):
+                sp.import_gpt_decisions(target, paths[2])
+        assert {path: path.read_bytes() if path.exists() else None for path in watched} == before_failed_write
+        with pytest.raises(ValueError, match="不同判定"):
+            sp.import_gpt_decisions(target, paths[2])
+        receipt = sp.json_load_strict(target / portability.CONFLICT_FILE)
+        assert len(receipt["conflicts"]) == 2
+        assert first_receipt["conflicts"][0] in receipt["conflicts"]
+        assert receipt["conflicts"][1]["target_event"] == adjudication
+        db = sp.json_load_strict(target / "人工判定資料庫.json")
+        assert conflicted_id not in db["events"]
+        assert db["events"][other_id]["exclusion_reason"] == "unrelated position"
+        assert portability.validate_conflict_state(target, manifest, db) == [conflicted_id]
+        before = (target / portability.CONFLICT_FILE).read_bytes()
+        with pytest.raises(ValueError, match="衝突|不同判定"):
+            sp.import_gpt_decisions(target, paths[2])
+        assert (target / portability.CONFLICT_FILE).read_bytes() == before
+        assert sp.materialize_ledger(manifest, db)[0]["active_review"] is True
+        assert len(sp.json_load_strict(target / "待人工確認.json")["pending"]) == 1
+        ReviewSaveService(target).save_event(conflicted_id, {
+            "action": "確認非校對範圍", "exclusion_reason": "second local adjudication",
+            "exclusion_evidence": "B PDF direct visual again"})
+        resolved_db = sp.json_load_strict(target / "人工判定資料庫.json")
+        resolution = resolved_db["events"][conflicted_id]["portability_conflict_resolution"]
+        assert resolution["original_conflicts"] == receipt["conflicts"]
+        assert portability.validate_conflict_state(target, manifest, resolved_db) == []
+        assert portability._load_project(target)[0]["session_id"] == manifest["session_id"]
+        assert sp.json_load_strict(target / portability.CONFLICT_FILE) == receipt
     assert not list((tmp_path / "isolated-localappdata").rglob("*.sqlite*"))
 
 

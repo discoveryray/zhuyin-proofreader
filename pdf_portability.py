@@ -130,7 +130,16 @@ def validate_conflict_state(output_dir: Path, manifest: Mapping[str, Any], db: M
         raise ValueError("跨專案判定衝突紀錄格式無法驗證")
     valid_ids = {entry["review_id"] for entry in manifest.get("records", [])}
     unresolved = []
-    for conflict in receipt["conflicts"]:
+    def locally_resolves(event, conflict):
+        resolution = event.get("portability_conflict_resolution") if isinstance(event, dict) else None
+        return (isinstance(resolution, dict)
+                and event.get("action") != "保留待人工"
+                and event.get("portability_source") is None
+                and hashlib.sha256(_canonical(conflict)).hexdigest()
+                in resolution.get("conflict_sha256", [])
+                and conflict in resolution.get("original_conflicts", []))
+
+    for index, conflict in enumerate(receipt["conflicts"]):
         if (not isinstance(conflict, dict)
                 or conflict.get("target_review_id") not in valid_ids
                 or not isinstance(conflict.get("source_event"), dict)
@@ -139,16 +148,21 @@ def validate_conflict_state(output_dir: Path, manifest: Mapping[str, Any], db: M
                 or not conflict.get("target_pdf_sha256")):
             raise ValueError("跨專案判定衝突來源或位置識別不完整")
         review_id = conflict["target_review_id"]
+        # A later conflict removes the active local adjudication. Its target
+        # snapshot is the durable, exact record of that adjudication and the
+        # earlier receipt it resolved; neither source verdict is discarded.
+        historical_resolution = any(
+            later.get("target_review_id") == review_id
+            and locally_resolves(later.get("target_event"), conflict)
+            for later in receipt["conflicts"][index + 1:]
+            if isinstance(later, dict))
+        if historical_resolution:
+            continue
         event = db["events"].get(review_id)
         if event is None or event.get("action") == "保留待人工":
             unresolved.append(review_id)
         else:
-            resolution = event.get("portability_conflict_resolution")
-            if (not isinstance(resolution, dict)
-                    or event.get("portability_source") is not None
-                    or hashlib.sha256(_canonical(conflict)).hexdigest()
-                    not in resolution.get("conflict_sha256", [])
-                    or conflict not in resolution.get("original_conflicts", [])):
+            if not locally_resolves(event, conflict):
                 raise ValueError(f"衝突位置有未經本地裁決的有效事件：{review_id}")
     return unresolved
 
@@ -859,10 +873,22 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
             raise ValueError("目標判定資料庫根節點不是物件")
         if sp.normalize_db(raw_db) != target_db:
             raise ValueError("Excel 匯入期間目標判定資料庫已變動")
+        receipt_path = target_dir / CONFLICT_FILE
+        prior_conflicts = []
+        if receipt_path.exists():
+            # The receipt and target DB are one logical state. Validate both
+            # under the same project lock before extending conflict history.
+            if validate_conflict_state(target_dir, live_manifest, target_db):
+                raise ValueError("Excel 匯入期間目標出現未裁決衝突，不能轉入新判定")
+            prior_conflicts = copy.deepcopy(sp.json_load_strict(receipt_path)["conflicts"])
         candidate = copy.deepcopy(target_db)
         imported, duplicates, conflicts = 0, 0, []
         for target, event, identity in actions:
             review_id = target["review_id"]
+            if any(conflict.get("source_identity") == identity
+                   for conflict in prior_conflicts):
+                duplicates += 1
+                continue
             current = candidate["events"].get(review_id)
             if current is not None:
                 known = [current.get("portability_source"),
@@ -907,7 +933,7 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
                 sp.json_save(marker_path,
                              {"status": "PRESENTATION_PENDING", "source_excel_sha256": _sha(xlsx)})
                 if conflicts:
-                    sp.json_save(receipt_path, {"version": 1, "conflicts": conflicts})
+                    sp.json_save(receipt_path, {"version": 1, "conflicts": [*prior_conflicts, *conflicts]})
                 sp.json_save(db_path, candidate, expected_sha256=before)
                 db_committed = True
                 written_candidate_sha = _sha(db_path)
