@@ -36,6 +36,9 @@ FIFTH_REPORT_REFS = (
     "pr29-round5-r1-20260925T152241Z-0249c4463685",
     "review-confirm-responsive/round5/review2/0249c4463685/20260925-full-pr-01",
 )
+FIFTH_KNOWN_IMPLEMENTERS = (
+    "/root", "/root/implement_round5", "/root/benchmark_round5", "/root/reconstruct_evidence",
+)
 MISSING_ORIGINALS = (
     "review1-e53f44d-report.md", "review1-89e0297-report.md", "review2-89e0297-report.md",
     "review1-bb4c136-report.md", "review2-bb4c136-report.md", "review1-bd6b478-report.md",
@@ -562,7 +565,8 @@ def validate_merge_state(state):
     _boolean(current["working_tree_clean"], "current.working_tree_clean")
     _text(current["evidence_ref"], "current.evidence_ref")
     _texts(state["implementers"], "implementers")
-    _require(bool(state["implementers"]), "implementation actors are missing")
+    _require(set(FIFTH_KNOWN_IMPLEMENTERS) <= set(state["implementers"]),
+             "retained fifth-round implementation actors are missing")
     _require(type(state["unavailable_review_rounds"]) is list and
              all(type(n) is int and n in (1, 2) for n in state["unavailable_review_rounds"]) and
              len(state["unavailable_review_rounds"]) == len(set(state["unavailable_review_rounds"])),
@@ -607,15 +611,18 @@ def validate_merge_state(state):
     _require(type(findings) is list, "known finding inventory must be a list")
     identifiers = []
     for finding in findings:
-        _fields(finding, "id source_ref description status verification_ref", "known_finding")
+        _fields(finding, "id source_ref description status verification_ref verified_head", "known_finding")
         for field in ("id", "source_ref", "description"):
             _text(finding[field], "known_finding." + field)
         _require(finding["status"] in ("verified_on_candidate", "open", "unknown"),
                  "unknown historical finding status")
         if finding["status"] == "verified_on_candidate":
             _text(finding["verification_ref"], "known_finding.verification_ref")
+            _require(finding["verified_head"] == current["head"],
+                     "historical finding proof belongs to another candidate")
         else:
-            _require(finding["verification_ref"] is None, "unresolved finding cannot claim verification")
+            _require(finding["verification_ref"] is None and finding["verified_head"] is None,
+                     "unresolved finding cannot claim verification")
         identifiers.append(finding["id"])
     _require(len(identifiers) == len(set(identifiers)) and KNOWN_FINDING_IDS <= set(identifiers),
              "known historical finding inventory is incomplete")
@@ -684,6 +691,8 @@ def validate_merge_state(state):
             _require(review["verdict"] == "BLOCKED" and review["blocker_kind"] != "code",
                      "round two PASS requires CI identity")
     _validate_review_history(state)
+    _require(not ({review["report_ref"] for review in reviews} & set(FIFTH_REPORT_REFS)),
+             "sixth-round report_ref reuses a retained fifth-round report")
     for number in (1, 2):
         report = _review(state, number, DEVELOP, current["head"])
         if report is not None:

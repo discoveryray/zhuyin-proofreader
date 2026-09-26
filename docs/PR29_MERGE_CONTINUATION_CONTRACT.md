@@ -15,10 +15,10 @@
 第六輪 state 的 top-level 欄位恰為 `schema task authorization current implementers corrections reviews unavailable_review_rounds pr pr_ci handoffs continuation remote local_validation prior_fifth ready_transition merge post_merge_ancestry push_event push_ci`。`validate` 只檢查形狀與內部一致性，回報 `authenticity_verified=false`；`next-action` 不讀網路、不修改 Git/PR、不執行 merge。自填 PASS、授權 SHA、source ref、布林、run ID、agent ID 或 gate 決策都不是原始證據。協調者須保存並親核使用者採納原文、Git objects/direct refs、GitHub 原 PR API 與 merge 紀錄、兩個真正不同且未參與實作的 fresh reviewer 完整報告、完整 CI run/attempt/jobs/steps/logs、保護規則及每次 gate 原輸入/輸出。
 
 - `task` 精確綁上述 repo/task/B/branch；`authorization` 精確綁本次採納 ref/hash、有效性與操作 allowlist。沒有任意 override 或一般輪次擴充。
-- `corrections` 必須恰六筆連續，原五輪固定提交鏈不可改，第六筆 N→C。`current` 為 D/C/C tree 與 clean-tree 實證；`continuation` 保留重建標籤、14 缺件及 KF-01～KF-07、RC-01～RC-04 至少全部已知 finding，各項須有 C 的具體 verification ref。缺失報告未知內容仍未知。
+- `corrections` 必須恰六筆連續，原五輪固定提交鏈不可改，第六筆 N→C。`current` 為 D/C/C tree 與 clean-tree 實證；`continuation` 保留重建標籤、14 缺件及 KF-01～KF-07、RC-01～RC-04 至少全部已知 finding，各項須有具體 verification ref 與 `verified_head=C`。缺失報告未知內容仍未知。
 - `prior_fifth` 引用原第五輪 state/STOP 原始雜湊、兩份完整報告 ref 與原缺件清單；它不是把第五輪 STOP 改為 PASS。歷史原件與公開去識別化副本應分別索引。
 - `local_validation` 綁 Windows Python 3.13.0 的 C 與原始 logs，必須包含 full unittest、full pytest、GUI、runtime、compile、B→C diff、D→C diff、測試清冊、clean tree。產品程式及效能 harness 未改時，可標記沿用 N 效能結果，附來源、逐檔影響分析，不能說成 C 重測。
-- `reviews` 只記 C 的正式新報告；R1 檢 B→C 全部 cumulative diff 及 D 整合，R2 檢完整 PR、當前 base/head/merge-base、CI 原始資料。兩者不得為實作者或彼此同一 session。PASS 不得帶 blocker；BLOCKED 必須有 kind/findings；只有同 HEAD 非 code BLOCKED 可按原凍結契約、獨立完整補審和 append-only relation 處理。Code BLOCKED 不可同 HEAD 補審洗除。
+- `implementers` 至少含第五輪已保存 state 中的四位已知實作者及本輪所有實際修改受審來源的人；未知歷史角色不補造。`reviews` 只記 C 的正式新報告，`report_ref` 不得重用第五輪兩份報告；R1 檢 B→C 全部 cumulative diff 及 D 整合，R2 檢完整 PR、當前 base/head/merge-base、CI 原始資料。兩者不得為實作者或彼此同一 session。PASS 不得帶 blocker；BLOCKED 必須有 kind/findings；只有同 HEAD 非 code BLOCKED 可按原凍結契約、獨立完整補審和 append-only relation 處理。Code BLOCKED 不可同 HEAD 補審洗除。
 - `pr_ci` 與 `push_ci` 分開記錄 workflow/event/branch/run/attempt/latest attempt/head/tested SHA/ordered parents/tree/完整 Windows jobs 和必要 steps。PR CI 需 synthetic `[D,C]` 且 tree=C；push CI 需實際 merge SHA 的 `push` event、`develop`、`[D,C]`、tree=C。任何 skip/failure、錯 run/attempt/checkout 均不得 COMPLETE。
 - `remote.head_ref_exists` 明確區分原 feature ref 尚在（SHA 必為 C）與合併後被 GitHub 自動刪除（`head=null`）；合併前不存在一律停止。PR API 仍須保留 head C。若 develop 已由實際 merge SHA 後續前進，`post_merge_ancestry` 必須逐筆列出從當前 develop tip 沿 first parent 回到 merge SHA 的真實 Git commit 物件與可回查原始證據；單一 `contains_merge` 布林不夠。直接停在 merge SHA 時此欄為 null。
 

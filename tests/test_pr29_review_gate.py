@@ -87,6 +87,7 @@ def sixth_state(stage="draft"):
                                   "operations": sorted(gate.MERGE_OPERATIONS),
                                   "source_ref": gate.MERGE_AUTHORIZATION_REF,
                                   "source_sha256": gate.MERGE_AUTHORIZATION_SHA256}
+    evidence["implementers"] = [*gate.FIFTH_KNOWN_IMPLEMENTERS, "/root/implement_round6", "writer"]
     chain = (*gate.HISTORY, gate.FIFTH_HEAD, HEAD)
     evidence["corrections"] = [{"number": n + 1, "from_head": chain[n], "to_head": chain[n + 1],
                                 "evidence_ref": "fixture://round/" + str(n + 1)} for n in range(6)]
@@ -100,6 +101,8 @@ def sixth_state(stage="draft"):
     evidence["continuation"].update(created_at="2026-09-26T00:00:00Z",
                                     missing_originals=list(gate.MISSING_ORIGINALS),
                                     contains_fifth=True)
+    for finding in evidence["continuation"]["known_findings"]:
+        finding["verified_head"] = HEAD
     evidence["local_validation"] = {"head": HEAD, "platform": "Windows",
                                     "python_version": "3.13.0", "evidence_ref": "fixture://local",
                                     "checks": {name: {"status": "success", "evidence_ref": "fixture://" + name}
@@ -525,6 +528,14 @@ class PR29MergeContinuationTests(unittest.TestCase):
             evidence = sixth_state(); blocked(evidence["reviews"][number], "code")
             self.assertIn("seventh", self.action(evidence, "STOP")["reason"])
         evidence = sixth_state(); evidence["reviews"][1]["reviewer"] = evidence["reviews"][0]["reviewer"]
+        self.action(evidence, "STOP")
+        evidence = sixth_state(); evidence["implementers"].remove(gate.FIFTH_KNOWN_IMPLEMENTERS[0])
+        self.action(evidence, "STOP")
+        evidence = sixth_state(); evidence["reviews"][0]["reviewer"] = gate.FIFTH_KNOWN_IMPLEMENTERS[0]
+        self.action(evidence, "STOP")
+        evidence = sixth_state(); evidence["reviews"][0]["report_ref"] = gate.FIFTH_REPORT_REFS[0]
+        self.action(evidence, "STOP")
+        evidence = sixth_state(); evidence["continuation"]["known_findings"][0]["verified_head"] = gate.FIFTH_HEAD
         self.action(evidence, "STOP")
         evidence = sixth_state(); evidence["pr"]["new_blockers"] = ["confirmed defect"]
         self.assertIn("seventh", self.action(evidence, "STOP")["reason"])
