@@ -467,6 +467,71 @@ def test_project_transfer_preserves_formal_target_expected(tmp_path, action, dif
                 before_entry["context_evidence"])
 
 
+@pytest.mark.parametrize("action,difference", [
+    ("補建expected證據", "line"), ("解決expected證據", "line"),
+    ("補建expected證據", "local_context"), ("解決expected證據", "local_context"),
+    ("補建expected證據", "context_evidence"), ("解決expected證據", "context_evidence"),
+])
+def test_project_expected_transfer_rechecks_independent_target_context(tmp_path, action, difference):
+    a_pdf, b_pdf = tmp_path / "A.pdf", tmp_path / "B.pdf"
+    pdf(a_pdf, title="A")
+    pdf(b_pdf, title="B")
+    assert sha(a_pdf) != sha(b_pdf)
+    source, target = tmp_path / "source", tmp_path / "target"
+    source_manifest, source_db = project(source, a_pdf, session="A", event_positions=(0,))
+    source_db["events"][source_manifest["records"][0]["review_id"]]["action"] = action
+    sp.json_save(source / "人工判定資料庫.json", source_db)
+    target_manifest, target_db = project(target, b_pdf, session="B")
+    entry = target_manifest["records"][0]
+    if difference == "line":
+        entry["source_record"]["所在行"] = "B independent line"
+    elif difference == "local_context":
+        entry["source_record"]["局部詞境"] = "B independent lexical context"
+    else:
+        entry["context_evidence"] = "B independent context evidence"
+    sp.seal_manifest(target_manifest)
+    sp.json_save(target / "校對工作階段.json", target_manifest)
+    watched = [target / name for name in ("校對工作階段.json", "人工判定資料庫.json",
+                                         portable.INCOMPLETE_FILE, portable.CONFLICT_FILE,
+                                         "待人工確認.json", "注音校對_最終報告.xlsx", "pipeline_status.json")]
+    before = {path: path.read_bytes() if path.exists() else None for path in watched}
+    source_row = sp.materialize_ledger(source_manifest, source_db)[0]
+    target_row = sp.materialize_ledger(target_manifest, target_db)[0]
+    assert source_row["context_evidence"] != target_row["context_evidence"] or difference != "context_evidence"
+    with pytest.raises(ValueError, match="詞境|context"):
+        portable.import_project_decisions(source, target)
+    assert {path: path.read_bytes() if path.exists() else None for path in watched} == before
+    reopened = sp.materialize_ledger(target_manifest, sp.json_load_strict(target / "人工判定資料庫.json"))[0]
+    assert reopened["state"] == target_row["state"] == "EXPECTED_UNRESOLVED"
+    assert reopened["context_evidence"] == target_row["context_evidence"]
+
+
+@pytest.mark.parametrize("action", ["補建expected證據", "解決expected證據"])
+def test_project_expected_transfer_accepts_more_specific_event_context(tmp_path, action):
+    a_pdf, b_pdf = tmp_path / "A.pdf", tmp_path / "B.pdf"
+    pdf(a_pdf, title="A")
+    pdf(b_pdf, title="B")
+    assert sha(a_pdf) != sha(b_pdf)
+    source, target = tmp_path / "source", tmp_path / "target"
+    source_manifest, source_db = project(source, a_pdf, session="A", event_positions=(0,))
+    target_manifest, target_db = project(target, b_pdf, session="B")
+    source_row, target_row = source_manifest["records"][0], target_manifest["records"][0]
+    assert source_row["context_evidence"] == target_row["context_evidence"]
+    assert source_row["source_record"].get("所在行") == target_row["source_record"].get("所在行")
+    assert source_row["source_record"].get("局部詞境") == target_row["source_record"].get("局部詞境")
+    event = source_db["events"][source_row["review_id"]]
+    event["action"] = action
+    event["context_evidence"] = "角色／角；同頁句子已由人工核對"
+    sp.json_save(source / "人工判定資料庫.json", source_db)
+    assert sp.materialize_ledger(source_manifest, source_db)[0]["context_evidence"] == event["context_evidence"]
+    result = portable.import_project_decisions(source, target)
+    assert result["imported"] == 1 and result["conflicts"] == []
+    imported = sp.json_load_strict(target / "人工判定資料庫.json")["events"][target_row["review_id"]]
+    assert imported["context_evidence"] == event["context_evidence"]
+    assert imported["portability_source"]["review_id"] == source_row["review_id"]
+    assert sp.materialize_ledger(target_manifest, sp.json_load_strict(target / "人工判定資料庫.json"))[0]["context_evidence"] == event["context_evidence"]
+
+
 @pytest.mark.parametrize("same_decision", [True, False])
 def test_project_transfer_keeps_prior_human_expected_duplicate_or_conflict(tmp_path, same_decision):
     a_pdf, b_pdf = tmp_path / "A.pdf", tmp_path / "B.pdf"

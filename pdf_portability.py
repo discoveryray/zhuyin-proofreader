@@ -778,6 +778,15 @@ def _require_transferable_expected_lane(action: str, target, prior_event, label:
         raise ValueError(f"{label}目標已有正式 expected；保留雙方獨立證據，須在目標明確裁決")
 
 
+def _require_mapped_textbook_context(source, target, label: str) -> None:
+    """An occurrence anchor cannot substitute for B's independently built text context."""
+    source_record = source.get("source_record") or {}
+    target_record = target.get("source_record") or {}
+    if any(str(source_record.get(field) or "") != str(target_record.get(field) or "")
+           for field in ("所在行", "局部詞境")):
+        raise ValueError(f"{label}教材詞境不同，不能沿用判定")
+
+
 def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False):
     """Import filled expected rows after full-page and occurrence-local mapping."""
     import standalone_proofread as sp
@@ -831,11 +840,7 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
                and item.get("source_excel_row") == number for item in prior_sources):
             skipped += 1
             continue
-        source_context = source.get("source_record") or {}
-        target_context = target.get("source_record") or {}
-        if (str(source_context.get("所在行") or "") != str(target_context.get("所在行") or "")
-                or str(source_context.get("局部詞境") or "") != str(target_context.get("局部詞境") or "")):
-            raise ValueError(f"Excel row {number} 教材詞境不同，不能沿用判定")
+        _require_mapped_textbook_context(source, target, f"Excel row {number} ")
         expected_only = action in {"補建expected證據", "解決expected證據"}
         if action not in sp.DECISIONS:
             raise ValueError(f"Excel row {number} action 無效")
@@ -1681,6 +1686,13 @@ def import_project_decisions(source_dir: Path, target_dir: Path, *,
             identity = _source_identity(source_manifest, source, source_id, target_manifest, target, event)
             _require_transferable_expected_lane(event.get("action"), target_current[target_id],
                                                 current, f"來源判定 {source_id} ")
+            if event.get("action") in {"補建expected證據", "解決expected證據"}:
+                source_entry, target_entry = source_current[source_id], target_current[target_id]
+                _require_mapped_textbook_context(source_entry, target_entry, f"來源判定 {source_id} ")
+                target_context = str(target_entry.get("context_evidence") or "").strip()
+                if (current is None and target_context
+                        and str(source.get("context_evidence") or "").strip() != target_context):
+                    raise ValueError(f"來源判定 {source_id} 目標獨立 context_evidence 詞境不同；未覆寫")
             _validate_project_confirmation_transfer(
                 event, source_current[source_id], target_current[target_id])
             transferred = _transfer_event(event, source, target)
