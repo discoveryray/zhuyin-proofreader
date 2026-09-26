@@ -21,12 +21,14 @@ jobs:
     env:
       PYTHONUTF8: "1"
       PYTHONIOENCODING: "utf-8"
+      # PR29's exact PR and bounded develop-push windows need native Windows Tk capture.
+      PYTEST_ADDOPTS: ${{ ((github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) && '--capture=sys' || '' }}
     strategy:
       fail-fast: false
       matrix:
-        # Only this transition PR, at its frozen baseline, retains the old CI contract.
-        # Future tasks (including reuse of this branch name at another base) use 3.13 only.
-        python-version: ${{ fromJSON(github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c' && '["3.12", "3.13"]' || '["3.13"]') }}
+        # PR29's develop push window only schedules tests; the actual PR merge is
+        # established separately from GitHub's record, ordered parents and tree.
+        python-version: ${{ fromJSON(((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) && '["3.12", "3.13"]' || '["3.13"]') }}
 
     steps:
       - name: Check out repository
@@ -55,7 +57,7 @@ jobs:
         run: python scripts/test_entrypoint_audit.py collect tmp/ci-test-inventory.json
 
       - name: Run full unittest suite
-        if: ${{ github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c' }}
+        if: ${{ ((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) }}
         run: python -m unittest discover -s tests -p "test_*.py"
 
       - name: Run full pytest suite

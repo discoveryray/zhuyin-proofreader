@@ -15,6 +15,7 @@ import actual_review
 import global_exact_glyph_library as global_library
 import review_gui
 import standalone_proofread as sp
+from tests.review_save_test_support import QueuedRoot
 from actual_review import (
     GLYPH_CONFLICT_FILE,
     GLYPH_PROVENANCE_FILE,
@@ -678,6 +679,9 @@ class DummyButton:
 
 
 class ImmediateRoot:
+    def bind(self, _event, _callback, *, add=None):
+        pass
+
     def after(self, _delay, callback):
         callback()
 
@@ -869,7 +873,7 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
             app.configure_actions = MagicMock()
             app.render = MagicMock()
             with (patch.object(review_gui, "materialize_ledger", return_value=[checked, unchecked]),
-                  patch.object(sp, "materialize_ledger", return_value=[checked, unchecked])):
+                  patch.object(sp, "prepare_review_ledger", return_value=([checked, unchecked], [checked, unchecked]))):
                 app.reload_records()
 
             self.assertEqual(app.staged_member_occurrence_ids, {"checked-a", "unchecked-b"})
@@ -929,7 +933,7 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
                 app.index = 0
                 app.apply_actual_button = DummyButton()
                 with (patch.object(review_gui, "materialize_ledger", return_value=ledger),
-                      patch.object(sp, "materialize_ledger", return_value=ledger)):
+                      patch.object(sp, "prepare_review_ledger", return_value=(ledger, ledger))):
                     app.reload_records()
                 self.assertEqual(app.staging_summary["staged_group_count"], 1)
                 self.assertEqual(app.apply_actual_button.options["text"], "套用 actual 修正（1）")
@@ -1032,7 +1036,7 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
         resolved["state"] = "PASS"
         staged_ledger = [resolved, staged_actual, next_entry]
         app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
-        app.root = object()
+        app.root = QueuedRoot()
         app.output_dir = Path("project")
         app.manifest = {}
         app.db = {"events": {}}
@@ -1041,17 +1045,20 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
         app.staged_checked_occurrence_ids = {"staged-b"}
         app.apply_actual_button = DummyButton()
         app.show = MagicMock()
+        result = SimpleNamespace(
+            db={"events": {current["review_id"]: {"action": "確認 expected"}}},
+            ledger=staged_ledger, resolved_entry=resolved, timings={}, version_token="fixture-version",
+            staging_summary={"staged_group_count": 1, "staged_checked_occurrence_ids": ["staged-b"]})
         with (
-            patch.object(review_gui, "materialize_ledger", return_value=staged_ledger),
-            patch.object(review_gui, "json_save") as save,
-            patch.object(review_gui, "manual_actual_staging_summary", return_value={
-                "staged_group_count": 1, "staged_checked_occurrence_ids": ["staged-b"],
-            }) as summary,
+            patch.object(review_gui, "ReviewSaveService") as service,
+            patch.object(review_gui.threading, "Thread", ImmediateThread),
         ):
-            terminal = app.save_event(current, {"action": "確認 expected"})
-        self.assertTrue(terminal)
-        save.assert_called_once()
-        summary.assert_called_once_with(app.output_dir, ledger=staged_ledger)
+            service.return_value.save_event.return_value = result
+            started = app.save_event(current, {"action": "確認 expected"})
+            app.root.update()
+        self.assertTrue(started)
+        service.return_value.save_event.assert_called_once()
+        self.assertTrue(app._last_event_saved)
         self.assertEqual([item["occurrence_id"] for item in app.records], ["next-c"])
         self.assertNotIn("staged-b", [item["occurrence_id"] for item in app.records])
         app.show.assert_called_once()
@@ -1148,6 +1155,9 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
 
     def test_reload_records_also_reloads_durable_staging_count(self):
         app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
+        app.output_dir = Path("isolated")
+        app.records = []
+        app.staged_checked_occurrence_ids = set()
         app.manifest = {}
         app.db = {}
         app.index = 0

@@ -5,6 +5,7 @@ from contextlib import closing
 import hashlib
 import json
 import tempfile
+import threading
 import tkinter as tk
 import tkinter.font as tkfont
 import unittest
@@ -17,6 +18,7 @@ from openpyxl import Workbook, load_workbook
 import occurrence_ledger as ol
 import review_gui as gui
 import standalone_proofread as sp
+from tests.review_save_test_support import wait_for_save
 
 ROOT = Path(__file__).resolve().parents[1]
 REGRESSION = {"ok": True, "required": 1, "executed": 1, "passed": 1, "failed": 0,
@@ -258,6 +260,8 @@ class ManualReviewGuiTests(unittest.TestCase):
             app.primary.invoke()
             self.window.update()
             app.primary.invoke()
+            wait_for_save(app)
+            app.primary.invoke()
             self.window.update()
         self.assertEqual(len(app.db["events"]), 1)
         self.assertIn(first["review_id"], app.db["events"])
@@ -266,7 +270,9 @@ class ManualReviewGuiTests(unittest.TestCase):
         dialog.assert_not_called()
         confirm.assert_not_called()
         reusable.assert_not_called()
-        self.assertFalse(sp.project_actual_evidence_root(self.output).exists())
+        # The save shares the actual transaction lock, but creates no actual truth.
+        actual_root = sp.project_actual_evidence_root(self.output)
+        self.assertEqual({p.name for p in actual_root.iterdir()}, {".global_exact_glyph_delivery.lock"})
 
     def test_optional_blank_dialog_actual_unresolved_then_actual_group(self):
         app = self.app
@@ -282,6 +288,7 @@ class ManualReviewGuiTests(unittest.TestCase):
         with patch.object(gui, "ExpectedDialog") as cls:
             cls.return_value.result = dialog.result
             app.resolve_expected()
+            wait_for_save(app)
         self.assertEqual(gui.review_lane(app.current()), "expected")
         new_both = next(e for e in app.records if e["review_id"] == both["review_id"])
         self.assertEqual(gui.review_lane(new_both), "actual")
@@ -320,9 +327,10 @@ class ManualReviewGuiTests(unittest.TestCase):
         app = self.app
         first = app.current()
         before = (self.output / "人工判定資料庫.json").read_bytes()
-        for failing in ("materialize_ledger", "json_save"):
-            with self.subTest(failing=failing), patch.object(gui, failing, side_effect=OSError("isolated save failure")), patch.object(gui.messagebox, "showerror") as error, patch.object(gui.messagebox, "showinfo") as success:
+        for failing in ("prepare_review_ledger", "json_save"):
+            with self.subTest(failing=failing), patch.object(sp, failing, side_effect=OSError("isolated save failure")), patch.object(gui.messagebox, "showerror") as error, patch.object(gui.messagebox, "showinfo") as success:
                 app.primary.invoke()
+                wait_for_save(app)
                 error.assert_called_once()
                 success.assert_not_called()
             self.assertEqual(app.current(), first)
@@ -336,6 +344,90 @@ class ManualReviewGuiTests(unittest.TestCase):
         self.assertEqual(app.primary.cget("state"), "disabled")
         app.confirm_current_expected(app.current()["review_id"])
         self.assertEqual(app.db["events"], {})
+
+    def test_ctrl_enter_dialog_repetition_and_busy_action_save_only_one_item(self):
+        app = self.app
+        first_id = app.current()["review_id"]
+        original_dialog = gui.ExpectedDialog
+
+        def keyboard_dialog(*args, **kwargs):
+            dialog = original_dialog(*args, **kwargs, wait=False)
+            dialog.expected.set("ㄎㄢˋ")
+            dialog.update()
+            dialog.focus_force()
+            # Queue genuine Tk key events. Destroying the submitted dialog must
+            # prevent the second event from becoming another item's decision.
+            dialog.event_generate("<Control-Return>", when="tail")
+            dialog.event_generate("<Control-Return>", when="tail")
+            dialog.wait_window()
+            return dialog
+
+        with patch.object(gui, "ExpectedDialog", side_effect=keyboard_dialog) as dialog:
+            app.resolve_expected()
+            app.resolve_expected()
+            wait_for_save(app)
+        dialog.assert_called_once()
+        self.assertEqual(set(app.db["events"]), {first_id})
+
+    def test_saved_event_survives_native_show_failure_and_reopens(self):
+        app = self.app
+        first_id = app.current()["review_id"]
+        with patch.object(app, "show", side_effect=RuntimeError("native publication failure")), \
+                patch.object(gui.messagebox, "showwarning") as warning:
+            app.primary.invoke()
+            wait_for_save(app)
+        warning.assert_called_once()
+        self.assertIn("已保存", warning.call_args.args[0])
+        self.assertTrue(app._last_event_saved)
+        self.assertFalse(app._last_event_refreshed)
+        self.assertEqual(app.primary.cget("state"), "disabled")
+        reopened_window = tk.Toplevel(self.root)
+        try:
+            reopened = gui.ReviewApp(reopened_window, self.output)
+            reopened_window.update()
+            self.assertIn(first_id, reopened.db["events"])
+            self.assertNotIn(first_id, [row["review_id"] for row in reopened.records])
+        finally:
+            reopened_window.destroy()
+
+    def test_next_preview_failure_after_save_does_not_enable_fast_confirmation(self):
+        app = self.app
+        first_id = app.current()["review_id"]
+        with patch.object(app.image, "load", return_value=False):
+            app.primary.invoke()
+            wait_for_save(app)
+        self.assertTrue(app._last_event_saved)
+        self.assertIsNone(app._rendered_review_id)
+        self.assertEqual(app.primary.cget("state"), "disabled")
+        app._shortcut_cooldown_until = app._review_action_cooldown_until = 0
+        app.confirm_current_expected(app.current()["review_id"])
+        self.assertEqual(set(app.db["events"]), {first_id})
+
+    def test_preview_failure_during_failed_save_stays_disabled(self):
+        app = self.app
+        first = app.current()
+        entered, release = threading.Event(), threading.Event()
+
+        def failed_save(*_args, **_kwargs):
+            entered.set()
+            if not release.wait(5):
+                raise RuntimeError("test did not release worker")
+            raise OSError("isolated failed write")
+
+        with patch.object(app._save_service, "save_event", side_effect=failed_save), \
+                patch.object(gui.messagebox, "showerror") as error:
+            app.primary.invoke()
+            self.assertTrue(entered.wait(5))
+            try:
+                app._preview_failed()
+            finally:
+                release.set()
+            wait_for_save(app)
+        error.assert_called_once()
+        self.assertEqual(app.current(), first)
+        self.assertEqual(app.db["events"], {})
+        self.assertIsNone(app._rendered_review_id)
+        self.assertEqual(app.primary.cget("state"), "disabled")
 
     def test_shortcut_full_label_and_staged_batch_footer_remain_visible(self):
         app = self.app
@@ -359,6 +451,7 @@ class ManualReviewGuiTests(unittest.TestCase):
         app = self.app
         first_id = app.current()["review_id"]
         app.primary.invoke()
+        wait_for_save(app)
         before = (self.output / "人工判定資料庫.json").read_bytes()
         with patch.object(gui.simpledialog, "askstring", side_effect=["看一看", ""]), patch.object(gui.messagebox, "showerror") as error, patch.object(gui, "save_reusable_expected_rule") as reusable:
             app.create_reusable_expected_rule()

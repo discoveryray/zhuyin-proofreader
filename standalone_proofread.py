@@ -1752,10 +1752,31 @@ def json_load_strict(path: Path) -> Any:
         raise ValueError(f"JSON 損壞或含重複 key：{path}") from exc
 
 
-def json_save(path: Path, data) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
+def json_save(path: Path, data, *, expected_sha256: str | None = None) -> str:
+    """Atomically replace JSON, optionally rejecting a concurrent DB edit.
+
+    A private temporary file avoids collisions between writers; failed writes
+    leave the prior document intact. The optional guard is used by review saves.
+    """
+    path = Path(path)
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         prefix=path.name + ".", suffix=".tmp", delete=False) as stream:
+            tmp = Path(stream.name)
+            json.dump(data, stream, ensure_ascii=False, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        saved_sha256 = sha256_file(tmp)
+        if expected_sha256 is not None:
+            observed = sha256_file(path) if path.exists() else ""
+            if observed != expected_sha256:
+                raise ValueError("人工判定資料庫已由其他操作變更；未覆寫，請重新載入")
+        tmp.replace(path)
+        return saved_sha256
+    finally:
+        if tmp is not None and tmp.exists():
+            tmp.unlink()
 
 
 def manifest_integrity_sha256(manifest: Mapping[str, Any]) -> str:
@@ -2630,7 +2651,12 @@ def _apply_review_event(entry: dict[str, Any], event: Mapping[str, Any]) -> dict
     raise InvalidTransitionError(f"未知或禁止的人工／GPT action：{action}")
 
 
-def materialize_ledger(manifest: Mapping[str, Any], db: Mapping[str, Any]) -> list[dict[str, Any]]:
+def prepare_review_ledger(manifest: Mapping[str, Any], db: Mapping[str, Any]):
+    """Build the rule-applied baseline and full ledger in one materialization.
+
+    The baseline is the only valid starting point for replacing or deleting an
+    occurrence event; replaying onto an already reviewed row changes semantics.
+    """
     db = normalize_db(dict(db))
     ledger = [dict(entry) for entry in manifest.get("records", [])]
     rules_doc = _canonical_rule_doc(manifest.get("reusable_expected_rules") or {})
@@ -2640,6 +2666,7 @@ def materialize_ledger(manifest: Mapping[str, Any], db: Mapping[str, Any]) -> li
     ledger = _apply_reusable_rules(ledger, rules_doc)
     assert_unique_ids(ledger, "occurrence_id")
     assert_unique_ids(ledger, "review_id")
+    baseline = list(ledger)
     by_review_id = {entry["review_id"]: index for index, entry in enumerate(ledger)}
     events = db.get("events", {})
     unknown = sorted(set(events) - set(by_review_id))
@@ -2659,7 +2686,11 @@ def materialize_ledger(manifest: Mapping[str, Any], db: Mapping[str, Any]) -> li
             ) from exc
     if ledger:
         validate_occurrence_ledger(ledger)
-    return ledger
+    return baseline, ledger
+
+
+def materialize_ledger(manifest: Mapping[str, Any], db: Mapping[str, Any]) -> list[dict[str, Any]]:
+    return prepare_review_ledger(manifest, db)[1]
 
 
 def save_pending_json(output_dir: Path, manifest: dict[str, Any], db: dict[str, Any]) -> int:
@@ -3419,7 +3450,7 @@ def export_actual_pending_for_gpt(output_dir: Path) -> Path | None:
     )
 
 
-def _manual_actual_snapshot_ledger(manifest, db, ledger):
+def _manual_actual_snapshot_ledger(manifest, db, ledger, *, base_ledger=None):
     """Recover only the known sealed state before a verified expected-only event.
 
     Manual group snapshots historically include the composite workflow state.
@@ -3431,7 +3462,9 @@ def _manual_actual_snapshot_ledger(manifest, db, ledger):
                        if event.get("action") in {"補建expected證據", "解決expected證據"}}
     if not expected_events:
         return ledger
-    base = {row["review_id"]: row for row in materialize_ledger(manifest, normalize_db({}))}
+    base = {row["review_id"]: row for row in (
+        materialize_ledger(manifest, normalize_db({})) if base_ledger is None else base_ledger
+    )}
     projected = []
     for row in ledger:
         event = expected_events.get(row["review_id"])
@@ -3454,7 +3487,7 @@ def _manual_actual_snapshot_ledger(manifest, db, ledger):
     return projected
 
 
-def _validate_manual_actual_group_sources(output_dir, live_groups):
+def _validate_manual_actual_group_sources(output_dir, live_groups, *, source_hashes=None):
     """Reprove the source bytes before retaining any prior visual checks."""
     checked_sources = set()
     for live in live_groups:
@@ -3463,21 +3496,16 @@ def _validate_manual_actual_group_sources(output_dir, live_groups):
             wanted = str(member.get("pdf_sha256") or "")
             key = (path, wanted)
             if key not in checked_sources:
-                if not wanted or sha256_file(path) != wanted:
+                observed = (source_hashes.get(str(path.resolve())) if source_hashes is not None
+                            else sha256_file(path))
+                if not wanted or observed != wanted:
                     raise ValueError(f"SOURCE_INVALID：actual 暫存來源 PDF 已變更：{path.name}")
                 checked_sources.add(key)
 
 
-def manual_actual_staging_summary(output_dir: Path, *, ledger=None) -> dict[str, Any]:
-    """Read durable intent; a GUI ledger requests live validation before hiding.
-
-    Without ``ledger`` this remains the historical storage-only inventory. It
-    cannot attest that a checked occurrence is still actionable/applicable.
-    """
-    output_dir = Path(output_dir)
-    staging = load_manual_actual_staging(project_actual_evidence_root(output_dir))
+def _manual_actual_staging_inventory(staging):
     groups = list(staging.get("staged_groups") or [])
-    summary = {
+    return {
         "staged_group_count": len(groups),
         "staged_group_ids": [str(group.get("group_id") or "") for group in groups],
         "staged_member_occurrence_ids": sorted({
@@ -3493,24 +3521,55 @@ def manual_actual_staging_summary(output_dir: Path, *, ledger=None) -> dict[str,
             if str(occurrence_id)
         }),
     }
+
+
+def _manual_actual_summary_from_verified_snapshot(output_dir, staging, manifest, db, ledger,
+                                                *, base_ledger=None, source_hashes=None):
+    """Internal save path: all arguments belong to one content-verified snapshot.
+
+    This shares group/source validators with the ordinary read path. It never
+    promotes unvalidated checked IDs when projection or group validation fails.
+    """
+    summary = _manual_actual_staging_inventory(staging)
+    groups = list(staging.get("staged_groups") or [])
+    try:
+        summary["actual_recovery_pending"] = committed_project_recovery(project_actual_evidence_root(output_dir)) is not None
+        if groups:
+            projected = _manual_actual_snapshot_ledger(manifest, db, ledger, base_ledger=base_ledger)
+            live_groups = _current_live_groups_for_staged_manual_actual(ledger, groups, snapshot_ledger=projected)
+            for staged, live in zip(sorted(groups, key=lambda item: item["group_id"]), live_groups):
+                _revalidate_staged_manual_actual_group(staged, live)
+            _validate_manual_actual_group_sources(output_dir, live_groups, source_hashes=source_hashes)
+    except Exception as exc:
+        summary["staging_error"] = str(exc)
+        summary["staged_checked_occurrence_ids"] = []
+    return summary
+
+
+def manual_actual_staging_summary(output_dir: Path, *, ledger=None) -> dict[str, Any]:
+    """Read durable intent; a GUI ledger requests live validation before hiding.
+
+    Without ``ledger`` this remains the historical storage-only inventory. It
+    cannot attest that a checked occurrence is still actionable/applicable.
+    """
+    output_dir = Path(output_dir)
+    staging = load_manual_actual_staging(project_actual_evidence_root(output_dir))
+    summary = _manual_actual_staging_inventory(staging)
     if ledger is not None:
         try:
             summary["actual_recovery_pending"] = committed_project_recovery(project_actual_evidence_root(output_dir)) is not None
-            if not groups:
+            if not staging.get("staged_groups"):
                 return summary
             manifest = json_load_strict(output_dir / "校對工作階段.json")
             validate_manifest_integrity(manifest)
             validate_output_artifact_hashes(manifest)
             # Strict reading, not load_or_initialize_db: summary never writes.
             db = normalize_db(json_load_strict(output_dir / "人工判定資料庫.json"))
-            current = materialize_ledger(manifest, db)
+            baseline, current = prepare_review_ledger(manifest, db)
             if current != ledger:
                 raise ValueError("工作階段已變更，請重新開啟人工校對畫面")
-            projected = _manual_actual_snapshot_ledger(manifest, db, current)
-            live_groups = _current_live_groups_for_staged_manual_actual(current, groups, snapshot_ledger=projected)
-            for staged, live in zip(sorted(groups, key=lambda item: item["group_id"]), live_groups):
-                _revalidate_staged_manual_actual_group(staged, live)
-            _validate_manual_actual_group_sources(output_dir, live_groups)
+            return _manual_actual_summary_from_verified_snapshot(
+                output_dir, staging, manifest, db, current, base_ledger=baseline)
         except Exception as exc:
             summary["staging_error"] = str(exc)
             summary["staged_checked_occurrence_ids"] = []

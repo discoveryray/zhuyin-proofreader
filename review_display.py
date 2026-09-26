@@ -73,6 +73,7 @@ class ActionRows(tk.Frame):
         if event.widget is self:
             self._disposed = True
             self._cancel_layout()
+            self.items.clear()
 
     def set_items(self, items):
         for item in self.items:
@@ -117,6 +118,12 @@ def scrollable_entry(master, variable, *, readonly=False):
     bar.pack(fill="x")
     entry.bind("<Control-a>", lambda _e: (entry.selection_range(0, "end"), "break")[-1])
     frame.entry = entry
+
+    def release_entry(event):
+        if event.widget is frame:
+            frame.entry = None
+
+    frame.bind("<Destroy>", release_entry, add="+")
     return frame
 
 
@@ -237,6 +244,15 @@ class OccurrencePreview(tk.Frame):
         if event.widget is self or event.widget is self.canvas:
             self._disposed = True
             self._cancel_callbacks()
+            # Tcl images and callback-held dialog variables must be released on
+            # this owning Tk thread, before a save worker can collect cycles.
+            self.photo = self.pixmap = self.target = None
+            self.on_locate = self.on_failure = self.on_layout = self.before_locate = None
+            if event.widget is self:
+                # Each child points back to this frame through master. Keep no
+                # Python-only cycle alive after Tcl destroys the widget tree.
+                self.notice = self.canvas = None
+                self.__dict__.pop("scrollbar", None)
 
     def clear(self, message=""):
         self._cancel_callbacks()

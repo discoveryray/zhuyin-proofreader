@@ -13,6 +13,7 @@ import actual_review as ar
 import occurrence_ledger as ol
 import review_gui as gui
 import standalone_proofread as sp
+from tests.review_save_test_support import QueuedRoot, wait_for_save
 from tests.test_manual_review_usability_v580 import create_gui_fixture
 from tests.test_manual_actual_gui_batch_v570 import DummyButton, FakeProgressWidget, ImmediateRoot, ImmediateThread
 from export_zhuyin_readings import load_actual_occurrence_overrides, match_actual_occurrence_override
@@ -53,7 +54,7 @@ def create_staged_navigation_fixture(output, *, same_exact_peers=False):
 
 def headless_app(output):
     app = gui.ReviewApp.__new__(gui.ReviewApp)
-    app.root = ImmediateRoot()
+    app.root = QueuedRoot()
     app.output_dir = output
     app.manifest = sp.json_load_strict(output / "校對工作階段.json")
     app.db = sp.load_or_initialize_db(output)
@@ -105,6 +106,7 @@ class StagedNavigationTests(unittest.TestCase):
         self.select(row)
         event = sp.build_manual_expected_event(row, operation="ENTER_EXPECTED", expected_set=reading)
         self.app.save_event(row, event)
+        wait_for_save(self.app)
         return event
 
     def test_difference_stage_removes_only_pending_comparison_and_navigates(self):
@@ -225,7 +227,7 @@ class StagedNavigationTests(unittest.TestCase):
     def test_staging_read_failure_reveals_previous_waiting_without_losing_expected(self):
         row = self.row(1)
         self.stage(row)
-        with patch.object(gui, "manual_actual_staging_summary", side_effect=OSError("isolated read failure")):
+        with patch.object(sp, "_manual_actual_summary_from_verified_snapshot", side_effect=OSError("isolated read failure")):
             event = self.save_expected(row)
         self.assertTrue(self.app._last_event_saved)
         self.assertIn(row["review_id"], [r["review_id"] for r in self.app.records])
@@ -235,8 +237,9 @@ class StagedNavigationTests(unittest.TestCase):
     def test_expected_save_failure_does_not_advance_and_actual_duplicate_does_not_stage_next(self):
         row = self.app.current()
         before = copy.deepcopy(self.app.db)
-        with patch.object(gui, "json_save", side_effect=OSError("isolated write failure")), patch.object(gui.messagebox, "showerror"):
+        with patch.object(sp, "json_save", side_effect=OSError("isolated write failure")), patch.object(gui.messagebox, "showerror"):
             self.app.save_event(row, sp.build_manual_expected_event(row, operation="ENTER_EXPECTED", expected_set="ㄎㄢ"))
+            wait_for_save(self.app)
         self.assertEqual(self.app.current(), row)
         self.assertEqual(self.app.db, before)
         row = self.row(5)
@@ -292,6 +295,7 @@ class StagedNavigationTests(unittest.TestCase):
                 row = app.current()
                 sp.stage_manual_actual_correction(output, row["review_id"], "ㄎㄢ")
                 app.save_event(row, sp.build_manual_expected_event(row, operation="ENTER_EXPECTED", expected_set=expected))
+                wait_for_save(app)
                 expected_event = copy.deepcopy(app.db["events"][row["review_id"]])
                 with patch.object(sp, "refresh_actual_project", side_effect=controlled_refresh):
                     sp.apply_staged_manual_actual_corrections(output)
@@ -334,6 +338,7 @@ class StagedNavigationTests(unittest.TestCase):
                 patch.object(gui.ttk, "Progressbar", FakeProgressWidget), \
                 patch.object(gui, "apply_screen_safe_geometry"):
             self.app.apply_staged_actuals()
+            self.app.root.update()
         error.assert_called_once()
         info.assert_not_called()
         self.assertEqual(stage_path.read_bytes(), before)
@@ -353,6 +358,7 @@ class StagedNavigationTests(unittest.TestCase):
                 patch.object(gui.messagebox, "showerror") as error, \
                 patch.object(self.app, "_start_staged_actual_apply") as launch:
             self.app.apply_staged_actuals()
+            self.app.root.update()
         error.assert_called_once()
         launch.assert_not_called()
 
@@ -397,7 +403,9 @@ class SameExactStagedNavigationTests(unittest.TestCase):
         self.ids = [row["occurrence_id"] for row in self.peers]
         self.app = headless_app(self.output)
         for row in self.peers:
+            self.app.index = next(n for n, item in enumerate(self.app.records) if item["review_id"] == row["review_id"])
             self.app.save_event(row, sp.build_manual_expected_event(row, operation="ENTER_EXPECTED", expected_set="ㄎㄢ"))
+            wait_for_save(self.app)
         self.expected_before = copy.deepcopy(self.app.db["events"])
         self.stage_path = ar.manual_actual_staging_path(sp.project_actual_evidence_root(self.output))
 

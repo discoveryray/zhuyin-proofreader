@@ -17,6 +17,7 @@ import review_display as display
 import review_gui as gui
 import standalone_gui as standalone
 import standalone_proofread as sp
+from tests.review_save_test_support import wait_for_save
 from test_manual_review_usability_v580 import make_manifest, REGRESSION
 
 
@@ -123,6 +124,7 @@ class GroupOrderTests(unittest.TestCase):
         ledger = [item(1, "我", "expected"), item(2, "你", "expected"), item(3, "我", "expected"),
                   item(4, "我", "actual"), item(5, "你", "actual"), item(6, "我", "actual")]
         app = gui.ReviewApp.__new__(gui.ReviewApp)
+        app.manifest, app.records, app.staged_checked_occurrence_ids = {}, [], set()
         app.index = 0
         app._set_actionable_records_from_ledger(ledger)
         self.assertEqual([e["occurrence_id"] for e in app.records], ["1", "3", "2", "4", "6", "5"])
@@ -148,6 +150,8 @@ class GroupOrderTests(unittest.TestCase):
         self.assertEqual(len({e["occurrence_id"] for e in app.records}), 4)
         # Reopening with a full source roster preserves the first group's order.
         reopened = gui.ReviewApp.__new__(gui.ReviewApp)
+        reopened.manifest, reopened.records, reopened.staged_checked_occurrence_ids = {}, [], set()
+        reopened.index = 0
         reopened._set_actionable_records_from_ledger(ledger)
         self.assertEqual([e["occurrence_id"] for e in reopened.records][:2], ["3", "2"])
 
@@ -318,10 +322,12 @@ class VisualGuiTests(unittest.TestCase):
         self.window.update()
         first, third = app.records[:2]
         app.primary.invoke()
+        wait_for_save(app)
         self.assertEqual(set(app.db["events"]), {first["review_id"]})
         self.assertEqual(app.current()["review_id"], third["review_id"])
         event = sp.build_manual_expected_event(app.current(), operation="ENTER_EXPECTED", expected_set="ㄨㄛˋ", rationale="")
         app.save_event(app.current(), event)
+        wait_for_save(app)
         self.assertEqual(len(app.db["events"]), 2)
         self.assertNotEqual(app.db["events"][first["review_id"]]["expected_set"], app.db["events"][third["review_id"]]["expected_set"])
 

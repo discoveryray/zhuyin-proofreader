@@ -27,12 +27,15 @@ def open_progress_demo(root, count=10):
     """Production constructor, held worker; UI-only demo, no actual service call."""
     app = gui.ReviewApp.__new__(gui.ReviewApp)
     app.root = root
+    app.output_dir = Path("ui-only-held-progress-project")
     app.index = 0
     app.reload_staging_summary = MagicMock(return_value={"staged_group_count": count})
     with (patch.object(gui.messagebox, "askyesno", return_value=True),
+          patch.object(gui.messagebox, "showerror") as error,
           patch.object(gui.threading, "Thread") as thread,
           patch.object(gui, "apply_staged_manual_actual_corrections") as service):
         app.apply_staged_actuals()
+        error.assert_not_called()
         thread.return_value.start.assert_called_once()
         service.assert_not_called()
     progress = next(widget for widget in root.winfo_children()

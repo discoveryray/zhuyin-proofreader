@@ -1,0 +1,506 @@
+{
+  "created_at_utc": "2026-09-25T12:58:29.165950+00:00",
+  "files": [
+    {
+      "file": "build_reconstruction.py",
+      "bytes": 27112,
+      "sha256": "da9519c01d0100920fab3a2591665eeebf397aa412a1d3a338466fa15b8e3a0a"
+    },
+    {
+      "file": "builder-attempt1.log",
+      "bytes": 240,
+      "sha256": "8fb11206cde81406ca795b613532ad32d1d385650c507bfc0de1dc54fbc198cd"
+    },
+    {
+      "file": "fixed-object-test-index.json",
+      "bytes": 110457,
+      "sha256": "fc453036aeb64a26d5958a30a0eb017b03cfe4c520c2e2d18252c92d56f3cc7e"
+    },
+    {
+      "file": "known-findings.json",
+      "bytes": 67095,
+      "sha256": "869394de232a052454a580dff4d7929c8874fafa0fb891f4749e1382be6d800b"
+    },
+    {
+      "file": "known-findings.md",
+      "bytes": 30966,
+      "sha256": "61d0f75bcc8d44400153fb3ae480f6f0eb0602ec9679b8fa881e197c62dd4f1c"
+    },
+    {
+      "file": "reconstructed-history.json",
+      "bytes": 29930,
+      "sha256": "6d41e814004e1ed1eb5752f56e55351fba0c3eaee1d3860dca8aec46b4a22c82"
+    },
+    {
+      "file": "reconstructed-history.md",
+      "bytes": 4644,
+      "sha256": "38a2bc778a8f12a633bf51c5f4de2a6aa8de7dd7867744ae1b478dcde134cce5"
+    },
+    {
+      "file": "source-index.json",
+      "bytes": 62400,
+      "sha256": "2457cd8eb6f5cf9f2b4aa81bf41e2546d4602ca05725022be0df797dc8f99a1f"
+    },
+    {
+      "file": "sources/git/B-to-H-commit-list.txt",
+      "bytes": 205,
+      "sha256": "d9fda01cc844a9a76f58c0683d04c27a230c8f52651ab832b0c62a7e11585c1d"
+    },
+    {
+      "file": "sources/git/commit-89e0297bd6e5b9b08d077b2216029fb6224976fc.raw",
+      "bytes": 291,
+      "sha256": "cf8f2e9bdd8fce0a4220da9bc1a4780243d78fb93946a854066cd3a948dd109d"
+    },
+    {
+      "file": "sources/git/commit-a38bdf1c84889c52e7281a0c23c9458e3762afa8.raw",
+      "bytes": 280,
+      "sha256": "ccbc6f6e1efb846892faec3ec6bd45f6221de6bef4308d24107dffd3677e44a9"
+    },
+    {
+      "file": "sources/git/commit-bb4c136fbc49c706fecfd48d1dacf81b4d97584e.raw",
+      "bytes": 278,
+      "sha256": "8b95d88402646516354b6546b68bc79493809385d4d2ea55ce453f982d54d735"
+    },
+    {
+      "file": "sources/git/commit-bd6b4789a646f8bed075c256447f54922a5c4f90.raw",
+      "bytes": 279,
+      "sha256": "a34ca720bee4e873edbb77e3bc1c3262d93641b59270185f3a9825e207ab65ba"
+    },
+    {
+      "file": "sources/git/commit-e53f44d2da29b46dfe0bd0f2c06af9919808b99f.raw",
+      "bytes": 304,
+      "sha256": "0fcf4e272ee1b0b4cc1a3576033e909dba0cb71f4ce6ddedeb7cec63838151a0"
+    },
+    {
+      "file": "sources/git/D/tests/test_hotfix_tone_and_followup_v531.py",
+      "bytes": 5835,
+      "sha256": "e58af9218c3abdf904594d0044c200bfaf770658634bc825dacee6dcb1d72cf5"
+    },
+    {
+      "file": "sources/git/D/tests/test_manual_actual_gui_batch_v570.py",
+      "bytes": 79346,
+      "sha256": "7b6db10b7f934ec9bdaa58d2725c928f011ee7c8d74fd62415e7c6d5fb1382dd"
+    },
+    {
+      "file": "sources/git/D/tests/test_manual_review_usability_v580.py",
+      "bytes": 22175,
+      "sha256": "31f067ec68a61bcf312c9306d2f34230fc35efee4b11b18e744a35d34d533fd1"
+    },
+    {
+      "file": "sources/git/D/tests/test_review_visual_corrective_v580.py",
+      "bytes": 12698,
+      "sha256": "70df4c7e512aef9d6c8bde29768ca673fc0239fbb588b585266ac9d41461d0fa"
+    },
+    {
+      "file": "sources/git/D/tests/test_staged_review_navigation_v580.py",
+      "bytes": 30202,
+      "sha256": "e4c55720d353be1aa85039a95a425414d5d63c32665ce2e46b927de27a1f6350"
+    },
+    {
+      "file": "sources/git/H/tests/test_hotfix_tone_and_followup_v531.py",
+      "bytes": 6103,
+      "sha256": "59eefb39e25f39b20a05b8372c775eb1fa63c6300f591df6d48f2ce3e848b2c6"
+    },
+    {
+      "file": "sources/git/H/tests/test_manual_actual_gui_batch_v570.py",
+      "bytes": 56456,
+      "sha256": "7bf3fe0c7fdd7e9fb5f088b3aa55c2311b90708be59f84101f43a841f830924d"
+    },
+    {
+      "file": "sources/git/H/tests/test_manual_review_usability_v580.py",
+      "bytes": 26322,
+      "sha256": "a8720dd618ba3102d967a81c475d4bb5dec1726d8af907b2f20821df033b7be1"
+    },
+    {
+      "file": "sources/git/H/tests/test_review_async_save.py",
+      "bytes": 35089,
+      "sha256": "53f5b3cd0356b70cf3fa41643689d20fb2d11e223d1558f235809b2673b3d91c"
+    },
+    {
+      "file": "sources/git/H/tests/test_review_save_service.py",
+      "bytes": 21231,
+      "sha256": "40bccc67417ac49a1efa7f0cc9f9c63ce3c64952dca2ac2cb0a912545e77ae25"
+    },
+    {
+      "file": "sources/git/H/tests/test_review_visual_corrective_v580.py",
+      "bytes": 12853,
+      "sha256": "6631a99729d2d8da13cb32c4eef35cfdda746364bcf7fb87b8a2e6c26f6b00d3"
+    },
+    {
+      "file": "sources/git/H/tests/test_staged_review_navigation_v580.py",
+      "bytes": 30612,
+      "sha256": "4af5f9d591a93cefe427c8fefb7478dbde60802de175b43e536bd06e4dc344b3"
+    },
+    {
+      "file": "sources/prior/baseline-feature.diff",
+      "bytes": 269701,
+      "sha256": "64223efb984fc039d1fb851d09d42dd8a9179d58cb36485642ea24932f284817"
+    },
+    {
+      "file": "sources/prior/commit-89e0297.diff",
+      "bytes": 132054,
+      "sha256": "1432832f36211aef9637a351165fa7f85c271b9ef6d74714195a33fd5ca95e10"
+    },
+    {
+      "file": "sources/prior/commit-89e0297.txt",
+      "bytes": 886,
+      "sha256": "bbd15103dc8f505379b8c2a3a8b5002779406878aa6f7ee3bda8224e9529854b"
+    },
+    {
+      "file": "sources/prior/commit-a38bdf1.diff",
+      "bytes": 113139,
+      "sha256": "54b899aa9f76932e0bfc8ccbaf337d55bf41850931db2c5477e13e9eb8c10eaf"
+    },
+    {
+      "file": "sources/prior/commit-a38bdf1.txt",
+      "bytes": 652,
+      "sha256": "a6ff758d50f1a2b0f6f62b251e132749363cd7e6845c2a4952fb69dbede800ef"
+    },
+    {
+      "file": "sources/prior/commit-bb4c136.diff",
+      "bytes": 125312,
+      "sha256": "ba9c0344eb7b0b9aa7321692b2269d436b89d1c38fe14dc0f4e662eea14e75b8"
+    },
+    {
+      "file": "sources/prior/commit-bb4c136.txt",
+      "bytes": 653,
+      "sha256": "9369520d3950b508b185f95c5bd69ce69562a09a173c692b7b92311957ff76b7"
+    },
+    {
+      "file": "sources/prior/commit-bd6b478.diff",
+      "bytes": 1419,
+      "sha256": "71109bde172fbf64e2b8c983bbf6cc694077f1e58169c8bce0113591b3f5b5b8"
+    },
+    {
+      "file": "sources/prior/commit-bd6b478.txt",
+      "bytes": 383,
+      "sha256": "3802c744e205499b8230e02604ae5d5a3f7a438644c967936b58bb09909b6f11"
+    },
+    {
+      "file": "sources/prior/commit-e53f44d.diff",
+      "bytes": 216522,
+      "sha256": "89e2a144b3687a65a59f9d547fc3d9cdc03a5071b9001c1166f5945a70871a9b"
+    },
+    {
+      "file": "sources/prior/commit-e53f44d.txt",
+      "bytes": 1122,
+      "sha256": "d34110dd6c2c331ffff5010dc80e3af32bad91d4cca670d2415ef43004da7c2d"
+    },
+    {
+      "file": "sources/prior/continuation-contract-finalization/adopted-pr-report-round1.md",
+      "bytes": 16755,
+      "sha256": "287ea7dc71f4bdc6a45cbd6a96a5b8ddfd72b22a9399dffcb7828477292b5c65"
+    },
+    {
+      "file": "sources/prior/continuation-contract-finalization/adopted-pr-report-round2.md",
+      "bytes": 18746,
+      "sha256": "7ebc63befe1bcfe111b3d8f438a39e76d32cff05f10aed6cee33e90d58850ff6"
+    },
+    {
+      "file": "sources/prior/continuation-contract-finalization/contracts/current/.github/workflows/ci.yml",
+      "bytes": 5079,
+      "sha256": "d25d396c566878c134d28cfd934a839686ce06e5e53f2628631426e5c771e57f"
+    },
+    {
+      "file": "sources/prior/continuation-contract-finalization/contracts/current/AGENTS.md",
+      "bytes": 16968,
+      "sha256": "57a084ede4b2cb95079b2195c32004697b6547d261458cf7fbdf8f5497881bd6"
+    },
+    {
+      "file": "sources/prior/continuation-contract-finalization/contracts/current/docs/PR_REVIEW_AUTOMATION.md",
+      "bytes": 13586,
+      "sha256": "e8db1d5bd77ee5a9e6e2c96a14f988dd33ab25bdea40c33b19d2028ca30a64cd"
+    },
+    {
+      "file": "sources/prior/continuation-contract-finalization/contracts/current/docs/PR_REVIEW_GATE.md",
+      "bytes": 17392,
+      "sha256": "ce70ad07dced9e63741ceccbd7ae6c0afcd13e6c52d56e34d28dafde4ff608eb"
+    },
+    {
+      "file": "sources/prior/continuation-contract-finalization/contracts/current/docs/V58_MASTER_DEVELOPMENT_REVIEW_PLAN_v1.1.md",
+      "bytes": 39554,
+      "sha256": "8d805875295a623788020d80d7f730f51d93f8a53c9d0ea47c01acb27dff14a9"
+    },
+    {
+      "file": "sources/prior/continuation-contract-finalization/contracts/current/docs/VALIDATION_POLICY.md",
+      "bytes": 10466,
+      "sha256": "d5656cfa60ecd367403985e184cc28dcd0c999f5d982479cda0037e64ea1329b"
+    },
+    {
+      "file": "sources/prior/continuation-contract-finalization/contracts/current/scripts/pr_review_gate.py",
+      "bytes": 26404,
+      "sha256": "aceb552f5c102997e24cedeeb29b720ced08d217681b861ba2c2a7d151fd3c1c"
+    },
+    {
+      "file": "sources/prior/continuation-contract-finalization/contracts/frozen/.github/workflows/ci.yml",
+      "bytes": 4142,
+      "sha256": "7d60ea6996b75cfdcf0f6ad1fc4afcd3f9883a23dfe11497fa26521aaed7ad68"
+    },
+    {
+      "file": "sources/prior/continuation-contract-finalization/contracts/frozen/AGENTS.md",
+      "bytes": 16343,
+      "sha256": "f320b4407c0fe9fb1c21d8083f243f0cccc05da5dee48e2f1ad84bccad9e1b6f"
+    },
+    {
+      "file": "sources/prior/continuation-contract-finalization/contracts/frozen/docs/PR_REVIEW_AUTOMATION.md",
+      "bytes": 13066,
+      "sha256": "5668b7b20e723c6f95b996d7aeb81480e972fe2a232ba08fb9200275233c5e20"
+    },
+    {
+      "file": "sources/prior/continuation-contract-finalization/contracts/frozen/docs/PR_REVIEW_GATE.md",
+      "bytes": 16410,
+      "sha256": "a8db315fe70b2a1210520e3ca847613c228541903a688c0d5702987149e6e984"
+    },
+    {
+      "file": "sources/prior/continuation-contract-finalization/contracts/frozen/docs/V58_MASTER_DEVELOPMENT_REVIEW_PLAN_v1.1.md",
+      "bytes": 38785,
+      "sha256": "e6473d675b1e482515e76832f66fd59f98b558b13ee6537b74f5dc489190fa43"
+    },
+    {
+      "file": "sources/prior/continuation-contract-finalization/contracts/frozen/scripts/pr_review_gate.py",
+      "bytes": 25778,
+      "sha256": "08bd0204ed44be4d7f8d525f0acdc6f7162de05290ba5d570695f043127be526"
+    },
+    {
+      "file": "sources/prior/continuation-contract-finalization/evidence-register.json",
+      "bytes": 57459,
+      "sha256": "23071564d945b37aa48a7b91391d005b458f09b4351acb112ed66317c4178def"
+    },
+    {
+      "file": "sources/prior/continuation-contract-finalization/pr29-body-current.md",
+      "bytes": 44377,
+      "sha256": "85b459b04f9e3f1aa30219cd1106f4e31f432a62488c556b80b128cb7008fd2c"
+    },
+    {
+      "file": "sources/prior/evidence-index.json",
+      "bytes": 65442,
+      "sha256": "c572d6094ba128a861eebd595c63f43d0a8941ca3ada32ea3ba2a1ce963a0579"
+    },
+    {
+      "file": "sources/prior/feature/docs/evidence/review_confirm_benchmark.json",
+      "bytes": 91806,
+      "sha256": "9140792353277a38a6d5cb431add9bbde816cbf9635ed4efcc5627c5e7338f5a"
+    },
+    {
+      "file": "sources/prior/feature/docs/REVIEW_CONFIRM_PERFORMANCE.md",
+      "bytes": 14029,
+      "sha256": "234380f9493a7c2372f5873ea080064715c9ab2d5ffbcedfbf10fe1796c15dee"
+    },
+    {
+      "file": "sources/prior/merge-tree.stdout",
+      "bytes": 369,
+      "sha256": "8ad2b00222e413ef21f4f6a932a0e4f7acd0ef4ca0de329c86eba8a88f1e59c9"
+    },
+    {
+      "file": "sources/prior/PR29_下一步實作指令_待使用者採納.md",
+      "bytes": 17259,
+      "sha256": "527bf1490e2bd5a3daefd5825725c954a55fd9d4b579928d1e59b2664b15bfa1"
+    },
+    {
+      "file": "sources/prior/PR29_接續查核與整合方案.md",
+      "bytes": 27602,
+      "sha256": "f95940def224281f62e6487662f457bd11ba16f4cef24d8751b3bce67ea708aa"
+    },
+    {
+      "file": "sources/prior/remote/all-feature-runs.json",
+      "bytes": 55851,
+      "sha256": "d4b477dbe122078ba182b30897658a5175724b6a7ddac2b28964a640c7435a91"
+    },
+    {
+      "file": "sources/prior/remote/attempt1-job106627336400-annotations.json",
+      "bytes": 448,
+      "sha256": "ebf29e1430774f34b26fb80e6d08e0594c19c0b727914796a7379456c36c4bcd"
+    },
+    {
+      "file": "sources/prior/remote/attempt1-job106627336481-annotations.json",
+      "bytes": 448,
+      "sha256": "ebf29e1430774f34b26fb80e6d08e0594c19c0b727914796a7379456c36c4bcd"
+    },
+    {
+      "file": "sources/prior/remote/attempt1-jobs.json",
+      "bytes": 1842,
+      "sha256": "5152b6d05aba169bc33be9fa9e372f9fadaf362375688b89f57f78ade34dcbfa"
+    },
+    {
+      "file": "sources/prior/remote/attempt1-run.json",
+      "bytes": 13949,
+      "sha256": "d820e741a5572a32849f6e2f089327dcb0c94413ea91d1118c8da4df82df75dd"
+    },
+    {
+      "file": "sources/prior/remote/attempt2-job106630235508-annotations.json",
+      "bytes": 448,
+      "sha256": "ebf29e1430774f34b26fb80e6d08e0594c19c0b727914796a7379456c36c4bcd"
+    },
+    {
+      "file": "sources/prior/remote/attempt2-job106630235654-annotations.json",
+      "bytes": 448,
+      "sha256": "ebf29e1430774f34b26fb80e6d08e0594c19c0b727914796a7379456c36c4bcd"
+    },
+    {
+      "file": "sources/prior/remote/attempt2-jobs.json",
+      "bytes": 1842,
+      "sha256": "5acb964832ef3a311c195eae652cd3fe58b03b8081bdc3c5ceaea745730825db"
+    },
+    {
+      "file": "sources/prior/remote/attempt2-run.json",
+      "bytes": 14043,
+      "sha256": "d9340e850ce254ace5da2e16bf512c5c0f92891cdea841cd8c7bfe26965d8231"
+    },
+    {
+      "file": "sources/prior/remote/attempt3-jobs.json",
+      "bytes": 7560,
+      "sha256": "578e9753e1eb6ac87fa503d156679e6b6c7c1e6802871f432f18faf77a3dd5d7"
+    },
+    {
+      "file": "sources/prior/remote/attempt3-python312.log",
+      "bytes": 47068,
+      "sha256": "1131af2f9b05ca5e06bbd510b599971a5026939d02191bd0404a475e53ced8c7"
+    },
+    {
+      "file": "sources/prior/remote/attempt3-python313.log",
+      "bytes": 63704,
+      "sha256": "e273aa81b236bab7a3403d3dca6eb629f634dbe50d7214aa5d5f4461578aebac"
+    },
+    {
+      "file": "sources/prior/remote/attempt3-run.json",
+      "bytes": 14043,
+      "sha256": "d0d7f7e5e161b0d91dc0af3052350aa6fc4bf9e986f45ceb4a83d7efad1b8779"
+    },
+    {
+      "file": "sources/prior/remote/attempt4-jobs.json",
+      "bytes": 7560,
+      "sha256": "3081f22bb9d40975513242f0f545f8fa53ef2b248ac58da7417c9af8993c8eca"
+    },
+    {
+      "file": "sources/prior/remote/attempt4-python312.log",
+      "bytes": 47069,
+      "sha256": "2f4f1799577979f81ac42cdfbc83c46d9e18b9d828218917556b21b3f1ebbaf5"
+    },
+    {
+      "file": "sources/prior/remote/attempt4-python313.log",
+      "bytes": 47287,
+      "sha256": "388ec201bed5d18e5b9afe70caf947170b7ece0563045c1f9c41a59b224fb208"
+    },
+    {
+      "file": "sources/prior/remote/attempt4-run.json",
+      "bytes": 14043,
+      "sha256": "816100134f788241736d7f133d1ea917dc7238aea7aa418045bef742f3c66c57"
+    },
+    {
+      "file": "sources/prior/remote/connector-ciandcode0.json",
+      "bytes": 49825,
+      "sha256": "b57169949949ff6393e2499359193efdfd885f8e5e8d133ba348e7b6ba5ac983"
+    },
+    {
+      "file": "sources/prior/remote/connector-ciandcode1.json",
+      "bytes": 49609,
+      "sha256": "7559d52cd01ea884ef9c40a8db2182b1068e390005e90334227b705cefb75eaf"
+    },
+    {
+      "file": "sources/prior/remote/connector-more0.json",
+      "bytes": 66997,
+      "sha256": "86220cbc173aa8cf681f9b465eba322d26220f75e68179aa336b909e50d8bbce"
+    },
+    {
+      "file": "sources/prior/remote/connector-more1.json",
+      "bytes": 49608,
+      "sha256": "bb7ff3561f66d59dd8dcb7dfd12bbcfcce0d85a713ef453d82d35b392a1c337a"
+    },
+    {
+      "file": "sources/prior/remote/connector-oldlogs1.json",
+      "bytes": 49836,
+      "sha256": "8d5cb7907d5eede53e714deab17ab95c9932151cdfe3f184e809ed5a3e765c56"
+    },
+    {
+      "file": "sources/prior/remote/connector-oldlogs2.json",
+      "bytes": 49620,
+      "sha256": "e65dc63cafd724fc7d3c570b4f5f5940e88e355bd21f6e7c3eb2b5c672fc7173"
+    },
+    {
+      "file": "sources/prior/remote/connector-oldlogs3.json",
+      "bytes": 44324,
+      "sha256": "603e5b8e18bd8775699cfdc3d3673ec7121aab6114c40eb8839ae4592da05738"
+    },
+    {
+      "file": "sources/prior/remote/connector-oldlogs4.json",
+      "bytes": 44108,
+      "sha256": "99933f52270dbf0cb948dd02206218a9bb08b5ae9cd26ea0ac65c7a464018f05"
+    },
+    {
+      "file": "sources/prior/remote/connector-oldlogs5.json",
+      "bytes": 99273,
+      "sha256": "4039b62d6e9687ba0d9edcf3d05898b3e0bf83d86ff08e696e4c3f6be78358ad"
+    },
+    {
+      "file": "sources/prior/remote/connector-oldlogs6.json",
+      "bytes": 53268,
+      "sha256": "9b2b1f0f9dec5516c58c6fb65c8eecefae994ac1a22e394fae476255ce19c5a8"
+    },
+    {
+      "file": "sources/prior/remote/historical-attempt4-jobs.json",
+      "bytes": 7560,
+      "sha256": "3081f22bb9d40975513242f0f545f8fa53ef2b248ac58da7417c9af8993c8eca"
+    },
+    {
+      "file": "sources/prior/remote/historical-run-35681281816-jobs.json",
+      "bytes": 7561,
+      "sha256": "3f4ce2e88b978291aa0f95b79cac7926ff9a35c890549418725248562eaa54fd"
+    },
+    {
+      "file": "sources/prior/remote/historical-run-35686446386-jobs.json",
+      "bytes": 7569,
+      "sha256": "5983c3450fd195f69ad72207e33cbe3d4a49455cf84a50d577529769ec5695dd"
+    },
+    {
+      "file": "sources/prior/remote/historical-run-35688006786-jobs.json",
+      "bytes": 7561,
+      "sha256": "5ae9de0fbeead46bb1f281a4ea33602c4c5399a7d587649bcd0fe0687eeab5ac"
+    },
+    {
+      "file": "sources/prior/remote/historical-run.json",
+      "bytes": 14021,
+      "sha256": "f85928548c0f13e7314073ccd8281d7758f1bdad45f9d7a6ea08d8b3fe837ada"
+    },
+    {
+      "file": "sources/prior/remote/job-106598564548.log",
+      "bytes": 94598,
+      "sha256": "a68c2a8d3529bd402c9532c8df8fcb6247b9d488b0607066d9ae698212e06b23"
+    },
+    {
+      "file": "sources/prior/remote/job-106598564776.log",
+      "bytes": 50543,
+      "sha256": "9ec9c844455179b5f266836abe181a208aaf8c60fea13d5d92ee9bcbf73cb353"
+    },
+    {
+      "file": "sources/prior/remote/job-106614185199.log",
+      "bytes": 42219,
+      "sha256": "a83936a12ca5f1eef8b90355379229456fe8eacb100c608e4947ba3454183010"
+    },
+    {
+      "file": "sources/prior/remote/job-106614185314.log",
+      "bytes": 42001,
+      "sha256": "873f9ee83a4a7944f637d8e81cf432a8f305761d67b9d9527d59e5dcee6c9aea"
+    },
+    {
+      "file": "sources/prior/remote/job-106618864571.log",
+      "bytes": 47298,
+      "sha256": "8aa10d445bdc8bef02ee20f80dbd9ec18d1e74e50582936d0f0a95950e02f6a4"
+    },
+    {
+      "file": "sources/prior/remote/job-106618864669.log",
+      "bytes": 47080,
+      "sha256": "52ee0a8ab2f44f5d2463b50ff2e00930b2107c058d5bbb9e228361172e8e4fd1"
+    },
+    {
+      "file": "user-adopted-contract.md",
+      "bytes": 6864,
+      "sha256": "53790b7433d64197d046dbaad0e61c6ebb0ad5775a1d5ad3ec36e142371a0b26"
+    },
+    {
+      "file": "user-adopted-contract.source.json",
+      "bytes": 698,
+      "sha256": "4f4a4c46265dc207585d44d2af57856510ab2433c9a70b4b8fc3686470bf8679"
+    }
+  ],
+  "no_current_candidate_pass": true
+}

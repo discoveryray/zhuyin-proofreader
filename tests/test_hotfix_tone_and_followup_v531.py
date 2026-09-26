@@ -60,7 +60,7 @@ class ExpectedResolutionFollowupTests(unittest.TestCase):
         app.staging_summary = {"staged_group_count": 0, "staging_error": ""}
         app.staged_checked_occurrence_ids = set()
 
-        def save_event(_entry, _event):
+        def save_event(_entry, _event, *, explain_expected=False):
             app._last_event_saved = True
             # A saved PASS entry still exists even after leaving the pending list.
             app.last_saved_expected = updated_entry if updated_entry is not None else {
@@ -68,6 +68,10 @@ class ExpectedResolutionFollowupTests(unittest.TestCase):
             }
             app._last_event_refreshed = refresh_succeeded
             app.records = [updated_entry] if updated_entry is not None else []
+            # Model the asynchronous completion callback: followup belongs to
+            # the published result, and must retain the failed-refresh guard.
+            if explain_expected:
+                app._explain_saved_expected(_entry)
 
         app.save_event = save_event
         app._confirm_calls = []
