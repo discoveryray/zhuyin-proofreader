@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import threading
 from pathlib import Path
 from unittest.mock import patch
 
@@ -225,6 +226,47 @@ def test_repeated_character_requires_its_own_position(tmp_path):
     portable.import_project_decisions(source, target)
     events = sp.json_load_strict(target / "人工判定資料庫.json")["events"]
     assert list(events) == [target_manifest["records"][1]["review_id"]]
+
+
+def test_concurrent_save_is_retained_during_explicit_import(tmp_path):
+    first, second = tmp_path / "first.pdf", tmp_path / "second.pdf"
+    pdf(first, title="A")
+    pdf(second, title="B")
+    source, target = tmp_path / "source", tmp_path / "target"
+    project(source, first, session="source", event_positions=(0,))
+    target_manifest, _ = project(target, second, session="target")
+    entered, proceed = threading.Event(), threading.Event()
+    real_map = portable._map_reviews
+    result, errors = [], []
+
+    def paused_map(*args):
+        mapped = real_map(*args)
+        entered.set()
+        assert proceed.wait(10)
+        return mapped
+
+    def importer():
+        try:
+            result.append(portable.import_project_decisions(source, target))
+        except Exception as exc:
+            errors.append(exc)
+
+    with patch.object(portable, "_map_reviews", side_effect=paused_map):
+        thread = threading.Thread(target=importer)
+        thread.start()
+        try:
+            assert entered.wait(10)
+            ReviewSaveService(target).save_event(
+                target_manifest["records"][1]["review_id"],
+                {"action": "確認非校對範圍", "exclusion_reason": "different visual position",
+                 "exclusion_evidence": "PDF page 1, position 2"},
+            )
+        finally:
+            proceed.set()
+            thread.join(10)
+    assert not thread.is_alive() and not errors
+    assert result[0]["imported"] == 1
+    assert len(sp.json_load_strict(target / "人工判定資料庫.json")["events"]) == 2
 
 
 def test_different_pdf_object_storage_and_identity_mapping(tmp_path):
@@ -483,6 +525,38 @@ def test_two_independent_projects_merge_in_new_project_and_preserve_sources(tmp_
     assert (first / "人工判定資料庫.json").read_bytes() == original_a
     assert (second / "人工判定資料庫.json").read_bytes() == original_b
     assert not (merged / portable.INCOMPLETE_FILE).exists()
+
+
+def test_same_decision_from_two_sources_keeps_both_exact_identities(tmp_path):
+    files = [tmp_path / f"{letter}.pdf" for letter in "ABC"]
+    for letter, path in zip("ABC", files):
+        pdf(path, title=letter)
+    first, second, merged = [tmp_path / name for name in ("first", "second", "merged")]
+    first_manifest, _ = project(first, files[0], session="A", event_positions=(0,))
+    second_manifest, _ = project(second, files[1], session="B", event_positions=(0,))
+
+    def build_target(paths, output_dir):
+        project(output_dir, files[2], session="C")
+
+    with patch.object(sp, "run_pipeline_pdfs", side_effect=build_target):
+        result = portable.merge_projects([first, second], files[2], merged)
+    assert result["sources"][1]["duplicates"] == 1
+    target_db = sp.json_load_strict(merged / "人工判定資料庫.json")
+    event = next(iter(target_db["events"].values()))
+    primary = event["portability_source"]
+    duplicate = event["portability_duplicate_sources"]
+    assert (primary["session_id"], primary["pdf_sha256"], primary["occurrence_id"], primary["review_id"]) == (
+        "A", sha(files[0]), first_manifest["records"][0]["occurrence_id"],
+        first_manifest["records"][0]["review_id"],
+    )
+    assert len(duplicate) == 1
+    assert (duplicate[0]["session_id"], duplicate[0]["pdf_sha256"],
+            duplicate[0]["occurrence_id"], duplicate[0]["review_id"]) == (
+        "B", sha(files[1]), second_manifest["records"][0]["occurrence_id"],
+        second_manifest["records"][0]["review_id"],
+    )
+    assert portable.import_project_decisions(second, merged)["duplicates"] == 1
+    assert sp.json_load_strict(merged / "人工判定資料庫.json") == target_db
 
 
 def test_two_sources_keep_both_actual_staging_originals_without_promotion(tmp_path, monkeypatch):

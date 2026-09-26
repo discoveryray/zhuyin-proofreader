@@ -246,7 +246,23 @@ def _map_reviews(source_manifest: Mapping[str, Any], target_manifest: Mapping[st
 
 
 def _event_payload(event: Mapping[str, Any]):
-    return {key: value for key, value in event.items() if key != "portability_source"}
+    return {key: value for key, value in event.items()
+            if key not in {"portability_source", "portability_duplicate_sources"}}
+
+
+def _source_identity(source_manifest, source, source_id, target_manifest, target, event):
+    return {
+        "session_id": source_manifest["session_id"],
+        "pdf_sha256": source["pdf_sha256"],
+        "occurrence_id": source["occurrence_id"],
+        "review_id": source_id,
+        "target_session_id": target_manifest["session_id"],
+        "target_pdf_sha256": target["pdf_sha256"],
+        "target_occurrence_id": target["occurrence_id"],
+        "target_review_id": target["review_id"],
+        "prior": copy.deepcopy(event.get("portability_source")),
+        "prior_duplicate_sources": copy.deepcopy(event.get("portability_duplicate_sources", [])),
+    }
 
 
 def _mapped_occurrence_overrides(source_dir: Path, source_manifest, target_manifest, reviews):
@@ -323,7 +339,7 @@ def import_project_decisions(source_dir: Path, target_dir: Path) -> dict[str, An
     if source_dir == target_dir:
         raise ValueError("來源與目標專案必須不同")
     source_manifest, source_db = _load_project(source_dir)
-    target_manifest, target_db = _load_project(target_dir)
+    target_manifest, _ = _load_project(target_dir)
     source_actual = _actual_transfer_state(source_dir, source_manifest)
     _actual_transfer_state(target_dir, target_manifest)
     proof = _load_proof(source_dir, source_manifest)
@@ -346,56 +362,60 @@ def import_project_decisions(source_dir: Path, target_dir: Path) -> dict[str, An
                 f"來源有已保存 occurrence-local actual 判定，目標缺少 {len(absent)} 筆、"
                 f"衝突 {len(different)} 筆；需先在隔離的新接續專案安全重建 actual，未匯入任何判定"
             )
-    candidate = copy.deepcopy(target_db)
-    imported, duplicates, conflicts = 0, 0, []
-    for source_id, event in source_db["events"].items():
-        if source_id not in reviews:
-            raise ValueError(f"來源 event 無法對應 occurrence：{source_id}")
-        source, target = reviews[source_id]
-        target_id = target["review_id"]
-        current = candidate["events"].get(target_id)
-        if current is not None:
-            if _event_payload(current) == _event_payload(event):
-                duplicates += 1
-            else:
-                conflicts.append({"source_review_id": source_id, "target_review_id": target_id})
-            continue
-        transferred = copy.deepcopy(event)
-        transferred["portability_source"] = {
-            "session_id": source_manifest["session_id"],
-            "pdf_sha256": source["pdf_sha256"],
-            "occurrence_id": source["occurrence_id"],
-            "review_id": source_id,
-            "target_session_id": target_manifest["session_id"],
-            "target_pdf_sha256": target["pdf_sha256"],
-            "target_occurrence_id": target["occurrence_id"],
-            "target_review_id": target_id,
-            "prior": copy.deepcopy(event.get("portability_source")),
-        }
-        candidate["events"][target_id] = transferred
-        imported += 1
-    # Existing replay validators are the final authority. A changed actual or
-    # expected lane can invalidate a conclusion, but may never be guessed valid.
-    ledger = sp.materialize_ledger(target_manifest, candidate)
-    invalid = [entry["review_id"] for entry in ledger if entry.get("review_event_replay_status")]
-    if invalid:
-        raise ValueError(f"目標 actual/expected 證據已改變，判定不能直接沿用：{invalid[:10]}")
-    if source_actual["staging"]["staged_groups"]:
-        # This is a read-only receipt. Staged checked IDs cannot be turned into
-        # target direct visual checks: doing so would mint an independent Global
-        # admission without anyone inspecting the local PDF. The normal actual
-        # review UI must perform a new visual check on the target project.
-        source_receipt = {
-            **source_actual,
-            "target_session_id": target_manifest["session_id"],
-            "source_pdf_sha256": [info["pdf_sha256"] for info in source_manifest["pdfs"]],
-            "mapped_occurrences": {
-                source["occurrence_id"]: target["occurrence_id"]
-                for source, target in reviews.values()
-            },
-        }
-        receipt_path = target_dir / PENDING_ACTUAL_FILE
-        with sp.project_delivery_lock(sp.project_actual_evidence_root(target_dir)):
+    # The same project lock protects the read, replay check, candidate and
+    # compare-and-swap write. A concurrent ReviewSaveService save is therefore
+    # included in the candidate rather than lost by a stale earlier read.
+    with sp.project_delivery_lock(sp.project_actual_evidence_root(target_dir)):
+        live_manifest = sp.json_load_strict(target_dir / "校對工作階段.json")
+        sp.validate_manifest_integrity(live_manifest)
+        if live_manifest["manifest_integrity_sha256"] != target_manifest["manifest_integrity_sha256"]:
+            raise ValueError("目標工作階段於內容對應後已變動；未匯入")
+        path = target_dir / "人工判定資料庫.json"
+        before = _sha(path)
+        target_db = sp.normalize_db(sp.json_load_strict(path))
+        candidate = copy.deepcopy(target_db)
+        imported, duplicates, provenance_updates, conflicts = 0, 0, 0, []
+        for source_id, event in source_db["events"].items():
+            if source_id not in reviews:
+                raise ValueError(f"來源 event 無法對應 occurrence：{source_id}")
+            source, target = reviews[source_id]
+            target_id = target["review_id"]
+            current = candidate["events"].get(target_id)
+            identity = _source_identity(source_manifest, source, source_id, target_manifest, target, event)
+            if current is not None:
+                if _event_payload(current) == _event_payload(event):
+                    duplicates += 1
+                    known = [current.get("portability_source"),
+                             *current.get("portability_duplicate_sources", [])]
+                    if identity not in known:
+                        current.setdefault("portability_duplicate_sources", []).append(identity)
+                        provenance_updates += 1
+                else:
+                    conflicts.append({"source_review_id": source_id, "target_review_id": target_id})
+                continue
+            transferred = copy.deepcopy(event)
+            transferred["portability_source"] = identity
+            candidate["events"][target_id] = transferred
+            imported += 1
+        # Existing replay validators are the final authority. A changed actual
+        # or expected lane can invalidate a conclusion, never guessed valid.
+        ledger = sp.materialize_ledger(target_manifest, candidate)
+        invalid = [entry["review_id"] for entry in ledger if entry.get("review_event_replay_status")]
+        if invalid:
+            raise ValueError(f"目標 actual/expected 證據已改變，判定不能直接沿用：{invalid[:10]}")
+        if source_actual["staging"]["staged_groups"]:
+            # A receipt preserves original staging only. It never becomes a
+            # fresh target direct visual check or a Global quorum vote.
+            source_receipt = {
+                **source_actual,
+                "target_session_id": target_manifest["session_id"],
+                "source_pdf_sha256": [info["pdf_sha256"] for info in source_manifest["pdfs"]],
+                "mapped_occurrences": {
+                    source["occurrence_id"]: target["occurrence_id"]
+                    for source, target in reviews.values()
+                },
+            }
+            receipt_path = target_dir / PENDING_ACTUAL_FILE
             existing = (sp.json_load_strict(receipt_path) if receipt_path.exists()
                         else {"status": "RECHECK_LOCAL_PDF_REQUIRED", "sources": []})
             if (existing.get("status") != "RECHECK_LOCAL_PDF_REQUIRED"
@@ -414,14 +434,10 @@ def import_project_decisions(source_dir: Path, target_dir: Path) -> dict[str, An
                     "status": "RECHECK_LOCAL_PDF_REQUIRED",
                     "sources": [*sources, source_receipt],
                 }, expected_sha256=_sha(receipt_path) if receipt_path.exists() else None)
-    if imported:
-        path = target_dir / "人工判定資料庫.json"
-        before = _sha(path)
-        with sp.project_delivery_lock(sp.project_actual_evidence_root(target_dir)):
-            if _sha(path) != before:
-                raise ValueError("目標判定資料庫已變動；未覆寫")
+        if imported or provenance_updates:
             sp.json_save(path, candidate, expected_sha256=before)
     return {"imported": imported, "duplicates": duplicates, "conflicts": conflicts,
+            "provenance_updates": provenance_updates,
             "matched_actual_overrides": len(mapped_overrides),
             "actual_staging": source_actual["status"],
             "source_session_id": source_manifest["session_id"],
