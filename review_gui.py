@@ -1092,9 +1092,13 @@ class ReviewApp:
                 dict(self._character_order) if hasattr(self, "_character_order") else None)
 
     def _set_actionable_records_from_ledger(self, ledger, *, advance_from=None):
-        from pdf_portability import actual_excel_conflict_state
-        self.actual_excel_conflict_review_ids = set(actual_excel_conflict_state(
-            self.output_dir, self.manifest, self.db))
+        if hasattr(self, "output_dir") and hasattr(self, "db"):
+            from pdf_portability import actual_excel_conflict_state
+            self.actual_excel_conflict_review_ids = set(actual_excel_conflict_state(
+                self.output_dir, self.manifest, self.db))
+        else:
+            # Pure queue/navigation fixtures have no persisted project to read.
+            self.actual_excel_conflict_review_ids = set()
         manifest, previous, index, deferred, character_order = self._queue_inputs()
         prepared = prepare_review_queue(manifest, ledger, previous, index,
                                         self.staged_checked_occurrence_ids, deferred,
@@ -1369,6 +1373,7 @@ class ReviewApp:
         completed = queue.Queue(maxsize=1)
         service = self._save_service
         manifest, previous, index, deferred, character_order = self._queue_inputs()
+        actual_conflict_review_ids = set(getattr(self, "actual_excel_conflict_review_ids", set()))
 
         def worker():
             result = prepared = error = None
@@ -1380,7 +1385,7 @@ class ReviewApp:
                     manifest, result.ledger, previous, index,
                     set(result.staging_summary.get("staged_checked_occurrence_ids") or []),
                     deferred, character_order, advance_from=request["review_id"],
-                    actual_conflict_review_ids=self.actual_excel_conflict_review_ids)
+                    actual_conflict_review_ids=actual_conflict_review_ids)
                 result.timings["todo_update"] = time.perf_counter() - queue_started
             except Exception as exc:
                 error = exc

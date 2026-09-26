@@ -14,6 +14,7 @@ import subprocess
 import sys
 from collections import Counter, defaultdict
 from datetime import datetime
+from functools import wraps
 from pathlib import Path
 from typing import Any, Mapping
 from uuid import uuid4
@@ -3033,20 +3034,18 @@ def _friendly_issue(entry: Mapping[str, Any]) -> tuple[str, str]:
         return friendly_state(state), "這是程式／資料完整性問題，先修復後再繼續校對。"
     return friendly_state(state), "保留待處理。"
 
+def _serialized_report_publication(render):
+    @wraps(render)
+    def serialized(output_dir, manifest, db, *, runtime_root=None):
+        # Conflict receipt and completion report share one publication lock.
+        # This project lock is reentrant during local visual refresh/recovery.
+        with project_delivery_lock(project_actual_evidence_root(output_dir)):
+            return render(output_dir, manifest, db, runtime_root=runtime_root)
+    return serialized
+
+
+@_serialized_report_publication
 def generate_report(
-    output_dir: Path,
-    manifest: dict[str, Any],
-    db: dict[str, Any],
-    *,
-    runtime_root: Path | None = None,
-) -> Path:
-    # The conflict receipt and completion report are one publication boundary.
-    # The delivery lock is reentrant for local visual actual refresh/recovery.
-    with project_delivery_lock(project_actual_evidence_root(output_dir)):
-        return _generate_report_locked(output_dir, manifest, db, runtime_root=runtime_root)
-
-
-def _generate_report_locked(
     output_dir: Path,
     manifest: dict[str, Any],
     db: dict[str, Any],
