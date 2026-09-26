@@ -4544,13 +4544,34 @@ def main():
     ap.add_argument("--export-actual-gpt",action="store_true",help="輸出 actual 字形待判定 GPT 包")
     ap.add_argument("--import-actual-gpt",help="匯入 GPT 已填寫的 actual待判定_給GPT.xlsx，驗證後自動重新解碼")
     ap.add_argument("--refresh-actual",action="store_true",help="依目前 user actual 證據重新解碼現有工作階段")
+    ap.add_argument("--prepare-portable",action="store_true",help="原 PDF 仍可讀時建立跨電腦全頁內容證據")
+    ap.add_argument("--continue-from-project",help="以來源專案與當地 PDF 建立新的接續專案")
+    ap.add_argument("--merge-with-project",help="接續時一併匯入另一來源專案，原兩專案均不修改")
+    ap.add_argument("--local-pdf",help="跨電腦接續時指定當地下載的 PDF")
+    ap.add_argument("--import-project-decisions",help="從另一個完整專案匯入已保存判定")
     args=ap.parse_args()
-    if args.report_only or args.repair_project or args.export_gpt or args.import_gpt or args.import_gpt_auto or args.export_actual_gpt or args.import_actual_gpt or args.refresh_actual:
+    if args.report_only or args.repair_project or args.export_gpt or args.import_gpt or args.import_gpt_auto or args.export_actual_gpt or args.import_actual_gpt or args.refresh_actual or args.prepare_portable or args.continue_from_project or args.import_project_decisions:
         if not args.output_dir: raise SystemExit("此操作需要 -o 輸出資料夾")
+        if args.continue_from_project:
+            if not args.local_pdf:
+                raise SystemExit("跨電腦接續需要 --local-pdf 明確指定當地 PDF")
+            from pdf_portability import merge_projects
+            sources = [Path(args.continue_from_project)]
+            if args.merge_with_project:
+                sources.append(Path(args.merge_with_project))
+            print(json.dumps(merge_projects(sources, Path(args.local_pdf), Path(args.output_dir)), ensure_ascii=False))
+            return 0
         requested_outdir = Path(args.output_dir)
         outdir = resolve_existing_project_dir(requested_outdir)
         if outdir != requested_outdir:
             print(f"[專案路徑修正] {requested_outdir} -> {outdir}", flush=True)
+        if args.prepare_portable:
+            from pdf_portability import prepare_portable_project
+            print(prepare_portable_project(outdir)); return 0
+        if args.import_project_decisions:
+            from pdf_portability import import_project_decisions
+            print(json.dumps(import_project_decisions(Path(args.import_project_decisions), outdir), ensure_ascii=False))
+            return 0
         if args.repair_project:
             print(repair_project_state(outdir)); return 0
         if args.export_actual_gpt:

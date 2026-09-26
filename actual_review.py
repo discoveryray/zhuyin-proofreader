@@ -721,10 +721,16 @@ def _restore_dynamic_actual_evidence(backups: Mapping[Path, bytes | None]) -> No
             path.write_bytes(data)
 
 
-def validate_dynamic_actual_evidence(root: Path) -> dict[str, Any]:
+def validate_dynamic_actual_evidence(root: Path, *, read_only: bool = False) -> dict[str, Any]:
     assert_project_actual_readable(root)
     root = Path(root)
-    ensure_user_evidence_files(root)
+    if read_only:
+        required = (USER_GLYF_FILE, USER_CFF_FILE, GLYPH_CONFLICT_FILE, GLYPH_PROVENANCE_FILE)
+        missing = [name for name in required if not (root / name).is_file()]
+        if missing:
+            raise ValueError(f"來源動態 actual 證據缺失，不能只讀驗證：{missing}")
+    else:
+        ensure_user_evidence_files(root)
     result = {"ok": True, "errors": [], "hashes": {}}
     specs = [
         (OCCURRENCE_OVERRIDE_FILE, OVERRIDE_HEADERS),
@@ -1022,6 +1028,7 @@ def dynamic_actual_hashes(
     *,
     pdf_path: Path | None = None,
     dependencies: Mapping[str, Any] | None = None,
+    read_only: bool = False,
 ) -> dict[str, str]:
     """Hash dynamic actual evidence, optionally scoped to one PDF's dependencies.
 
@@ -1031,7 +1038,7 @@ def dynamic_actual_hashes(
     preserves fail-closed fingerprints while avoiding whole-project cache
     invalidation after an unrelated correction.
     """
-    report = validate_dynamic_actual_evidence(root)
+    report = validate_dynamic_actual_evidence(root, read_only=read_only)
     if not report.get("ok"):
         raise ValueError("動態 actual 證據檔驗證失敗：" + "；".join(report.get("errors") or []))
     if pdf_path is None:

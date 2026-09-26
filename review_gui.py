@@ -950,6 +950,8 @@ class ReviewApp:
     def __init__(self, root, output_dir: Path):
         self.root = root
         self.output_dir = output_dir
+        if (output_dir / "跨電腦接續未完成.json").exists():
+            raise ValueError("跨電腦接續未完成：不能在部分建立的目標專案保存判定")
         self.manifest = json_load_strict(output_dir / "校對工作階段.json")
         validate_manifest_integrity(self.manifest)
         validate_output_artifact_hashes(self.manifest)
@@ -1047,6 +1049,20 @@ class ReviewApp:
 
         self.reload_records()
         self.show()
+        if (output_dir / "來源actual待重新核對.json").exists():
+            messagebox.showwarning(
+                "來源 actual 暫存待重新核對",
+                "來源專案的 actual 暫存與原始識別已保存，但沒有套用到當地 PDF。"
+                "請依當地原頁重新核對；搬移/匯入不算新的獨立 Global 人工證據。",
+                parent=self.root,
+            )
+        if (output_dir / "跨專案判定衝突.json").exists():
+            messagebox.showwarning(
+                "跨專案判定衝突",
+                "同位置不同判定沒有自動覆寫。來源與目標原資料均保留，"
+                "請查看專案詳細資訊並回原頁人工核對衝突。",
+                parent=self.root,
+            )
         if not self.records:
             title, detail, _primary_text = self._empty_actionable_state()
             messagebox.showinfo(title, detail, parent=self.root)

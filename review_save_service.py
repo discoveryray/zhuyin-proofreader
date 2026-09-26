@@ -201,6 +201,8 @@ class ReviewSaveService:
             self._lock.release()
 
     def _save(self, review_id, event, expected_manifest, expected_db):
+        if (self.output_dir / "跨電腦接續未完成.json").exists():
+            raise StaleReviewProjectError("跨電腦接續未完成；未保存人工判定")
         started = time.perf_counter()
         timings = {}
         manifest_path = self.output_dir / "校對工作階段.json"
