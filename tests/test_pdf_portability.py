@@ -428,6 +428,82 @@ def test_different_sha_same_pages_a_to_b_to_a_with_reopen(tmp_path):
     assert len(sp.materialize_ledger(a_manifest, reopened)) == 2
 
 
+@pytest.mark.parametrize("action,difference", [
+    ("解決expected證據", "reading"), ("補建expected證據", "reading"),
+    ("解決expected證據", "evidence"), ("補建expected證據", "evidence"),
+    ("解決expected證據", "context"), ("補建expected證據", "context"),
+])
+def test_project_transfer_preserves_formal_target_expected(tmp_path, action, difference):
+    a_pdf, b_pdf = tmp_path / "A.pdf", tmp_path / "B.pdf"
+    pdf(a_pdf, title="A")
+    pdf(b_pdf, title="B")
+    assert sha(a_pdf) != sha(b_pdf)
+    source, target = tmp_path / "source", tmp_path / "target"
+    source_manifest, source_db = project(source, a_pdf, session="A", event_positions=(0,))
+    target_manifest, target_db = project(target, b_pdf, session="B")
+    source_event = source_db["events"][source_manifest["records"][0]["review_id"]]
+    source_event["action"] = action
+    sp.json_save(source / "人工判定資料庫.json", source_db)
+    entry = target_manifest["records"][0]
+    entry.update(state="DIFFERENCE_PENDING_CONFIRMATION" if difference == "reading" else "PASS",
+                 expected_status="RESOLVED",
+                 expected_set=["ㄐㄩㄝˇ"] if difference == "reading" else ["ㄐㄩㄝˊ"],
+                 expected_evidence="B independent rule" if difference == "evidence" else "現版手冊",
+                 context_evidence="B independent context" if difference == "context" else "角色/角@1")
+    sp.seal_manifest(target_manifest)
+    sp.json_save(target / "校對工作階段.json", target_manifest)
+    watched = [target / name for name in ("校對工作階段.json", "人工判定資料庫.json",
+                                         portable.INCOMPLETE_FILE, portable.CONFLICT_FILE,
+                                         "待人工確認.json", "注音校對_最終報告.xlsx", "pipeline_status.json")]
+    before = {path: path.read_bytes() if path.exists() else None for path in watched}
+    before_entry = sp.materialize_ledger(target_manifest, target_db)[0]
+    with pytest.raises(ValueError, match="正式 expected|獨立 expected"):
+        portable.import_project_decisions(source, target)
+    assert {path: path.read_bytes() if path.exists() else None for path in watched} == before
+    after_entry = sp.materialize_ledger(target_manifest, sp.json_load_strict(target / "人工判定資料庫.json"))[0]
+    assert (after_entry["state"], after_entry["expected_set"], after_entry["expected_evidence"],
+            after_entry["context_evidence"]) == (
+                before_entry["state"], before_entry["expected_set"], before_entry["expected_evidence"],
+                before_entry["context_evidence"])
+
+
+@pytest.mark.parametrize("same_decision", [True, False])
+def test_project_transfer_keeps_prior_human_expected_duplicate_or_conflict(tmp_path, same_decision):
+    a_pdf, b_pdf = tmp_path / "A.pdf", tmp_path / "B.pdf"
+    pdf(a_pdf, title="A")
+    pdf(b_pdf, title="B")
+    source, target = tmp_path / "source", tmp_path / "target"
+    source_manifest, source_db = project(source, a_pdf, session="A", event_positions=(0,))
+    source_event = source_db["events"][source_manifest["records"][0]["review_id"]]
+    source_event["action"] = "解決expected證據"
+    sp.json_save(source / "人工判定資料庫.json", source_db)
+    target_manifest, target_db = project(target, b_pdf, session="B")
+    entry = target_manifest["records"][0]
+    entry.update(state="DIFFERENCE_PENDING_CONFIRMATION", expected_status="RESOLVED",
+                 expected_set=["ㄐㄩㄝˇ"], expected_evidence="B independent rule",
+                 context_evidence="角色/角@1")
+    sp.seal_manifest(target_manifest)
+    sp.json_save(target / "校對工作階段.json", target_manifest)
+    target_id = entry["review_id"]
+    target_db["events"][target_id] = {
+        "action": "解決expected證據", "expected_set": ["ㄐㄩㄝˊ" if same_decision else "ㄐㄩㄝˋ"],
+        "expected_evidence": "現版手冊", "context_evidence": "角色/角@1",
+    }
+    sp.json_save(target / "人工判定資料庫.json", target_db)
+    result = portable.import_project_decisions(source, target)
+    db = sp.json_load_strict(target / "人工判定資料庫.json")
+    if same_decision:
+        assert result["duplicates"] == 1 and not result["conflicts"]
+        assert db["events"][target_id]["expected_set"] == ["ㄐㄩㄝˊ"]
+        assert len(db["events"][target_id]["portability_duplicate_sources"]) == 1
+    else:
+        assert len(result["conflicts"]) == 1
+        assert target_id not in db["events"]
+        receipt = sp.json_load_strict(target / portable.CONFLICT_FILE)
+        assert receipt["conflicts"][0]["target_event"]["expected_set"] == ["ㄐㄩㄝˋ"]
+        assert receipt["conflicts"][0]["source_event"]["expected_set"] == ["ㄐㄩㄝˊ"]
+
+
 @pytest.mark.parametrize("change", ["text", "picture", "zhuyin"])
 def test_same_filename_different_content_rejected(tmp_path, change):
     left, right = tmp_path / "left", tmp_path / "right"

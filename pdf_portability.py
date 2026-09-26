@@ -769,6 +769,15 @@ def _restore_exact_file(path: Path, original: bytes | None) -> None:
         Path(temporary).unlink(missing_ok=True)
 
 
+def _require_transferable_expected_lane(action: str, target, prior_event, label: str) -> None:
+    """An imported expected event cannot become B's independent resolver truth."""
+    import standalone_proofread as sp
+
+    if (action in {"補建expected證據", "解決expected證據"}
+            and not prior_event and sp.infer_expected_status(target) == "RESOLVED"):
+        raise ValueError(f"{label}目標已有正式 expected；保留雙方獨立證據，須在目標明確裁決")
+
+
 def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False):
     """Import filled expected rows after full-page and occurrence-local mapping."""
     import standalone_proofread as sp
@@ -839,11 +848,7 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
                     source.get(key) != target.get(key) for key in
                     ("actual", "actual_evidence", "expected_set", "expected_evidence", "context_evidence")):
                 raise ValueError(f"Excel row {number} 目標當前 actual/expected 證據不同；六個確認 gate 不可沿用")
-        if not prior_event and expected_only and sp.infer_expected_status(target) == "RESOLVED":
-            # A separate session may not replace B's independent resolver truth,
-            # even when the reading matches: the evidence or pending comparison
-            # could change, and a new event would outlive B's future resolver.
-            raise ValueError(f"Excel row {number} 目標已有正式 expected；保留雙方獨立證據，須在目標明確裁決")
+        _require_transferable_expected_lane(action, target, prior_event, f"Excel row {number} ")
         event = {
             "action": action, "expected_set": str(row.get("proposed_expected_set") or "").strip(),
             "expected_evidence": str(row.get("proposed_expected_evidence") or "").strip(),
@@ -1674,6 +1679,8 @@ def import_project_decisions(source_dir: Path, target_dir: Path, *,
             target_id = target["review_id"]
             current = candidate["events"].get(target_id)
             identity = _source_identity(source_manifest, source, source_id, target_manifest, target, event)
+            _require_transferable_expected_lane(event.get("action"), target_current[target_id],
+                                                current, f"來源判定 {source_id} ")
             _validate_project_confirmation_transfer(
                 event, source_current[source_id], target_current[target_id])
             transferred = _transfer_event(event, source, target)
