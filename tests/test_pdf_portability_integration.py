@@ -19,6 +19,7 @@ import pdf_portability as portability
 import review_gui
 import standalone_proofread as sp
 import occurrence_ledger as ol
+import actual_review as ar
 from review_display import occurrence_preview
 from review_save_service import ReviewSaveService
 from tests.test_project_repair_integration_v562 import ACTUAL_COLUMNS, EXCLUDED_COLUMNS
@@ -129,6 +130,45 @@ def test_full_pipeline_different_sha_continues_and_returns(tmp_path, monkeypatch
         assert (a / "注音校對_最終報告.xlsx").is_file()
         assert sp.json_load_strict(a / "pipeline_status.json")["user_report"] == str(a / "注音校對_最終報告.xlsx")
         assert len(sp.materialize_ledger(a_manifest, sp.json_load_strict(a / "人工判定資料庫.json"))) == 2
+    assert not list((tmp_path / "isolated-localappdata").rglob("*.sqlite*"))
+
+
+def test_real_pipeline_actual_override_refresh_publishes_current_manifest(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
+    first, second = _pdfs(tmp_path)
+    a, b = tmp_path / "source", tmp_path / "continued"
+    with patch.object(sp, "decode", side_effect=_synthetic_decode), \
+         patch.object(sp, "actual_workbook_global_exact_dependencies", return_value=()), \
+         patch("check_pronunciation_candidates.actual_workbook_global_exact_dependencies", return_value=()):
+        sp.run_pipeline_pdfs([first], a, defer_excel_reports=True)
+        original = sp.json_load_strict(a / "校對工作階段.json")
+        entry = original["records"][0]
+        key = ar._override_key_from_entry(entry)
+        fields = ("pdf_contains", "pdf_excludes", "page", "target_char", "stable_key", "x0", "y0")
+        override = dict(zip(fields, key)) | {
+            "actual_reading": "ㄐㄩㄝˊ", "source": "source direct visual", "note": "verified page 1",
+        }
+        ar._write_csv(sp.project_actual_evidence_root(a) / ar.OCCURRENCE_OVERRIDE_FILE,
+                      ar.OVERRIDE_HEADERS, [override])
+        sp.refresh_actual_project(a)
+        refreshed = sp.json_load_strict(a / "校對工作階段.json")
+        assert refreshed["session_id"] == original["session_id"]
+        portability.prepare_portable_project(a)
+        first.rename(tmp_path / "source-away.pdf")
+        result = portability.continue_project(a, second, b)
+        assert result["matched_actual_overrides"] == 1
+        assert not (b / portability.INCOMPLETE_FILE).exists()
+        b_manifest = sp.json_load_strict(b / "校對工作階段.json")
+        sp.validate_manifest_integrity(b_manifest)
+        assert b_manifest["pdfs"][0]["actual_workbook_sha256"] == sp.sha256_file(
+            b / "01_實際注音" / Path(b_manifest["pdfs"][0]["actual_workbook"]).name)
+        assert (b / "待人工確認.json").is_file()
+        assert (b / "注音校對_最終報告.xlsx").is_file()
+        target_overrides = ar._read_csv(sp.project_actual_evidence_root(b) / ar.OCCURRENCE_OVERRIDE_FILE,
+                                        ar.OVERRIDE_HEADERS)
+        assert len([row for row in target_overrides if row["source"] ==
+                    "portable occurrence-local actual (no Global quorum)"]) == 1
+        assert portability._load_project(b)[0]["session_id"] == b_manifest["session_id"]
     assert not list((tmp_path / "isolated-localappdata").rglob("*.sqlite*"))
 
 

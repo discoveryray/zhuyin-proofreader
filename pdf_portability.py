@@ -95,7 +95,10 @@ def _load_project(output_dir: Path, *, allow_incomplete: bool = False,
     for info in manifest.get("pdfs", []):
         _artifact(output_dir, info, "actual")
         _artifact(output_dir, info, "candidate")
-    db = sp.normalize_db(sp.json_load_strict(output_dir / "人工判定資料庫.json"))
+    raw_db = sp.json_load_strict(output_dir / "人工判定資料庫.json")
+    if not isinstance(raw_db, dict):
+        raise ValueError("DATA_INTEGRITY_ERROR：人工判定資料庫根節點必須是物件")
+    db = sp.normalize_db(raw_db)
     unresolved = validate_conflict_state(output_dir, manifest, db)
     if unresolved and not allow_unresolved_conflict:
         raise ValueError(f"來源專案有未裁決的同位置判定衝突，不能再轉送：{unresolved}")
@@ -129,11 +132,12 @@ def validate_conflict_state(output_dir: Path, manifest: Mapping[str, Any], db: M
             raise ValueError("跨專案判定衝突來源或位置識別不完整")
         review_id = conflict["target_review_id"]
         event = db["events"].get(review_id)
-        if event is None:
+        if event is None or event.get("action") == "保留待人工":
             unresolved.append(review_id)
         else:
             resolution = event.get("portability_conflict_resolution")
             if (not isinstance(resolution, dict)
+                    or event.get("portability_source") is not None
                     or hashlib.sha256(_canonical(conflict)).hexdigest()
                     not in resolution.get("conflict_sha256", [])
                     or conflict not in resolution.get("original_conflicts", [])):
@@ -286,6 +290,20 @@ def _load_proof(output_dir: Path, manifest: Mapping[str, Any]):
     return _proof_payload(output_dir, manifest)
 
 
+def _proof_from_explicit_local(output_dir: Path, manifest: Mapping[str, Any],
+                               local_pdf: Path, local_pages):
+    try:
+        return _load_proof(output_dir, manifest)
+    except FileNotFoundError:
+        infos = manifest.get("pdfs", [])
+        if len(infos) != 1 or _sha(local_pdf) != infos[0].get("pdf_sha256"):
+            raise
+        # The selected file has the sealed source bytes; no path search or
+        # inferred equivalence is needed to obtain its complete page proof.
+        return {"pdfs": [{"pdf_sha256": infos[0]["pdf_sha256"],
+                           "pdf_name": infos[0]["pdf_name"], "pages": local_pages}]}
+
+
 def _pages_equivalent(source_pages, target_pages):
     if len(source_pages) != len(target_pages):
         return False
@@ -393,7 +411,23 @@ def _source_identity(source_manifest, source, source_id, target_manifest, target
         "target_review_id": target["review_id"],
         "prior": copy.deepcopy(event.get("portability_source")),
         "prior_duplicate_sources": copy.deepcopy(event.get("portability_duplicate_sources", [])),
+        "source_conflict_resolution": copy.deepcopy(event.get("portability_conflict_resolution")),
+        "source_manual_expected_decision": copy.deepcopy(event.get("manual_expected_decision")),
     }
+
+
+def _transfer_event(event, source, target):
+    """Rebind a validated human expected target to the proven local occurrence."""
+    from occurrence_ledger import manual_expected_target, valid_manual_expected_decision
+
+    transferred = copy.deepcopy(event)
+    if "manual_expected_decision" in event:
+        if not valid_manual_expected_decision({**source, **event}):
+            raise ValueError("來源人工 expected 判定位置或語境無法驗證")
+        transferred["manual_expected_decision"]["target"] = manual_expected_target(target)
+        if not valid_manual_expected_decision({**target, **transferred}):
+            raise ValueError("目標人工 expected 判定位置或語境無法驗證")
+    return transferred
 
 
 def _mapped_occurrence_overrides(source_dir: Path, source_manifest, target_manifest, reviews):
@@ -471,7 +505,8 @@ def _publish_portable_outputs(target_dir: Path, manifest, db):
 
 
 def import_project_decisions(source_dir: Path, target_dir: Path, *,
-                             _allow_incomplete_target: bool = False) -> dict[str, Any]:
+                             _allow_incomplete_target: bool = False,
+                             _selected_local_pdf: Path | None = None) -> dict[str, Any]:
     """Import only proven mapped review events; conflicts remain untouched."""
     import standalone_proofread as sp
 
@@ -482,7 +517,16 @@ def import_project_decisions(source_dir: Path, target_dir: Path, *,
     target_manifest, _ = _load_project(target_dir, allow_incomplete=_allow_incomplete_target)
     source_actual = _actual_transfer_state(source_dir, source_manifest)
     _actual_transfer_state(target_dir, target_manifest)
-    proof = _load_proof(source_dir, source_manifest)
+    if _selected_local_pdf is None:
+        proof = _load_proof(source_dir, source_manifest)
+    else:
+        local_pdf = Path(_selected_local_pdf).resolve()
+        target_pdfs = target_manifest.get("pdfs", [])
+        if (len(target_pdfs) != 1 or not local_pdf.is_file()
+                or _sha(local_pdf) != target_pdfs[0].get("pdf_sha256")):
+            raise ValueError("明確指定的本地 PDF 與目標封印 SHA 不符")
+        proof = _proof_from_explicit_local(source_dir, source_manifest,
+                                            local_pdf, _page_signatures(local_pdf))
     pdf_map, geometry = _match_pdfs(proof, source_manifest, target_manifest, target_dir)
     reviews = _map_reviews(source_manifest, target_manifest, pdf_map, geometry)
     mapped_overrides = _mapped_occurrence_overrides(source_dir, source_manifest, target_manifest, reviews)
@@ -512,7 +556,10 @@ def import_project_decisions(source_dir: Path, target_dir: Path, *,
             raise ValueError("目標工作階段於內容對應後已變動；未匯入")
         path = target_dir / "人工判定資料庫.json"
         before = _sha(path)
-        target_db = sp.normalize_db(sp.json_load_strict(path))
+        raw_db = sp.json_load_strict(path)
+        if not isinstance(raw_db, dict):
+            raise ValueError("DATA_INTEGRITY_ERROR：目標人工判定資料庫根節點必須是物件")
+        target_db = sp.normalize_db(raw_db)
         candidate = copy.deepcopy(target_db)
         imported, duplicates, provenance_updates, conflicts, conflict_records = 0, 0, 0, [], []
         for source_id, event in source_db["events"].items():
@@ -522,8 +569,9 @@ def import_project_decisions(source_dir: Path, target_dir: Path, *,
             target_id = target["review_id"]
             current = candidate["events"].get(target_id)
             identity = _source_identity(source_manifest, source, source_id, target_manifest, target, event)
+            transferred = _transfer_event(event, source, target)
             if current is not None:
-                if _event_payload(current) == _event_payload(event):
+                if _event_payload(current) == _event_payload(transferred):
                     duplicates += 1
                     known = [current.get("portability_source"),
                              *current.get("portability_duplicate_sources", [])]
@@ -548,7 +596,6 @@ def import_project_decisions(source_dir: Path, target_dir: Path, *,
                     })
                     candidate["events"].pop(target_id)
                 continue
-            transferred = copy.deepcopy(event)
             transferred["portability_source"] = identity
             candidate["events"][target_id] = transferred
             imported += 1
@@ -662,7 +709,7 @@ def merge_projects(source_dirs, local_pdf: Path, target_dir: Path):
     for source_dir in source_dirs:
         source_manifest, _ = _load_project(source_dir)
         _actual_transfer_state(source_dir, source_manifest)
-        proof = _load_proof(source_dir, source_manifest)
+        proof = _proof_from_explicit_local(source_dir, source_manifest, local_pdf, local_pages)
         if len(proof["pdfs"]) != 1:
             raise ValueError("此入口目前僅支援單一 PDF 專案；多 PDF 請先建立目標專案再匯入")
         if not _pages_equivalent(proof["pdfs"][0]["pages"], local_pages):
@@ -681,7 +728,7 @@ def merge_projects(source_dirs, local_pdf: Path, target_dir: Path):
         mapped_by_key = {}
         for source_dir in source_dirs:
             source_manifest, _ = _load_project(source_dir)
-            proof = _load_proof(source_dir, source_manifest)
+            proof = _proof_from_explicit_local(source_dir, source_manifest, local_pdf, local_pages)
             pdf_map, geometry = _match_pdfs(proof, source_manifest, target_manifest, target_dir)
             reviews = _map_reviews(source_manifest, target_manifest, pdf_map, geometry)
             for row in _mapped_occurrence_overrides(source_dir, source_manifest, target_manifest, reviews):
@@ -699,20 +746,33 @@ def merge_projects(source_dirs, local_pdf: Path, target_dir: Path):
         if mapped_overrides:
             import actual_review as ar
             actual_root = sp.project_actual_evidence_root(target_dir)
-            if ar._read_csv(actual_root / ar.OCCURRENCE_OVERRIDE_FILE, ar.OVERRIDE_HEADERS):
-                raise ValueError("目標已有 actual occurrence override；未覆寫")
-            ar._write_csv(actual_root / ar.OCCURRENCE_OVERRIDE_FILE, ar.OVERRIDE_HEADERS, mapped_overrides)
+            existing_rows = ar._read_csv(actual_root / ar.OCCURRENCE_OVERRIDE_FILE, ar.OVERRIDE_HEADERS)
+            fields = ("pdf_contains", "pdf_excludes", "page", "target_char", "stable_key", "x0", "y0")
+            existing_keys = {tuple(row[field] for field in fields) for row in existing_rows}
+            if any(tuple(row[field] for field in fields) in existing_keys for row in mapped_overrides):
+                raise ValueError("目標已有同位置 actual occurrence override；未覆寫")
+            ar._write_csv(actual_root / ar.OCCURRENCE_OVERRIDE_FILE, ar.OVERRIDE_HEADERS,
+                          [*existing_rows, *mapped_overrides])
             sp.refresh_actual_project(target_dir)
+            refreshed_manifest, _ = _load_project(target_dir, allow_incomplete=True)
+            if (refreshed_manifest.get("session_id") != target_manifest.get("session_id")
+                    or {(row["review_id"], row["occurrence_id"]) for row in refreshed_manifest["records"]}
+                    != {(row["review_id"], row["occurrence_id"]) for row in target_manifest["records"]}):
+                raise ValueError("actual 重建後目標工作階段或 occurrence 清單改變；未匯入")
+            target_manifest = refreshed_manifest
         results = []
         conflicts = []
         for source_dir in source_dirs:
-            result = import_project_decisions(source_dir, target_dir, _allow_incomplete_target=True)
+            result = import_project_decisions(source_dir, target_dir,
+                                              _allow_incomplete_target=True,
+                                              _selected_local_pdf=local_pdf)
             results.append(result)
             conflicts.extend(result["conflicts"])
-        _publish_portable_outputs(
-            target_dir, target_manifest,
-            sp.normalize_db(sp.json_load_strict(target_dir / "人工判定資料庫.json")),
-        )
+        final_manifest, final_db = _load_project(target_dir, allow_incomplete=True,
+                                                  allow_unresolved_conflict=True)
+        if final_manifest.get("session_id") != target_manifest.get("session_id"):
+            raise ValueError("匯入期間目標工作階段改變；未發布")
+        _publish_portable_outputs(target_dir, final_manifest, final_db)
         marker.unlink()
         return {"sources": results, "conflicts": conflicts,
                 "imported": sum(item["imported"] for item in results),

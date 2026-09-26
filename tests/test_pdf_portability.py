@@ -857,3 +857,178 @@ def test_two_project_conflicting_decisions_keep_both_sources(tmp_path):
         portable.continue_project(merged, fourth, transferred)
     later_event = next(iter(sp.json_load_strict(transferred / "人工判定資料庫.json")["events"].values()))
     assert later_event["portability_conflict_resolution"]["original_conflicts"] == receipt["conflicts"]
+
+
+def test_manual_expected_event_rebinds_exact_target_and_keeps_origin(tmp_path):
+    first, second = tmp_path / "source.pdf", tmp_path / "local.pdf"
+    pdf(first, title="source")
+    pdf(second, title="local")
+    assert sha(first) != sha(second)
+    source, target = tmp_path / "source", tmp_path / "target"
+    source_manifest, _ = project(source, first, session="A")
+    target_manifest, _ = project(target, second, session="B")
+    source_row = source_manifest["records"][0]
+    event = sp.build_manual_expected_event(source_row, operation="ENTER_EXPECTED",
+                                            expected_set=["ㄐㄩㄝˊ"], rationale="教材頁面核對")
+    source_db = sp.json_load_strict(source / "人工判定資料庫.json")
+    source_db["events"][source_row["review_id"]] = event
+    sp.json_save(source / "人工判定資料庫.json", source_db)
+    portable.import_project_decisions(source, target)
+    target_row = target_manifest["records"][0]
+    target_event = sp.json_load_strict(target / "人工判定資料庫.json")["events"][target_row["review_id"]]
+    assert target_event["manual_expected_decision"]["target"]["pdf_sha256"] == sha(second)
+    assert target_event["portability_source"]["source_manual_expected_decision"] == event["manual_expected_decision"]
+    assert target_event["portability_source"]["review_id"] == source_row["review_id"]
+    assert sp.materialize_ledger(target_manifest, sp.json_load_strict(target / "人工判定資料庫.json"))[0]["expected_set"] == ["ㄐㄩㄝˊ"]
+    ReviewSaveService(target).save_event(target_row["review_id"], target_event)
+    assert portable._load_project(target)[0]["session_id"] == "B"
+
+    tampered, rejected = tmp_path / "tampered", tmp_path / "rejected"
+    project(tampered, first, session="T")
+    project(rejected, second, session="R")
+    tampered_db = sp.json_load_strict(tampered / "人工判定資料庫.json")
+    tampered_event = dict(event)
+    tampered_event["manual_expected_decision"] = json.loads(json.dumps(event["manual_expected_decision"]))
+    tampered_event["manual_expected_decision"]["target"]["pdf_sha256"] = "0" * 64
+    tampered_id = sp.json_load_strict(tampered / "校對工作階段.json")["records"][0]["review_id"]
+    tampered_db["events"][tampered_id] = tampered_event
+    sp.json_save(tampered / "人工判定資料庫.json", tampered_db)
+    before = (rejected / "人工判定資料庫.json").read_bytes()
+    with pytest.raises(Exception, match="review event replay 失敗"):
+        portable.import_project_decisions(tampered, rejected)
+    assert (rejected / "人工判定資料庫.json").read_bytes() == before
+
+
+@pytest.mark.parametrize("root", ["[]", "null", "false", "0"])
+@pytest.mark.parametrize("corrupt_source", [True, False])
+def test_falsy_nonobject_database_root_is_rejected_without_mutation(tmp_path, root, corrupt_source):
+    first, second = tmp_path / "a.pdf", tmp_path / "b.pdf"
+    pdf(first, title="A")
+    pdf(second, title="B")
+    source, target = tmp_path / "source", tmp_path / "target"
+    project(source, first, session="A", event_positions=(0,))
+    project(target, second, session="B")
+    bad = (source if corrupt_source else target) / "人工判定資料庫.json"
+    bad.write_text(root, encoding="utf-8")
+    before = (target / "人工判定資料庫.json").read_bytes()
+    with pytest.raises(ValueError, match="根節點"):
+        portable.import_project_decisions(source, target)
+    assert (target / "人工判定資料庫.json").read_bytes() == before
+
+
+def test_target_db_becomes_nonobject_before_locked_candidate_read(tmp_path):
+    first, second = tmp_path / "a.pdf", tmp_path / "b.pdf"
+    pdf(first, title="A")
+    pdf(second, title="B")
+    source, target = tmp_path / "source", tmp_path / "target"
+    project(source, first, session="A", event_positions=(0,))
+    project(target, second, session="B")
+    original_mapper = portable._mapped_occurrence_overrides
+
+    def change_target_db(*args):
+        (target / "人工判定資料庫.json").write_text("[]", encoding="utf-8")
+        return original_mapper(*args)
+
+    with patch.object(portable, "_mapped_occurrence_overrides", side_effect=change_target_db):
+        with pytest.raises(ValueError, match="根節點"):
+            portable.import_project_decisions(source, target)
+    assert (target / "人工判定資料庫.json").read_text(encoding="utf-8") == "[]"
+
+
+def test_missing_source_uses_only_explicit_identical_sha_local_pdf(tmp_path):
+    other_download = tmp_path / "other-download"
+    other_download.mkdir()
+    original, local, changed = tmp_path / "original.pdf", tmp_path / "local.pdf", other_download / "original.pdf"
+    pdf(original, title="A")
+    local.write_bytes(original.read_bytes())
+    pdf(changed, title="B")
+    source, target, refused = [tmp_path / name for name in ("source", "target", "refused")]
+    project(source, original, session="A", event_positions=(0,))
+    original.rename(tmp_path / "source-away.pdf")
+
+    def build_target(paths, output_dir):
+        project(output_dir, paths[0], session="B")
+
+    with patch.object(sp, "run_pipeline_pdfs", side_effect=build_target):
+        with pytest.raises(FileNotFoundError):
+            portable.continue_project(source, changed, refused)
+        result = portable.continue_project(source, local, target)
+    assert result["imported"] == 1
+    assert not refused.exists()
+    assert portable._load_project(target)[0]["pdfs"][0]["pdf_sha256"] == sha(local)
+
+
+def test_noop_and_clear_do_not_adjudicate_conflict(tmp_path):
+    first, second, third = [tmp_path / f"{name}.pdf" for name in "ABC"]
+    for name, path in zip("ABC", (first, second, third)):
+        pdf(path, title=name)
+    a, b, merged = [tmp_path / name for name in ("a", "b", "merged")]
+    project(a, first, session="A", event_positions=(0,))
+    manifest, db = project(b, second, session="B", event_positions=(0,))
+    db["events"][manifest["records"][0]["review_id"]]["expected_evidence"] = "other"
+    sp.json_save(b / "人工判定資料庫.json", db)
+
+    def build(paths, output_dir):
+        project(output_dir, paths[0], session="M")
+
+    with patch.object(sp, "run_pipeline_pdfs", side_effect=build):
+        portable.merge_projects([a, b], third, merged)
+    merged_manifest = sp.json_load_strict(merged / "校對工作階段.json")
+    review_id = merged_manifest["records"][0]["review_id"]
+    receipt = sp.json_load_strict(merged / portable.CONFLICT_FILE)
+    saver = ReviewSaveService(merged)
+    saver.save_event(review_id, {"action": "保留待人工"})
+    after_noop = sp.json_load_strict(merged / "人工判定資料庫.json")
+    assert "portability_conflict_resolution" not in after_noop["events"][review_id]
+    assert portable.validate_conflict_state(merged, merged_manifest, after_noop) == [review_id]
+    saver.save_event(review_id, None)
+    assert portable.validate_conflict_state(merged, merged_manifest, sp.json_load_strict(merged / "人工判定資料庫.json")) == [review_id]
+    before_imported = (merged / "人工判定資料庫.json").read_bytes()
+    with pytest.raises(ValueError, match="本地重新核對"):
+        saver.save_event(review_id, {"action": "確認非校對範圍", "exclusion_reason": "copied",
+                                     "exclusion_evidence": "source page",
+                                     "portability_source": {"session_id": "A"}})
+    assert (merged / "人工判定資料庫.json").read_bytes() == before_imported
+    with pytest.raises(ValueError, match="未裁決"):
+        portable.prepare_portable_project(merged)
+    saver.save_event(review_id, {"action": "確認非校對範圍", "exclusion_reason": "local",
+                                 "exclusion_evidence": "local PDF page 1"})
+    resolved = sp.json_load_strict(merged / "人工判定資料庫.json")
+    assert portable.validate_conflict_state(merged, merged_manifest, resolved) == []
+    assert resolved["events"][review_id]["portability_conflict_resolution"]["original_conflicts"] == receipt["conflicts"]
+
+
+def test_duplicate_carries_source_conflict_adjudication_across_hops(tmp_path):
+    files = [tmp_path / f"{letter}.pdf" for letter in "ABCDE"]
+    for letter, path in zip("ABCDE", files):
+        pdf(path, title=letter)
+    a, b, c, d, e = [tmp_path / letter for letter in "abcde"]
+    project(a, files[0], session="A", event_positions=(0,))
+    b_manifest, b_db = project(b, files[1], session="B", event_positions=(0,))
+    b_db["events"][b_manifest["records"][0]["review_id"]]["expected_evidence"] = "other"
+    sp.json_save(b / "人工判定資料庫.json", b_db)
+
+    def build(paths, output_dir):
+        project(output_dir, paths[0], session="C")
+
+    with patch.object(sp, "run_pipeline_pdfs", side_effect=build):
+        portable.merge_projects([a, b], files[2], c)
+    c_id = sp.json_load_strict(c / "校對工作階段.json")["records"][0]["review_id"]
+    ReviewSaveService(c).save_event(c_id, {"action": "確認非校對範圍", "exclusion_reason": "adjudicated",
+                                          "exclusion_evidence": "C page 1"})
+    c_event = sp.json_load_strict(c / "人工判定資料庫.json")["events"][c_id]
+    d_manifest, d_db = project(d, files[3], session="D")
+    d_id = d_manifest["records"][0]["review_id"]
+    d_db["events"][d_id] = {key: value for key, value in c_event.items()
+                             if key != "portability_conflict_resolution"}
+    sp.json_save(d / "人工判定資料庫.json", d_db)
+    portable.prepare_portable_project(c)
+    assert portable.import_project_decisions(c, d)["duplicates"] == 1
+    duplicate = sp.json_load_strict(d / "人工判定資料庫.json")["events"][d_id]
+    origin = duplicate["portability_duplicate_sources"][0]
+    assert origin["source_conflict_resolution"] == c_event["portability_conflict_resolution"]
+    project(e, files[4], session="E")
+    portable.prepare_portable_project(d)
+    portable.import_project_decisions(d, e)
+    e_event = next(iter(sp.json_load_strict(e / "人工判定資料庫.json")["events"].values()))
+    assert e_event["portability_source"]["prior_duplicate_sources"][0]["source_conflict_resolution"] == c_event["portability_conflict_resolution"]

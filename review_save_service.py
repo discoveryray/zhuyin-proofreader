@@ -271,12 +271,19 @@ class ReviewSaveService:
             if not isinstance(event, dict):
                 raise ValueError("review event 格式錯誤")
             import pdf_portability
-            resolution = pdf_portability.conflict_resolution_evidence(
-                self.output_dir, manifest, db, review_id)
-            if resolution is None:
-                resolution = (db.get("events", {}).get(review_id) or {}).get(
-                    "portability_conflict_resolution")
+            unresolved_conflicts = pdf_portability.validate_conflict_state(
+                self.output_dir, manifest, db)
+            if review_id in unresolved_conflicts and event.get("portability_source") is not None:
+                raise ValueError("衝突位置只接受本地重新核對的人工裁決；未保存匯入事件")
             staged_db["events"][review_id] = copy.deepcopy(event)
+            staged_db["events"][review_id].pop("portability_conflict_resolution", None)
+            resolution = None
+            if event.get("action") != "保留待人工" and event.get("portability_source") is None:
+                resolution = pdf_portability.conflict_resolution_evidence(
+                    self.output_dir, manifest, db, review_id)
+                if resolution is None:
+                    resolution = (db.get("events", {}).get(review_id) or {}).get(
+                        "portability_conflict_resolution")
             if resolution is not None:
                 staged_db["events"][review_id]["portability_conflict_resolution"] = copy.deepcopy(resolution)
             resolved = sp._apply_review_event(baseline[index[review_id]], staged_db["events"][review_id])
