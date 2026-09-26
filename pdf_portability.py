@@ -1327,6 +1327,10 @@ def import_actual_excel(target_dir: Path, xlsx: Path):
     original_rows = ar._read_csv(override_path, ar.OVERRIDE_HEADERS)
     fields = ("pdf_contains", "pdf_excludes", "page", "target_char", "stable_key", "x0", "y0")
     by_key = {tuple(row[field] for field in fields): row for row in original_rows}
+    conflict_receipt_path = target_dir / ACTUAL_EXCEL_CONFLICT_FILE
+    conflict_receipt_sha = _sha(conflict_receipt_path) if conflict_receipt_path.exists() else None
+    prior_conflicts = (_validated_actual_excel_receipt(conflict_receipt_path)["conflicts"]
+                       if conflict_receipt_sha is not None else [])
     changed = False
     conflict_records = []
     recovery_results = []
@@ -1346,9 +1350,22 @@ def import_actual_excel(target_dir: Path, xlsx: Path):
             audit = json.dumps(provenance, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
             if old is not None and audit in old.get("note", ""):
                 continue
+            # A fresh local visual decision replaces the occurrence row, but
+            # the sealed conflict receipt still retains the previously imported
+            # workbook's original row. Replaying that workbook is not a new
+            # decision and must not replace the local adjudication or its token.
+            if old is not None and any(
+                item["target_occurrence_id"] == entry["occurrence_id"]
+                and ar._canon(item["target_record"]["actual_reading"]) == reading
+                and audit in item["target_record"].get("note", "")
+                for item in prior_conflicts
+            ):
+                continue
             new_row = dict(zip(fields, key)) | {
                 "actual_reading": reading,
-                "source": "portable Excel occurrence-local actual (no Global quorum)",
+                "source": (old["source"] if old is not None
+                           and ar._canon(old["actual_reading"]) == reading else
+                           "portable Excel occurrence-local actual (no Global quorum)"),
                 "note": ((old.get("note", "") + "；") if old else "") + audit,
             }
             by_key[key] = new_row
@@ -1405,6 +1422,8 @@ def import_actual_excel(target_dir: Path, xlsx: Path):
     marker = target_dir / INCOMPLETE_FILE
     if not changed:
         with sp.project_delivery_lock(root):
+            if (_sha(conflict_receipt_path) if conflict_receipt_path.exists() else None) != conflict_receipt_sha:
+                raise ValueError("Excel actual 衝突紀錄於匯入期間變動；請重新核對")
             if actual_excel_conflict_state(target_dir, target_manifest, target_db):
                 raise ValueError("Excel actual 衝突於匯入期間仍待本地核對；不能回報完成")
             if marker.exists() or (root / PROJECT_TRANSACTION_FILE).exists():
@@ -1416,6 +1435,8 @@ def import_actual_excel(target_dir: Path, xlsx: Path):
     # Preflight may take time, so bind the live target, marker and durable
     # transaction under one lock. A second import must never own our marker.
     with sp.project_delivery_lock(root):
+        if (_sha(conflict_receipt_path) if conflict_receipt_path.exists() else None) != conflict_receipt_sha:
+            raise ValueError("Excel actual 衝突紀錄於匯入期間變動；未寫入")
         if actual_excel_conflict_state(target_dir, target_manifest, target_db):
             raise ValueError("Excel actual 衝突於匯入期間仍待本地核對；未寫入")
         if marker.exists() or (root / PROJECT_TRANSACTION_FILE).exists():

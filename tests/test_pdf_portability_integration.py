@@ -360,6 +360,54 @@ def test_actual_excel_conflict_requires_fresh_local_visual_adjudication(tmp_path
             report_gui.open_user_report()
             report_error.assert_not_called()
             assert startfile.called or open_other.called
+        actual_root = sp.project_actual_evidence_root(b)
+        override_path = actual_root / ar.OCCURRENCE_OVERRIDE_FILE
+        reviewed_entry = next(item for item in sp.json_load_strict(b / "校對工作階段.json")["records"]
+                              if item["review_id"] == review_id)
+        override_fields = ("pdf_contains", "pdf_excludes", "page", "target_char",
+                           "stable_key", "x0", "y0")
+        reviewed_key = ar._override_key_from_entry(reviewed_entry)
+
+        def reviewed_override():
+            return next(row for row in ar._read_csv(override_path, ar.OVERRIDE_HEADERS)
+                        if tuple(row[field] for field in override_fields) == reviewed_key)
+
+        adjudicated = reviewed_override()
+        assert adjudicated["source"] == "人工 GUI actual 視覺確認"
+        assert "portable_actual_conflict:" in adjudicated["note"]
+        conflict_record = sp.json_load_strict(receipt_path)["conflicts"][0]
+        assert hashlib.sha256(first_excel.read_bytes()).hexdigest() in conflict_record["target_record"]["note"]
+        assert conflict_record["source_record"]["source_excel_sha256"] == hashlib.sha256(
+            conflict_excel.read_bytes()).hexdigest()
+        repeat_paths = [receipt_path, override_path, actual_root / ar.GLYPH_PROVENANCE_FILE,
+                        b / "校對工作階段.json", b / "人工判定資料庫.json",
+                        b / "pipeline_status.json", b / "注音校對_最終報告.xlsx"]
+        before_repeat = {path: path.read_bytes() for path in repeat_paths}
+        repeated = sp.import_actual_gpt_decisions(b, first_excel)
+        assert repeated[0] == 0 and repeated.status["project_actual_commit"] == "NO_CHANGES"
+        assert {path: path.read_bytes() for path in repeat_paths} == before_repeat
+        assert portability.actual_excel_conflict_state(
+            b, sp.json_load_strict(b / "校對工作階段.json"),
+            sp.json_load_strict(b / "人工判定資料庫.json")) == []
+        same_reading_workbook = load_workbook(first_excel)
+        same_reading_sheet = same_reading_workbook["actual待判定"]
+        same_reading_sheet.cell(2, headers.index("note") + 1, "另一份同讀音來源")
+        new_same_reading = tmp_path / "new-same-reading.xlsx"
+        same_reading_workbook.save(new_same_reading)
+        same_reading_workbook.close()
+        assert hashlib.sha256(new_same_reading.read_bytes()).hexdigest() != hashlib.sha256(
+            first_excel.read_bytes()).hexdigest()
+        sp.import_actual_gpt_decisions(b, new_same_reading)
+        annotated = reviewed_override()
+        assert annotated["source"] == "人工 GUI actual 視覺確認"
+        assert "portable_actual_conflict:" in annotated["note"]
+        assert hashlib.sha256(new_same_reading.read_bytes()).hexdigest() in annotated["note"]
+        assert portability.actual_excel_conflict_state(
+            b, sp.json_load_strict(b / "校對工作階段.json"),
+            sp.json_load_strict(b / "人工判定資料庫.json")) == []
+        before_new_repeat = {path: path.read_bytes() for path in repeat_paths}
+        assert sp.import_actual_gpt_decisions(b, new_same_reading)[0] == 0
+        assert {path: path.read_bytes() for path in repeat_paths} == before_new_repeat
         provenance = ar._read_csv(sp.project_actual_evidence_root(b) / ar.GLYPH_PROVENANCE_FILE,
                                   ar.GLYPH_PROVENANCE_HEADERS)
         assert any("portable_actual_conflict:" in row["note"]
@@ -378,6 +426,7 @@ def test_actual_excel_conflict_requires_fresh_local_visual_adjudication(tmp_path
             b, sp.json_load_strict(b / "校對工作階段.json"),
             sp.json_load_strict(b / "人工判定資料庫.json")) == []
         assert portability._load_project(b)[0]["session_id"] == manifest["session_id"]
+    assert not list((tmp_path / "isolated-localappdata").rglob("*.sqlite*"))
 
 
 def test_real_pipeline_actual_override_refresh_publishes_current_manifest(tmp_path, monkeypatch):
