@@ -21,6 +21,14 @@ from occurrence_ledger import (
 )
 
 
+@pytest.fixture(autouse=True)
+def synthetic_project_report_renderer(monkeypatch):
+    # These small sealed-project fixtures use intentionally synthetic candidate
+    # workbooks. The separate real-pipeline integration test exercises actual
+    # pending/status/Excel publication after transfer.
+    monkeypatch.setattr(portable, "_publish_portable_outputs", lambda *_args: None)
+
+
 def pdf(path: Path, *, title: str, text: str = "角角ㄐㄩㄝˊ", picture=(0, 0, 1), tone="rising"):
     document = fitz.open()
     page = document.new_page(width=300, height=200)
@@ -38,7 +46,7 @@ def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def project(root: Path, source_pdf: Path, *, session: str, event_positions=()):
+def project(root: Path, source_pdf: Path, *, session: str, event_positions=(), boxes=None):
     root.mkdir(exist_ok=True)
     actual = root / "01_實際注音"
     candidate = root / "02_候選報告"
@@ -61,14 +69,15 @@ def project(root: Path, source_pdf: Path, *, session: str, event_positions=()):
     candidate_file.write_bytes(b"sealed candidate test artifact")
     digest = sha(source_pdf)
     rows = []
-    for index, x0 in enumerate((20, 90), 1):
+    boxes = boxes or ((20, 20, 40, 45), (90, 20, 110, 45))
+    for index, (x0, y0, x1, y1) in enumerate(boxes, 1):
         rows.append({
             "pdf_sha256": digest, "pdf": str(source_pdf), "pdf_name": source_pdf.name,
             "實體頁碼": 1, "課本頁": 1, "字元": "角", "實際注音": "ㄐㄩㄝˊ",
             "解碼依據": "glyph evidence", "穩定注音鍵": f"F#{index}", "font": "F", "font_xref": 1,
             "TTF字形SHA256": "a" * 64,
             "glyph_id_字形索引": index, "注音元件ID": index,
-            "x0": x0, "y0": 20, "x1": x0 + 20, "y1": 45, "source_row_number": index,
+            "x0": x0, "y0": y0, "x1": x1, "y1": y1, "source_row_number": index,
         })
     prepare_occurrence_rows(digest, rows)
     ledger = build_occurrence_ledger(rows, {
@@ -206,14 +215,33 @@ def test_conflict_preserves_both_and_write_failure_keeps_target(tmp_path):
     before = (target / "人工判定資料庫.json").read_bytes()
     result = portable.import_project_decisions(source, target)
     assert result["conflicts"] == [{"source_review_id": sp.json_load_strict(source / "校對工作階段.json")["records"][0]["review_id"], "target_review_id": rid}]
-    assert (target / "人工判定資料庫.json").read_bytes() == before
-    db["events"].clear()
-    sp.json_save(target / "人工判定資料庫.json", db)
-    before = (target / "人工判定資料庫.json").read_bytes()
+    assert (target / "人工判定資料庫.json").read_bytes() != before
+    assert rid not in sp.json_load_strict(target / "人工判定資料庫.json")["events"]
+    receipt = sp.json_load_strict(target / portable.CONFLICT_FILE)
+    assert receipt["conflicts"][0]["target_event"]["action"] == "保留待人工"
+    assert receipt["conflicts"][0]["source_event"]["action"] == "補建expected證據"
+    with pytest.raises(ValueError, match="未裁決"):
+        portable.prepare_portable_project(target)
+    resolved = ReviewSaveService(target).save_event(
+        rid, {"action": "確認非校對範圍", "exclusion_reason": "new local check",
+              "exclusion_evidence": "PDF page 1"})
+    assert resolved is not None
+    decision = sp.json_load_strict(target / "人工判定資料庫.json")["events"][rid]
+    assert decision["portability_conflict_resolution"]["original_conflicts"] == receipt["conflicts"]
+    ReviewSaveService(target).save_event(
+        rid, {"action": "確認非校對範圍", "exclusion_reason": "revised local check",
+              "exclusion_evidence": "PDF page 1 inspected again"})
+    revised = sp.json_load_strict(target / "人工判定資料庫.json")
+    assert revised["events"][rid]["portability_conflict_resolution"] == decision["portability_conflict_resolution"]
+    assert portable.validate_conflict_state(target, manifest, revised) == []
+    assert sp.json_load_strict(target / portable.CONFLICT_FILE) == receipt
+    another = tmp_path / "another-target"
+    project(another, b_pdf, session="another")
+    before = (another / "人工判定資料庫.json").read_bytes()
     with patch("standalone_proofread.json_save", side_effect=OSError("disk full")):
         with pytest.raises(OSError, match="disk full"):
-            portable.import_project_decisions(source, target)
-    assert (target / "人工判定資料庫.json").read_bytes() == before
+            portable.import_project_decisions(source, another)
+    assert (another / "人工判定資料庫.json").read_bytes() == before
 
 
 def test_repeated_character_requires_its_own_position(tmp_path):
@@ -288,6 +316,52 @@ def test_different_pdf_object_storage_and_identity_mapping(tmp_path):
     assert source_manifest["records"][0]["review_id"] != target_manifest["records"][0]["review_id"]
     result = portable.import_project_decisions(source, target)
     assert result["imported"] == 1
+
+
+def test_rotation_storage_on_unreviewed_equal_page_does_not_reject(tmp_path):
+    first, second = tmp_path / "A.pdf", tmp_path / "B.pdf"
+    document = fitz.open()
+    page = document.new_page(width=300, height=200)
+    page.insert_text((20, 40), "identical lesson", fontsize=16)
+    annex = document.new_page(width=200, height=200)
+    annex.draw_rect(fitz.Rect(90, 90, 110, 110), fill=(0, 0, 0))
+    document.save(first)
+    annex.set_rotation(180)
+    document.save(second)
+    document.close()
+    source_pages, target_pages = portable._page_signatures(first), portable._page_signatures(second)
+    assert sha(first) != sha(second)
+    assert source_pages[1]["rotation"] == 0 and target_pages[1]["rotation"] == 180
+    assert source_pages[1]["rgb_sha256"] == target_pages[1]["rgb_sha256"]
+    source, target = tmp_path / "source", tmp_path / "target"
+    project(source, first, session="A", event_positions=(0,))
+    project(target, second, session="B")
+    assert portable.import_project_decisions(source, target)["imported"] == 1
+
+
+def test_rotated_reviewed_page_maps_same_char_by_display_position(tmp_path):
+    first, second = tmp_path / "source.pdf", tmp_path / "rotated.pdf"
+    source_boxes = ((20, 20, 40, 45), (90, 20, 110, 45))
+    target_boxes = ((260, 155, 280, 180), (190, 155, 210, 180))
+    for path, boxes, rotation in ((first, source_boxes, 0), (second, target_boxes, 180)):
+        document = fitz.open()
+        page = document.new_page(width=300, height=200)
+        for box in boxes:
+            page.draw_rect(fitz.Rect(box), color=(0, 0, 0), fill=(0, 0, 0))
+        page.set_rotation(rotation)
+        document.save(path)
+        document.close()
+    assert sha(first) != sha(second)
+    signatures_a, signatures_b = portable._page_signatures(first), portable._page_signatures(second)
+    assert signatures_a[0]["rgb_sha256"] == signatures_b[0]["rgb_sha256"]
+    source, target = tmp_path / "source-project", tmp_path / "target-project"
+    source_manifest, _ = project(source, first, session="A", event_positions=(0,), boxes=source_boxes)
+    target_manifest, _ = project(target, second, session="B", boxes=target_boxes)
+    assert portable.import_project_decisions(source, target)["imported"] == 1
+    assert list(sp.json_load_strict(target / "人工判定資料庫.json")["events"]) == [
+        target_manifest["records"][0]["review_id"]
+    ]
+    assert source_manifest["records"][0]["occurrence_id"] != target_manifest["records"][0]["occurrence_id"]
 
 
 def test_missing_source_pdf_requires_prior_proof_and_moved_artifact_is_checked(tmp_path):
@@ -395,6 +469,63 @@ def test_source_actual_staging_is_preserved_as_recheck_not_new_global_evidence(t
     assert not (tmp_path / "isolated-localappdata").exists()
 
 
+def test_staged_actual_receipt_survives_a_to_b_to_c(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
+    files = [tmp_path / f"{letter}.pdf" for letter in "ABC"]
+    for letter, path in zip("ABC", files):
+        pdf(path, title=letter)
+    a, b, c = [tmp_path / name for name in ("project-a", "project-b", "project-c")]
+    a_manifest, _ = project(a, files[0], session="A", event_positions=(0,))
+    project(b, files[1], session="B")
+    group = ar.build_actual_group_for_entry(a_manifest["records"], a_manifest["records"][0])
+    a_root = sp.project_actual_evidence_root(a)
+    ar.stage_manual_actual_group(a_root, group, "ㄐㄩㄝˊ",
+                                 checked_occurrence_ids=[a_manifest["records"][0]["occurrence_id"]],
+                                 source="manual visual actual confirmation")
+    original = ar.load_manual_actual_staging(a_root)
+    portable.import_project_decisions(a, b)
+    portable.prepare_portable_project(b)
+
+    def build_target(paths, output_dir):
+        project(output_dir, files[2], session="C")
+
+    with patch.object(sp, "run_pipeline_pdfs", side_effect=build_target):
+        result = portable.continue_project(b, files[2], c)
+    assert result["sources"][0]["actual_staging"] == "RECHECK_LOCAL_PDF_REQUIRED"
+    receipt = sp.json_load_strict(c / portable.PENDING_ACTUAL_FILE)
+    assert len(receipt["sources"]) == 1
+    assert receipt["sources"][0]["source_session_id"] == "A"
+    assert receipt["sources"][0]["staging"] == original
+    assert receipt["sources"][0]["forwarded_via"][0]["source_session_id"] == "B"
+    assert ar.load_manual_actual_staging(sp.project_actual_evidence_root(c))["staged_groups"] == []
+    assert not (tmp_path / "isolated-localappdata").exists()
+
+
+def test_tampered_forwarded_actual_receipt_is_rejected_before_target_creation(tmp_path):
+    files = [tmp_path / f"{letter}.pdf" for letter in "ABC"]
+    for letter, path in zip("ABC", files):
+        pdf(path, title=letter)
+    a, b, c = [tmp_path / name for name in ("project-a", "project-b", "project-c")]
+    a_manifest, _ = project(a, files[0], session="A", event_positions=(0,))
+    project(b, files[1], session="B")
+    group = ar.build_actual_group_for_entry(a_manifest["records"], a_manifest["records"][0])
+    ar.stage_manual_actual_group(
+        sp.project_actual_evidence_root(a), group, "ㄐㄩㄝˊ",
+        checked_occurrence_ids=[a_manifest["records"][0]["occurrence_id"]],
+        source="manual visual actual confirmation",
+    )
+    portable.import_project_decisions(a, b)
+    portable.prepare_portable_project(b)
+    receipt_path = b / portable.PENDING_ACTUAL_FILE
+    receipt = sp.json_load_strict(receipt_path)
+    first_key = next(iter(receipt["sources"][0]["mapped_occurrences"]))
+    receipt["sources"][0]["mapped_occurrences"][first_key] = "wrong-target-occurrence"
+    sp.json_save(receipt_path, receipt)
+    with pytest.raises(ValueError, match="暫存與目前工作階段不符"):
+        portable.continue_project(b, files[2], c)
+    assert not c.exists()
+
+
 def test_continue_operation_uses_local_pdf_and_only_clears_success_marker(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
     first, local = tmp_path / "first.pdf", tmp_path / "local.pdf"
@@ -432,6 +563,55 @@ def test_failed_continue_keeps_source_and_marks_target_incomplete(tmp_path):
     assert (target / portable.INCOMPLETE_FILE).is_file()
     from standalone_gui import project_status_details
     assert "未完成" in project_status_details(target)[0]
+    with pytest.raises(ValueError, match="接續未完成"):
+        ReviewSaveService(target).save_event("any", {"action": "保留待人工"})
+
+
+def test_sealed_but_incomplete_target_cannot_be_reexported(tmp_path):
+    first, local = tmp_path / "source.pdf", tmp_path / "local.pdf"
+    pdf(first, title="A")
+    pdf(local, title="B")
+    source, partial, another = tmp_path / "source", tmp_path / "partial", tmp_path / "another"
+    project(source, first, session="A", event_positions=(0,))
+    before = (source / "人工判定資料庫.json").read_bytes()
+
+    def build_target(paths, output_dir):
+        project(output_dir, local, session="B")
+
+    with patch.object(sp, "run_pipeline_pdfs", side_effect=build_target), \
+         patch.object(portable, "_mapped_occurrence_overrides", side_effect=ValueError("mapping stopped")):
+        with pytest.raises(ValueError, match="mapping stopped"):
+            portable.continue_project(source, local, partial)
+    assert (partial / "校對工作階段.json").exists()
+    assert (partial / portable.INCOMPLETE_FILE).exists()
+    with pytest.raises(ValueError, match="接續未完成"):
+        portable.prepare_portable_project(partial)
+    with pytest.raises(ValueError, match="接續未完成"):
+        portable.continue_project(partial, first, another)
+    with pytest.raises(ValueError, match="接續未完成"):
+        portable.import_project_decisions(partial, source)
+    assert not another.exists()
+    assert (source / "人工判定資料庫.json").read_bytes() == before
+
+
+def test_report_publication_failure_retains_data_and_blocks_partial_target(tmp_path):
+    first, local = tmp_path / "first.pdf", tmp_path / "local.pdf"
+    pdf(first, title="A")
+    pdf(local, title="B")
+    source, target = tmp_path / "source", tmp_path / "target"
+    project(source, first, session="A", event_positions=(0,))
+    project(target, local, session="B")
+    before = (source / "人工判定資料庫.json").read_bytes()
+    with patch.object(portable, "_publish_portable_outputs", side_effect=OSError("report disk full")):
+        with pytest.raises(OSError, match="report disk full"):
+            portable.import_project_decisions(source, target)
+    assert (source / "人工判定資料庫.json").read_bytes() == before
+    assert len(sp.json_load_strict(target / "人工判定資料庫.json")["events"]) == 1
+    assert (target / portable.INCOMPLETE_FILE).exists()
+    from standalone_gui import project_status_details
+    assert "未完成" in project_status_details(target)[0]
+    with pytest.raises(ValueError, match="接續未完成"):
+        portable.prepare_portable_project(target)
     with pytest.raises(ValueError, match="接續未完成"):
         ReviewSaveService(target).save_event("any", {"action": "保留待人工"})
 
@@ -651,7 +831,29 @@ def test_two_project_conflicting_decisions_keep_both_sources(tmp_path):
     receipt = sp.json_load_strict(merged / portable.CONFLICT_FILE)
     assert receipt["conflicts"][0]["source_event"]["expected_evidence"] == "另一來源"
     assert receipt["conflicts"][0]["target_event"]["expected_evidence"] == "現版手冊"
+    conflicted_id = receipt["conflicts"][0]["target_review_id"]
+    merged_manifest = sp.json_load_strict(merged / "校對工作階段.json")
+    merged_db = sp.json_load_strict(merged / "人工判定資料庫.json")
+    assert conflicted_id not in merged_db["events"]
+    assert sp.materialize_ledger(merged_manifest, merged_db)[0]["active_review"] is True
     assert (first / "人工判定資料庫.json").read_bytes() == before_a
     assert (second / "人工判定資料庫.json").read_bytes() == before_b
     from standalone_gui import project_status_details
     assert "衝突" in project_status_details(merged)[0]
+    fourth, transferred = tmp_path / "D.pdf", tmp_path / "transferred"
+    pdf(fourth, title="D")
+    with pytest.raises(ValueError, match="未裁決"):
+        portable.continue_project(merged, fourth, transferred)
+    assert not transferred.exists()
+    ReviewSaveService(merged).save_event(
+        conflicted_id, {"action": "確認非校對範圍", "exclusion_reason": "fresh local adjudication",
+                        "exclusion_evidence": "PDF page 1 visual check"})
+    portable.prepare_portable_project(merged)
+
+    def build_fourth(paths, output_dir):
+        project(output_dir, fourth, session="D")
+
+    with patch.object(sp, "run_pipeline_pdfs", side_effect=build_fourth):
+        portable.continue_project(merged, fourth, transferred)
+    later_event = next(iter(sp.json_load_strict(transferred / "人工判定資料庫.json")["events"].values()))
+    assert later_event["portability_conflict_resolution"]["original_conflicts"] == receipt["conflicts"]

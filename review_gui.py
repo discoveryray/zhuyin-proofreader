@@ -956,6 +956,8 @@ class ReviewApp:
         validate_manifest_integrity(self.manifest)
         validate_output_artifact_hashes(self.manifest)
         self.db = load_or_initialize_db(output_dir)
+        from pdf_portability import validate_conflict_state
+        self.unresolved_portability_conflicts = validate_conflict_state(output_dir, self.manifest, self.db)
         self.index = 0
         self.photo = None
         self.records = []
@@ -1056,7 +1058,7 @@ class ReviewApp:
                 "請依當地原頁重新核對；搬移/匯入不算新的獨立 Global 人工證據。",
                 parent=self.root,
             )
-        if (output_dir / "跨專案判定衝突.json").exists():
+        if self.unresolved_portability_conflicts:
             messagebox.showwarning(
                 "跨專案判定衝突",
                 "同位置不同判定沒有自動覆寫。來源與目標原資料均保留，"

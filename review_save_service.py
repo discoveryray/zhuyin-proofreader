@@ -270,7 +270,15 @@ class ReviewSaveService:
         else:
             if not isinstance(event, dict):
                 raise ValueError("review event 格式錯誤")
+            import pdf_portability
+            resolution = pdf_portability.conflict_resolution_evidence(
+                self.output_dir, manifest, db, review_id)
+            if resolution is None:
+                resolution = (db.get("events", {}).get(review_id) or {}).get(
+                    "portability_conflict_resolution")
             staged_db["events"][review_id] = copy.deepcopy(event)
+            if resolution is not None:
+                staged_db["events"][review_id]["portability_conflict_resolution"] = copy.deepcopy(resolution)
             resolved = sp._apply_review_event(baseline[index[review_id]], staged_db["events"][review_id])
         original = baseline[index[review_id]]
         if (resolved.get("review_id"), resolved.get("occurrence_id")) != (

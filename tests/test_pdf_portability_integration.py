@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 import fitz
 import pytest
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 
 import pdf_portability as portability
 import review_gui
@@ -106,6 +106,14 @@ def test_full_pipeline_different_sha_continues_and_returns(tmp_path, monkeypatch
         assert result["imported"] == 1
         b_manifest = sp.json_load_strict(b / "校對工作階段.json")
         assert len(b_manifest["records"]) == 2
+        assert len(sp.json_load_strict(b / "待人工確認.json")["pending"]) == 1
+        b_status = sp.json_load_strict(b / "pipeline_status.json")
+        assert b_status["user_report"] == str(b / "注音校對_最終報告.xlsx")
+        workbook = load_workbook(b / "注音校對_最終報告.xlsx", read_only=True)
+        try:
+            assert any(row[0] == "人工判定" for row in workbook["人工與公司規則"].values)
+        finally:
+            workbook.close()
         pixels, box, _ = occurrence_preview(b_manifest["records"][1], output_dir=b)
         assert pixels.width > 0 and box is not None
         second_event = {"action": "確認非校對範圍", "exclusion_reason": "synthetic fixture",
@@ -117,6 +125,9 @@ def test_full_pipeline_different_sha_continues_and_returns(tmp_path, monkeypatch
         back = portability.import_project_decisions(b, a)
         assert back["imported"] == 1 and back["duplicates"] == 1
         assert len(sp.json_load_strict(a / "人工判定資料庫.json")["events"]) == 2
+        assert sp.json_load_strict(a / "待人工確認.json")["pending"] == []
+        assert (a / "注音校對_最終報告.xlsx").is_file()
+        assert sp.json_load_strict(a / "pipeline_status.json")["user_report"] == str(a / "注音校對_最終報告.xlsx")
         assert len(sp.materialize_ledger(a_manifest, sp.json_load_strict(a / "人工判定資料庫.json"))) == 2
     assert not list((tmp_path / "isolated-localappdata").rglob("*.sqlite*"))
 
@@ -156,3 +167,58 @@ def test_review_app_reopens_continued_project(tmp_path, monkeypatch):
                 window.destroy()
     finally:
         root.destroy()
+
+
+def test_real_pipeline_conflict_stays_pending_until_new_local_adjudication(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
+    first, second = _pdfs(tmp_path)
+    third = tmp_path / "download-c.pdf"
+    with fitz.open(first) as document:
+        document.set_metadata({"title": "download C"})
+        document.save(third, deflate=True, garbage=4)
+    assert portability._page_signatures(first) == portability._page_signatures(third)
+    a, b, merged = [tmp_path / name for name in ("project-a", "project-b", "merged")]
+    with patch.object(sp, "decode", side_effect=_synthetic_decode), \
+         patch.object(sp, "actual_workbook_global_exact_dependencies", return_value=()), \
+         patch("check_pronunciation_candidates.actual_workbook_global_exact_dependencies", return_value=()):
+        sp.run_pipeline_pdfs([first], a, defer_excel_reports=True)
+        sp.run_pipeline_pdfs([second], b, defer_excel_reports=True)
+        a_manifest = sp.json_load_strict(a / "校對工作階段.json")
+        b_manifest = sp.json_load_strict(b / "校對工作階段.json")
+        ReviewSaveService(a).save_event(
+            a_manifest["records"][0]["review_id"],
+            {"action": "確認非校對範圍", "exclusion_reason": "A local visual decision",
+             "exclusion_evidence": "A PDF page 1"},
+        )
+        ReviewSaveService(b).save_event(
+            b_manifest["records"][0]["review_id"],
+            {"action": "確認非校對範圍", "exclusion_reason": "B different decision",
+             "exclusion_evidence": "B PDF page 1"},
+        )
+        result = portability.merge_projects([a, b], third, merged)
+        assert len(result["conflicts"]) == 1
+        manifest = sp.json_load_strict(merged / "校對工作階段.json")
+        db = sp.json_load_strict(merged / "人工判定資料庫.json")
+        conflicted_id = manifest["records"][0]["review_id"]
+        assert conflicted_id not in db["events"]
+        assert sp.materialize_ledger(manifest, db)[0]["active_review"] is True
+        assert len(sp.json_load_strict(merged / "待人工確認.json")["pending"]) == 2
+        assert sp.json_load_strict(merged / "pipeline_status.json")["status"] != "PROOFREAD_COMPLETE"
+        workbook = load_workbook(merged / "注音校對_最終報告.xlsx", read_only=True)
+        try:
+            assert not any(row[0] == "人工判定" for row in workbook["人工與公司規則"].values)
+        finally:
+            workbook.close()
+        receipt = sp.json_load_strict(merged / portability.CONFLICT_FILE)
+        ReviewSaveService(merged).save_event(
+            conflicted_id,
+            {"action": "確認非校對範圍", "exclusion_reason": "new local check",
+             "exclusion_evidence": "C PDF page 1 direct visual"},
+        )
+        resolved = sp.json_load_strict(merged / "人工判定資料庫.json")
+        assert resolved["events"][conflicted_id]["portability_conflict_resolution"]["original_conflicts"] == receipt["conflicts"]
+        sp.save_pending_json(merged, manifest, resolved)
+        sp.generate_report(merged, manifest, resolved)
+        assert len(sp.json_load_strict(merged / "待人工確認.json")["pending"]) == 1
+        assert sp.json_load_strict(merged / portability.CONFLICT_FILE) == receipt
+    assert not list((tmp_path / "isolated-localappdata").rglob("*.sqlite*"))
