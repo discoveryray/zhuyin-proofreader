@@ -324,10 +324,21 @@ def write_excel_content_proof(workbook, output_dir: Path, manifest, db, *, kind:
         if any(row.get("review_event_replay_status") for row in
                sp.materialize_ledger(source_manifest, snapshot_db)):
             raise ValueError("Excel 補證來源快照判定失效")
+    try:
+        page_proof = _proof_payload(Path(output_dir), source_manifest)
+    except FileNotFoundError:
+        if kind != "expected":
+            raise
+        saved = Path(output_dir) / PROOF_FILE
+        if not saved.exists():
+            # The ordinary same-session workbook remains usable. It carries
+            # no cross-session claim without the exact PDF or sealed proof.
+            return
+        page_proof = _load_proof(Path(output_dir), source_manifest)
     payload = {"version": EXCEL_PROOF_VERSION, "kind": kind,
                "exported_at": datetime.now().astimezone().isoformat(timespec="microseconds"),
                "manifest": source_manifest, "db": snapshot_db,
-               "proof": _proof_payload(Path(output_dir), source_manifest),
+               "proof": page_proof,
                "bound_rows": _excel_bound_rows(workbook, kind),
                "attestations": attestations or {}}
     raw = _canonical(payload)
@@ -1178,16 +1189,19 @@ def import_actual_excel(target_dir: Path, xlsx: Path):
             raise ValueError("目標 actual occurrence 證據於匯入期間變動；未覆寫")
         if any(item["status"] == "PENDING" for item in load_promotion_outbox(root)["items"]):
             raise ValueError("目標 Global outbox 於匯入期間變動；未寫入 actual")
+        recovery_plan = post_commit_recovery_plan_from_results(recovery_results)
         owned_marker = {"status": "ACTUAL_EXCEL_REFRESH_PENDING",
                         "source_excel_sha256": workbook_sha,
                         "import_token": uuid.uuid4().hex,
-                        "pre_state": _actual_excel_file_snapshot(target_dir)}
+                        "pre_state": _actual_excel_file_snapshot(target_dir),
+                        "sealed_workbooks": _sealed_workbook_snapshot(target_dir, live_manifest),
+                        "recovery_plan_sha256": hashlib.sha256(_canonical(recovery_plan)).hexdigest()}
         sp.json_save(marker, owned_marker)
         try:
             with direct_visual_project_transaction(root) as bind_recovery_plan:
                 ar._write_csv(override_path, ar.OVERRIDE_HEADERS,
                               sorted(by_key.values(), key=lambda row: tuple(row[field] for field in fields)))
-                bind_recovery_plan(post_commit_recovery_plan_from_results(recovery_results))
+                bind_recovery_plan(recovery_plan)
         except Exception:
             # A PREPARED/COMMITTED journal owns recovery. Only remove our own
             # marker after a fully rolled-back precommit failure.
@@ -1272,6 +1286,119 @@ def _actual_excel_file_snapshot(output_dir: Path):
     return {name: _sha(path) if path.exists() else None for name, path in paths.items()}
 
 
+def _sealed_workbook_snapshot(output_dir: Path, manifest: Mapping[str, Any]):
+    """Keep exact pre-commit workbook bytes for a dedicated COMMITTED redo."""
+    output_dir = Path(output_dir).resolve()
+    manifest_bytes = (output_dir / "校對工作階段.json").read_bytes()
+    entries = []
+    for info in manifest.get("pdfs", []):
+        for kind in ("actual", "candidate"):
+            path = Path(str(info.get(f"{kind}_workbook") or "")).resolve()
+            try:
+                relative = path.relative_to(output_dir)
+            except ValueError as exc:
+                raise ValueError("actual Excel 封印工作簿不在專案目錄內") from exc
+            expected_sha = str(info.get(f"{kind}_workbook_sha256") or "")
+            raw = path.read_bytes()
+            if hashlib.sha256(raw).hexdigest() != expected_sha:
+                raise ValueError("actual Excel 舊封印工作簿備份 hash 不符")
+            entries.append({"path": str(relative), "sha256": expected_sha,
+                            "bytes": base64.b64encode(raw).decode("ascii")})
+    return {"manifest_integrity_sha256": manifest["manifest_integrity_sha256"],
+            "manifest_bytes": base64.b64encode(manifest_bytes).decode("ascii"),
+            "entries": entries}
+
+
+def _restore_sealed_workbooks_for_actual_resume(output_dir: Path, marker: Mapping[str, Any], pending):
+    """Bind COMMITTED source/journal, then restore only old sealed derived workbooks."""
+    import actual_review as ar
+    import standalone_proofread as sp
+
+    output_dir = Path(output_dir).resolve()
+    manifest_path = output_dir / "校對工作階段.json"
+    snapshot = marker.get("sealed_workbooks")
+    if (not isinstance(snapshot, dict)
+            or not isinstance(marker.get("pre_state"), dict)
+            or not isinstance(snapshot.get("entries"), list)
+            or marker.get("recovery_plan_sha256") != hashlib.sha256(_canonical(pending[1])).hexdigest()):
+        raise ValueError("actual Excel COMMITTED 舊封印恢復材料不完整或不符；未略過完整性檢查")
+    try:
+        old_raw = base64.b64decode(snapshot.get("manifest_bytes"), validate=True)
+        old_manifest = json.loads(old_raw)
+    except (ValueError, TypeError) as exc:
+        raise ValueError("actual Excel COMMITTED 舊封印無法解碼") from exc
+    if (hashlib.sha256(old_raw).hexdigest() != marker["pre_state"].get("manifest")
+            or not isinstance(old_manifest, dict)
+            or snapshot.get("manifest_integrity_sha256") != old_manifest.get("manifest_integrity_sha256")):
+        raise ValueError("actual Excel COMMITTED 舊封印與標記不符")
+    sp.validate_manifest_integrity(old_manifest)
+    expected = []
+    for info in old_manifest.get("pdfs", []):
+        for kind in ("actual", "candidate"):
+            path = Path(str(info.get(f"{kind}_workbook") or "")).resolve()
+            try:
+                relative = path.relative_to(output_dir)
+            except ValueError as exc:
+                raise ValueError("actual Excel 封印工作簿不在專案目錄內") from exc
+            expected.append((path, str(relative), str(info.get(f"{kind}_workbook_sha256") or "")))
+    if len(snapshot["entries"]) != len(expected):
+        raise ValueError("actual Excel 舊封印工作簿備份數量不符")
+    validated = []
+    for item, (path, relative, wanted) in zip(snapshot["entries"], expected):
+        if (not isinstance(item, dict) or item.get("path") != relative
+                or item.get("sha256") != wanted or not wanted):
+            raise ValueError("actual Excel 舊封印工作簿備份識別不符")
+        try:
+            raw = base64.b64decode(item.get("bytes"), validate=True)
+        except (ValueError, TypeError) as exc:
+            raise ValueError("actual Excel 舊封印工作簿備份無法解碼") from exc
+        if hashlib.sha256(raw).hexdigest() != wanted:
+            raise ValueError("actual Excel 舊封印工作簿備份內容不符")
+        validated.append((path, raw, wanted))
+    records = {entry["occurrence_id"]: entry for entry in old_manifest.get("records", [])}
+    root = sp.project_actual_evidence_root(output_dir)
+    fields = ("pdf_contains", "pdf_excludes", "page", "target_char", "stable_key", "x0", "y0")
+    overrides = {tuple(row[field] for field in fields): row for row in
+                 ar._read_csv(root / ar.OCCURRENCE_OVERRIDE_FILE, ar.OVERRIDE_HEADERS)}
+    conditions = pending[1]["checked_postconditions"]
+    if not conditions:
+        raise ValueError("actual Excel COMMITTED journal 沒有來源判定位置")
+    for condition in conditions:
+        entry = records.get(condition["occurrence_id"])
+        override = overrides.get(ar._override_key_from_entry(entry)) if entry else None
+        if override is None or ar._canon(override["actual_reading"]) != condition["reading"]:
+            raise ValueError("actual Excel COMMITTED journal 與 occurrence-local 判定不符")
+        decoder = json.JSONDecoder()
+        audits = []
+        for index, char in enumerate(override.get("note", "")):
+            if char == "{":
+                try:
+                    audit, _ = decoder.raw_decode(override["note"][index:])
+                except (ValueError, TypeError):
+                    continue
+                audits.append(audit)
+        if not any(isinstance(audit, dict)
+                   and audit.get("source_excel_sha256") == marker["source_excel_sha256"]
+                   and audit.get("source_group_id") == condition["group_id"]
+                   for audit in audits):
+            raise ValueError("actual Excel COMMITTED 來源 SHA/group 與 journal 不符")
+    manifest = sp.json_load_strict(manifest_path)
+    sp.validate_manifest_integrity(manifest)
+    if _sha(manifest_path) != marker["pre_state"]["manifest"]:
+        if (manifest.get("session_id") != old_manifest.get("session_id")
+                or [(info.get("pdf_sha256"), info.get("pdf_name")) for info in manifest.get("pdfs", [])]
+                != [(info.get("pdf_sha256"), info.get("pdf_name")) for info in old_manifest.get("pdfs", [])]
+                or [(row.get("occurrence_id"), row.get("review_id")) for row in manifest.get("records", [])]
+                != [(row.get("occurrence_id"), row.get("review_id")) for row in old_manifest.get("records", [])]):
+            raise ValueError("actual Excel COMMITTED 已重封專案的來源識別不符")
+        sp.validate_output_artifact_hashes(manifest)
+        return
+    for path, raw, wanted in validated:
+        if not path.is_file() or _sha(path) != wanted:
+            _restore_exact_file(path, raw)
+    sp.validate_output_artifact_hashes(manifest)
+
+
 def resume_actual_excel_project(output_dir: Path):
     """Resolve only the durable actual-Excel marker, never a publication marker."""
     import standalone_proofread as sp
@@ -1316,6 +1443,7 @@ def _resume_actual_excel_project_locked(output_dir: Path):
             raise ValueError("actual Excel 未提交交易的原資料狀態已變動；保留標記待人工查核")
         marker_path.unlink()
         return {"project_actual_commit": "ROLLED_BACK", "project_refresh": "NOT_STARTED"}
+    _restore_sealed_workbooks_for_actual_resume(output_dir, marker, pending)
     recovered = sp.recover_committed_actual_project(output_dir, acknowledge=False)
     if recovered is None or recovered.get("project_refresh") != "SUCCESS":
         raise ValueError("actual Excel COMMITTED 交易未完成安全恢復")

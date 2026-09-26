@@ -5,6 +5,8 @@ service, and portability adapter are real. Only the glyph decoder's output is
 injected: this is synthetic acceptance, not real textbook acceptance.
 """
 
+import base64
+import copy
 import hashlib
 import json
 import sys
@@ -743,14 +745,15 @@ def test_actual_excel_prepared_and_post_ack_crash_windows_can_resume(tmp_path, m
 
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
     first, second = _pdfs(tmp_path)
-    a, before_commit, after_refresh = [tmp_path / name for name in
-                                       ("source", "before-commit", "after-refresh")]
+    a, before_commit, after_refresh, after_reseal = [tmp_path / name for name in
+                                                     ("source", "before-commit", "after-refresh", "after-reseal")]
     with patch.object(sp, "decode", side_effect=_synthetic_unresolved_decode), \
          patch.object(sp, "actual_workbook_global_exact_dependencies", return_value=()), \
          patch("check_pronunciation_candidates.actual_workbook_global_exact_dependencies", return_value=()):
         sp.run_pipeline_pdfs([first], a, defer_excel_reports=True)
         sp.run_pipeline_pdfs([second], before_commit, defer_excel_reports=True)
         sp.run_pipeline_pdfs([second], after_refresh, defer_excel_reports=True)
+        sp.run_pipeline_pdfs([second], after_reseal, defer_excel_reports=True)
         sp.export_actual_pending_for_gpt(a)
         workbook = load_workbook(a / "actual待判定_GPT包" / "actual待判定_給GPT.xlsx")
         sheet = workbook["actual待判定"]
@@ -784,6 +787,24 @@ def test_actual_excel_prepared_and_post_ack_crash_windows_can_resume(tmp_path, m
         assert portability._load_project(after_refresh)[0]["session_id"] == sp.json_load_strict(
             after_refresh / "校對工作階段.json")["session_id"]
         assert sp.import_actual_gpt_decisions(after_refresh, filled)[0] == 0
+
+        original_save = sp.json_save
+        def interrupt_marker_transition(path, payload, **kwargs):
+            if (Path(path) == after_reseal / portability.INCOMPLETE_FILE
+                    and payload.get("status") == "ACTUAL_EXCEL_RECOVERED"):
+                raise SystemExit("power loss after manifest reseal")
+            return original_save(path, payload, **kwargs)
+        with patch.object(sp, "json_save", side_effect=interrupt_marker_transition):
+            with pytest.raises(SystemExit, match="power loss after manifest reseal"):
+                sp.import_actual_gpt_decisions(after_reseal, filled)
+        reseal_marker = sp.json_load_strict(after_reseal / portability.INCOMPLETE_FILE)
+        assert reseal_marker["status"] == "ACTUAL_EXCEL_REFRESH_PENDING"
+        assert portability._sha(after_reseal / "校對工作階段.json") != reseal_marker["pre_state"]["manifest"]
+        sp.validate_output_artifact_hashes(sp.json_load_strict(after_reseal / "校對工作階段.json"))
+        assert promotion.committed_project_recovery(sp.project_actual_evidence_root(after_reseal)) is not None
+        assert portability.resume_actual_excel_project(after_reseal)["project_actual_commit"] == "COMMITTED"
+        assert not (after_reseal / portability.INCOMPLETE_FILE).exists()
+        assert sp.import_actual_gpt_decisions(after_reseal, filled)[0] == 0
     assert not list((tmp_path / "isolated-localappdata").rglob("*.sqlite*"))
 
 
@@ -908,6 +929,123 @@ def test_parallel_actual_excel_imports_preserve_marker_and_recovery(tmp_path, mo
                     sp.import_actual_gpt_decisions(target, filled)
             assert (target / portability.INCOMPLETE_FILE).exists()
             assert portability.resume_actual_excel_project(target)["project_actual_commit"] == "ROLLED_BACK"
+        assert not list((tmp_path / "isolated-localappdata").rglob("*.sqlite*"))
+
+
+def test_actual_excel_midrefresh_workbook_rewrite_can_resume_twice(tmp_path, monkeypatch):
+    import global_glyph_promotion as promotion
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
+    first, second = _pdfs(tmp_path)
+    source, target = tmp_path / "source", tmp_path / "target"
+    with patch.object(sp, "decode", side_effect=_synthetic_unresolved_decode), \
+         patch.object(sp, "actual_workbook_global_exact_dependencies", return_value=()), \
+         patch("check_pronunciation_candidates.actual_workbook_global_exact_dependencies", return_value=()):
+        sp.run_pipeline_pdfs([first], source, defer_excel_reports=True)
+        sp.run_pipeline_pdfs([second], target, defer_excel_reports=True)
+        manifest = sp.json_load_strict(target / "校對工作階段.json")
+        expected_id = manifest["records"][1]["review_id"]
+        ReviewSaveService(target).save_event(expected_id, {
+            "action": "補建expected證據", "expected_set": ["ㄐㄩㄝˊ"],
+            "expected_evidence": "independent manual expected", "context_evidence": "PDF page 1",
+        })
+        expected_event = sp.json_load_strict(target / "人工判定資料庫.json")["events"][expected_id]
+        sp.export_actual_pending_for_gpt(source)
+        workbook = load_workbook(source / "actual待判定_GPT包" / "actual待判定_給GPT.xlsx")
+        sheet = workbook["actual待判定"]
+        headers = [cell.value for cell in sheet[1]]
+        for key, value in {"decision": "VERIFIED", "actual_reading": "ㄐㄩㄝˊ",
+                           "confidence": "高", "sample_a_checked": "Y"}.items():
+            sheet.cell(2, headers.index(key) + 1, value)
+        filled = tmp_path / "filled-actual.xlsx"
+        workbook.save(filled)
+        workbook.close()
+        root = sp.project_actual_evidence_root(target)
+        marker = target / portability.INCOMPLETE_FILE
+        old_manifest = sp.json_load_strict(target / "校對工作階段.json")
+        def rewrite_then_crash(*args, **kwargs):
+            _synthetic_unresolved_decode(*args, **kwargs)
+            raise RuntimeError("power loss after workbook rewrite")
+        with patch.object(sp, "decode", side_effect=rewrite_then_crash):
+            with pytest.raises(Exception, match="power loss after workbook rewrite"):
+                sp.import_actual_gpt_decisions(target, filled)
+        assert marker.exists() and promotion.committed_project_recovery(root) is not None
+        with pytest.raises(ValueError, match="hash 不符"):
+            sp.validate_output_artifact_hashes(old_manifest)
+        intact_marker = sp.json_load_strict(marker)
+        for item in intact_marker["sealed_workbooks"]["entries"]:
+            portability._restore_exact_file(target / item["path"], base64.b64decode(item["bytes"]))
+        sp.validate_output_artifact_hashes(old_manifest)
+        sp.json_save(marker, {"status": "ACTUAL_EXCEL_REFRESH_PENDING",
+                              "source_excel_sha256": "0" * 64})
+        watched = [marker, root / promotion.PROJECT_TRANSACTION_FILE,
+                   target / "人工判定資料庫.json", root / ar.OCCURRENCE_OVERRIDE_FILE,
+                   target / "校對工作階段.json"]
+        before_refusal = {path: path.read_bytes() for path in watched}
+        with pytest.raises(ValueError, match="恢復材料不完整"):
+            portability.resume_actual_excel_project(target)
+        assert {path: path.read_bytes() for path in watched} == before_refusal
+        sp.json_save(marker, intact_marker)
+        damaged_marker = copy.deepcopy(intact_marker)
+        damaged_marker["sealed_workbooks"]["entries"][0]["bytes"] = "AA=="
+        sp.json_save(marker, damaged_marker)
+        with pytest.raises(ValueError, match="備份內容不符"):
+            portability.resume_actual_excel_project(target)
+        assert promotion.committed_project_recovery(root) is not None
+        sp.json_save(marker, intact_marker)
+        with patch.object(sp, "decode", side_effect=rewrite_then_crash):
+            with pytest.raises(Exception, match="power loss after workbook rewrite"):
+                portability.resume_actual_excel_project(target)
+        assert marker.exists() and promotion.committed_project_recovery(root) is not None
+        resumed = portability.resume_actual_excel_project(target)
+        assert resumed["project_actual_commit"] == "COMMITTED"
+        assert resumed["global_promotion_delivery"]["status"] == "NO_PENDING"
+        assert not marker.exists() and promotion.committed_project_recovery(root) is None
+        current = sp.json_load_strict(target / "校對工作階段.json")
+        sp.validate_output_artifact_hashes(current)
+        assert current["session_id"] == old_manifest["session_id"]
+        assert sp.json_load_strict(target / "人工判定資料庫.json")["events"][expected_id] == expected_event
+        override_rows = ar._read_csv(root / ar.OCCURRENCE_OVERRIDE_FILE, ar.OVERRIDE_HEADERS)
+        assert any(row["pdf_contains"] == second.stem and
+                   "source_excel_sha256" in row["note"] for row in override_rows)
+        assert (target / "pipeline_status.json").is_file()
+        assert sp.import_actual_gpt_decisions(target, filled)[0] == 0
+        assert not list((tmp_path / "isolated-localappdata").rglob("*.sqlite*"))
+
+
+@pytest.mark.parametrize("saved_proof", [False, True])
+def test_expected_export_without_local_pdf_preserves_same_session_work(saved_proof, tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
+    first, second = _pdfs(tmp_path)
+    source, target = tmp_path / "source", tmp_path / "target"
+    with patch.object(sp, "decode", side_effect=_synthetic_decode), \
+         patch.object(sp, "actual_workbook_global_exact_dependencies", return_value=()), \
+         patch("check_pronunciation_candidates.actual_workbook_global_exact_dependencies", return_value=()):
+        sp.run_pipeline_pdfs([first], source, defer_excel_reports=True)
+        sp.run_pipeline_pdfs([second], target, defer_excel_reports=True)
+        if saved_proof:
+            portability.prepare_portable_project(source)
+        away = tmp_path / "source-pdf-away.pdf"
+        first.rename(away)
+        exported = sp.export_pending_for_gpt(source)
+        workbook = load_workbook(exported)
+        assert (portability.EXCEL_PROOF_SHEET in workbook.sheetnames) is saved_proof
+        sheet = workbook["待判定候選"]
+        headers = [cell.value for cell in sheet[1]]
+        sheet.cell(2, headers.index("action") + 1, "確認非校對範圍")
+        sheet.cell(2, headers.index("exclusion_reason") + 1, "source local visual")
+        sheet.cell(2, headers.index("exclusion_evidence") + 1, "source PDF page 1")
+        filled = tmp_path / "filled-expected.xlsx"
+        workbook.save(filled)
+        workbook.close()
+        assert sp.import_gpt_decisions(source, filled)[0] == 1
+        if saved_proof:
+            assert sp.import_gpt_decisions(target, filled)[0] == 1
+        else:
+            before = (target / "人工判定資料庫.json").read_bytes()
+            with pytest.raises(ValueError, match="證據|session|SHA|PDF"):
+                sp.import_gpt_decisions(target, filled)
+            assert (target / "人工判定資料庫.json").read_bytes() == before
         assert not list((tmp_path / "isolated-localappdata").rglob("*.sqlite*"))
 
 
