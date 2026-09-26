@@ -1208,7 +1208,8 @@ class ReviewApp:
     def _last_expected_target(self):
         review_id = getattr(self, "last_expected_review_id", None)
         event = getattr(self, "db", {}).get("events", {}).get(review_id)
-        if not isinstance(event, dict) or "manual_expected_decision" not in event:
+        if (not isinstance(event, dict) or "manual_expected_decision" not in event
+                or "undo_previous_event" not in event):
             return None
         return review_id
 
@@ -1225,7 +1226,7 @@ class ReviewApp:
             return
         if not messagebox.askyesno("撤銷上一次判定", "確定撤銷這次應標判定並回到這一筆？", parent=self.root):
             return
-        previous = self.db["events"][review_id].get("undo_previous_event")
+        previous = self.db["events"][review_id]["undo_previous_event"]
         self.save_event(entry, copy.deepcopy(previous), focus_after_save=True)
 
     def _remember_previous_expected_event(self, entry, event):

@@ -326,6 +326,71 @@ class ManualReviewGuiTests(unittest.TestCase):
         self.assertEqual(app.current()["state"], "DIFFERENCE_PENDING_CONFIRMATION")
         self.assertEqual(app.db["events"][first["review_id"]], prior)
 
+    def test_only_one_undo_snapshot_is_consumed_after_three_decisions(self):
+        app = self.app
+        first = app.current()
+        app.primary.invoke()  # A: current reading, now terminal and out of the queue.
+        wait_for_save(app)
+        with patch.object(gui, "ConfirmedItemsDialog") as choose:
+            choose.return_value.result = first["review_id"]
+            app.open_confirmed_items()
+        self.assertEqual(app.current()["review_id"], first["review_id"])
+
+        for reading in ("ㄎㄢ", "ㄎㄢˊ"):
+            app._review_action_cooldown_until = 0
+            with patch.object(gui, "ExpectedDialog") as dialog, patch.object(gui.messagebox, "showwarning"):
+                dialog.return_value.result = {"expected_set": reading, "expected_evidence": "", "resolution_reason": ""}
+                app.resolve_expected()
+                wait_for_save(app)
+        latest = app.db["events"][first["review_id"]]
+        self.assertEqual(latest["expected_set"], ["ㄎㄢˊ"])
+        self.assertEqual(latest["undo_previous_event"]["expected_set"], ["ㄎㄢ"])
+        self.assertNotIn("undo_previous_event", latest["undo_previous_event"])
+
+        app._review_action_cooldown_until = 0
+        with patch.object(gui.messagebox, "askyesno", return_value=True):
+            app.undo_last_expected()
+            wait_for_save(app)
+        restored = app.db["events"][first["review_id"]]
+        self.assertEqual(restored["expected_set"], ["ㄎㄢ"])
+        self.assertNotIn("undo_previous_event", restored)
+        self.assertEqual(app.current()["expected_set"], ["ㄎㄢ"])
+        self.assertEqual(app.undo_expected_button.cget("state"), "disabled")
+        before = (self.output / "人工判定資料庫.json").read_bytes()
+        app._review_action_cooldown_until = 0
+        with patch.object(gui.messagebox, "askyesno") as confirm:
+            app.undo_last_expected()
+            confirm.assert_not_called()
+        self.assertEqual((self.output / "人工判定資料庫.json").read_bytes(), before)
+        self.assertEqual(app.db["events"][first["review_id"]], restored)
+
+    def test_legacy_manual_event_without_snapshot_needs_explicit_revoke(self):
+        first = self.app.current()
+        legacy = sp.build_manual_expected_event(first, operation="ENTER_EXPECTED", expected_set="ㄎㄢˋ")
+        db = sp.load_or_initialize_db(self.output)
+        db["events"][first["review_id"]] = legacy
+        sp.json_save(self.output / "人工判定資料庫.json", db)
+        reopened_window = tk.Toplevel(self.root)
+        try:
+            reopened = gui.ReviewApp(reopened_window, self.output)
+            reopened_window.update()
+            with patch.object(gui, "ConfirmedItemsDialog") as choose:
+                choose.return_value.result = first["review_id"]
+                reopened.open_confirmed_items()
+            self.assertEqual(reopened.current()["review_id"], first["review_id"])
+            self.assertEqual(reopened.undo_expected_button.cget("state"), "disabled")
+            before = (self.output / "人工判定資料庫.json").read_bytes()
+            with patch.object(gui.messagebox, "askyesno") as confirm:
+                reopened.undo_last_expected()
+                confirm.assert_not_called()
+            self.assertEqual((self.output / "人工判定資料庫.json").read_bytes(), before)
+            with patch.object(gui.messagebox, "askyesno", return_value=True):
+                reopened.clear()  # Existing explicit per-item revoke remains available.
+                wait_for_save(reopened)
+            self.assertNotIn(first["review_id"], reopened.db["events"])
+        finally:
+            reopened_window.destroy()
+
     def test_confirmed_lookup_reopens_with_filters_and_corrects_one_item(self):
         app = self.app
         first = app.current()
