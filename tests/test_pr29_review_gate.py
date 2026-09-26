@@ -79,6 +79,80 @@ def blocked(review, kind):
     review.update(verdict="BLOCKED", blocker_kind=kind, findings=["confirmed " + kind])
 
 
+def sixth_state(stage="draft"):
+    """Synthetic stage fixture; never use its refs, agents or PASS as real evidence."""
+    evidence = state()
+    evidence["schema"] = gate.MERGE_SCHEMA
+    evidence["authorization"] = {"task_id": gate.TASK, "active": True,
+                                  "operations": sorted(gate.MERGE_OPERATIONS),
+                                  "source_ref": gate.MERGE_AUTHORIZATION_REF,
+                                  "source_sha256": gate.MERGE_AUTHORIZATION_SHA256}
+    chain = (*gate.HISTORY, gate.FIFTH_HEAD, HEAD)
+    evidence["corrections"] = [{"number": n + 1, "from_head": chain[n], "to_head": chain[n + 1],
+                                "evidence_ref": "fixture://round/" + str(n + 1)} for n in range(6)]
+    evidence["prior_fifth"] = {"candidate_head": gate.FIFTH_HEAD,
+                               "state_ref": "fixture://retained-fifth-input",
+                               "state_sha256": gate.FIFTH_STATE_SHA256,
+                               "stop_ref": "fixture://retained-fifth-stop",
+                               "stop_sha256": gate.FIFTH_STOP_SHA256, "stop_action": "STOP",
+                               "report_refs": list(gate.FIFTH_REPORT_REFS),
+                               "missing_originals": list(gate.MISSING_ORIGINALS)}
+    evidence["continuation"].update(created_at="2026-09-26T00:00:00Z",
+                                    missing_originals=list(gate.MISSING_ORIGINALS),
+                                    contains_fifth=True)
+    evidence["local_validation"] = {"head": HEAD, "platform": "Windows",
+                                    "python_version": "3.13.0", "evidence_ref": "fixture://local",
+                                    "checks": {name: {"status": "success", "evidence_ref": "fixture://" + name}
+                                               for name in gate.MERGE_LOCAL_CHECKS},
+                                    "performance": {"status": "reused", "source_head": gate.FIFTH_HEAD,
+                                                    "product_unchanged": True, "harness_unchanged": True,
+                                                    "impact_ref": "fixture://impact",
+                                                    "evidence_ref": "fixture://round5-benchmark"}}
+    evidence["pr"].update(head_repository=gate.REPOSITORY, merged=False, merge_commit_sha=None)
+    evidence["remote"]["head_ref_exists"] = True
+    evidence["ready_transition"] = None
+    evidence["merge"] = None
+    evidence["post_merge_ancestry"] = None
+    evidence["push_event"] = None
+    evidence["push_ci"] = None
+    if stage == "local":
+        evidence["remote"]["head"] = gate.FIFTH_HEAD
+        evidence["pr"]["head_sha"] = gate.FIFTH_HEAD
+        evidence["pr_ci"] = None
+        evidence["reviews"] = [report(1)]
+    if stage in ("ready", "merged"):
+        evidence["pr"]["draft"] = False
+        evidence["ready_transition"] = {
+            "decision_ref": "fixture://ready-decision", "ready_event_ref": "fixture://ready-api",
+            "ready_at": "2026-09-26T01:00:00Z", "rechecked_at": "2026-09-26T01:01:00Z",
+            "pr_ref": "fixture://post-ready-pr", "refs_ref": "fixture://post-ready-refs",
+            "findings_ref": "fixture://post-ready-findings", "rules_ref": "fixture://rules",
+            "ci_ref": "fixture://latest-ci", "mergeable_at_ready": True,
+            "protection_satisfied_at_ready": True}
+    if stage == "merged":
+        merge_sha = "d" * 40
+        evidence["pr"].update(state="closed", merged=True, merge_commit_sha=merge_sha)
+        evidence["remote"]["base"] = merge_sha
+        evidence["merge"] = {"sha": merge_sha, "parents": [gate.DEVELOP, HEAD], "tree": TREE,
+                             "method": "merge", "pr_number": 29, "expected_base": gate.DEVELOP,
+                             "expected_head": HEAD, "merged_at": "2026-09-26T01:02:00Z",
+                             "api_record_ref": "fixture://merged-pr",
+                             "git_ref": "fixture://merge-object", "develop_ref": "fixture://develop-ref"}
+        evidence["push_event"] = {"repository": gate.REPOSITORY, "ref": "refs/heads/develop",
+                                  "before_sha": gate.DEVELOP, "after_sha": merge_sha,
+                                  "evidence_ref": "fixture://push-event"}
+        push_ci = deepcopy(evidence["pr_ci"])
+        push_ci.update(event="push", branch="develop", run_id=201, attempt=1,
+                       latest_run_id=201, latest_attempt=1, head_sha=merge_sha,
+                       tested_sha=merge_sha, parents=[gate.DEVELOP, HEAD])
+        for job in push_ci["jobs"]:
+            job.update(run_id=201, attempt=1, tested_sha=merge_sha)
+            job["steps"]["Check committed whitespace (pull request)"] = "skipped"
+            job["steps"]["Check committed whitespace (push)"] = "success"
+        evidence["push_ci"] = push_ci
+    return evidence
+
+
 class PR29GateTests(unittest.TestCase):
     def action(self, evidence, action):
         result = gate.next_action(evidence)
@@ -323,17 +397,19 @@ class PR29GateTests(unittest.TestCase):
     def test_workflow_actual_condition_is_limited_to_adopted_pr_and_target(self):
         text = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         expression = re.search(r"- name: Run full unittest suite\s+if: \$\{\{ (.+?) \}\}", text)[1]
-        self.assertIn(expression, re.search(r"python-version: \$\{\{ fromJSON\((.+)\) \}\}", text)[1])
+        matrix_choice = re.search(r"python-version: \$\{\{ fromJSON\((.+)\) \}\}", text)[1]
+        self.assertIn(expression, matrix_choice)
         job_env = re.search(r"    env:\n(.*?)    strategy:", text, re.S)[1]
         capture_expression = re.search(r"PYTEST_ADDOPTS: \$\{\{ (.+?) \}\}", job_env)[1]
         self.assertEqual(text.count("PYTEST_ADDOPTS:"), 1)
         capture_condition, capture_choice = capture_expression.rsplit(" && ", 1)
         self.assertEqual(capture_choice, "'--capture=sys' || ''")
-        self.assertIn(capture_condition, expression)
+        self.assertIn("github.event.before == '" + gate.DEVELOP + "'", capture_condition)
         context = {"github.event_name": "pull_request", "github.repository": gate.REPOSITORY,
                    "github.event.pull_request.head.repo.full_name": gate.REPOSITORY,
                    "github.event.pull_request.number": 29, "github.head_ref": gate.BRANCH,
-                   "github.event.pull_request.base.ref": "develop", "github.event.pull_request.base.sha": gate.DEVELOP}
+                   "github.event.pull_request.base.ref": "develop", "github.event.pull_request.base.sha": gate.DEVELOP,
+                   "github.ref": "refs/pull/29/merge", "github.event.before": "0" * 40}
 
         def evaluate(values, actual_expression=expression):
             code = actual_expression
@@ -344,21 +420,187 @@ class PR29GateTests(unittest.TestCase):
 
         self.assertTrue(evaluate(context))
         self.assertEqual(evaluate(context, capture_expression), "--capture=sys")
-        for key in context:
+        self.assertEqual(evaluate(context, matrix_choice), '["3.12", "3.13"]')
+        for key in ("github.event_name", "github.repository", "github.event.pull_request.head.repo.full_name",
+                    "github.event.pull_request.number", "github.head_ref", "github.event.pull_request.base.ref",
+                    "github.event.pull_request.base.sha"):
             changed = {**context, key: "wrong" if key != "github.event.pull_request.number" else 30}
             self.assertFalse(evaluate(changed), key)
             self.assertEqual(evaluate(changed, capture_expression), "", key)
-        for event in ("push", "workflow_dispatch"):
-            changed = {**context, "github.event_name": event}
-            self.assertFalse(evaluate(changed))
-            self.assertEqual(evaluate(changed, capture_expression), "")
+            self.assertEqual(evaluate(changed, matrix_choice), '["3.13"]', key)
+        push = {**context, "github.event_name": "push", "github.ref": "refs/heads/develop",
+                "github.event.before": gate.DEVELOP}
+        self.assertTrue(evaluate(push))
+        self.assertEqual(evaluate(push, capture_expression), "--capture=sys")
+        self.assertEqual(evaluate(push, matrix_choice), '["3.12", "3.13"]')
+        for key in ("github.repository", "github.ref", "github.event.before"):
+            changed = {**push, key: "wrong"}
+            self.assertFalse(evaluate(changed), key)
+            self.assertEqual(evaluate(changed, capture_expression), "", key)
+            self.assertEqual(evaluate(changed, matrix_choice), '["3.13"]', key)
+        changed = {**context, "github.event_name": "workflow_dispatch"}
+        self.assertFalse(evaluate(changed))
+        self.assertEqual(evaluate(changed, capture_expression), "")
+        self.assertEqual(evaluate(changed, matrix_choice), '["3.13"]')
         pr30 = {**context, "github.event.pull_request.number": 30,
                 "github.head_ref": "codex/simplify-validation",
                 "github.event.pull_request.base.sha": gate.BASELINE}
         self.assertTrue(evaluate(pr30))
         self.assertEqual(evaluate(pr30, capture_expression), "")
+        self.assertEqual(evaluate(pr30, matrix_choice), '["3.12", "3.13"]')
         for step in gate.COMMON_STEPS:
             self.assertIn("- name: " + step, text)
+
+
+class PR29MergeContinuationTests(unittest.TestCase):
+    def action(self, evidence, expected):
+        original = deepcopy(evidence)
+        actual = gate.next_action(evidence)
+        self.assertEqual(actual["action"], expected, actual)
+        self.assertEqual(evidence, original)
+        return actual
+
+    def test_adopted_source_and_fifth_stop_remain_bound(self):
+        original = ROOT / "docs/evidence/pr29_round6_user_adopted_contract.md"
+        # Check the LF Git-content bytes; a Windows working-tree checkout may be CRLF.
+        self.assertEqual(hashlib.sha256(original.read_bytes().replace(b"\r\n", b"\n")).hexdigest(),
+                         gate.MERGE_AUTHORIZATION_SHA256)
+        for part, field in (("authorization", "source_ref"), ("authorization", "source_sha256"),
+                            ("prior_fifth", "state_sha256"), ("prior_fifth", "stop_sha256"),
+                            ("prior_fifth", "report_refs"), ("prior_fifth", "missing_originals")):
+            evidence = sixth_state()
+            evidence[part][field] = "wrong"
+            self.action(evidence, "STOP")
+        old = state()
+        self.action(old, "STOP")
+        self.assertTrue(gate.next_action(old)["delivery_ready"])
+
+    def test_exact_sixth_round_and_external_drift(self):
+        for count in (0, 5, 7):
+            evidence = sixth_state(); evidence["corrections"] = evidence["corrections"][:count] if count < 6 else evidence["corrections"] + [evidence["corrections"][-1]]
+            self.assertIn("seventh", self.action(evidence, "STOP")["reason"])
+        for part, field, value in (("task", "id", "other"), ("task", "baseline", HEAD),
+                                   ("current", "base", gate.BASELINE),
+                                   ("corrections", 5, None), ("remote", "base", gate.BASELINE),
+                                   ("remote", "head", gate.START), ("pr", "head_repository", "other/repo"),
+                                   ("pr", "number", 30)):
+            evidence = sixth_state()
+            if part == "corrections": evidence[part][field]["from_head"] = gate.START
+            else: evidence[part][field] = value
+            self.action(evidence, "STOP")
+        evidence = sixth_state(); evidence["reviews"][0]["head"] = gate.FIFTH_HEAD
+        self.action(evidence, "STOP")
+
+    def test_stage_order_and_no_draft_merge(self):
+        local = sixth_state("local")
+        self.action(local, "PUSH_CANDIDATE")
+        local["reviews"] = []
+        self.action(local, "REQUEST_REVIEW_1")
+        local = sixth_state("local"); local["reviews"].append(report(2))
+        self.action(local, "STOP")
+        for permission in ("push", "pr"):
+            evidence = sixth_state("local"); evidence["authorization"]["operations"].remove(permission)
+            self.action(evidence, "STOP")
+        self.action(sixth_state(), "READY_FOR_REVIEW")
+        ready = sixth_state("ready")
+        proposal = self.action(ready, "MERGE_PROPOSAL")
+        self.assertEqual((proposal["expected_base_sha"], proposal["expected_head_sha"], proposal["merge_method"]),
+                         (gate.DEVELOP, HEAD, "merge"))
+        ready["ready_transition"] = None
+        self.action(ready, "REFRESH_EVIDENCE")
+        ready = sixth_state("ready"); ready["ready_transition"]["rechecked_at"] = "2026-09-26T00:00:00Z"
+        self.action(ready, "STOP")
+        for permission in ("ready", "pr"):
+            evidence = sixth_state(); evidence["authorization"]["operations"].remove(permission)
+            self.action(evidence, "STOP")
+        evidence = sixth_state("ready"); evidence["authorization"]["operations"].remove("merge")
+        self.action(evidence, "STOP")
+
+    def test_reviews_are_fresh_independent_and_no_seventh_code_fix(self):
+        for number in (0, 1):
+            for field, value in (("reviewer", "writer"), ("independent", False),
+                                 ("full_diff_reviewed", False), ("scope", "partial")):
+                evidence = sixth_state(); evidence["reviews"][number][field] = value
+                self.action(evidence, "STOP")
+            evidence = sixth_state(); blocked(evidence["reviews"][number], "code")
+            self.assertIn("seventh", self.action(evidence, "STOP")["reason"])
+        evidence = sixth_state(); evidence["reviews"][1]["reviewer"] = evidence["reviews"][0]["reviewer"]
+        self.action(evidence, "STOP")
+        evidence = sixth_state(); evidence["pr"]["new_blockers"] = ["confirmed defect"]
+        self.assertIn("seventh", self.action(evidence, "STOP")["reason"])
+        evidence = sixth_state(); blocked(evidence["reviews"][1], "evidence")
+        self.action(evidence, "REFRESH_EVIDENCE")
+
+    def test_missing_and_failed_candidate_validation_or_ci(self):
+        for check in gate.MERGE_LOCAL_CHECKS:
+            evidence = sixth_state(); evidence["local_validation"]["checks"][check]["status"] = "missing"
+            self.action(evidence, "REFRESH_EVIDENCE")
+        evidence = sixth_state(); evidence["local_validation"]["performance"]["product_unchanged"] = False
+        self.action(evidence, "STOP")
+        evidence = sixth_state(); evidence["pr_ci"] = None
+        self.action(evidence, "WAIT_PR_CI")
+        evidence = sixth_state(); evidence["pr_ci"]["conclusion"] = "failure"
+        self.action(evidence, "INVESTIGATE_CI")
+        for field, value in (("head_sha", gate.FIFTH_HEAD), ("parents", [HEAD, gate.DEVELOP]),
+                             ("tree", TESTED), ("attempt", 1), ("latest_run_id", 102)):
+            evidence = sixth_state(); evidence["pr_ci"][field] = value
+            self.assertNotIn(self.action(evidence, gate.next_action(evidence)["action"])["action"],
+                             ("READY_FOR_REVIEW", "MERGE_PROPOSAL", "COMPLETE"))
+        evidence = sixth_state(); evidence["pr_ci"]["jobs"][0]["steps"]["Verify GUI test execution"] = "skipped"
+        self.action(evidence, "INVESTIGATE_CI")
+
+    def test_actual_merge_and_its_own_push_ci_are_required(self):
+        self.action(sixth_state("merged"), "COMPLETE")
+        evidence = sixth_state("merged"); evidence["remote"].update(head=None, head_ref_exists=False)
+        self.action(evidence, "COMPLETE")
+        evidence = sixth_state(); evidence["remote"].update(head=None, head_ref_exists=False)
+        self.action(evidence, "STOP")
+        evidence = sixth_state("merged"); evidence["remote"]["base"] = "e" * 40
+        self.action(evidence, "REFRESH_EVIDENCE")
+        evidence["post_merge_ancestry"] = {
+            "tip": "e" * 40, "merge_sha": "d" * 40,
+            "first_parent_commits": [{"sha": "e" * 40, "parents": ["d" * 40],
+                                      "object_ref": "fixture://actual-commit-object"}],
+            "git_ref": "fixture://first-parent-ancestry"}
+        self.action(evidence, "COMPLETE")
+        evidence["post_merge_ancestry"]["first_parent_commits"][0]["parents"] = [HEAD]
+        self.action(evidence, "STOP")
+        evidence = sixth_state("merged"); evidence["merge"] = None
+        self.action(evidence, "VERIFY_MERGE")
+        evidence = sixth_state("merged"); evidence["push_ci"] = None
+        self.action(evidence, "WAIT_PUSH_CI")
+        for field, value in (("parents", [HEAD, gate.DEVELOP]), ("tree", TESTED),
+                             ("expected_base", gate.BASELINE), ("merged_at", "2026-09-26T00:00:00Z")):
+            evidence = sixth_state("merged"); evidence["merge"][field] = value
+            self.action(evidence, "STOP")
+        evidence = sixth_state("merged"); evidence["push_event"]["before_sha"] = gate.BASELINE
+        self.action(evidence, "STOP")
+        for field, value in (("tested_sha", TESTED), ("head_sha", TESTED),
+                             ("attempt", 2), ("latest_run_id", 202), ("tree", TESTED)):
+            evidence = sixth_state("merged"); evidence["push_ci"][field] = value
+            self.assertNotEqual(self.action(evidence, gate.next_action(evidence)["action"])["action"], "COMPLETE")
+        evidence = sixth_state("merged"); evidence["push_ci"]["jobs"][0]["steps"]["Check committed whitespace (push)"] = "skipped"
+        self.action(evidence, "INVESTIGATE_CI")
+
+    def test_closed_schema_and_cli_keep_old_and_new_read_only(self):
+        for stage in ("local", "draft", "ready", "merged"):
+            evidence = sixth_state(stage)
+            gate.validate_state(evidence)
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "state.json"
+                path.write_text(json.dumps(evidence), encoding="utf-8")
+                original = path.read_bytes()
+                command = [sys.executable, str(ROOT / "scripts/pr29_review_gate.py")]
+                process = subprocess.run([*command, "validate", str(path)], capture_output=True, text=True)
+                self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
+                self.assertEqual(json.loads(process.stdout), {"schema_valid": True, "authenticity_verified": False})
+                process = subprocess.run([*command, "next-action", str(path)], capture_output=True, text=True)
+                self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
+                self.assertEqual(path.read_bytes(), original)
+        evidence = sixth_state(); evidence["override_round_limit"] = 7
+        self.action(evidence, "STOP")
+        evidence = sixth_state(); evidence["authorization"]["operations"].append("force_push")
+        self.action(evidence, "STOP")
 
 
 if __name__ == "__main__":
