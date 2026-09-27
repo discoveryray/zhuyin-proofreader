@@ -2,6 +2,7 @@
 
 import hashlib
 import copy
+import os
 from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import patch
@@ -311,3 +312,92 @@ def test_legacy_visual_proof_requires_exact_source_to_map_different_sha(tmp_path
     upgraded = portable._load_proof(source, manifest)
     assert portable._match_pdfs(upgraded, manifest, changed_manifest, target_changed)[0] == {
         manifest["pdfs"][0]["pdf_sha256"]: changed_manifest["pdfs"][0]["pdf_sha256"]}
+
+
+def test_pdf_sha_and_page_proof_share_the_same_bytes_snapshot(tmp_path):
+    source, replacement = tmp_path / "source.pdf", tmp_path / "replacement.pdf"
+    pdf(source, title="original", text="original lesson")
+    pdf(replacement, title="replacement", text="other lesson")
+    sealed_sha = hashlib.sha256(source.read_bytes()).hexdigest()
+    original_pages = portable._page_signatures(source)
+    replacement_pages = portable._page_signatures(replacement)
+    manifest = {"session_id": "A", "manifest_integrity_sha256": "sealed-A",
+                "pdfs": [{"pdf": str(source), "pdf_name": source.name,
+                          "pdf_sha256": sealed_sha}]}
+    original_source_pdf = portable._source_pdf
+
+    def swap_source(*args):
+        selected = original_source_pdf(*args)
+        os.replace(replacement, source)
+        return selected
+
+    with patch.object(portable, "_source_pdf", side_effect=swap_source):
+        with pytest.raises((ValueError, FileNotFoundError), match="SHA|變動|內容"):
+            portable._proof_payload(tmp_path, manifest)
+    assert original_pages != replacement_pages
+
+    good, target, swap = (tmp_path / name for name in ("good.pdf", "target.pdf", "swap.pdf"))
+    pdf(good, title="good", text="same lesson")
+    pdf(target, title="target", text="different lesson")
+    swap.write_bytes(good.read_bytes())
+    source_sha = hashlib.sha256(good.read_bytes()).hexdigest()
+    target_sha = hashlib.sha256(target.read_bytes()).hexdigest()
+    proof = {"pdfs": [{"pdf_sha256": source_sha, "pdf_name": good.name,
+                       "pages": portable._page_signatures(good)}]}
+    target_manifest = {"pdfs": [{"pdf": str(target), "pdf_name": target.name,
+                                 "pdf_sha256": target_sha}]}
+
+    def swap_target(*args):
+        selected = original_source_pdf(*args)
+        os.replace(swap, target)
+        return selected
+
+    with patch.object(portable, "_source_pdf", side_effect=swap_target):
+        with pytest.raises((ValueError, FileNotFoundError), match="SHA|變動|內容"):
+            portable._match_pdfs(proof, manifest, target_manifest, tmp_path)
+
+    missing_source = tmp_path / "missing.pdf"
+    local = tmp_path / "local.pdf"
+    pdf(local, title="old local", text="unrelated lesson")
+    stale_pages = portable._page_signatures(local)
+    local.write_bytes(good.read_bytes())
+    missing_manifest = {"pdfs": [{"pdf": str(missing_source), "pdf_name": missing_source.name,
+                                  "pdf_sha256": source_sha}]}
+    with pytest.raises((ValueError, FileNotFoundError), match="SHA|變動|頁面|內容"):
+        portable._proof_from_explicit_local(tmp_path, missing_manifest, local, stale_pages)
+
+
+@pytest.mark.parametrize("partial_presentation", [False, True])
+def test_cross_session_expected_postcommit_interrupt_can_repair(
+        tmp_path, monkeypatch, partial_presentation):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
+    first, second = _pdfs(tmp_path)
+    source, target = tmp_path / "source", tmp_path / "target"
+    with patch.object(sp, "decode", side_effect=_synthetic_decode), \
+         patch.object(sp, "actual_workbook_global_exact_dependencies", return_value=()), \
+         patch("check_pronunciation_candidates.actual_workbook_global_exact_dependencies", return_value=()):
+        sp.run_pipeline_pdfs([first], source)
+        sp.run_pipeline_pdfs([second], target)
+    filled = expected_workbook(tmp_path, source)
+    source_db_before = read(source / "人工判定資料庫.json")
+    target_manifest = sp.json_load_strict(target / "校對工作階段.json")
+
+    def interrupt(output_dir, manifest, db):
+        if partial_presentation:
+            sp.save_pending_json(output_dir, manifest, db)
+        raise KeyboardInterrupt("abrupt stop after commit")
+
+    with patch.object(portable, "_publish_portable_outputs", side_effect=interrupt):
+        with pytest.raises(KeyboardInterrupt, match="abrupt stop"):
+            sp.import_gpt_decisions(target, filled)
+    marker = target / portable.INCOMPLETE_FILE
+    assert marker.exists()
+    assert len(sp.json_load_strict(target / "人工判定資料庫.json")["events"]) == 1
+    assert read(source / "人工判定資料庫.json") == source_db_before
+    with pytest.raises(ValueError, match="未完成"):
+        sp.regenerate_report(target)
+    assert sp.repair_project_state(target) == target / "注音校對_最終報告.xlsx"
+    assert not marker.exists()
+    assert sp.json_load_strict(target / "校對工作階段.json")["session_id"] == target_manifest["session_id"]
+    assert sp.json_load_strict(target / "pipeline_status.json")["user_report"] == str(
+        target / "注音校對_最終報告.xlsx")

@@ -45,8 +45,8 @@ def _canonical(value: Any) -> bytes:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
-def _page_signatures(path: Path) -> list[dict[str, Any]]:
-    """Bind rendered content and the text actually consumed by candidate building.
+def _pdf_content_snapshot(path: Path, *, expected_sha256: str | None = None):
+    """Read PDF bytes once, then derive SHA, candidate text and raster from them.
 
     The candidate resolver uses RAWDICT text even when a PDF marks it invisible.
     Comparing its normalized characters in displayed coordinates prevents a
@@ -55,9 +55,20 @@ def _page_signatures(path: Path) -> list[dict[str, Any]]:
     """
     from check_pronunciation_candidates import build_pdf_line_index
 
-    line_index = build_pdf_line_index(path)
+    data = Path(path).read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    if expected_sha256 is not None and digest != expected_sha256:
+        raise ValueError(f"PDF SHA 在建立內容證據前已變動：{path}")
+    # The production candidate index accepts a path. Feed it a private copy
+    # of the already-read bytes; raster rendering uses the same in-memory bytes.
+    with tempfile.TemporaryDirectory(prefix="portable-pdf-snapshot-") as folder:
+        snapshot_path = Path(folder) / "content.pdf"
+        snapshot_path.write_bytes(data)
+        line_index = build_pdf_line_index(snapshot_path)
+        if _sha(snapshot_path) != digest:
+            raise ValueError("PDF 校對文字快照於讀取期間變動")
     signatures = []
-    with fitz.open(path) as document:
+    with fitz.open(stream=data, filetype="pdf") as document:
         if not document.page_count:
             raise ValueError("PDF 沒有頁面")
         for page in document:
@@ -88,7 +99,11 @@ def _page_signatures(path: Path) -> list[dict[str, Any]]:
                 "rgb_sha256": hashlib.sha256(pix.samples).hexdigest(),
                 "candidate_text_sha256": hashlib.sha256(_canonical(candidate_blocks)).hexdigest(),
             })
-    return signatures
+    return digest, signatures
+
+
+def _page_signatures(path: Path) -> list[dict[str, Any]]:
+    return _pdf_content_snapshot(path)[1]
 
 
 def _source_pdf(manifest: Mapping[str, Any], info: Mapping[str, Any], output_dir: Path) -> Path:
@@ -474,10 +489,11 @@ def _proof_payload(output_dir: Path, manifest: Mapping[str, Any]) -> dict[str, A
     pdfs = []
     for info in manifest.get("pdfs", []):
         path = _source_pdf(manifest, info, output_dir)
+        observed_sha, pages = _pdf_content_snapshot(path, expected_sha256=str(info["pdf_sha256"]))
         pdfs.append({
-            "pdf_sha256": str(info["pdf_sha256"]),
+            "pdf_sha256": observed_sha,
             "pdf_name": str(info["pdf_name"]),
-            "pages": _page_signatures(path),
+            "pages": pages,
         })
     if not pdfs or len({item["pdf_sha256"] for item in pdfs}) != len(pdfs):
         raise ValueError("來源工作階段 PDF 清單空白或 SHA 不唯一")
@@ -856,7 +872,7 @@ def _load_proof(output_dir: Path, manifest: Mapping[str, Any]):
                     # _match_pdfs may still prove byte-for-byte identity with
                     # the target; different bytes require this missing layer.
                     return proof
-                fresh = _page_signatures(original)
+                _, fresh = _pdf_content_snapshot(original, expected_sha256=str(info["pdf_sha256"]))
                 if not _pages_visual_equivalent(saved["pages"], fresh):
                     raise ValueError("舊 PDF 內容證據與來源原頁不符；未補證")
                 saved["pages"] = fresh
@@ -868,11 +884,14 @@ def _load_proof(output_dir: Path, manifest: Mapping[str, Any]):
 
 def _proof_from_explicit_local(output_dir: Path, manifest: Mapping[str, Any],
                                local_pdf: Path, local_pages):
+    infos = manifest.get("pdfs", [])
+    observed_sha, observed_pages = _pdf_content_snapshot(local_pdf)
+    if observed_pages != local_pages:
+        raise ValueError("明確指定的本地 PDF 在頁面內容取證後已變動")
     try:
         return _load_proof(output_dir, manifest)
     except FileNotFoundError:
-        infos = manifest.get("pdfs", [])
-        if len(infos) != 1 or _sha(local_pdf) != infos[0].get("pdf_sha256"):
+        if len(infos) != 1 or observed_sha != infos[0].get("pdf_sha256"):
             raise
         # The selected file has the sealed source bytes; no path search or
         # inferred equivalence is needed to obtain its complete page proof.
@@ -908,7 +927,8 @@ def _match_pdfs(proof: Mapping[str, Any], source_manifest: Mapping[str, Any],
     rendered = []
     for target in target_pdfs:
         path = _source_pdf(target_manifest, target, target_dir)
-        rendered.append((target, _page_signatures(path)))
+        _, pages = _pdf_content_snapshot(path, expected_sha256=str(target["pdf_sha256"]))
+        rendered.append((target, pages))
     mapping = {}
     geometry = {}
     for source in source_pdfs:
@@ -1039,7 +1059,8 @@ def _presentation_receipt_plan(target_dir: Path, planned: Mapping[str, Any]):
 def _new_presentation_marker(target_dir: Path, manifest, before_db_sha: str,
                              candidate_db, planned_receipts: Mapping[str, Any], *,
                              phase: str, export_pending: bool = False):
-    if phase not in {"PROJECT_IMPORT", "NEW_PROJECT_FINAL", "SAME_SESSION_EXPECTED"}:
+    if phase not in {"PROJECT_IMPORT", "NEW_PROJECT_FINAL", "SAME_SESSION_EXPECTED",
+                     "CROSS_SESSION_EXPECTED"}:
         raise ValueError("未知專案發布階段")
     payload = {
         "status": "PRESENTATION_PENDING", "plan_version": PRESENTATION_PLAN_VERSION,
@@ -1064,7 +1085,8 @@ def _validated_presentation_marker(value):
     payload = {key: item for key, item in value.items() if key != "plan_integrity_sha256"}
     if (value["status"] != "PRESENTATION_PENDING"
             or value["plan_version"] != PRESENTATION_PLAN_VERSION
-            or value["phase"] not in {"PROJECT_IMPORT", "NEW_PROJECT_FINAL", "SAME_SESSION_EXPECTED"}
+            or value["phase"] not in {"PROJECT_IMPORT", "NEW_PROJECT_FINAL", "SAME_SESSION_EXPECTED",
+                                       "CROSS_SESSION_EXPECTED"}
             or not isinstance(value["owner_token"], str) or len(value["owner_token"]) != 32
             or any(char not in "0123456789abcdef" for char in value["owner_token"])
             or type(value["export_pending"]) is not bool
@@ -1348,13 +1370,18 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
                               for path in [db_path, receipt_path, marker_path, *presentation_paths]}
             marker_before = marker_path.read_bytes() if marker_path.exists() else None
             receipt_before = receipt_path.read_bytes() if receipt_path.exists() else None
-            owned_marker = {"status": "PRESENTATION_PENDING", "source_excel_sha256": _sha(xlsx),
-                            "import_token": uuid.uuid4().hex}
+            planned_conflicts = ({"version": 1, "conflicts": [*prior_conflicts, *conflicts]}
+                                 if conflicts else None)
+            owned_marker = _new_presentation_marker(
+                target_dir, live_manifest, before, candidate,
+                {CONFLICT_FILE: planned_conflicts} if planned_conflicts is not None else {},
+                phase="CROSS_SESSION_EXPECTED")
             db_committed = False
             try:
-                sp.json_save(marker_path, owned_marker)
+                sp.json_save(marker_path, owned_marker, expected_sha256="")
                 if conflicts:
-                    sp.json_save(receipt_path, {"version": 1, "conflicts": [*prior_conflicts, *conflicts]})
+                    sp.json_save(receipt_path, planned_conflicts,
+                                 expected_sha256=_sha(receipt_path) if receipt_path.exists() else "")
                 if sp.json_load_strict(marker_path) != owned_marker:
                     raise ValueError("Excel expected 匯入標記已由其他交易變動；未寫入判定")
                 sp.json_save(db_path, candidate, expected_sha256=before)
@@ -1369,7 +1396,7 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
                 raise
     if imported or duplicates or conflicts:
         try:
-            _publish_portable_outputs(target_dir, target_manifest, candidate)
+            resume_portable_project(target_dir)
         except Exception:
             with sp.project_delivery_lock(sp.project_actual_evidence_root(target_dir)):
                 if (_sha(target_dir / "人工判定資料庫.json") != written_candidate_sha
@@ -1384,12 +1411,6 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
                 _restore_exact_file(target_dir / INCOMPLETE_FILE,
                                     original_files[target_dir / INCOMPLETE_FILE])
             raise
-        with sp.project_delivery_lock(sp.project_actual_evidence_root(target_dir)):
-            if (_sha(target_dir / "人工判定資料庫.json") != written_candidate_sha
-                    or not marker_path.exists()
-                    or sp.json_load_strict(marker_path) != owned_marker):
-                raise ValueError("Excel expected 發布後目標資料或未完成標記已由其他交易變動；未清除標記且未回報成功")
-            marker_path.unlink()
     if conflicts:
         raise ValueError(f"Excel expected 同位置有 {len(conflicts)} 筆不同判定；兩份來源已保留於 {CONFLICT_FILE}，目標位置已標待人工裁決（不是寫入回滾）")
     return imported, skipped + duplicates, target_dir / "注音校對_最終報告.xlsx"
@@ -2075,8 +2096,9 @@ def import_project_decisions(source_dir: Path, target_dir: Path, *,
         if (len(target_pdfs) != 1 or not local_pdf.is_file()
                 or _sha(local_pdf) != target_pdfs[0].get("pdf_sha256")):
             raise ValueError("明確指定的本地 PDF 與目標封印 SHA 不符")
+        _, local_pages = _pdf_content_snapshot(local_pdf, expected_sha256=target_pdfs[0]["pdf_sha256"])
         proof = _proof_from_explicit_local(source_dir, source_manifest,
-                                            local_pdf, _page_signatures(local_pdf))
+                                            local_pdf, local_pages)
     pdf_map, geometry = _match_pdfs(proof, source_manifest, target_manifest, target_dir)
     reviews = _map_reviews(source_manifest, target_manifest, pdf_map, geometry)
     mapped_overrides = _mapped_occurrence_overrides(source_dir, source_manifest, target_manifest, reviews)
@@ -2281,7 +2303,7 @@ def merge_projects(source_dirs, local_pdf: Path, target_dir: Path):
         raise ValueError("接續目標資料夾必須為空，避免覆寫既有成果")
     if not local_pdf.is_file() or local_pdf.suffix.lower() != ".pdf":
         raise FileNotFoundError(f"找不到當地 PDF：{local_pdf}")
-    local_pages = _page_signatures(local_pdf)
+    _, local_pages = _pdf_content_snapshot(local_pdf)
     for source_dir in source_dirs:
         source_manifest, _ = _load_project(source_dir)
         _actual_transfer_state(source_dir, source_manifest)
