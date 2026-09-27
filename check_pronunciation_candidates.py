@@ -856,7 +856,7 @@ def _repair_same_baseline_fragment_order(block_recs):
     return out
 
 
-def build_pdf_line_index(pdf_path: Path):
+def build_pdf_line_index(pdf_path: Path, *, strict_extraction: bool = False):
     """Build a block-aware PDF reading index from PyMuPDF RAWDICT.
 
     v2.6 rebuilt horizontal text by baseline from *all* texttrace spans on a
@@ -873,8 +873,15 @@ def build_pdf_line_index(pdf_path: Path):
     for page_no, page in enumerate(doc, start=1):
         try:
             raw = page.get_text("rawdict", flags=(fitz.TEXTFLAGS_RAWDICT & ~fitz.TEXT_PRESERVE_IMAGES)) or {}
-        except Exception:
+        except Exception as exc:
+            if strict_extraction:
+                doc.close()
+                raise ValueError(f"PDF 第 {page_no} 頁 RAWDICT 文字抽取失敗；無法建立全頁內容證據") from exc
             raw = {}
+        if strict_extraction and (not isinstance(raw, dict)
+                                  or not isinstance(raw.get("blocks"), list)):
+            doc.close()
+            raise ValueError(f"PDF 第 {page_no} 頁 RAWDICT 文字抽取結果不完整；無法建立全頁內容證據")
 
         candidates = []
         serial = 0

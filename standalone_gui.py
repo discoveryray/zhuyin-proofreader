@@ -118,8 +118,39 @@ def summarize_project_status(data, *, has_session=False):
 
 def project_status_details(folder: Path) -> tuple[str, str]:
     folder = Path(folder)
+    incomplete = folder / "跨電腦接續未完成.json"
+    if incomplete.exists():
+        return "跨電腦接續未完成；請查看執行紀錄，尚不能在此專案保存判定。", str(incomplete)
     status_path = folder / "pipeline_status.json"
     session_path = folder / "校對工作階段.json"
+    pending_actual = folder / "來源actual待重新核對.json"
+    recheck_notice = (
+        " 來源專案尚有 actual 暫存核對；請在當地 PDF 原頁重新核對，"
+        "此暫存沒有當作新人工證據或自動套用。"
+        if pending_actual.exists() else ""
+    )
+    conflict_path = folder / "跨專案判定衝突.json"
+    conflict_notice = (
+        " 匯入的同位置判定有衝突；雙方原判定已保留，請查看進度詳細資訊並人工核對。"
+        if conflict_path.exists() else ""
+    )
+    actual_conflict_path = folder / "跨Excel_actual衝突.json"
+    actual_conflict_notice = ""
+    pending_actual_conflicts = []
+    if actual_conflict_path.exists():
+        try:
+            import pdf_portability
+            import standalone_proofread as sp
+            manifest = sp.json_load_strict(session_path)
+            db = sp.normalize_db(sp.json_load_strict(folder / "人工判定資料庫.json"))
+            pending_actual_conflicts = pdf_portability.actual_excel_conflict_state(folder, manifest, db)
+            if pending_actual_conflicts:
+                actual_conflict_notice = (
+                    " Excel actual 同位置判定衝突尚待原頁重核；雙方來源已保留，"
+                    "不能當完成專案轉送。"
+                )
+        except Exception as exc:
+            return "Excel actual 衝突紀錄無法驗證；不得視為完成。", f"{actual_conflict_path}\n{exc}"
     try:
         has_session = session_path.is_file()
         if status_path.exists():
@@ -131,10 +162,23 @@ def project_status_details(folder: Path) -> tuple[str, str]:
             diagnostics = f"{status_path}\n\n{json.dumps(data, ensure_ascii=False, indent=2)}"
             if not has_session:
                 diagnostics += f"\n\n缺少工作階段檔案：{session_path}"
-            return summarize_project_status(data, has_session=has_session), diagnostics
+            if recheck_notice:
+                diagnostics += f"\n\n{pending_actual}\n{recheck_notice}"
+            if conflict_notice:
+                diagnostics += f"\n\n{conflict_path}\n{conflict_notice}"
+            if actual_conflict_notice:
+                diagnostics += f"\n\n{actual_conflict_path}\n{actual_conflict_notice}"
+            if (actual_conflict_path.exists() and not pending_actual_conflicts
+                    and data.get("excel_report_deferred") is True):
+                return (
+                    "本地 actual 衝突已重核；Excel 報告尚待更新，不能視為報告完成。"
+                    + recheck_notice + conflict_notice + actual_conflict_notice,
+                    diagnostics,
+                )
+            return summarize_project_status(data, has_session=has_session) + recheck_notice + conflict_notice + actual_conflict_notice, diagnostics
         if not has_session:
             return "這是新的校對專案資料夾；尚未建立工作階段。請選擇教材後按『開始新校對』。", str(folder)
-        return _UNKNOWN_PROGRESS, f"已有工作階段，但找不到 {status_path}"
+        return _UNKNOWN_PROGRESS + recheck_notice + conflict_notice + actual_conflict_notice, f"已有工作階段，但找不到 {status_path}"
     except Exception as exc:
         return _UNKNOWN_PROGRESS, f"{status_path}\n{exc}"
 
@@ -254,6 +298,10 @@ class App:
         buttons.set_items([self.runbtn, review, repair, report, more])
         menu.add_command(label="輸出 expected／差異 GPT 證據表", command=self.export_gpt)
         menu.add_command(label="匯入 GPT 判定檔／單檔判定包（一鍵）", command=self.import_gpt_auto)
+        menu.add_separator()
+        menu.add_command(label="準備跨電腦專案內容證據", command=self.prepare_portable)
+        menu.add_command(label="以當地 PDF 接續帶來的專案", command=self.continue_portable)
+        menu.add_command(label="匯入另一專案的已保存判定", command=self.import_project_decisions)
         menu.add_separator()
         menu.add_command(label="輸出 actual 待判定給 GPT", command=self.export_actual_gpt)
         menu.add_command(label="重新套用 actual 修正／重新解碼", command=self.refresh_actual)
@@ -443,6 +491,46 @@ class App:
             # 使用者不需要再決定匯入順序。
             self.start(self.proof_cmd(["--import-gpt-auto", *paths, "-o", out]))
 
+    def prepare_portable(self):
+        out = self.output.get().strip()
+        if not out:
+            messagebox.showerror("缺少專案資料夾", "請先選擇要帶走的校對專案資料夾。")
+            return
+        self.start(self.proof_cmd(["--prepare-portable", "-o", out]))
+
+    def continue_portable(self):
+        source = filedialog.askdirectory(title="選擇從另一台電腦帶來的專案")
+        if not source:
+            return
+        local_pdf = filedialog.askopenfilename(title="指定當地下載的同內容 PDF", filetypes=[("PDF", "*.pdf")])
+        if not local_pdf:
+            return
+        target = filedialog.askdirectory(title="選擇空的資料夾保存接續專案")
+        if not target:
+            return
+        self.input.set(local_pdf)
+        self.output.set(target)
+        self.start(self.proof_cmd(["--continue-from-project", source, "--local-pdf", local_pdf, "-o", target]))
+
+    def import_project_decisions(self):
+        current = self.output.get().strip()
+        if not current:
+            messagebox.showerror("缺少專案資料夾", "請先選擇目前的校對專案。")
+            return
+        source = filedialog.askdirectory(title="選擇另一個同內容 PDF 的專案")
+        if not source:
+            return
+        local_pdf = filedialog.askopenfilename(title="指定目前電腦的同內容 PDF", filetypes=[("PDF", "*.pdf")])
+        if not local_pdf:
+            return
+        merged = filedialog.askdirectory(title="選擇空的資料夾保存合併後專案")
+        if not merged:
+            return
+        self.input.set(local_pdf)
+        self.output.set(merged)
+        self.start(self.proof_cmd(["--continue-from-project", current, "--merge-with-project", source,
+                                   "--local-pdf", local_pdf, "-o", merged]))
+
     # Backward-compatible method names: even if an old shortcut/menu binding
     # reaches one of these, workbook type is still auto-detected.
     def import_gpt(self):
@@ -475,6 +563,9 @@ class App:
         if not (Path(out) / "校對工作階段.json").exists():
             messagebox.showinfo("尚未建立校對專案", "請先按『開始新校對』完成第一次分析。")
             return
+        if (Path(out) / "跨電腦接續未完成.json").exists():
+            messagebox.showerror("跨電腦接續未完成", "目標專案仍有未完成標記。請查看執行紀錄，不能把部分匯入當作完成。")
+            return
         env = os.environ.copy()
         env["PYTHONUTF8"] = "1"
         env["PYTHONIOENCODING"] = "utf-8"
@@ -484,6 +575,31 @@ class App:
         out = self.output.get().strip()
         if not out:
             return
+        project = Path(out)
+        if (project / "跨電腦接續未完成.json").exists():
+            messagebox.showerror("報告尚未完成", "跨電腦接續尚未完成；請先完成專用恢復。")
+            return
+        if (project / "跨Excel_actual衝突.json").exists():
+            try:
+                import pdf_portability
+                import standalone_proofread as sp
+                manifest = sp.json_load_strict(project / "校對工作階段.json")
+                sp.validate_manifest_integrity(manifest)
+                sp.validate_output_artifact_hashes(manifest)
+                db = sp.json_load_strict(project / "人工判定資料庫.json")
+                pending = pdf_portability.actual_excel_conflict_state(project, manifest, db)
+                status = sp.json_load_strict(project / "pipeline_status.json")
+                if not isinstance(status, dict):
+                    raise ValueError("專案報告狀態格式無法驗證")
+            except Exception as exc:
+                messagebox.showerror("報告無法驗證", f"Excel actual 衝突紀錄無法驗證：{exc}")
+                return
+            if pending:
+                messagebox.showerror("報告尚未完成", "Excel actual 衝突尚待在原頁重新核對；既有報告已失效。")
+                return
+            if status.get("excel_report_deferred") is True:
+                messagebox.showerror("報告尚待更新", "本地 actual 已保存，但 Excel 報告尚未重新產生；請按『更新報告』。")
+                return
         report = Path(out) / filename
         if not report.exists():
             messagebox.showinfo("尚無報告", missing_message)

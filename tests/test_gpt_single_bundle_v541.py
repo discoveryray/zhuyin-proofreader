@@ -88,8 +88,14 @@ class GptSingleBundleV541Tests(unittest.TestCase):
                 "review_id_schema_version": sp.REVIEW_ID_SCHEMA_VERSION,
             }
             group = {"group_id": "agr_" + "1" * 24, "members": [entry], "kind": "OCCURRENCE_ONLY", "exact_key": ("occ_" + hashlib.sha256(b"occ1").hexdigest()), "occurrence_count": 1}
-            with patch.object(sp, "load_or_initialize_db", return_value={}), \
-                 patch.object(sp, "materialize_ledger", side_effect=[[entry], [entry], [dict(entry, actual="ㄉㄢˋ")]]), \
+            # The shared prewrite guard rereads the durable DB and ledger.
+            # Keep this orchestration fixture stable across those reads, then
+            # expose the changed actual only after the mocked apply has run.
+            db = sp.normalize_db({})
+            sp.json_save(folder / "人工判定資料庫.json", db)
+            with patch.object(sp, "load_or_initialize_db", return_value=db), \
+                 patch.object(sp, "materialize_ledger", side_effect=lambda *_args:
+                              [dict(entry, actual="ㄉㄢˋ") if apply_mock.called else entry]), \
                  patch.object(sp, "build_actual_group_for_entry", return_value=group), \
                  patch.object(sp, "apply_verified_actual_group", return_value={"target_occurrence_ids": [entry["occurrence_id"]],
                                                                            "verified_occurrence_ids": [entry["occurrence_id"]], "reading": "ㄉㄢˋ"}) as apply_mock, \

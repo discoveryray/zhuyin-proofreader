@@ -201,6 +201,8 @@ class ReviewSaveService:
             self._lock.release()
 
     def _save(self, review_id, event, expected_manifest, expected_db):
+        if (self.output_dir / "跨電腦接續未完成.json").exists():
+            raise StaleReviewProjectError("跨電腦接續未完成；未保存人工判定")
         started = time.perf_counter()
         timings = {}
         manifest_path = self.output_dir / "校對工作階段.json"
@@ -268,7 +270,22 @@ class ReviewSaveService:
         else:
             if not isinstance(event, dict):
                 raise ValueError("review event 格式錯誤")
+            import pdf_portability
+            unresolved_conflicts = pdf_portability.validate_conflict_state(
+                self.output_dir, manifest, db)
+            if review_id in unresolved_conflicts and event.get("portability_source") is not None:
+                raise ValueError("衝突位置只接受本地重新核對的人工裁決；未保存匯入事件")
             staged_db["events"][review_id] = copy.deepcopy(event)
+            staged_db["events"][review_id].pop("portability_conflict_resolution", None)
+            resolution = None
+            if event.get("action") != "保留待人工" and event.get("portability_source") is None:
+                resolution = pdf_portability.conflict_resolution_evidence(
+                    self.output_dir, manifest, db, review_id)
+                if resolution is None:
+                    resolution = (db.get("events", {}).get(review_id) or {}).get(
+                        "portability_conflict_resolution")
+            if resolution is not None:
+                staged_db["events"][review_id]["portability_conflict_resolution"] = copy.deepcopy(resolution)
             resolved = sp._apply_review_event(baseline[index[review_id]], staged_db["events"][review_id])
         original = baseline[index[review_id]]
         if (resolved.get("review_id"), resolved.get("occurrence_id")) != (

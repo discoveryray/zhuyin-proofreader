@@ -249,7 +249,8 @@ def _waits_for_actual(item, checked):
 
 
 def prepare_review_queue(manifest, ledger, previous, index, checked, deferred,
-                         character_order=None, *, advance_from=None):
+                         character_order=None, *, advance_from=None,
+                         actual_conflict_review_ids=()):
     """Prepare navigation without Tk calls; synchronous reload and save share it."""
     old = previous[index] if 0 <= index < len(previous) else None
     lane = review_lane(old) if old else None
@@ -262,7 +263,9 @@ def prepare_review_queue(manifest, ledger, previous, index, checked, deferred,
     waiting = {
         str(item.get("occurrence_id") or "") for item in ledger if _waits_for_actual(item, checked)
     }
-    pending = [item for item in ledger if item.get("state") in NON_TERMINAL_STATES
+    conflict_ids = set(actual_conflict_review_ids)
+    pending = [item for item in ledger if (item.get("state") in NON_TERMINAL_STATES
+                                           or item.get("review_id") in conflict_ids)
                and not _waits_for_actual(item, checked)]
     live_keys = {(review_lane(item), str(item.get("occurrence_id") or "")) for item in pending}
     deferred = deferred & live_keys
@@ -950,10 +953,16 @@ class ReviewApp:
     def __init__(self, root, output_dir: Path):
         self.root = root
         self.output_dir = output_dir
+        if (output_dir / "跨電腦接續未完成.json").exists():
+            raise ValueError("跨電腦接續未完成：不能在部分建立的目標專案保存判定")
         self.manifest = json_load_strict(output_dir / "校對工作階段.json")
         validate_manifest_integrity(self.manifest)
         validate_output_artifact_hashes(self.manifest)
         self.db = load_or_initialize_db(output_dir)
+        from pdf_portability import validate_conflict_state
+        self.unresolved_portability_conflicts = validate_conflict_state(output_dir, self.manifest, self.db)
+        from pdf_portability import actual_excel_conflict_state
+        self.actual_excel_conflict_review_ids = set(actual_excel_conflict_state(output_dir, self.manifest, self.db))
         self.index = 0
         self.photo = None
         self.records = []
@@ -1047,6 +1056,20 @@ class ReviewApp:
 
         self.reload_records()
         self.show()
+        if (output_dir / "來源actual待重新核對.json").exists():
+            messagebox.showwarning(
+                "來源 actual 暫存待重新核對",
+                "來源專案的 actual 暫存與原始識別已保存，但沒有套用到當地 PDF。"
+                "請依當地原頁重新核對；搬移/匯入不算新的獨立 Global 人工證據。",
+                parent=self.root,
+            )
+        if self.unresolved_portability_conflicts:
+            messagebox.showwarning(
+                "跨專案判定衝突",
+                "同位置不同判定沒有自動覆寫。來源與目標原資料均保留，"
+                "請查看專案詳細資訊並回原頁人工核對衝突。",
+                parent=self.root,
+            )
         if not self.records:
             title, detail, _primary_text = self._empty_actionable_state()
             messagebox.showinfo(title, detail, parent=self.root)
@@ -1069,10 +1092,18 @@ class ReviewApp:
                 dict(self._character_order) if hasattr(self, "_character_order") else None)
 
     def _set_actionable_records_from_ledger(self, ledger, *, advance_from=None):
+        if hasattr(self, "output_dir") and hasattr(self, "db"):
+            from pdf_portability import actual_excel_conflict_state
+            self.actual_excel_conflict_review_ids = set(actual_excel_conflict_state(
+                self.output_dir, self.manifest, self.db))
+        else:
+            # Pure queue/navigation fixtures have no persisted project to read.
+            self.actual_excel_conflict_review_ids = set()
         manifest, previous, index, deferred, character_order = self._queue_inputs()
         prepared = prepare_review_queue(manifest, ledger, previous, index,
                                         self.staged_checked_occurrence_ids, deferred,
-                                        character_order, advance_from=advance_from)
+                                        character_order, advance_from=advance_from,
+                                        actual_conflict_review_ids=self.actual_excel_conflict_review_ids)
         self._publish_review_queue(prepared)
 
     def _publish_review_queue(self, prepared):
@@ -1342,6 +1373,7 @@ class ReviewApp:
         completed = queue.Queue(maxsize=1)
         service = self._save_service
         manifest, previous, index, deferred, character_order = self._queue_inputs()
+        actual_conflict_review_ids = set(getattr(self, "actual_excel_conflict_review_ids", set()))
 
         def worker():
             result = prepared = error = None
@@ -1352,7 +1384,8 @@ class ReviewApp:
                 prepared = prepare_review_queue(
                     manifest, result.ledger, previous, index,
                     set(result.staging_summary.get("staged_checked_occurrence_ids") or []),
-                    deferred, character_order, advance_from=request["review_id"])
+                    deferred, character_order, advance_from=request["review_id"],
+                    actual_conflict_review_ids=actual_conflict_review_ids)
                 result.timings["todo_update"] = time.perf_counter() - queue_started
             except Exception as exc:
                 error = exc
@@ -1877,7 +1910,10 @@ class ReviewApp:
         lane = review_lane(entry)
         primary_text, secondary_text = review_action_labels(state)
         primary_command = secondary_command = None
-        if getattr(self, "focused_entry", None) is not None and valid_manual_expected_decision(entry):
+        if entry.get("review_id") in getattr(self, "actual_excel_conflict_review_ids", set()):
+            primary_text = "重新核對 actual 衝突"
+            primary_command = self.correct_actual
+        elif getattr(self, "focused_entry", None) is not None and valid_manual_expected_decision(entry):
             primary_text = "輸入其他應標注音"
             primary_command = self.resolve_expected
             if (can_confirm_current_expected(entry)
@@ -1948,6 +1984,8 @@ class ReviewApp:
             f"{LANE_LABELS[lane]}｜本組剩餘 {lane_count} 筆｜稍後 {deferred} 筆{staged_status}"
         ))
         help_text = STATE_HELP.get(state, "這一筆需要人工處理。")
+        if entry.get("review_id") in getattr(self, "actual_excel_conflict_review_ids", set()):
+            help_text = "跨電腦 Excel actual 在此位置有不同讀音；請查看原頁並重新核對，未套用匯入讀音。"
         if lane == "expected":
             help_text = "請先依原文與語境判定應標注音；目前注音待辨識時，儲存後再進第二組。依據選填。"
         staged_line = "\nactual 狀態：已暫存人工核對結果，等待批次套用；上方目前注音是套用前的正式結果，應標仍須依語境獨立判定。" if is_staged else ""

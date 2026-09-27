@@ -721,10 +721,16 @@ def _restore_dynamic_actual_evidence(backups: Mapping[Path, bytes | None]) -> No
             path.write_bytes(data)
 
 
-def validate_dynamic_actual_evidence(root: Path) -> dict[str, Any]:
+def validate_dynamic_actual_evidence(root: Path, *, read_only: bool = False) -> dict[str, Any]:
     assert_project_actual_readable(root)
     root = Path(root)
-    ensure_user_evidence_files(root)
+    if read_only:
+        required = (USER_GLYF_FILE, USER_CFF_FILE, GLYPH_CONFLICT_FILE, GLYPH_PROVENANCE_FILE)
+        missing = [name for name in required if not (root / name).is_file()]
+        if missing:
+            raise ValueError(f"來源動態 actual 證據缺失，不能只讀驗證：{missing}")
+    else:
+        ensure_user_evidence_files(root)
     result = {"ok": True, "errors": [], "hashes": {}}
     specs = [
         (OCCURRENCE_OVERRIDE_FILE, OVERRIDE_HEADERS),
@@ -1022,6 +1028,7 @@ def dynamic_actual_hashes(
     *,
     pdf_path: Path | None = None,
     dependencies: Mapping[str, Any] | None = None,
+    read_only: bool = False,
 ) -> dict[str, str]:
     """Hash dynamic actual evidence, optionally scoped to one PDF's dependencies.
 
@@ -1031,7 +1038,7 @@ def dynamic_actual_hashes(
     preserves fail-closed fingerprints while avoiding whole-project cache
     invalidation after an unrelated correction.
     """
-    report = validate_dynamic_actual_evidence(root)
+    report = validate_dynamic_actual_evidence(root, read_only=read_only)
     if not report.get("ok"):
         raise ValueError("動態 actual 證據檔驗證失敗：" + "；".join(report.get("errors") or []))
     if pdf_path is None:
@@ -1319,6 +1326,7 @@ def export_actual_review_package(
     session_schema_version: str,
     workbook_schema_version: str,
     review_id_schema_version: str,
+    portable_source=None,
 ) -> Path:
     output_dir = Path(output_dir)
     groups = build_actual_review_groups(ledger)
@@ -1410,6 +1418,10 @@ def export_actual_review_package(
         ws.column_dimensions[get_column_letter(headers.index(col_name) + 1)].hidden = True
     for sheet in wb.worksheets:
         _style_sheet(sheet)
+    if portable_source is not None:
+        from pdf_portability import write_excel_content_proof
+        manifest, db = portable_source
+        write_excel_content_proof(wb, output_dir, manifest, db, kind="actual")
     xlsx = package_dir / "actual待判定_給GPT.xlsx"
     wb.save(xlsx)
 
@@ -1950,13 +1962,15 @@ def _empty_manual_actual_batch_result() -> dict[str, Any]:
 def apply_direct_visual_actual_batch(
     root: Path, decisions: Sequence[Mapping[str, Any]], *,
     source_context: Mapping[str, Any] | None = None,
-    acknowledge=None, apply_function=None, initialize_evidence=None,
+    acknowledge=None, apply_function=None, initialize_evidence=None, prewrite_guard=None,
 ) -> dict[str, Any]:
     """Shared project commit; Global delivery belongs to the post-commit controller.
 
     Low-level callers without a sealed session remain project-local and receive
     explicit NON_GLOBAL_ELIGIBLE admissions. They cannot synthesize provenance.
     """
+    if prewrite_guard is not None:
+        prewrite_guard()
     if not decisions:
         return {
             "group_results": [], "acknowledgement": {},
@@ -1978,9 +1992,13 @@ def apply_direct_visual_actual_batch(
         prepared.append((decision, reading, checked, admissions))
     results = []
     with direct_visual_project_transaction(root) as bind_recovery_plan:
+        if prewrite_guard is not None:
+            prewrite_guard()
         if initialize_evidence is not None:
             initialize_evidence()
         for decision, reading, checked, admissions in prepared:
+            if prewrite_guard is not None:
+                prewrite_guard()
             group = decision["group"]
             applied = apply_function(
                 root, group, reading, checked_occurrence_ids=checked,
@@ -1993,9 +2011,13 @@ def apply_direct_visual_actual_batch(
                 "group_snapshot": group.get("group_snapshot", ""),
                 "global_admissions": admissions,
             })
+        if prewrite_guard is not None:
+            prewrite_guard()
         bind_recovery_plan(post_commit_recovery_plan_from_results(results))
         enqueue_promotion_intents(root, all_intents)
         acknowledgement = acknowledge() if acknowledge else {}
+        if prewrite_guard is not None:
+            prewrite_guard()
     return {
         "group_results": results, "acknowledgement": acknowledgement,
         "project_actual_commit": "COMMITTED",
@@ -2084,6 +2106,23 @@ def apply_staged_manual_actual_batch(
     }
 
 
+def _actual_workbook_schema_mismatches(
+    meta: Mapping[str, Any], required_meta: Mapping[str, Any],
+) -> dict[str, tuple[Any, Any]]:
+    mismatched = {}
+    for key in ("session_schema_version", "workbook_schema_version", "review_id_schema_version"):
+        if key not in required_meta:
+            continue
+        observed = meta.get(key)
+        required = required_meta[key]
+        compatible = (review_id_schema_compatible(observed, required)
+                      if key == "review_id_schema_version"
+                      else schema_compatible(observed, required))
+        if not compatible:
+            mismatched[key] = (required, observed)
+    return mismatched
+
+
 def import_actual_review_workbook(
     root: Path,
     xlsx: Path,
@@ -2091,24 +2130,21 @@ def import_actual_review_workbook(
     *,
     expected_metadata: Mapping[str, Any],
     source_context: Mapping[str, Any] | None = None,
-    initialize_evidence=None,
+    initialize_evidence=None, prewrite_guard=None,
 ) -> dict[str, Any]:
     meta, rows = _load_sheet_rows(Path(xlsx), "actual待判定")
     required_meta = dict(expected_metadata)
     required_meta["actual_review_schema_version"] = ACTUAL_REVIEW_SCHEMA_VERSION
+    schema_mismatches = _actual_workbook_schema_mismatches(meta, required_meta)
     mismatched = {}
     for key, required in required_meta.items():
         observed = meta.get(key)
         if key == "version":
             # Application release is audit-only from v5.6 onward.
             continue
-        if key in {"session_schema_version", "workbook_schema_version"}:
-            if not schema_compatible(observed, required):
-                mismatched[key] = (required, observed)
-            continue
-        if key == "review_id_schema_version":
-            if not review_id_schema_compatible(observed, required):
-                mismatched[key] = (required, observed)
+        if key in {"session_schema_version", "workbook_schema_version", "review_id_schema_version"}:
+            if key in schema_mismatches:
+                mismatched[key] = schema_mismatches[key]
             continue
         if str(observed) != str(required):
             mismatched[key] = (required, observed)
@@ -2173,6 +2209,7 @@ def import_actual_review_workbook(
           "source": "GPT actual 視覺證據匯入", "note": note}
          for group, reading, ids, note in staged],
         source_context=source_context, initialize_evidence=initialize_evidence,
+        prewrite_guard=prewrite_guard,
     )
     results = transaction_result["group_results"]
     return {**transaction_result, "imported_groups": len(results), "results": results}
