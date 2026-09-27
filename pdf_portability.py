@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import base64
+import functools
 import hashlib
 import json
 import os
@@ -39,6 +40,26 @@ def _sha(path: Path) -> str:
         for block in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def _stable_excel_import(importer):
+    """Read user Excel bytes once before any workbook metadata or decision read."""
+    @functools.wraps(importer)
+    def wrapped(target_dir, xlsx, *args, **kwargs):
+        original = Path(xlsx).resolve()
+        data = original.read_bytes()
+        digest = hashlib.sha256(data).hexdigest()
+        with tempfile.TemporaryDirectory(prefix="portable-excel-snapshot-") as folder:
+            snapshot = Path(folder) / original.name
+            snapshot.write_bytes(data)
+            return importer(target_dir, snapshot, *args,
+                            _original_xlsx=original, _snapshot_sha=digest, **kwargs)
+    return wrapped
+
+
+def _verify_excel_import_snapshot(snapshot: Path, original: Path, digest: str) -> None:
+    if _sha(snapshot) != digest or _sha(original) != digest:
+        raise ValueError("Excel 來源檔於匯入期間變動；未寫入目標判定")
 
 
 def _canonical(value: Any) -> bytes:
@@ -1201,7 +1222,9 @@ def _require_mapped_textbook_context(source, target, label: str) -> None:
         raise ValueError(f"{label}教材詞境不同，不能沿用判定")
 
 
-def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False):
+@_stable_excel_import
+def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False,
+                          _original_xlsx: Path, _snapshot_sha: str):
     """Import filled expected rows after full-page and occurrence-local mapping."""
     import standalone_proofread as sp
 
@@ -1221,6 +1244,7 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
                 "proposed_expected_set", "proposed_expected_evidence", "proposed_context_evidence",
                 "exclusion_reason", "exclusion_evidence", *sp.CONFIRMATION_GATES, "note"]
     rows = sp.workbook_rows(xlsx, "待判定候選", required)
+    _verify_excel_import_snapshot(xlsx, _original_xlsx, _snapshot_sha)
     sp.assert_unique_ids(rows, "occurrence_id")
     sp.assert_unique_ids(rows, "review_id")
     source_by_id = {entry["review_id"]: entry for entry in source_ledger}
@@ -1249,7 +1273,7 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
         target_for_validation = target_base_by_id[target["review_id"]] if prior_event else target
         prior_sources = [prior_event.get("portability_source"),
                          *prior_event.get("portability_duplicate_sources", [])]
-        if any(isinstance(item, dict) and item.get("source_excel_sha256") == _sha(xlsx)
+        if any(isinstance(item, dict) and item.get("source_excel_sha256") == _snapshot_sha
                and item.get("review_id") == source["review_id"]
                and item.get("source_excel_row") == number for item in prior_sources):
             skipped += 1
@@ -1289,7 +1313,7 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
                 raise ValueError(f"Excel row {number} {label}判定失效：{replay['review_event_replay_status']}")
         identity = _source_identity(source_manifest, source, source["review_id"],
                                     target_manifest, target, event)
-        identity["source_excel_sha256"] = _sha(xlsx)
+        identity["source_excel_sha256"] = _snapshot_sha
         identity["source_excel_row"] = number
         identity["source_excel_decision"] = copy.deepcopy(row)
         actions.append((target, event, identity))
@@ -1298,6 +1322,7 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
 
     written_candidate_sha = None
     with sp.project_delivery_lock(sp.project_actual_evidence_root(target_dir)):
+        _verify_excel_import_snapshot(xlsx, _original_xlsx, _snapshot_sha)
         marker_path = target_dir / INCOMPLETE_FILE
         if marker_path.exists():
             raise ValueError("Excel 匯入期間目標出現未完成標記；未寫入任何判定，先完成專用恢復")
@@ -1416,7 +1441,9 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
     return imported, skipped + duplicates, target_dir / "注音校對_最終報告.xlsx"
 
 
-def import_actual_excel(target_dir: Path, xlsx: Path):
+@_stable_excel_import
+def import_actual_excel(target_dir: Path, xlsx: Path, *,
+                        _original_xlsx: Path, _snapshot_sha: str):
     """Carry source visual decisions as local occurrence evidence, never a vote."""
     import actual_review as ar
     import standalone_proofread as sp
@@ -1432,6 +1459,7 @@ def import_actual_excel(target_dir: Path, xlsx: Path):
     if target_actual_state["status"] != "NONE":
         raise ValueError("目標尚有未核對的 actual 暫存/來源轉送；先完成本地恢復")
     metadata, rows = ar._load_sheet_rows(xlsx, "actual待判定")
+    _verify_excel_import_snapshot(xlsx, _original_xlsx, _snapshot_sha)
     from openpyxl import load_workbook
     workbook = load_workbook(xlsx, read_only=True)
     try:
@@ -1453,7 +1481,7 @@ def import_actual_excel(target_dir: Path, xlsx: Path):
     attached_groups = (proof_payload.get("attestations") or {}).get("actual_groups") or {}
     target_ledger = sp.materialize_ledger(target_manifest, target_db)
     by_target_occ = {entry["occurrence_id"]: entry for entry in target_ledger}
-    workbook_sha = _sha(xlsx)
+    workbook_sha = _snapshot_sha
     decisions = []
     seen_groups = set()
     for number, row in enumerate(rows, 2):
@@ -1598,9 +1626,11 @@ def import_actual_excel(target_dir: Path, xlsx: Path):
             recovery_results.append({"group_id": group_id, "reading": reading,
                                      "verified_occurrence_ids": sorted(target_ids),
                                      "affected_occurrence_ids": sorted(target_ids)})
+    _verify_excel_import_snapshot(xlsx, _original_xlsx, _snapshot_sha)
     if conflict_records:
         receipt = target_dir / ACTUAL_EXCEL_CONFLICT_FILE
         with sp.project_delivery_lock(root):
+            _verify_excel_import_snapshot(xlsx, _original_xlsx, _snapshot_sha)
             if ar._read_csv(override_path, ar.OVERRIDE_HEADERS) != original_rows:
                 raise ValueError("目標 actual 證據於衝突登記前已變動；未覆寫任何紀錄")
             previous_sha = _sha(receipt) if receipt.exists() else None
@@ -1645,6 +1675,7 @@ def import_actual_excel(target_dir: Path, xlsx: Path):
     marker = target_dir / INCOMPLETE_FILE
     if not changed:
         with sp.project_delivery_lock(root):
+            _verify_excel_import_snapshot(xlsx, _original_xlsx, _snapshot_sha)
             if (_sha(conflict_receipt_path) if conflict_receipt_path.exists() else None) != conflict_receipt_sha:
                 raise ValueError("Excel actual 衝突紀錄於匯入期間變動；請重新核對")
             if actual_excel_conflict_state(target_dir, target_manifest, target_db):
@@ -1658,6 +1689,7 @@ def import_actual_excel(target_dir: Path, xlsx: Path):
     # Preflight may take time, so bind the live target, marker and durable
     # transaction under one lock. A second import must never own our marker.
     with sp.project_delivery_lock(root):
+        _verify_excel_import_snapshot(xlsx, _original_xlsx, _snapshot_sha)
         if (_sha(conflict_receipt_path) if conflict_receipt_path.exists() else None) != conflict_receipt_sha:
             raise ValueError("Excel actual 衝突紀錄於匯入期間變動；未寫入")
         if actual_excel_conflict_state(target_dir, target_manifest, target_db):

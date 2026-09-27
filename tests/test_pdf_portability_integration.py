@@ -680,6 +680,94 @@ def test_direct_actual_excel_import_is_local_only_across_different_sha(tmp_path,
     assert not list((tmp_path / "isolated-localappdata").rglob("*.sqlite*"))
 
 
+@pytest.mark.parametrize("kind", ["expected", "actual"])
+def test_cross_session_excel_edit_after_rows_read_preserves_target(tmp_path, monkeypatch, kind):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
+    first, second = _pdfs(tmp_path)
+    source, target = tmp_path / "source", tmp_path / "target"
+    decoder = _synthetic_decode if kind == "expected" else _synthetic_unresolved_decode
+    with patch.object(sp, "decode", side_effect=decoder), \
+         patch.object(sp, "actual_workbook_global_exact_dependencies", return_value=()), \
+         patch("check_pronunciation_candidates.actual_workbook_global_exact_dependencies", return_value=()):
+        sp.run_pipeline_pdfs([first], source, defer_excel_reports=True)
+        sp.run_pipeline_pdfs([second], target, defer_excel_reports=True)
+        if kind == "expected":
+            exported = sp.export_pending_for_gpt(source)
+            sheet_name, answer_column, answer_row = "待判定候選", "exclusion_reason", 3
+            first_answer, changed_answer = "source visual", "edited after row read"
+            filled = tmp_path / "expected與差異判定_匯入.xlsx"
+        else:
+            sp.export_actual_pending_for_gpt(source)
+            exported = source / "actual待判定_GPT包" / "actual待判定_給GPT.xlsx"
+            sheet_name, answer_column, answer_row = "actual待判定", "actual_reading", 2
+            first_answer, changed_answer = "ㄐㄩㄝˊ", "ㄐㄩㄝˇ"
+            filled = tmp_path / "actual視覺判定_匯入.xlsx"
+        workbook = load_workbook(exported)
+        sheet = workbook[sheet_name]
+        columns = [cell.value for cell in sheet[1]]
+        if kind == "expected":
+            for column, value in (("action", "確認非校對範圍"),
+                                  ("exclusion_evidence", "PDF page 1")):
+                sheet.cell(answer_row, columns.index(column) + 1, value)
+        else:
+            for column, value in (("decision", "VERIFIED"), ("confidence", "高"),
+                                  ("sample_a_checked", "Y")):
+                sheet.cell(answer_row, columns.index(column) + 1, value)
+        sheet.cell(answer_row, columns.index(answer_column) + 1, first_answer)
+        workbook.save(filled)
+        workbook.close()
+        watched = [target / name for name in (
+            "人工判定資料庫.json", portability.INCOMPLETE_FILE,
+            portability.ACTUAL_EXCEL_CONFLICT_FILE, portability.CONFLICT_FILE,
+            "pipeline_status.json", "注音校對_最終報告.xlsx",
+        )]
+        actual_csv = sp.project_actual_evidence_root(target) / ar.OCCURRENCE_OVERRIDE_FILE
+        watched.append(actual_csv)
+        before = {path: path.read_bytes() if path.exists() else None for path in watched}
+        changed = False
+
+        def edit_visible_answer():
+            nonlocal changed
+            if changed:
+                return
+            changed = True
+            updated = load_workbook(filled)
+            visible = updated[sheet_name]
+            headers = [cell.value for cell in visible[1]]
+            visible.cell(answer_row, headers.index(answer_column) + 1, changed_answer)
+            updated.save(filled)
+            updated.close()
+
+        if kind == "expected":
+            original = sp.workbook_rows
+
+            def read_then_edit(path, sheet, required):
+                rows = original(path, sheet, required)
+                if sheet == sheet_name:
+                    edit_visible_answer()
+                return rows
+
+            reader_patch = patch.object(sp, "workbook_rows", side_effect=read_then_edit)
+            import_decisions = lambda: sp.import_gpt_decisions(target, filled)
+        else:
+            original = ar._load_sheet_rows
+
+            def read_then_edit(path, sheet):
+                metadata, rows = original(path, sheet)
+                if sheet == sheet_name:
+                    edit_visible_answer()
+                return metadata, rows
+
+            reader_patch = patch.object(ar, "_load_sheet_rows", side_effect=read_then_edit)
+            import_decisions = lambda: sp.import_actual_gpt_decisions(target, filled)
+        with reader_patch:
+            with pytest.raises(ValueError, match="Excel.*變動"):
+                import_decisions()
+        assert changed
+        assert {path: path.read_bytes() if path.exists() else None for path in watched} == before
+    assert not list((tmp_path / "isolated-localappdata").rglob("*.sqlite*"))
+
+
 def test_old_filled_expected_excel_imported_in_a_can_gain_present_proof(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
     first, second = _pdfs(tmp_path)
