@@ -1373,6 +1373,7 @@ def _validate_gpt_bundle_metadata(meta: Mapping[str, Any], manifest: Mapping[str
     if bad:
         raise ValueError(f"GPT 判定包 session/schema 不相容：{bad}")
 
+@_serialized_user_project_entry
 def import_actual_occurrence_decisions(output_dir: Path, csv_path: Path, *, package_meta: Mapping[str, Any]) -> tuple[int, int, Path]:
     """Import occurrence-scoped visual actual decisions from a GPT bundle.
 
@@ -1403,7 +1404,9 @@ def import_actual_occurrence_decisions(output_dir: Path, csv_path: Path, *, pack
         if not reader.fieldnames or not required.issubset(set(reader.fieldnames)):
             raise ValueError(f"GPT actual occurrence 決策表缺少欄位：{sorted(required - set(reader.fieldnames or []))}")
         rows = list(reader)
+    prewrite_guard = lambda: _validate_actual_import_target(output_dir, manifest, db)
     if not rows:
+        prewrite_guard()
         return 0, 0, generate_report(output_dir, manifest, db)
 
     staged_by_group: dict[str, dict[str, Any]] = {}
@@ -1485,11 +1488,15 @@ def import_actual_occurrence_decisions(output_dir: Path, csv_path: Path, *, pack
         source_context=_global_direct_source_context(output_dir, manifest),
         apply_function=apply_verified_actual_group,
         initialize_evidence=lambda: initialize_project_actual_evidence(output_dir),
+        prewrite_guard=prewrite_guard,
     )
     results = transaction_result["group_results"]
     removed, report = _finish_direct_actual_commit(
-        output_dir, ledger, transaction_result, refresh=bool(results),
+        output_dir, ledger, transaction_result, refresh=bool(results), acknowledge=False,
     )
+    from pdf_portability import _load_project
+    _load_project(output_dir)
+    acknowledge_project_refresh(root, transaction_result.get("project_refresh_token"))
     if already_applied_ids:
         print(
             f"  GPT actual 判定包重試：{len(already_applied_ids)} 筆 current actual 已等於 verified_actual；"
@@ -1507,6 +1514,7 @@ def import_actual_occurrence_decisions(output_dir: Path, csv_path: Path, *, pack
 
 
 
+@_serialized_user_project_entry
 def import_gpt_decision_bundle(output_dir: Path, bundle: Path) -> tuple[int, int, int, int, Path]:
     """One-file round import with expected preflight and lane-ordered commit.
 
@@ -1605,6 +1613,12 @@ def plan_gpt_auto_imports(paths: Iterable[str | Path]) -> list[tuple[Path, str]]
 
 @_serialized_user_project_entry
 def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False) -> tuple[int, int, Path]:
+    from pdf_portability import _stable_excel_import
+    return _stable_excel_import(_import_gpt_decisions_snapshot)(output_dir, xlsx, dry_run=dry_run)
+
+
+def _import_gpt_decisions_snapshot(output_dir: Path, xlsx: Path, *, dry_run: bool = False,
+                                   _original_xlsx: Path, _snapshot_sha: str):
     _reject_incomplete_portable_project(output_dir)
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
@@ -1618,7 +1632,8 @@ def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False)
     metadata = workbook_metadata(xlsx, "匯入中繼資料")
     if str(metadata.get("session_id") or "") != str(manifest.get("session_id") or ""):
         from pdf_portability import import_expected_excel
-        return import_expected_excel(output_dir, xlsx, dry_run=dry_run)
+        return import_expected_excel.__wrapped__(output_dir, xlsx, dry_run=dry_run,
+            _original_xlsx=_original_xlsx, _snapshot_sha=_snapshot_sha)
     mismatched = {}
     if str(metadata.get("session_id") or "") != str(manifest.get("session_id") or ""):
         mismatched["session_id"] = (manifest.get("session_id"), metadata.get("session_id"))
@@ -1746,10 +1761,12 @@ def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False)
     # Full materialization validates every transition and terminal invariant
     # before the first persistent write.
     materialize_ledger(manifest, staged_db)
-    from pdf_portability import validate_conflict_state
+    from pdf_portability import validate_conflict_state, _verify_excel_import_snapshot
+    _verify_excel_import_snapshot(xlsx, _original_xlsx, _snapshot_sha)
     unresolved_conflicts = validate_conflict_state(output_dir, manifest, db)
     if set(staged_events) & set(unresolved_conflicts):
         raise ValueError("同 session Excel 判定包含未經本地裁決的跨專案衝突位置；未寫入任何判定")
+    validate_conflict_state(output_dir, manifest, staged_db)
     if dry_run:
         # Bundle preflight: validate expected actions before any actual evidence
         # is committed.  This prevents avoidable half-applied bundles.
@@ -1760,6 +1777,8 @@ def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False)
     unresolved_conflicts = validate_conflict_state(output_dir, manifest, db)
     if set(staged_events) & set(unresolved_conflicts):
         raise ValueError("匯入期間同 session Excel 判定位置出現未裁決跨專案衝突；未寫入任何判定")
+    validate_conflict_state(output_dir, manifest, staged_db)
+    _verify_excel_import_snapshot(xlsx, _original_xlsx, _snapshot_sha)
     from pdf_portability import INCOMPLETE_FILE, _new_presentation_marker, resume_portable_project
     marker = output_dir / INCOMPLETE_FILE
     owned_marker = _new_presentation_marker(
@@ -3787,7 +3806,23 @@ def refresh_actual_project(output_dir: Path, *, defer_excel_reports: bool = True
     )
 
 
+def _validate_actual_import_target(output_dir: Path, manifest, db):
+    from pdf_portability import _load_project
+    live_manifest, live_db = _load_project(output_dir)
+    if live_manifest != manifest or live_db != db:
+        raise ValueError("actual 匯入期間封印或人工判定已變動；未寫入")
+    if live_manifest["pdfs"]:
+        _resolve_session_pdfs(output_dir, live_manifest)
+
+
 def import_actual_gpt_decisions(output_dir: Path, xlsx: Path) -> tuple[int, int, Path]:
+    from pdf_portability import _stable_excel_import
+    output_dir = resolve_existing_project_dir(Path(output_dir))
+    return _stable_excel_import(_import_actual_gpt_decisions_snapshot)(output_dir, xlsx)
+
+
+def _import_actual_gpt_decisions_snapshot(output_dir: Path, xlsx: Path, *,
+                                         _original_xlsx: Path, _snapshot_sha: str):
     output_dir = Path(output_dir)
     from pdf_portability import INCOMPLETE_FILE
     if (output_dir / INCOMPLETE_FILE).exists():
@@ -3798,12 +3833,29 @@ def import_actual_gpt_decisions(output_dir: Path, xlsx: Path) -> tuple[int, int,
     metadata = workbook_metadata(Path(xlsx), "匯入中繼資料")
     if str(metadata.get("session_id") or "") != str(manifest.get("session_id") or ""):
         from pdf_portability import import_actual_excel
-        return import_actual_excel(output_dir, xlsx)
+        return import_actual_excel.__wrapped__(output_dir, xlsx,
+            _original_xlsx=_original_xlsx, _snapshot_sha=_snapshot_sha)
+    with project_delivery_lock(project_actual_evidence_root(output_dir)):
+        return _import_same_session_actual_snapshot(
+            output_dir, xlsx, _original_xlsx=_original_xlsx, _snapshot_sha=_snapshot_sha)
+
+
+def _import_same_session_actual_snapshot(output_dir: Path, xlsx: Path, *,
+                                         _original_xlsx: Path, _snapshot_sha: str):
+    # The routing read is advisory. Reload the complete same-session target
+    # under the lock held through its transaction and publication.
     _reject_incomplete_portable_project(output_dir)
+    manifest = json_load_strict(output_dir / "校對工作階段.json")
+    validate_manifest_integrity(manifest)
+    validate_output_artifact_hashes(manifest)
     recover_pending_project_actual_write(project_actual_evidence_root(output_dir))
     db = load_or_initialize_db(output_dir)
     ledger = materialize_ledger(manifest, db)
     groups = build_actual_review_groups(ledger)
+    def prewrite_guard():
+        from pdf_portability import _verify_excel_import_snapshot
+        _verify_excel_import_snapshot(xlsx, _original_xlsx, _snapshot_sha)
+        _validate_actual_import_target(output_dir, manifest, db)
     result = import_actual_review_workbook(
         project_actual_evidence_root(output_dir),
         Path(xlsx),
@@ -3811,8 +3863,13 @@ def import_actual_gpt_decisions(output_dir: Path, xlsx: Path) -> tuple[int, int,
         expected_metadata=_session_metadata_for_actual(manifest),
         source_context=_global_direct_source_context(output_dir, manifest),
         initialize_evidence=lambda: initialize_project_actual_evidence(output_dir),
+        prewrite_guard=prewrite_guard,
     )
-    removed, report = _finish_direct_actual_commit(output_dir, ledger, result)
+    _reject_incomplete_portable_project(output_dir)
+    removed, report = _finish_direct_actual_commit(output_dir, ledger, result, acknowledge=False)
+    from pdf_portability import _load_project
+    _load_project(output_dir)
+    acknowledge_project_refresh(project_actual_evidence_root(output_dir), result.get("project_refresh_token"))
     return ActualImportResult(int(result.get("imported_groups") or 0), removed, report, result)
 
 

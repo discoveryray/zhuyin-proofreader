@@ -7,6 +7,7 @@ The transfer receipt is local project evidence, not Global glyph evidence.
 from __future__ import annotations
 
 import copy
+from contextlib import contextmanager
 import base64
 import binascii
 import functools
@@ -44,16 +45,26 @@ def _sha(path: Path) -> str:
     return digest.hexdigest()
 
 
+@contextmanager
+def _workbook_snapshot(path: Path, *, expected_sha256: str | None = None):
+    """All workbook consumers read the same bytes whose digest was verified."""
+    original = Path(path).resolve()
+    data = original.read_bytes()
+    digest = hashlib.sha256(data).hexdigest()
+    if expected_sha256 is not None and digest != expected_sha256:
+        raise ValueError("來源工作簿 SHA 不符；未使用變動的 workbook")
+    with tempfile.TemporaryDirectory(prefix="portable-excel-snapshot-") as folder:
+        snapshot = Path(folder) / original.name
+        snapshot.write_bytes(data)
+        yield snapshot, digest
+
+
 def _stable_excel_import(importer):
     """Read user Excel bytes once before any workbook metadata or decision read."""
     @functools.wraps(importer)
     def wrapped(target_dir, xlsx, *args, **kwargs):
         original = Path(xlsx).resolve()
-        data = original.read_bytes()
-        digest = hashlib.sha256(data).hexdigest()
-        with tempfile.TemporaryDirectory(prefix="portable-excel-snapshot-") as folder:
-            snapshot = Path(folder) / original.name
-            snapshot.write_bytes(data)
+        with _workbook_snapshot(original) as (snapshot, digest):
             return importer(target_dir, snapshot, *args,
                             _original_xlsx=original, _snapshot_sha=digest, **kwargs)
     return wrapped
@@ -723,7 +734,9 @@ def _legacy_exact_excel_mapping(xlsx: Path, target_dir: Path, target_manifest, *
             datetime.now().astimezone().isoformat(timespec="microseconds"), payload, None)
 
 
-def attach_filled_excel_proof(source_dir: Path, xlsx: Path) -> Path:
+@_stable_excel_import
+def attach_filled_excel_proof(source_dir: Path, xlsx: Path, *,
+                              _original_xlsx: Path, _snapshot_sha: str) -> Path:
     """Attest an old filled workbook against the *current* sealed A project.
 
     This does not assert that the workbook caused an earlier A decision.  It
@@ -841,10 +854,11 @@ def attach_filled_excel_proof(source_dir: Path, xlsx: Path) -> Path:
                     }
         write_excel_content_proof(workbook, source_dir, manifest, current_db, kind=kind,
                                   snapshot_db=snapshot_db, attestations=attestations)
-        descriptor, temporary = tempfile.mkstemp(prefix=f".{xlsx.stem}.proof-", suffix=".xlsx", dir=xlsx.parent)
+        _verify_excel_import_snapshot(xlsx, _original_xlsx, _snapshot_sha)
+        descriptor, temporary = tempfile.mkstemp(prefix=f".{_original_xlsx.stem}.proof-", suffix=".xlsx", dir=_original_xlsx.parent)
         os.close(descriptor)
         workbook.save(temporary)
-        destination = xlsx.with_name(f"{xlsx.stem}_跨電腦_{uuid.uuid4().hex[:8]}.xlsx")
+        destination = _original_xlsx.with_name(f"{_original_xlsx.stem}_跨電腦_{uuid.uuid4().hex[:8]}.xlsx")
         os.replace(temporary, destination)
         temporary = None
         return destination
@@ -1492,11 +1506,19 @@ def import_actual_excel(target_dir: Path, xlsx: Path, *,
         legacy = EXCEL_PROOF_SHEET not in workbook.sheetnames
     finally:
         workbook.close()
-    if legacy and _legacy_actual_already_imported(target_dir, target_manifest, target_db, xlsx, rows):
-        return sp.ActualImportResult(0, 0, target_dir / "注音校對_最終報告.xlsx",
-                                     {"project_actual_commit": "NO_CHANGES",
-                                      "global_promotion_delivery": "NOT_ATTEMPTED"})
-    source_manifest, _, source_ledger, reviews, _, _, proof_payload, _ = load_excel_content_proof(
+    if legacy:
+        with sp.project_delivery_lock(sp.project_actual_evidence_root(target_dir)):
+            if _legacy_actual_already_imported(target_dir, target_manifest, target_db, xlsx, rows):
+                _verify_excel_import_snapshot(xlsx, _original_xlsx, _snapshot_sha)
+                live_manifest, live_db = _load_project(target_dir)
+                if live_manifest != target_manifest or live_db != target_db:
+                    raise ValueError("目標封印或判定於舊 actual Excel 核對期間變動")
+                for info in live_manifest["pdfs"]:
+                    _source_pdf(live_manifest, info, target_dir)
+                return sp.ActualImportResult(0, 0, target_dir / "注音校對_最終報告.xlsx",
+                                             {"project_actual_commit": "NO_CHANGES",
+                                              "global_promotion_delivery": "NOT_ATTEMPTED"})
+    source_manifest, _, source_ledger, reviews, pdf_map, _, proof_payload, geometry = load_excel_content_proof(
         xlsx, target_dir, target_manifest, kind="actual",
         workbook_session=str(metadata.get("session_id") or ""))
     if (str(metadata.get("actual_review_schema_version")) != ar.ACTUAL_REVIEW_SCHEMA_VERSION
@@ -1652,11 +1674,22 @@ def import_actual_excel(target_dir: Path, xlsx: Path, *,
             recovery_results.append({"group_id": group_id, "reading": reading,
                                      "verified_occurrence_ids": sorted(target_ids),
                                      "affected_occurrence_ids": sorted(target_ids)})
+    def validate_live_target():
+        _verify_excel_import_snapshot(xlsx, _original_xlsx, _snapshot_sha)
+        if (target_dir / INCOMPLETE_FILE).exists() or (root / PROJECT_TRANSACTION_FILE).exists():
+            raise ValueError("目標 actual Excel 交易待專用恢復；未寫入或回報完成")
+        live_manifest, live_db = _load_project(target_dir, allow_actual_excel_conflict=True)
+        if live_manifest != target_manifest or live_db != target_db:
+            raise ValueError("目標封印或人工判定於 actual Excel 匯入期間變動；未寫入")
+        _verify_mapped_target_pdfs(target_dir, live_manifest, pdf_map, geometry)
+        if (_sha(conflict_receipt_path) if conflict_receipt_path.exists() else None) != conflict_receipt_sha:
+            raise ValueError("Excel actual 衝突紀錄於匯入期間變動；未寫入")
+
     _verify_excel_import_snapshot(xlsx, _original_xlsx, _snapshot_sha)
     if conflict_records:
         receipt = target_dir / ACTUAL_EXCEL_CONFLICT_FILE
         with sp.project_delivery_lock(root):
-            _verify_excel_import_snapshot(xlsx, _original_xlsx, _snapshot_sha)
+            validate_live_target()
             if ar._read_csv(override_path, ar.OVERRIDE_HEADERS) != original_rows:
                 raise ValueError("目標 actual 證據於衝突登記前已變動；未覆寫任何紀錄")
             previous_sha = _sha(receipt) if receipt.exists() else None
@@ -1701,7 +1734,7 @@ def import_actual_excel(target_dir: Path, xlsx: Path, *,
     marker = target_dir / INCOMPLETE_FILE
     if not changed:
         with sp.project_delivery_lock(root):
-            _verify_excel_import_snapshot(xlsx, _original_xlsx, _snapshot_sha)
+            validate_live_target()
             if (_sha(conflict_receipt_path) if conflict_receipt_path.exists() else None) != conflict_receipt_sha:
                 raise ValueError("Excel actual 衝突紀錄於匯入期間變動；請重新核對")
             if actual_excel_conflict_state(target_dir, target_manifest, target_db):
@@ -1715,7 +1748,7 @@ def import_actual_excel(target_dir: Path, xlsx: Path, *,
     # Preflight may take time, so bind the live target, marker and durable
     # transaction under one lock. A second import must never own our marker.
     with sp.project_delivery_lock(root):
-        _verify_excel_import_snapshot(xlsx, _original_xlsx, _snapshot_sha)
+        validate_live_target()
         if (_sha(conflict_receipt_path) if conflict_receipt_path.exists() else None) != conflict_receipt_sha:
             raise ValueError("Excel actual 衝突紀錄於匯入期間變動；未寫入")
         if actual_excel_conflict_state(target_dir, target_manifest, target_db):
@@ -1744,18 +1777,22 @@ def import_actual_excel(target_dir: Path, xlsx: Path, *,
             "recovery_plan": recovery_plan,
             "recovery_plan_sha256": hashlib.sha256(_canonical(recovery_plan)).hexdigest(),
         })
-        sp.json_save(marker, owned_marker)
+        marker_sha = sp.json_save(marker, owned_marker, expected_sha256="")
         try:
             with direct_visual_project_transaction(root) as bind_recovery_plan:
+                _assert_actual_marker_owner(marker, marker_sha)
+                _verify_mapped_target_pdfs(target_dir, live_manifest, pdf_map, geometry)
                 ar._write_csv(override_path, ar.OVERRIDE_HEADERS,
                               sorted(by_key.values(), key=lambda row: tuple(row[field] for field in fields)))
+                _assert_actual_marker_owner(marker, marker_sha)
+                _verify_mapped_target_pdfs(target_dir, live_manifest, pdf_map, geometry)
                 bind_recovery_plan(recovery_plan)
         except Exception:
             # A PREPARED/COMMITTED journal owns recovery. Only remove our own
             # marker after a fully rolled-back precommit failure.
             if not (root / PROJECT_TRANSACTION_FILE).exists() and marker.exists():
-                if sp.json_load_strict(marker) == owned_marker:
-                    marker.unlink()
+                _assert_actual_marker_owner(marker, marker_sha)
+                marker.unlink()
             raise
         recovered = resume_actual_excel_project(target_dir)
         if recovered.get("project_actual_commit") != "COMMITTED":
@@ -2035,6 +2072,33 @@ def resume_actual_excel_project(output_dir: Path):
         return _resume_actual_excel_project_locked(output_dir)
 
 
+def _assert_actual_marker_owner(path: Path, expected_sha: str) -> None:
+    if not path.is_file() or _sha(path) != expected_sha:
+        raise ValueError("actual Excel 未完成標記已由其他交易變動；保留標記與 journal 待查核")
+
+
+def _acknowledge_owned_actual_refresh(root: Path, token, marker_path: Path, marker_sha: str):
+    from global_glyph_promotion import acknowledge_project_refresh, PROJECT_TRANSACTION_FILE
+
+    journal = root / PROJECT_TRANSACTION_FILE
+    raw = journal.read_bytes()
+    _assert_actual_marker_owner(marker_path, marker_sha)
+    acknowledge_project_refresh(root, token)
+    try:
+        _assert_actual_marker_owner(marker_path, marker_sha)
+    except ValueError:
+        # A foreign marker published during acknowledgement cannot consume our
+        # recovery evidence. Restore only an absent journal; never another owner.
+        try:
+            with journal.open("xb") as stream:
+                stream.write(raw)
+                stream.flush()
+                os.fsync(stream.fileno())
+        except FileExistsError:
+            pass
+        raise
+
+
 def _resume_actual_excel_project_locked(output_dir: Path):
     import standalone_proofread as sp
     from global_glyph_promotion import (
@@ -2044,10 +2108,14 @@ def _resume_actual_excel_project_locked(output_dir: Path):
 
     output_dir = Path(output_dir).resolve()
     marker_path = output_dir / INCOMPLETE_FILE
+    marker_sha = _sha(marker_path)
     marker = sp.json_load_strict(marker_path)
+    _assert_actual_marker_owner(marker_path, marker_sha)
     _validate_actual_excel_marker(output_dir, marker)
     root = sp.project_actual_evidence_root(output_dir)
+    _assert_actual_marker_owner(marker_path, marker_sha)
     recover_pending_project_actual_write(root)
+    _assert_actual_marker_owner(marker_path, marker_sha)
     pending = committed_project_recovery(root)
     if marker["status"] == "ACTUAL_EXCEL_RECOVERED":
         if marker.get("post_state") != _actual_excel_file_snapshot(output_dir):
@@ -2055,7 +2123,8 @@ def _resume_actual_excel_project_locked(output_dir: Path):
         if pending is not None:
             if pending[0] != marker.get("recovery_token"):
                 raise ValueError("actual Excel COMMITTED journal 與已恢復標記不符")
-            acknowledge_project_refresh(root, pending[0])
+            _acknowledge_owned_actual_refresh(root, pending[0], marker_path, marker_sha)
+        _assert_actual_marker_owner(marker_path, marker_sha)
         marker_path.unlink()
         return {"project_actual_commit": "COMMITTED", "project_refresh": "SUCCESS",
                 "cleared_actual_dependent_event_count": 0,
@@ -2064,20 +2133,23 @@ def _resume_actual_excel_project_locked(output_dir: Path):
     if pending is None:
         if marker.get("pre_state") != _actual_excel_file_snapshot(output_dir):
             raise ValueError("actual Excel 未提交交易的原資料狀態已變動；保留標記待人工查核")
+        _assert_actual_marker_owner(marker_path, marker_sha)
         marker_path.unlink()
         return {"project_actual_commit": "ROLLED_BACK", "project_refresh": "NOT_STARTED"}
     _restore_sealed_workbooks_for_actual_resume(output_dir, marker, pending)
     recovered = sp.recover_committed_actual_project(output_dir, acknowledge=False)
     if recovered is None or recovered.get("project_refresh") != "SUCCESS":
         raise ValueError("actual Excel COMMITTED 交易未完成安全恢復")
-    sp.json_save(marker_path, _sealed_actual_excel_marker({
+    _assert_actual_marker_owner(marker_path, marker_sha)
+    marker_sha = sp.json_save(marker_path, _sealed_actual_excel_marker({
         "status": "ACTUAL_EXCEL_RECOVERED",
         "source_excel_sha256": marker["source_excel_sha256"],
         "import_token": marker["import_token"],
         "recovery_token": pending[0],
         "post_state": _actual_excel_file_snapshot(output_dir),
-    }))
-    acknowledge_project_refresh(root, pending[0])
+    }), expected_sha256=marker_sha)
+    _acknowledge_owned_actual_refresh(root, pending[0], marker_path, marker_sha)
+    _assert_actual_marker_owner(marker_path, marker_sha)
     marker_path.unlink()
     return recovered
 
@@ -2152,15 +2224,16 @@ def _mapped_occurrence_overrides(source_dir: Path, source_manifest, target_manif
         sealed_by_pdf = []
         for info, name in zip(source_manifest.get("pdfs", []), source_names):
             workbook = _artifact(source_dir, info, "actual")
-            metadata = sp.workbook_metadata(workbook)
-            if metadata.get("pdf_sha256") != info.get("pdf_sha256"):
-                raise ValueError("來源 actual workbook PDF SHA 不符")
-            try:
-                components = json.loads(str(metadata["actual_asset_fingerprint_components"]))
-                sealed_dynamic = components["dynamic_actual_evidence_hashes"]
-            except (KeyError, TypeError, ValueError) as exc:
-                raise ValueError("來源 actual workbook 缺少可核對的動態 evidence fingerprint") from exc
-            dependency_roster = ar.actual_workbook_dynamic_dependencies(workbook)
+            with _workbook_snapshot(workbook, expected_sha256=info["actual_workbook_sha256"]) as (workbook, _):
+                metadata = sp.workbook_metadata(workbook)
+                if metadata.get("pdf_sha256") != info.get("pdf_sha256"):
+                    raise ValueError("來源 actual workbook PDF SHA 不符")
+                try:
+                    components = json.loads(str(metadata["actual_asset_fingerprint_components"]))
+                    sealed_dynamic = components["dynamic_actual_evidence_hashes"]
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise ValueError("來源 actual workbook 缺少可核對的動態 evidence fingerprint") from exc
+                dependency_roster = ar.actual_workbook_dynamic_dependencies(workbook)
             current_dynamic = ar.dynamic_actual_hashes(
                 source_root, pdf_path=name, dependencies=dependency_roster, read_only=True,
             )

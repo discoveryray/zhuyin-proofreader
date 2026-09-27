@@ -1962,13 +1962,15 @@ def _empty_manual_actual_batch_result() -> dict[str, Any]:
 def apply_direct_visual_actual_batch(
     root: Path, decisions: Sequence[Mapping[str, Any]], *,
     source_context: Mapping[str, Any] | None = None,
-    acknowledge=None, apply_function=None, initialize_evidence=None,
+    acknowledge=None, apply_function=None, initialize_evidence=None, prewrite_guard=None,
 ) -> dict[str, Any]:
     """Shared project commit; Global delivery belongs to the post-commit controller.
 
     Low-level callers without a sealed session remain project-local and receive
     explicit NON_GLOBAL_ELIGIBLE admissions. They cannot synthesize provenance.
     """
+    if prewrite_guard is not None:
+        prewrite_guard()
     if not decisions:
         return {
             "group_results": [], "acknowledgement": {},
@@ -1990,9 +1992,13 @@ def apply_direct_visual_actual_batch(
         prepared.append((decision, reading, checked, admissions))
     results = []
     with direct_visual_project_transaction(root) as bind_recovery_plan:
+        if prewrite_guard is not None:
+            prewrite_guard()
         if initialize_evidence is not None:
             initialize_evidence()
         for decision, reading, checked, admissions in prepared:
+            if prewrite_guard is not None:
+                prewrite_guard()
             group = decision["group"]
             applied = apply_function(
                 root, group, reading, checked_occurrence_ids=checked,
@@ -2005,9 +2011,13 @@ def apply_direct_visual_actual_batch(
                 "group_snapshot": group.get("group_snapshot", ""),
                 "global_admissions": admissions,
             })
+        if prewrite_guard is not None:
+            prewrite_guard()
         bind_recovery_plan(post_commit_recovery_plan_from_results(results))
         enqueue_promotion_intents(root, all_intents)
         acknowledgement = acknowledge() if acknowledge else {}
+        if prewrite_guard is not None:
+            prewrite_guard()
     return {
         "group_results": results, "acknowledgement": acknowledgement,
         "project_actual_commit": "COMMITTED",
@@ -2103,7 +2113,7 @@ def import_actual_review_workbook(
     *,
     expected_metadata: Mapping[str, Any],
     source_context: Mapping[str, Any] | None = None,
-    initialize_evidence=None,
+    initialize_evidence=None, prewrite_guard=None,
 ) -> dict[str, Any]:
     meta, rows = _load_sheet_rows(Path(xlsx), "actual待判定")
     required_meta = dict(expected_metadata)
@@ -2185,6 +2195,7 @@ def import_actual_review_workbook(
           "source": "GPT actual 視覺證據匯入", "note": note}
          for group, reading, ids, note in staged],
         source_context=source_context, initialize_evidence=initialize_evidence,
+        prewrite_guard=prewrite_guard,
     )
     results = transaction_result["group_results"]
     return {**transaction_result, "imported_groups": len(results), "results": results}
