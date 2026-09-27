@@ -109,6 +109,7 @@ from actual_review import (
     load_manual_actual_staging,
     stage_manual_actual_group,
     _revalidate_staged_manual_actual_group,
+    _actual_workbook_schema_mismatches,
     _resolve_pdf_path,
     _staging_id_list,
 )
@@ -3871,6 +3872,9 @@ def _import_actual_gpt_decisions_snapshot(output_dir: Path, xlsx: Path, *,
     validate_output_artifact_hashes(manifest)
     metadata = workbook_metadata(Path(xlsx), "匯入中繼資料")
     if str(metadata.get("session_id") or "") != str(manifest.get("session_id") or ""):
+        mismatched = _actual_workbook_schema_mismatches(metadata, _session_metadata_for_actual(manifest))
+        if mismatched:
+            raise ValueError(f"actual GPT workbook session/schema 不相容：{mismatched}")
         from pdf_portability import import_actual_excel
         return import_actual_excel.__wrapped__(output_dir, xlsx,
             _original_xlsx=_original_xlsx, _snapshot_sha=_snapshot_sha)

@@ -2106,6 +2106,23 @@ def apply_staged_manual_actual_batch(
     }
 
 
+def _actual_workbook_schema_mismatches(
+    meta: Mapping[str, Any], required_meta: Mapping[str, Any],
+) -> dict[str, tuple[Any, Any]]:
+    mismatched = {}
+    for key in ("session_schema_version", "workbook_schema_version", "review_id_schema_version"):
+        if key not in required_meta:
+            continue
+        observed = meta.get(key)
+        required = required_meta[key]
+        compatible = (review_id_schema_compatible(observed, required)
+                      if key == "review_id_schema_version"
+                      else schema_compatible(observed, required))
+        if not compatible:
+            mismatched[key] = (required, observed)
+    return mismatched
+
+
 def import_actual_review_workbook(
     root: Path,
     xlsx: Path,
@@ -2118,19 +2135,16 @@ def import_actual_review_workbook(
     meta, rows = _load_sheet_rows(Path(xlsx), "actual待判定")
     required_meta = dict(expected_metadata)
     required_meta["actual_review_schema_version"] = ACTUAL_REVIEW_SCHEMA_VERSION
+    schema_mismatches = _actual_workbook_schema_mismatches(meta, required_meta)
     mismatched = {}
     for key, required in required_meta.items():
         observed = meta.get(key)
         if key == "version":
             # Application release is audit-only from v5.6 onward.
             continue
-        if key in {"session_schema_version", "workbook_schema_version"}:
-            if not schema_compatible(observed, required):
-                mismatched[key] = (required, observed)
-            continue
-        if key == "review_id_schema_version":
-            if not review_id_schema_compatible(observed, required):
-                mismatched[key] = (required, observed)
+        if key in {"session_schema_version", "workbook_schema_version", "review_id_schema_version"}:
+            if key in schema_mismatches:
+                mismatched[key] = schema_mismatches[key]
             continue
         if str(observed) != str(required):
             mismatched[key] = (required, observed)
