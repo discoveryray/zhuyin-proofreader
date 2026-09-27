@@ -1112,7 +1112,7 @@ def test_staged_actual_receipt_survives_a_to_b_to_c(tmp_path, monkeypatch):
     portable.import_project_decisions(a, b)
     portable.prepare_portable_project(b)
 
-    def build_target(paths, output_dir):
+    def build_target(paths, output_dir, **kwargs):
         project(output_dir, files[2], session="C")
 
     with patch.object(sp, "run_pipeline_pdfs", side_effect=build_target):
@@ -1162,7 +1162,7 @@ def test_continue_operation_uses_local_pdf_and_only_clears_success_marker(tmp_pa
     portable.prepare_portable_project(source)
     first.rename(tmp_path / "first-away.pdf")
 
-    def build_target(paths, output_dir):
+    def build_target(paths, output_dir, **kwargs):
         assert paths == [local.resolve()]
         project(output_dir, local, session="continued")
 
@@ -1201,7 +1201,7 @@ def test_sealed_but_incomplete_target_cannot_be_reexported(tmp_path):
     project(source, first, session="A", event_positions=(0,))
     before = (source / "人工判定資料庫.json").read_bytes()
 
-    def build_target(paths, output_dir):
+    def build_target(paths, output_dir, **kwargs):
         project(output_dir, local, session="B")
 
     with patch.object(sp, "run_pipeline_pdfs", side_effect=build_target), \
@@ -1348,10 +1348,10 @@ def test_saved_actual_override_maps_without_global_promotion(tmp_path, monkeypat
     portable.prepare_portable_project(source)
     first.rename(tmp_path / "first-away.pdf")
 
-    def build_target(paths, output_dir):
+    def build_target(paths, output_dir, **kwargs):
         project(output_dir, local, session="B")
 
-    def refresh_target(output_dir):
+    def refresh_target(output_dir, **kwargs):
         reseal_actual_dynamic(output_dir, local)
 
     with patch.object(sp, "run_pipeline_pdfs", side_effect=build_target), \
@@ -1401,7 +1401,7 @@ def test_two_independent_projects_merge_in_new_project_and_preserve_sources(tmp_
     original_a = (first / "人工判定資料庫.json").read_bytes()
     original_b = (second / "人工判定資料庫.json").read_bytes()
 
-    def build_target(paths, output_dir):
+    def build_target(paths, output_dir, **kwargs):
         project(output_dir, files[2], session="C")
 
     with patch.object(sp, "run_pipeline_pdfs", side_effect=build_target):
@@ -1421,7 +1421,7 @@ def test_same_decision_from_two_sources_keeps_both_exact_identities(tmp_path):
     first_manifest, _ = project(first, files[0], session="A", event_positions=(0,))
     second_manifest, _ = project(second, files[1], session="B", event_positions=(0,))
 
-    def build_target(paths, output_dir):
+    def build_target(paths, output_dir, **kwargs):
         project(output_dir, files[2], session="C")
 
     with patch.object(sp, "run_pipeline_pdfs", side_effect=build_target):
@@ -1464,7 +1464,7 @@ def test_two_sources_keep_both_actual_staging_originals_without_promotion(tmp_pa
         )
         originals.append(ar.load_manual_actual_staging(evidence_root))
 
-    def build_target(paths, output_dir):
+    def build_target(paths, output_dir, **kwargs):
         project(output_dir, files[2], session="C")
 
     with patch.object(sp, "run_pipeline_pdfs", side_effect=build_target):
@@ -1490,10 +1490,10 @@ def test_b_new_actual_override_returns_to_a_in_new_project(tmp_path, monkeypatch
     portable.prepare_portable_project(first)
     first_pdf.rename(tmp_path / "missing-on-b.pdf")
 
-    def build_target(paths, output_dir):
+    def build_target(paths, output_dir, **kwargs):
         project(output_dir, paths[0], session="B" if output_dir == b else "A-return")
 
-    def refresh_target(output_dir):
+    def refresh_target(output_dir, **kwargs):
         reseal_actual_dynamic(output_dir, b_pdf if output_dir == b else first_pdf)
 
     with patch.object(sp, "run_pipeline_pdfs", side_effect=build_target), \
@@ -1528,7 +1528,7 @@ def test_two_project_conflicting_decisions_keep_both_sources(tmp_path):
     before_a = (first / "人工判定資料庫.json").read_bytes()
     before_b = (second / "人工判定資料庫.json").read_bytes()
 
-    def build_target(paths, output_dir):
+    def build_target(paths, output_dir, **kwargs):
         project(output_dir, files[2], session="C")
 
     with patch.object(sp, "run_pipeline_pdfs", side_effect=build_target):
@@ -1556,7 +1556,7 @@ def test_two_project_conflicting_decisions_keep_both_sources(tmp_path):
                         "exclusion_evidence": "PDF page 1 visual check"})
     portable.prepare_portable_project(merged)
 
-    def build_fourth(paths, output_dir):
+    def build_fourth(paths, output_dir, **kwargs):
         project(output_dir, fourth, session="D")
 
     with patch.object(sp, "run_pipeline_pdfs", side_effect=build_fourth):
@@ -1652,7 +1652,7 @@ def test_missing_source_uses_only_explicit_identical_sha_local_pdf(tmp_path):
     project(source, original, session="A", event_positions=(0,))
     original.rename(tmp_path / "source-away.pdf")
 
-    def build_target(paths, output_dir):
+    def build_target(paths, output_dir, **kwargs):
         project(output_dir, paths[0], session="B")
 
     with patch.object(sp, "run_pipeline_pdfs", side_effect=build_target):
@@ -1674,7 +1674,7 @@ def test_noop_and_clear_do_not_adjudicate_conflict(tmp_path):
     db["events"][manifest["records"][0]["review_id"]]["expected_evidence"] = "other"
     sp.json_save(b / "人工判定資料庫.json", db)
 
-    def build(paths, output_dir):
+    def build(paths, output_dir, **kwargs):
         project(output_dir, paths[0], session="M")
 
     with patch.object(sp, "run_pipeline_pdfs", side_effect=build):
@@ -1714,7 +1714,7 @@ def test_duplicate_carries_source_conflict_adjudication_across_hops(tmp_path):
     b_db["events"][b_manifest["records"][0]["review_id"]]["expected_evidence"] = "other"
     sp.json_save(b / "人工判定資料庫.json", b_db)
 
-    def build(paths, output_dir):
+    def build(paths, output_dir, **kwargs):
         project(output_dir, paths[0], session="C")
 
     with patch.object(sp, "run_pipeline_pdfs", side_effect=build):

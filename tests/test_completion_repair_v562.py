@@ -82,7 +82,9 @@ class CompletionRepairV562Tests(unittest.TestCase):
                 pdfs,
                 output_dir,
                 session_id_override="session-562",
+                _prewrite_guard=run.call_args.kwargs["_prewrite_guard"],
             )
+            self.assertTrue(callable(run.call_args.kwargs["_prewrite_guard"]))
 
     def test_gui_surfaces_failed_gate_when_pending_is_zero(self):
         with tempfile.TemporaryDirectory() as directory:

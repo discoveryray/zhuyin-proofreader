@@ -627,7 +627,9 @@ def test_direct_expected_excel_import_maps_different_sha_session(tmp_path, monke
         workbook.save(renamed)
         workbook.close()
         assert sp.detect_gpt_workbook_kind(renamed) == "expected"
-        count, _, report = sp.import_gpt_decisions(b, renamed)
+        with patch.object(portability, "_pdf_content_snapshot", wraps=portability._pdf_content_snapshot) as snapshots:
+            count, _, report = sp.import_gpt_decisions(b, renamed)
+        assert len([call for call in snapshots.call_args_list if Path(call.args[0]) == second]) == 1
         assert count == 1 and report.is_file()
         b_db = sp.json_load_strict(b / "人工判定資料庫.json")
         event = b_db["events"][b_manifest["records"][1]["review_id"]]
@@ -637,6 +639,15 @@ def test_direct_expected_excel_import_maps_different_sha_session(tmp_path, monke
         assert len(sp.json_load_strict(b / "待人工確認.json")["pending"]) == 1
         assert b_manifest["records"][0]["review_id"] not in b_db["events"]
         assert portability._load_project(b)[0]["session_id"] == b_manifest["session_id"]
+        pixels, box, _ = occurrence_preview(b_manifest["records"][0], output_dir=b)
+        assert pixels.width > 0 and box is not None
+        local_id = b_manifest["records"][0]["review_id"]
+        ReviewSaveService(b).save_event(local_id, {
+            "action": "確認非校對範圍", "exclusion_reason": "local after Excel",
+            "exclusion_evidence": "B PDF page 1"})
+        reopened_manifest, reopened_db = portability._load_project(b)
+        assert reopened_manifest["session_id"] == b_manifest["session_id"]
+        assert reopened_db["events"][local_id]["exclusion_reason"] == "local after Excel"
     assert not list((tmp_path / "isolated-localappdata").rglob("*.sqlite*"))
 
 
@@ -669,7 +680,9 @@ def test_direct_actual_excel_import_is_local_only_across_different_sha(tmp_path,
         workbook.save(renamed)
         workbook.close()
         assert sp.detect_gpt_workbook_kind(renamed) == "actual"
-        result = sp.import_actual_gpt_decisions(b, renamed)
+        with patch.object(portability, "_pdf_content_snapshot", wraps=portability._pdf_content_snapshot) as snapshots:
+            result = sp.import_actual_gpt_decisions(b, renamed)
+        assert len([call for call in snapshots.call_args_list if Path(call.args[0]) == second]) == 1
         assert result[0] == 1
         assert result.status["global_promotion_delivery"]["status"] == "NO_PENDING"
         assert not (b / portability.INCOMPLETE_FILE).exists()
@@ -677,6 +690,15 @@ def test_direct_actual_excel_import_is_local_only_across_different_sha(tmp_path,
         assert refreshed["session_id"] == b_manifest["session_id"]
         assert portability._load_project(b)[0]["session_id"] == b_manifest["session_id"]
         assert sp.import_actual_gpt_decisions(b, renamed)[0] == 0
+        pixels, box, _ = occurrence_preview(refreshed["records"][1], output_dir=b)
+        assert pixels.width > 0 and box is not None
+        local_id = refreshed["records"][1]["review_id"]
+        ReviewSaveService(b).save_event(local_id, {
+            "action": "確認非校對範圍", "exclusion_reason": "local after actual Excel",
+            "exclusion_evidence": "B PDF page 1"})
+        reopened_manifest, reopened_db = portability._load_project(b)
+        assert reopened_manifest["session_id"] == b_manifest["session_id"]
+        assert reopened_db["events"][local_id]["exclusion_reason"] == "local after actual Excel"
     assert not list((tmp_path / "isolated-localappdata").rglob("*.sqlite*"))
 
 

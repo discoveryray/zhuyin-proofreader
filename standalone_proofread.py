@@ -1620,7 +1620,7 @@ def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False)
 def _import_gpt_decisions_snapshot(output_dir: Path, xlsx: Path, *, dry_run: bool = False,
                                    _original_xlsx: Path, _snapshot_sha: str):
     _reject_incomplete_portable_project(output_dir)
-    manifest = json_load_strict(output_dir / "校對工作階段.json")
+    manifest, manifest_before_sha = json_load_snapshot(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
     validate_output_artifact_hashes(manifest)
     if (
@@ -1666,10 +1666,13 @@ def _import_gpt_decisions_snapshot(output_dir: Path, xlsx: Path, *, dry_run: boo
     assert_unique_ids(rows, "occurrence_id")
     assert_unique_ids(rows, "review_id")
 
-    db = load_or_initialize_db(output_dir)
-    manifest_before_sha = sha256_file(output_dir / "校對工作階段.json")
     db_path = output_dir / "人工判定資料庫.json"
-    db_before_sha = sha256_file(db_path)
+    raw_db, db_before_sha = json_load_snapshot(db_path)
+    db = normalize_db(raw_db)
+    from pdf_portability import (_read_presentation_receipts, _receipt_snapshot_shas,
+                                 _check_receipt_shas, _actual_transfer_state)
+    receipt_snapshots = _read_presentation_receipts(output_dir)
+    receipt_shas = _receipt_snapshot_shas(receipt_snapshots)
     current_ledger = materialize_ledger(manifest, db)
     assert_unique_ids(current_ledger, "occurrence_id")
     assert_unique_ids(current_ledger, "review_id")
@@ -1767,6 +1770,16 @@ def _import_gpt_decisions_snapshot(output_dir: Path, xlsx: Path, *, dry_run: boo
     if set(staged_events) & set(unresolved_conflicts):
         raise ValueError("同 session Excel 判定包含未經本地裁決的跨專案衝突位置；未寫入任何判定")
     validate_conflict_state(output_dir, manifest, staged_db)
+    from pdf_portability import _verify_available_session_pdfs
+    def validate_prewrite():
+        _reject_incomplete_portable_project(output_dir)
+        if (sha256_file(output_dir / "校對工作階段.json") != manifest_before_sha
+                or sha256_file(db_path) != db_before_sha):
+            raise ValueError("匯入期間工作階段或判定資料庫已變動；未寫入判定")
+        _verify_available_session_pdfs(output_dir, manifest)
+        _actual_transfer_state(output_dir, manifest)
+        _check_receipt_shas(output_dir, receipt_shas)
+    validate_prewrite()
     if dry_run:
         # Bundle preflight: validate expected actions before any actual evidence
         # is committed.  This prevents avoidable half-applied bundles.
@@ -1782,10 +1795,21 @@ def _import_gpt_decisions_snapshot(output_dir: Path, xlsx: Path, *, dry_run: boo
     from pdf_portability import INCOMPLETE_FILE, _new_presentation_marker, resume_portable_project
     marker = output_dir / INCOMPLETE_FILE
     owned_marker = _new_presentation_marker(
-        output_dir, manifest, db_before_sha, staged_db, {}, phase="SAME_SESSION_EXPECTED")
-    json_save(marker, owned_marker, expected_sha256="")
+        output_dir, manifest, db_before_sha, staged_db, {}, phase="SAME_SESSION_EXPECTED",
+        _receipt_snapshots=receipt_snapshots)
+    validate_prewrite()
+    marker_sha = json_save(marker, owned_marker, expected_sha256="")
+    from pdf_portability import _assert_actual_marker_owner
+    _assert_actual_marker_owner(marker, marker_sha)
+    if sha256_file(output_dir / "校對工作階段.json") != manifest_before_sha:
+        raise ValueError("匯入期間工作階段已變動；保留發布計畫")
+    _verify_available_session_pdfs(output_dir, manifest)
+    _assert_actual_marker_owner(marker, marker_sha)
+    _actual_transfer_state(output_dir, manifest)
+    _check_receipt_shas(output_dir, receipt_shas)
     json_save(db_path, staged_db, expected_sha256=db_before_sha)
-    report = Path(resume_portable_project(output_dir)["report"])
+    _assert_actual_marker_owner(marker, marker_sha)
+    report = Path(resume_portable_project(output_dir, _expected_marker_sha=marker_sha)["report"])
     # skipped counts only explicit no-op/keep rows; safe rebases are successful
     # imports and remain included in len(staged_events).
     return len(staged_events), ignored_noop_rows, report
@@ -1817,9 +1841,11 @@ def json_load(path: Path, default):
 
 
 def json_load_strict(path: Path) -> Any:
-    if not path.exists():
-        raise FileNotFoundError(path)
+    return json_load_snapshot(path)[0]
 
+
+def json_parse_strict(raw: bytes, source: Path) -> Any:
+    """Strictly parse the exact bytes used by a snapshot, digest or backup."""
     def reject_duplicate_keys(pairs):
         out = {}
         for key, value in pairs:
@@ -1827,11 +1853,16 @@ def json_load_strict(path: Path) -> Any:
                 raise ValueError(f"JSON 重複 key：{key}")
             out[key] = value
         return out
-
     try:
-        return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=reject_duplicate_keys)
+        return json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
     except Exception as exc:
-        raise ValueError(f"JSON 損壞或含重複 key：{path}") from exc
+        raise ValueError(f"JSON 損壞或含重複 key：{source}") from exc
+
+
+def json_load_snapshot(path: Path) -> tuple[Any, str]:
+    """Parse and hash one immutable byte sequence, including duplicate-key checks."""
+    raw = path.read_bytes()
+    return json_parse_strict(raw, path), hashlib.sha256(raw).hexdigest()
 
 
 def json_save(path: Path, data, *, expected_sha256: str | None = None) -> str:
@@ -3789,7 +3820,8 @@ def _clear_actual_dependent_events(output_dir: Path, ledger: list[dict[str, Any]
     return removed
 
 
-def refresh_actual_project(output_dir: Path, *, defer_excel_reports: bool = True) -> Path:
+def refresh_actual_project(output_dir: Path, *, defer_excel_reports: bool = True,
+                           _prewrite_guard=None) -> Path:
     """Incrementally re-decode current project after dynamic actual evidence changes."""
     output_dir = Path(output_dir)
     manifest = json_load_strict(output_dir / "校對工作階段.json")
@@ -3803,6 +3835,7 @@ def refresh_actual_project(output_dir: Path, *, defer_excel_reports: bool = True
         output_dir,
         session_id_override=str(manifest.get("session_id") or ""),
         defer_excel_reports=defer_excel_reports,
+        **({"_prewrite_guard": _prewrite_guard} if _prewrite_guard is not None else {}),
     )
 
 
@@ -4227,7 +4260,10 @@ def run_pipeline_pdfs(
     session_id_override: str | None = None,
     defer_excel_reports: bool = False,
     runtime_root: Path | None = None,
+    _prewrite_guard=None,
 ) -> Path:
+    if _prewrite_guard is not None:
+        _prewrite_guard()
     pdfs = [Path(pdf).resolve() for pdf in pdfs]
     root=Path(runtime_root or Path(__file__).resolve().parent).resolve()
     source_validation = validate_asset_manifest(root)
@@ -4443,15 +4479,23 @@ def run_pipeline_pdfs(
             manifest["session_id"] = str(session_id_override)
             seal_manifest(manifest)
         with project_delivery_lock(project_actual_evidence_root(output_dir)):
+            if _prewrite_guard is not None:
+                _prewrite_guard()
             json_save(output_dir/"校對工作階段.json",manifest)
             db=load_or_initialize_db(output_dir)
+            if _prewrite_guard is not None:
+                _prewrite_guard()
             json_save(output_dir/"人工判定資料庫.json",db)
+            if _prewrite_guard is not None:
+                _prewrite_guard()
             pending=save_pending_json(output_dir,manifest,db)
             ledger = materialize_ledger(manifest, db)
             reconciliation = reconcile_ledger(ledger, manifest.get("actual_source_ids") or [])
             gate = completion_gate(ledger, reconciliation, manifest.get("regression_gate") or {}, source_validation_ok=True)
             from pdf_portability import hold_actual_excel_completion
             gate = hold_actual_excel_completion(output_dir, manifest, db, gate)
+            if _prewrite_guard is not None:
+                _prewrite_guard()
             if defer_excel_reports:
                 # Interactive actual correction should refresh the authoritative
                 # ledger quickly. The large reports can be regenerated on demand.
@@ -4486,6 +4530,8 @@ def run_pipeline_pdfs(
             print(f"證據補建／六閘門確認報表：{gpt_report}",flush=True)
         return report
     except Exception as exc:
+        if _prewrite_guard is not None:
+            _prewrite_guard()
         blocked_report = dict(source_validation)
         blocked_report.setdefault("errors", []).append(f"runtime fatal error：{type(exc).__name__}: {exc}")
         write_pipeline_blocked(output_dir, blocked_report, "RUNTIME_FATAL_OR_DATA_INTEGRITY_ERROR")
@@ -4607,6 +4653,10 @@ def regenerate_report(output_dir: Path) -> Path:
     manifest = _carry_forward_cross_version_identity(manifest, old_manifest)
     db = load_or_initialize_db(output_dir)
     materialize_ledger(manifest, db)
+    _reject_incomplete_portable_project(output_dir)
+    from pdf_portability import validate_conflict_state
+    if validate_conflict_state(output_dir, old_manifest, db):
+        raise ValueError("專案出現未裁決衝突；未重新發布")
     json_save(output_dir/"校對工作階段.json",manifest)
     save_pending_json(output_dir,manifest,db)
     return generate_report(output_dir,manifest,db)
@@ -4659,8 +4709,15 @@ def repair_project_state(output_dir: Path, *, runtime_root: Path | None = None) 
         "[專案修復] 沿用相同 PDF 與既有人工判定；actual 證據相容時直接 reuse，只重建受影響的 expected 候選與完成門檻。",
         flush=True,
     )
+    def validate_repair_publication():
+        _reject_incomplete_portable_project(output_dir)
+        from pdf_portability import validate_conflict_state
+        current_db = normalize_db(json_load_strict(decision_path))
+        if validate_conflict_state(output_dir, old_manifest, current_db):
+            raise ValueError("專案出現未裁決衝突；未修復發布")
     pipeline_kwargs: dict[str, Any] = {
         "session_id_override": str(old_manifest.get("session_id") or "") or None,
+        "_prewrite_guard": validate_repair_publication,
     }
     if runtime_root is not None:
         pipeline_kwargs["runtime_root"] = Path(runtime_root)

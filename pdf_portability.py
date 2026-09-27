@@ -7,7 +7,7 @@ The transfer receipt is local project evidence, not Global glyph evidence.
 from __future__ import annotations
 
 import copy
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 import base64
 import binascii
 import functools
@@ -149,6 +149,30 @@ def _source_pdf(manifest: Mapping[str, Any], info: Mapping[str, Any], output_dir
     if not matching:
         raise FileNotFoundError(f"無法建立跨電腦證據：原 PDF 不存在或 SHA 不符：{name}")
     return matching[0]
+
+
+def _verify_available_session_pdfs(output_dir: Path, manifest) -> None:
+    """Expected can work offline, but a known local replacement is not offline."""
+    import standalone_proofread as sp
+    for info in manifest.get("pdfs", []):
+        try:
+            sp._resolve_session_pdfs(output_dir, {"pdfs": [info]})
+        except FileNotFoundError:
+            name = str(info.get("pdf_name") or Path(str(info.get("pdf") or "")).name)
+            stored = Path(str(info.get("pdf") or ""))
+            if stored.is_file() or (name and any(path.is_file() for path in output_dir.parent.rglob(name))):
+                raise ValueError(f"目前 PDF 與工作階段 SHA 不符：{name}；未寫入判定")
+
+
+@contextmanager
+def _project_transfer_locks(*directories):
+    """Acquire source and target roots in the same order for every transfer."""
+    import standalone_proofread as sp
+    roots = {sp.project_actual_evidence_root(Path(path).resolve()) for path in directories}
+    with ExitStack() as stack:
+        for root in sorted(roots, key=lambda path: str(path).casefold()):
+            stack.enter_context(sp.project_delivery_lock(root))
+        yield
 
 
 def _artifact(output_dir: Path, info: Mapping[str, Any], kind: str) -> Path:
@@ -683,8 +707,11 @@ def _legacy_exact_excel_mapping(xlsx: Path, target_dir: Path, target_manifest, *
 
     if not workbook_session or workbook_session == target_manifest["session_id"]:
         raise ValueError("舊 Excel 缺少可驗證的跨 session 來源識別")
+    geometry = {}
     for info in target_manifest.get("pdfs", []):
-        _source_pdf(target_manifest, info, Path(target_dir))
+        path = _source_pdf(target_manifest, info, Path(target_dir))
+        _, pages = _pdf_content_snapshot(path, expected_sha256=info["pdf_sha256"])
+        geometry[info["pdf_sha256"]] = (pages, pages)
     source_db = sp.normalize_db({})
     source_ledger = sp.materialize_ledger(target_manifest, source_db)
     by_review = {entry["review_id"]: entry for entry in source_ledger}
@@ -731,7 +758,7 @@ def _legacy_exact_excel_mapping(xlsx: Path, target_dir: Path, target_manifest, *
     pdf_map = {item["pdf_sha256"]: item["pdf_sha256"] for item in target_manifest["pdfs"]}
     payload = {"attestations": {"basis": "LEGACY_EXACT_IDS_NO_SOURCE_SEAL"}}
     return (source_context, source_db, source_ledger, reviews, pdf_map,
-            datetime.now().astimezone().isoformat(timespec="microseconds"), payload, None)
+            datetime.now().astimezone().isoformat(timespec="microseconds"), payload, geometry)
 
 
 @_stable_excel_import
@@ -994,7 +1021,7 @@ def _match_pdfs(proof: Mapping[str, Any], source_manifest: Mapping[str, Any],
 
 
 def _verify_mapped_target_pdfs(target_dir: Path, target_manifest, pdf_map, geometry) -> None:
-    """Recheck the mapped PDF bytes and all-page evidence at the target write gate."""
+    """Bind current B bytes to B's already verified full-page snapshot at each gate."""
     by_sha = {str(info["pdf_sha256"]): info for info in target_manifest.get("pdfs", [])}
     if len(by_sha) != len(target_manifest.get("pdfs", [])) or len(pdf_map) != len(by_sha):
         raise ValueError("目標 PDF 內容對應清單已變動；未匯入判定")
@@ -1006,11 +1033,10 @@ def _verify_mapped_target_pdfs(target_dir: Path, target_manifest, pdf_map, geome
             raise ValueError("目標 PDF 內容對應已變動；未匯入判定")
         try:
             path = _source_pdf(target_manifest, info, target_dir)
-            _, pages = _pdf_content_snapshot(path, expected_sha256=target_sha)
+            if _sha(path) != target_sha:
+                raise ValueError("已驗證的目標 PDF bytes 已變動")
         except (FileNotFoundError, ValueError) as exc:
             raise ValueError(f"目標 PDF 在內容對應後已變動；未匯入判定：{info['pdf_name']}") from exc
-        if expected is not None and pages != expected[1]:
-            raise ValueError(f"目標 PDF 頁面內容在對應後已變動；未匯入判定：{info['pdf_name']}")
 
 
 def _anchor(entry: Mapping[str, Any], pages):
@@ -1096,44 +1122,75 @@ def _document_digest(value: Any) -> str:
     return hashlib.sha256(_canonical(value)).hexdigest()
 
 
-def _presentation_receipt_plan(target_dir: Path, planned: Mapping[str, Any]):
-    """Freeze both receipt preimages and the intended post-commit documents."""
+def _read_presentation_receipts(target_dir: Path):
+    """Keep strict parsed documents and rollback bytes from the same read."""
     import standalone_proofread as sp
-
-    receipts = {}
+    snapshots = {}
     for name in PRESENTATION_RECEIPTS:
         path = target_dir / name
-        old = path.read_bytes() if path.exists() else None
-        current = sp.json_load_strict(path) if old is not None else None
+        try:
+            raw = path.read_bytes()
+        except FileNotFoundError:
+            raw = None
+        snapshots[name] = (raw, sp.json_parse_strict(raw, path) if raw is not None else None)
+    return snapshots
+
+
+def _receipt_snapshot_shas(snapshots):
+    return {name: hashlib.sha256(raw).hexdigest() if raw is not None else ""
+            for name, (raw, _) in snapshots.items()}
+
+
+def _check_receipt_shas(target_dir: Path, expected):
+    for name, digest in expected.items():
+        path = target_dir / name
+        if (_sha(path) if path.exists() else "") != digest:
+            raise ValueError(f"來源回執於判定期間變動；保留新紀錄，未覆寫：{name}")
+
+
+def _presentation_receipt_plan(target_dir: Path, planned: Mapping[str, Any], *, snapshots=None):
+    """Freeze receipt backup, candidate and digest from one retained snapshot."""
+    snapshots = _read_presentation_receipts(target_dir) if snapshots is None else snapshots
+    receipts = {}
+    for name, (old, current) in snapshots.items():
         desired = planned.get(name, current)
         receipts[name] = {
             "before_bytes": base64.b64encode(old).decode("ascii") if old is not None else None,
             "before_digest": _document_digest(current) if current is not None else None,
             "after_digest": _document_digest(desired) if desired is not None else None,
         }
+    _check_receipt_shas(target_dir, _receipt_snapshot_shas(snapshots))
     return receipts
 
 
 def _new_presentation_marker(target_dir: Path, manifest, before_db_sha: str,
                              candidate_db, planned_receipts: Mapping[str, Any], *,
-                             phase: str, export_pending: bool = False):
+                             phase: str, export_pending: bool = False, _receipt_snapshots=None):
     if phase not in {"PROJECT_IMPORT", "NEW_PROJECT_FINAL", "SAME_SESSION_EXPECTED",
                      "CROSS_SESSION_EXPECTED"}:
         raise ValueError("未知專案發布階段")
+    import standalone_proofread as sp
+    _actual_transfer_state(target_dir, manifest)
+    if _sha(target_dir / "人工判定資料庫.json") != before_db_sha:
+        raise ValueError("判定資料庫於建立發布計畫前變動；未寫入")
+    live_manifest, manifest_sha = sp.json_load_snapshot(target_dir / "校對工作階段.json")
+    if live_manifest != manifest:
+        raise ValueError("工作階段已變動；未建立不一致的發布計畫")
     payload = {
         "status": "PRESENTATION_PENDING", "plan_version": PRESENTATION_PLAN_VERSION,
         "owner_token": uuid.uuid4().hex, "phase": phase,
-        "manifest_file_sha256": _sha(target_dir / "校對工作階段.json"),
+        "manifest_file_sha256": manifest_sha,
         "manifest_integrity_sha256": manifest["manifest_integrity_sha256"],
         "db_before_sha256": before_db_sha,
         "db_after_digest": _document_digest(candidate_db),
-        "receipts": _presentation_receipt_plan(target_dir, planned_receipts),
+        "receipts": _presentation_receipt_plan(target_dir, planned_receipts, snapshots=_receipt_snapshots),
         "export_pending": bool(export_pending),
     }
     return {**payload, "plan_integrity_sha256": _document_digest(payload)}
 
 
 def _validated_presentation_marker(value):
+    import standalone_proofread as sp
     if not isinstance(value, dict) or set(value) != {
         "status", "plan_version", "owner_token", "phase", "manifest_file_sha256",
         "manifest_integrity_sha256", "db_before_sha256", "db_after_digest",
@@ -1168,7 +1225,7 @@ def _validated_presentation_marker(value):
         else:
             try:
                 original = base64.b64decode(encoded, validate=True)
-                if _document_digest(json.loads(original)) != item["before_digest"]:
+                if _document_digest(sp.json_parse_strict(original, Path("presentation receipt backup"))) != item["before_digest"]:
                     raise ValueError("未完成專案回執原文與摘要不符")
             except (ValueError, TypeError) as exc:
                 raise ValueError("未完成專案回執原文無法驗證") from exc
@@ -1183,7 +1240,7 @@ def _presentation_current_receipts(target_dir: Path):
             for name in PRESENTATION_RECEIPTS}
 
 
-def resume_portable_project(output_dir: Path):
+def resume_portable_project(output_dir: Path, *, _expected_marker_sha: str | None = None):
     """Redo only a fully bound committed presentation, or undo precommit receipts."""
     import standalone_proofread as sp
 
@@ -1191,7 +1248,11 @@ def resume_portable_project(output_dir: Path):
     root = sp.project_actual_evidence_root(output_dir)
     with sp.project_delivery_lock(root):
         marker_path = output_dir / INCOMPLETE_FILE
-        marker = _validated_presentation_marker(sp.json_load_strict(marker_path))
+        if _expected_marker_sha is not None:
+            _assert_actual_marker_owner(marker_path, _expected_marker_sha)
+        raw_marker, marker_sha = sp.json_load_snapshot(marker_path)
+        marker = _validated_presentation_marker(raw_marker)
+        _assert_actual_marker_owner(marker_path, _expected_marker_sha or marker_sha)
         manifest_path = output_dir / "校對工作階段.json"
         if _sha(manifest_path) != marker["manifest_file_sha256"]:
             raise ValueError("未完成專案封印檔已變動；未恢復或清標記")
@@ -1212,6 +1273,7 @@ def resume_portable_project(output_dir: Path):
         if db_after and receipt_after:
             _load_project(output_dir, allow_incomplete=True, allow_unresolved_conflict=True)
             _actual_transfer_state(output_dir, manifest)
+            _assert_actual_marker_owner(marker_path, marker_sha)
             published_report = _publish_portable_outputs(output_dir, manifest, db)
             if marker["export_pending"]:
                 if any(sp.needs_expected_review(row) for row in sp.materialize_ledger(manifest, db)):
@@ -1221,6 +1283,7 @@ def resume_portable_project(output_dir: Path):
                     or _document_digest(sp.normalize_db(sp.json_load_strict(db_path))) != marker["db_after_digest"]
                     or _presentation_current_receipts(output_dir) != current_receipts):
                 raise ValueError("發布期間來源資料或未完成標記已由其他交易變動；保留標記")
+            _assert_actual_marker_owner(marker_path, marker_sha)
             marker_path.unlink()
             return {"status": "PRESENTATION_RECOVERED", "report": str(published_report)}
         if (_sha(db_path) == marker["db_before_sha256"]
@@ -1231,11 +1294,13 @@ def resume_portable_project(output_dir: Path):
             if sp.json_load_strict(marker_path) != marker:
                 raise ValueError("未完成標記已由其他交易變動；未回滾")
             for name in PRESENTATION_RECEIPTS:
+                _assert_actual_marker_owner(marker_path, marker_sha)
                 encoded = marker["receipts"][name]["before_bytes"]
                 _restore_exact_file(output_dir / name,
                                     base64.b64decode(encoded) if encoded is not None else None)
             if sp.json_load_strict(marker_path) != marker:
                 raise ValueError("回滾期間未完成標記已變動；保留現場")
+            _assert_actual_marker_owner(marker_path, marker_sha)
             marker_path.unlink()
             return {"status": "PRECOMMIT_ROLLED_BACK"}
         raise ValueError("未完成專案 DB／來源回執與專用恢復計畫不符；保留資料及標記")
@@ -1371,8 +1436,7 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
             raise ValueError("Excel 匯入期間目標封印已變動")
         _verify_mapped_target_pdfs(target_dir, live_manifest, pdf_map, geometry)
         db_path = target_dir / "人工判定資料庫.json"
-        before = _sha(db_path)
-        raw_db = sp.json_load_strict(db_path)
+        raw_db, before = sp.json_load_snapshot(db_path)
         if not isinstance(raw_db, dict):
             raise ValueError("目標判定資料庫根節點不是物件")
         live_db = sp.normalize_db(raw_db)
@@ -1381,14 +1445,16 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
         pending_actual = actual_excel_conflict_state(target_dir, live_manifest, live_db)
         if pending_actual:
             raise ValueError(f"Excel 匯入期間目標出現未裁決 actual 衝突；未寫入判定：{pending_actual}")
+        receipt_snapshots = _read_presentation_receipts(target_dir)
+        receipt_shas = _receipt_snapshot_shas(receipt_snapshots)
         receipt_path = target_dir / CONFLICT_FILE
         prior_conflicts = []
-        if receipt_path.exists():
+        if receipt_snapshots[CONFLICT_FILE][0] is not None:
             # The receipt and target DB are one logical state. Validate both
             # under the same project lock before extending conflict history.
             if validate_conflict_state(target_dir, live_manifest, target_db):
                 raise ValueError("Excel 匯入期間目標出現未裁決衝突，不能轉入新判定")
-            prior_conflicts = copy.deepcopy(sp.json_load_strict(receipt_path)["conflicts"])
+            prior_conflicts = copy.deepcopy(receipt_snapshots[CONFLICT_FILE][1]["conflicts"])
         candidate = copy.deepcopy(target_db)
         imported, duplicates, conflicts = 0, 0, []
         for target, event, identity in actions:
@@ -1434,21 +1500,29 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
             original_files = {path: path.read_bytes() if path.exists() else None
                               for path in [db_path, receipt_path, marker_path, *presentation_paths]}
             marker_before = marker_path.read_bytes() if marker_path.exists() else None
-            receipt_before = receipt_path.read_bytes() if receipt_path.exists() else None
+            receipt_before = receipt_snapshots[CONFLICT_FILE][0]
+            original_files[receipt_path] = receipt_before
             planned_conflicts = ({"version": 1, "conflicts": [*prior_conflicts, *conflicts]}
                                  if conflicts else None)
             owned_marker = _new_presentation_marker(
                 target_dir, live_manifest, before, candidate,
                 {CONFLICT_FILE: planned_conflicts} if planned_conflicts is not None else {},
-                phase="CROSS_SESSION_EXPECTED")
+                phase="CROSS_SESSION_EXPECTED", _receipt_snapshots=receipt_snapshots)
+            def validate_write():
+                _actual_transfer_state(target_dir, live_manifest)
+                _check_receipt_shas(target_dir, receipt_shas)
+            validate_write()
             db_committed = False
             try:
-                sp.json_save(marker_path, owned_marker, expected_sha256="")
+                marker_sha = sp.json_save(marker_path, owned_marker, expected_sha256="")
+                _assert_actual_marker_owner(marker_path, marker_sha)
+                validate_write()
                 if conflicts:
-                    sp.json_save(receipt_path, planned_conflicts,
-                                 expected_sha256=_sha(receipt_path) if receipt_path.exists() else "")
+                    receipt_shas[CONFLICT_FILE] = sp.json_save(
+                        receipt_path, planned_conflicts, expected_sha256=receipt_shas[CONFLICT_FILE])
                 if sp.json_load_strict(marker_path) != owned_marker:
                     raise ValueError("Excel expected 匯入標記已由其他交易變動；未寫入判定")
+                validate_write()
                 sp.json_save(db_path, candidate, expected_sha256=before)
                 db_committed = True
                 written_candidate_sha = _sha(db_path)
@@ -1456,18 +1530,20 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
                 if not db_committed and _sha(db_path) == before:
                     if not marker_path.exists() or sp.json_load_strict(marker_path) != owned_marker:
                         raise ValueError("Excel expected 寫入失敗且未完成標記已由其他交易變動；保留衝突紀錄與現場待查核") from exc
+                    _check_receipt_shas(target_dir, receipt_shas)
                     _restore_exact_file(receipt_path, receipt_before)
                     _restore_exact_file(marker_path, marker_before)
                 raise
     if imported or duplicates or conflicts:
         try:
-            resume_portable_project(target_dir)
+            resume_portable_project(target_dir, _expected_marker_sha=marker_sha)
         except Exception:
             with sp.project_delivery_lock(sp.project_actual_evidence_root(target_dir)):
                 if (_sha(target_dir / "人工判定資料庫.json") != written_candidate_sha
                         or not (target_dir / INCOMPLETE_FILE).exists()
                         or sp.json_load_strict(target_dir / INCOMPLETE_FILE) != owned_marker):
                     raise ValueError("Excel expected 發布失敗且目標資料或未完成標記已由其他交易變動；保留現場待查核")
+                _check_receipt_shas(target_dir, receipt_shas)
                 # Restore the original user views, conflict receipt and DB;
                 # leave the fail-closed marker in place until every restore succeeds.
                 for path in [*presentation_paths, target_dir / CONFLICT_FILE,
@@ -2293,13 +2369,18 @@ def _publish_portable_outputs(target_dir: Path, manifest, db):
 
 def import_project_decisions(source_dir: Path, target_dir: Path, *,
                              _allow_incomplete_target: bool = False,
-                             _selected_local_pdf: Path | None = None) -> dict[str, Any]:
+                             _selected_local_pdf: Path | None = None,
+                             _target_marker_sha: str | None = None) -> dict[str, Any]:
     """Import only proven mapped review events; conflicts remain untouched."""
     import standalone_proofread as sp
 
     source_dir, target_dir = Path(source_dir).resolve(), Path(target_dir).resolve()
     if source_dir == target_dir:
         raise ValueError("來源與目標專案必須不同")
+    if _allow_incomplete_target:
+        if not _target_marker_sha:
+            raise ValueError("內部接續缺少明確 owner；未匯入")
+        _assert_actual_marker_owner(target_dir / INCOMPLETE_FILE, _target_marker_sha)
     source_manifest, source_db = _load_project(source_dir)
     target_manifest, _ = _load_project(target_dir, allow_incomplete=_allow_incomplete_target)
     source_current = {entry["review_id"]: entry for entry in
@@ -2339,18 +2420,19 @@ def import_project_decisions(source_dir: Path, target_dir: Path, *,
     # The same project lock protects the read, replay check, candidate and
     # compare-and-swap write. A concurrent ReviewSaveService save is therefore
     # included in the candidate rather than lost by a stale earlier read.
-    with sp.project_delivery_lock(sp.project_actual_evidence_root(target_dir)):
+    with _project_transfer_locks(source_dir, target_dir):
         live_manifest = sp.json_load_strict(target_dir / "校對工作階段.json")
         sp.validate_manifest_integrity(live_manifest)
         if live_manifest["manifest_integrity_sha256"] != target_manifest["manifest_integrity_sha256"]:
             raise ValueError("目標工作階段於內容對應後已變動；未匯入")
         _verify_mapped_target_pdfs(target_dir, live_manifest, pdf_map, geometry)
         path = target_dir / "人工判定資料庫.json"
-        before = _sha(path)
-        raw_db = sp.json_load_strict(path)
+        raw_db, before = sp.json_load_snapshot(path)
         if not isinstance(raw_db, dict):
             raise ValueError("DATA_INTEGRITY_ERROR：目標人工判定資料庫根節點必須是物件")
         target_db = sp.normalize_db(raw_db)
+        receipt_snapshots = _read_presentation_receipts(target_dir)
+        receipt_shas = _receipt_snapshot_shas(receipt_snapshots)
         if (target_dir / INCOMPLETE_FILE).exists() and not _allow_incomplete_target:
             raise ValueError("目標跨電腦接續未完成；匯入期間不得寫入判定")
         pending_actual = actual_excel_conflict_state(target_dir, live_manifest, target_db)
@@ -2422,7 +2504,8 @@ def import_project_decisions(source_dir: Path, target_dir: Path, *,
         planned_receipts = {}
         if conflict_records:
             conflict_path = target_dir / CONFLICT_FILE
-            existing_conflicts = (sp.json_load_strict(conflict_path) if conflict_path.exists()
+            existing_conflicts = (receipt_snapshots[CONFLICT_FILE][1]
+                                  if receipt_snapshots[CONFLICT_FILE][0] is not None
                                   else {"version": 1, "conflicts": []})
             if (not isinstance(existing_conflicts, dict)
                     or existing_conflicts.get("version") != 1
@@ -2457,7 +2540,8 @@ def import_project_decisions(source_dir: Path, target_dir: Path, *,
                 })
                 incoming.append(forwarded)
             receipt_path = target_dir / PENDING_ACTUAL_FILE
-            existing = (sp.json_load_strict(receipt_path) if receipt_path.exists()
+            existing = (receipt_snapshots[PENDING_ACTUAL_FILE][1]
+                        if receipt_snapshots[PENDING_ACTUAL_FILE][0] is not None
                         else {"status": "RECHECK_LOCAL_PDF_REQUIRED", "sources": []})
             if (existing.get("status") != "RECHECK_LOCAL_PDF_REQUIRED"
                     or not isinstance(existing.get("sources"), list)):
@@ -2478,20 +2562,50 @@ def import_project_decisions(source_dir: Path, target_dir: Path, *,
                     "status": "RECHECK_LOCAL_PDF_REQUIRED",
                     "sources": sources,
                 }
+        def validate_source():
+            if _load_project(source_dir) != (source_manifest, source_db):
+                raise ValueError("來源工作階段或判定於匯入期間變動；未轉送")
+            if _actual_transfer_state(source_dir, source_manifest) != source_actual:
+                raise ValueError("來源 actual 狀態於匯入期間變動；未轉送")
+            if _mapped_occurrence_overrides(source_dir, source_manifest, target_manifest, reviews) != mapped_overrides:
+                raise ValueError("來源 actual occurrence 證據於匯入期間變動；未轉送")
+        validate_source()
+        _actual_transfer_state(target_dir, live_manifest)
+        _check_receipt_shas(target_dir, receipt_shas)
         marker_path = target_dir / INCOMPLETE_FILE
+        marker_sha = _target_marker_sha
+        if _allow_incomplete_target:
+            _assert_actual_marker_owner(marker_path, marker_sha)
+        elif marker_path.exists():
+            raise ValueError("目標出現未完成標記；未寫入")
         if mutations and not _allow_incomplete_target:
             owned_marker = _new_presentation_marker(
                 target_dir, live_manifest, before, candidate, planned_receipts,
-                phase="PROJECT_IMPORT")
-            sp.json_save(marker_path, owned_marker, expected_sha256="")
+                phase="PROJECT_IMPORT", _receipt_snapshots=receipt_snapshots)
+            _actual_transfer_state(target_dir, live_manifest)
+            _check_receipt_shas(target_dir, receipt_shas)
+            marker_sha = sp.json_save(marker_path, owned_marker, expected_sha256="")
+        def validate_owned_write():
+            validate_source()
+            _actual_transfer_state(target_dir, live_manifest)
+            _check_receipt_shas(target_dir, receipt_shas)
+            if marker_sha:
+                _assert_actual_marker_owner(marker_path, marker_sha)
+            if sp.json_load_strict(target_dir / "校對工作階段.json") != live_manifest:
+                raise ValueError("目標工作階段於寫入前變動")
+            _verify_mapped_target_pdfs(target_dir, live_manifest, pdf_map, geometry)
         for name, document in planned_receipts.items():
+            validate_owned_write()
             receipt_path = target_dir / name
-            sp.json_save(receipt_path, document,
-                         expected_sha256=_sha(receipt_path) if receipt_path.exists() else None)
+            receipt_shas[name] = sp.json_save(receipt_path, document,
+                                             expected_sha256=receipt_shas[name])
         if imported or provenance_updates or conflict_records:
+            validate_owned_write()
             sp.json_save(path, candidate, expected_sha256=before)
+        if marker_sha:
+            _assert_actual_marker_owner(marker_path, marker_sha)
     if not _allow_incomplete_target and mutations:
-        resume_portable_project(target_dir)
+        resume_portable_project(target_dir, _expected_marker_sha=marker_sha)
     return {"imported": imported, "duplicates": duplicates, "conflicts": conflicts,
             "provenance_updates": provenance_updates,
             "matched_actual_overrides": len(mapped_overrides),
@@ -2505,7 +2619,36 @@ def continue_project(source_dir: Path, local_pdf: Path, target_dir: Path):
     return merge_projects([source_dir], local_pdf, target_dir)
 
 
+def _preflight_merge_sources(source_dirs, local_pdf):
+    if not 1 <= len(source_dirs) <= 2 or len(set(source_dirs)) != len(source_dirs):
+        raise ValueError("跨專案合併需要一至兩個不同來源專案")
+    if not local_pdf.is_file() or local_pdf.suffix.lower() != ".pdf":
+        raise FileNotFoundError(f"找不到當地 PDF：{local_pdf}")
+    _, local_pages = _pdf_content_snapshot(local_pdf)
+    for source_dir in source_dirs:
+        source_manifest, _ = _load_project(source_dir)
+        _actual_transfer_state(source_dir, source_manifest)
+        proof = _proof_from_explicit_local(source_dir, source_manifest, local_pdf, local_pages)
+        if len(proof["pdfs"]) != 1:
+            raise ValueError("此入口目前僅支援單一 PDF 專案；多 PDF 請先建立目標專案再匯入")
+        if not _pages_equivalent(proof["pdfs"][0]["pages"], local_pages):
+            raise ValueError(f"當地 PDF 頁面內容/位置與來源不同：{source_dir}；未建立目標專案")
+    return local_pages
+
+
 def merge_projects(source_dirs, local_pdf: Path, target_dir: Path):
+    source_dirs = [Path(path).resolve() for path in source_dirs]
+    local_pdf = Path(local_pdf).resolve()
+    target_dir = Path(target_dir).resolve()
+    if target_dir.exists() and any(target_dir.iterdir()):
+        raise ValueError("接續目標資料夾必須為空，避免覆寫既有成果")
+    # Invalid source/preflight must not create even a lock-only target.
+    _preflight_merge_sources(source_dirs, local_pdf)
+    with _project_transfer_locks(*source_dirs, target_dir):
+        return _merge_projects_locked(source_dirs, local_pdf, target_dir)
+
+
+def _merge_projects_locked(source_dirs, local_pdf: Path, target_dir: Path):
     """Build a new project from local bytes and merge one or two source projects.
 
     The existing projects are read-only. The first source's decision wins only
@@ -2518,29 +2661,28 @@ def merge_projects(source_dirs, local_pdf: Path, target_dir: Path):
     local_pdf, target_dir = Path(local_pdf).resolve(), Path(target_dir).resolve()
     if not 1 <= len(source_dirs) <= 2 or len(set(source_dirs)) != len(source_dirs):
         raise ValueError("跨專案合併需要一至兩個不同來源專案")
-    if target_dir.exists() and any(target_dir.iterdir()):
+    # Acquiring the lock creates only its own directory chain and lock file.
+    # Recheck under that lock so a waiting concurrent builder cannot overwrite
+    # a project completed since the outer empty-directory preflight.
+    actual_root = sp.project_actual_evidence_root(target_dir)
+    allowed = {actual_root / ".global_exact_glyph_delivery.lock", actual_root}
+    allowed.update(parent for parent in actual_root.parents if target_dir in parent.parents)
+    if any(path not in allowed for path in target_dir.rglob("*")):
         raise ValueError("接續目標資料夾必須為空，避免覆寫既有成果")
-    if not local_pdf.is_file() or local_pdf.suffix.lower() != ".pdf":
-        raise FileNotFoundError(f"找不到當地 PDF：{local_pdf}")
-    _, local_pages = _pdf_content_snapshot(local_pdf)
-    for source_dir in source_dirs:
-        source_manifest, _ = _load_project(source_dir)
-        _actual_transfer_state(source_dir, source_manifest)
-        proof = _proof_from_explicit_local(source_dir, source_manifest, local_pdf, local_pages)
-        if len(proof["pdfs"]) != 1:
-            raise ValueError("此入口目前僅支援單一 PDF 專案；多 PDF 請先建立目標專案再匯入")
-        if not _pages_equivalent(proof["pdfs"][0]["pages"], local_pages):
-            raise ValueError(f"當地 PDF 頁面內容/位置與來源不同：{source_dir}；未建立目標專案")
+    local_pages = _preflight_merge_sources(source_dirs, local_pdf)
     target_dir.mkdir(parents=True, exist_ok=True)
     marker = target_dir / INCOMPLETE_FILE
-    sp.json_save(marker, {
+    marker_sha = sp.json_save(marker, {
         "status": "INCOMPLETE",
         "source_projects": [str(path) for path in source_dirs],
         "local_pdf": str(local_pdf),
         "reason": "只有建立目標封印、匯入映射與核對均成功後才移除此標記",
-    })
+    }, expected_sha256="")
     try:
-        sp.run_pipeline_pdfs([local_pdf], target_dir)
+        _assert_actual_marker_owner(marker, marker_sha)
+        sp.run_pipeline_pdfs([local_pdf], target_dir,
+                             _prewrite_guard=lambda: _assert_actual_marker_owner(marker, marker_sha))
+        _assert_actual_marker_owner(marker, marker_sha)
         target_manifest, _ = _load_project(target_dir, allow_incomplete=True)
         mapped_by_key = {}
         for source_dir in source_dirs:
@@ -2568,9 +2710,11 @@ def merge_projects(source_dirs, local_pdf: Path, target_dir: Path):
             existing_keys = {tuple(row[field] for field in fields) for row in existing_rows}
             if any(tuple(row[field] for field in fields) in existing_keys for row in mapped_overrides):
                 raise ValueError("目標已有同位置 actual occurrence override；未覆寫")
+            _assert_actual_marker_owner(marker, marker_sha)
             ar._write_csv(actual_root / ar.OCCURRENCE_OVERRIDE_FILE, ar.OVERRIDE_HEADERS,
                           [*existing_rows, *mapped_overrides])
-            sp.refresh_actual_project(target_dir)
+            sp.refresh_actual_project(
+                target_dir, _prewrite_guard=lambda: _assert_actual_marker_owner(marker, marker_sha))
             refreshed_manifest, _ = _load_project(target_dir, allow_incomplete=True)
             if (refreshed_manifest.get("session_id") != target_manifest.get("session_id")
                     or {(row["review_id"], row["occurrence_id"]) for row in refreshed_manifest["records"]}
@@ -2582,20 +2726,27 @@ def merge_projects(source_dirs, local_pdf: Path, target_dir: Path):
         for source_dir in source_dirs:
             result = import_project_decisions(source_dir, target_dir,
                                               _allow_incomplete_target=True,
-                                              _selected_local_pdf=local_pdf)
+                                              _selected_local_pdf=local_pdf,
+                                              _target_marker_sha=marker_sha)
             results.append(result)
             conflicts.extend(result["conflicts"])
-        final_manifest, final_db = _load_project(target_dir, allow_incomplete=True,
-                                                  allow_unresolved_conflict=True)
-        if final_manifest.get("session_id") != target_manifest.get("session_id"):
-            raise ValueError("匯入期間目標工作階段改變；未發布")
         with sp.project_delivery_lock(sp.project_actual_evidence_root(target_dir)):
+            _assert_actual_marker_owner(marker, marker_sha)
+            final_manifest, final_db = _load_project(target_dir, allow_incomplete=True,
+                                                      allow_unresolved_conflict=True)
+            if final_manifest.get("session_id") != target_manifest.get("session_id"):
+                raise ValueError("匯入期間目標工作階段改變；未發布")
             final_db_path = target_dir / "人工判定資料庫.json"
+            raw_final_db, final_db_sha = sp.json_load_snapshot(final_db_path)
+            if sp.normalize_db(raw_final_db) != final_db:
+                raise ValueError("匯入期間目標判定改變；未發布")
             owned_marker = _new_presentation_marker(
-                target_dir, final_manifest, _sha(final_db_path), final_db, {},
+                target_dir, final_manifest, final_db_sha, final_db, {},
                 phase="NEW_PROJECT_FINAL", export_pending=True)
-            sp.json_save(marker, owned_marker, expected_sha256=_sha(marker))
-        resume_portable_project(target_dir)
+            _assert_actual_marker_owner(marker, marker_sha)
+            marker_sha = sp.json_save(marker, owned_marker, expected_sha256=marker_sha)
+            _assert_actual_marker_owner(marker, marker_sha)
+        resume_portable_project(target_dir, _expected_marker_sha=marker_sha)
         return {"sources": results, "conflicts": conflicts,
                 "imported": sum(item["imported"] for item in results),
                 "duplicates": sum(item["duplicates"] for item in results),
