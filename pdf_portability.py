@@ -1103,6 +1103,27 @@ def _excel_expected_decision(event: Mapping[str, Any]):
     return {key: event.get(key) for key in fields}
 
 
+def _historical_import_replay(conflicts, identity, source_event, target_event, *, decision_payload):
+    """Recognize only exact inputs retained in already validated conflict history.
+
+    Source-side project events retain their original coordinates; target-side
+    events retain the transferred payload and any equal-decision provenance.
+    Identity alone is insufficient because a project's event can later change.
+    """
+    for conflict in conflicts:
+        if conflict.get("target_review_id") != identity["target_review_id"]:
+            continue
+        for side, incoming in (("source", source_event), ("target", target_event)):
+            saved = conflict.get(f"{side}_event")
+            if not isinstance(saved, dict):
+                continue
+            known = [conflict.get(f"{side}_identity"), saved.get("portability_source"),
+                     *saved.get("portability_duplicate_sources", [])]
+            if identity in known and decision_payload(saved) == decision_payload(incoming):
+                return True
+    return False
+
+
 def _restore_exact_file(path: Path, original: bytes | None) -> None:
     if original is None:
         path.unlink(missing_ok=True)
@@ -1459,8 +1480,8 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
         imported, duplicates, conflicts = 0, 0, []
         for target, event, identity in actions:
             review_id = target["review_id"]
-            if any(conflict.get("source_identity") == identity
-                   for conflict in prior_conflicts):
+            if _historical_import_replay(prior_conflicts, identity, event, event,
+                                         decision_payload=_excel_expected_decision):
                 duplicates += 1
                 continue
             current = candidate["events"].get(review_id)
@@ -1511,6 +1532,7 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
             def validate_write():
                 _actual_transfer_state(target_dir, live_manifest)
                 _check_receipt_shas(target_dir, receipt_shas)
+                _verify_mapped_target_pdfs(target_dir, live_manifest, pdf_map, geometry)
             validate_write()
             db_committed = False
             try:
@@ -2441,6 +2463,8 @@ def import_project_decisions(source_dir: Path, target_dir: Path, *,
         unresolved = validate_conflict_state(target_dir, live_manifest, target_db)
         if unresolved:
             raise ValueError(f"目標匯入期間出現未裁決衝突；未匯入判定：{unresolved}")
+        prior_conflicts = (receipt_snapshots[CONFLICT_FILE][1]["conflicts"]
+                           if receipt_snapshots[CONFLICT_FILE][0] is not None else [])
         target_current = {entry["review_id"]: entry for entry in
                           sp.materialize_ledger(live_manifest, target_db)}
         candidate = copy.deepcopy(target_db)
@@ -2464,6 +2488,10 @@ def import_project_decisions(source_dir: Path, target_dir: Path, *,
             _validate_project_confirmation_transfer(
                 event, source_current[source_id], target_current[target_id])
             transferred = _transfer_event(event, source, target)
+            if _historical_import_replay(prior_conflicts, identity, event, transferred,
+                                         decision_payload=_event_payload):
+                duplicates += 1
+                continue
             if current is not None:
                 if _event_payload(current) == _event_payload(transferred):
                     duplicates += 1
