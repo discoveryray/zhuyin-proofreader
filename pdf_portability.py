@@ -2005,28 +2005,34 @@ def _mapped_occurrence_overrides(source_dir: Path, source_manifest, target_manif
     import standalone_proofread as sp
 
     source_root = sp.project_actual_evidence_root(source_dir)
-    # Verify the exact per-PDF dynamic evidence dependency captured in the
-    # sealed actual workbook. This read-only mode never initializes/migrates
-    # source evidence, even when the original PDF bytes are no longer present.
-    for info in source_manifest.get("pdfs", []):
-        workbook = _artifact(source_dir, info, "actual")
-        metadata = sp.workbook_metadata(workbook)
-        if metadata.get("pdf_sha256") != info.get("pdf_sha256"):
-            raise ValueError("來源 actual workbook PDF SHA 不符")
-        try:
-            components = json.loads(str(metadata["actual_asset_fingerprint_components"]))
-            sealed_dynamic = components["dynamic_actual_evidence_hashes"]
-        except (KeyError, TypeError, ValueError) as exc:
-            raise ValueError("來源 actual workbook 缺少可核對的動態 evidence fingerprint") from exc
-        dependency_roster = ar.actual_workbook_dynamic_dependencies(workbook)
-        current_dynamic = ar.dynamic_actual_hashes(
-            source_root, pdf_path=Path(str(info["pdf_name"])),
-            dependencies=dependency_roster, read_only=True,
-        )
-        if sealed_dynamic != current_dynamic:
-            raise ValueError(f"來源動態 actual 證據與封印 workbook fingerprint 不符：{info['pdf_name']}")
-    rows = ar._read_csv(source_root / ar.OCCURRENCE_OVERRIDE_FILE, ar.OVERRIDE_HEADERS)
     source_names = [Path(str(info["pdf_name"])) for info in source_manifest.get("pdfs", [])]
+    # Hold the source delivery lock across verification and consumption. The
+    # per-PDF hash below also binds the exact in-memory rows being transferred
+    # to the sealed workbook, even if an external writer bypasses that lock.
+    with sp.project_delivery_lock(source_root):
+        sealed_by_pdf = []
+        for info, name in zip(source_manifest.get("pdfs", []), source_names):
+            workbook = _artifact(source_dir, info, "actual")
+            metadata = sp.workbook_metadata(workbook)
+            if metadata.get("pdf_sha256") != info.get("pdf_sha256"):
+                raise ValueError("來源 actual workbook PDF SHA 不符")
+            try:
+                components = json.loads(str(metadata["actual_asset_fingerprint_components"]))
+                sealed_dynamic = components["dynamic_actual_evidence_hashes"]
+            except (KeyError, TypeError, ValueError) as exc:
+                raise ValueError("來源 actual workbook 缺少可核對的動態 evidence fingerprint") from exc
+            dependency_roster = ar.actual_workbook_dynamic_dependencies(workbook)
+            current_dynamic = ar.dynamic_actual_hashes(
+                source_root, pdf_path=name, dependencies=dependency_roster, read_only=True,
+            )
+            if sealed_dynamic != current_dynamic:
+                raise ValueError(f"來源動態 actual 證據與封印 workbook fingerprint 不符：{info['pdf_name']}")
+            sealed_by_pdf.append((name, sealed_dynamic[ar.OCCURRENCE_OVERRIDE_FILE]))
+        rows = ar._read_csv(source_root / ar.OCCURRENCE_OVERRIDE_FILE, ar.OVERRIDE_HEADERS)
+        for name, sealed_hash in sealed_by_pdf:
+            consumed = [row for row in rows if ar._override_applies_to_pdf(row, name)]
+            if ar._subset_sha256(consumed, ar.OVERRIDE_HEADERS) != sealed_hash:
+                raise ValueError(f"來源動態 actual 證據與封印 workbook fingerprint 不符：{name}")
     rows = [row for row in rows if any(ar._override_applies_to_pdf(row, name) for name in source_names)]
     if not rows:
         return []

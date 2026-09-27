@@ -1136,6 +1136,86 @@ def test_tampered_source_actual_override_cannot_be_imported(tmp_path):
     assert (target / "人工判定資料庫.json").read_bytes() == before
 
 
+@pytest.mark.parametrize("restore_source_before_import", [False, True])
+def test_source_actual_override_change_after_fingerprint_check_rejects_public_import(
+        tmp_path, monkeypatch, restore_source_before_import):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
+    first, second = tmp_path / "first.pdf", tmp_path / "second.pdf"
+    pdf(first, title="A")
+    pdf(second, title="B")
+    assert sha(first) != sha(second)
+    source, target = tmp_path / "source", tmp_path / "target"
+    source_manifest, _ = project(source, first, session="A", event_positions=(0,))
+    target_manifest, _ = project(target, second, session="B")
+    add_override(source, source_manifest["records"][0], reading="ㄐㄩㄝˊ")
+    reseal_actual_dynamic(source, first)
+    add_override(target, target_manifest["records"][0], reading="ㄐㄩㄝˇ")
+    reseal_actual_dynamic(target, second)
+    watched = [target / name for name in (
+        "人工判定資料庫.json", portable.CONFLICT_FILE, portable.INCOMPLETE_FILE,
+        "pipeline_status.json", "注音校對_最終報告.xlsx",
+    )]
+    before = {path: path.read_bytes() if path.exists() else None for path in watched}
+    original_hashes = ar.dynamic_actual_hashes
+    original_read_csv = ar._read_csv
+    source_root = sp.project_actual_evidence_root(source).resolve()
+    changed = False
+    restored = False
+
+    def change_source_after_hash(root, *args, **kwargs):
+        nonlocal changed
+        result = original_hashes(root, *args, **kwargs)
+        if Path(root).resolve() == source_root and not changed:
+            changed = True
+            add_override(source, source_manifest["records"][0], reading="ㄐㄩㄝˇ")
+        return result
+
+    def read_then_optionally_restore(path, headers):
+        nonlocal restored
+        rows = original_read_csv(path, headers)
+        if (restore_source_before_import and changed and not restored
+                and Path(path).resolve() == source_root / ar.OCCURRENCE_OVERRIDE_FILE):
+            # A path rehash would see the sealed bytes again, while the caller
+            # has already consumed the unsealed rows returned above.
+            restored = True
+            add_override(source, source_manifest["records"][0], reading="ㄐㄩㄝˊ")
+        return rows
+
+    with patch.object(ar, "dynamic_actual_hashes", side_effect=change_source_after_hash), \
+         patch.object(ar, "_read_csv", side_effect=read_then_optionally_restore):
+        with pytest.raises(ValueError, match="fingerprint 不符"):
+            portable.import_project_decisions(source, target)
+    assert changed
+    assert restored == restore_source_before_import
+    assert {path: path.read_bytes() if path.exists() else None for path in watched} == before
+    assert ar._read_csv(source_root / ar.OCCURRENCE_OVERRIDE_FILE, ar.OVERRIDE_HEADERS)[0][
+        "actual_reading"] == ("ㄐㄩㄝˊ" if restore_source_before_import else "ㄐㄩㄝˇ")
+    assert not (tmp_path / "isolated-localappdata").exists()
+
+
+def test_unrelated_pdf_actual_override_does_not_invalidate_sealed_source(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
+    first, second = tmp_path / "first.pdf", tmp_path / "second.pdf"
+    pdf(first, title="A")
+    pdf(second, title="B")
+    source, target = tmp_path / "source", tmp_path / "target"
+    source_manifest, _ = project(source, first, session="A", event_positions=(0,))
+    target_manifest, _ = project(target, second, session="B")
+    sealed_row = add_override(source, source_manifest["records"][0])
+    reseal_actual_dynamic(source, first)
+    add_override(target, target_manifest["records"][0])
+    reseal_actual_dynamic(target, second)
+    other_row = dict(sealed_row, pdf_contains="unrelated-pdf", actual_reading="ㄐㄩㄝˇ")
+    ar._write_csv(sp.project_actual_evidence_root(source) / ar.OCCURRENCE_OVERRIDE_FILE,
+                  ar.OVERRIDE_HEADERS, [sealed_row, other_row])
+
+    result = portable.import_project_decisions(source, target)
+    assert result["imported"] == 1
+    assert result["matched_actual_overrides"] == 1
+    assert sp.json_load_strict(target / "人工判定資料庫.json")["events"]
+    assert not (tmp_path / "isolated-localappdata").exists()
+
+
 def test_saved_actual_override_maps_without_global_promotion(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
     first, local = tmp_path / "first.pdf", tmp_path / "local.pdf"
