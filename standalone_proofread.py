@@ -1636,19 +1636,19 @@ def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False,
         raise ValueError("SESSION_SCHEMA_INCOMPATIBLE：工作階段／review ID 無法直接沿用")
 
     metadata = workbook_metadata(xlsx, "匯入中繼資料")
-    if str(metadata.get("session_id") or "") != str(manifest.get("session_id") or ""):
-        from pdf_portability import import_expected_excel
-        return import_expected_excel.__wrapped__(output_dir, xlsx, dry_run=dry_run,
-            _original_xlsx=_original_xlsx, _snapshot_sha=_snapshot_sha)
     mismatched = {}
-    if str(metadata.get("session_id") or "") != str(manifest.get("session_id") or ""):
-        mismatched["session_id"] = (manifest.get("session_id"), metadata.get("session_id"))
     if not schema_compatible(metadata.get("session_schema_version"), SESSION_SCHEMA_VERSION):
         mismatched["session_schema_version"] = (SESSION_SCHEMA_VERSION, metadata.get("session_schema_version"))
     if not schema_compatible(metadata.get("workbook_schema_version"), WORKBOOK_SCHEMA_VERSION):
         mismatched["workbook_schema_version"] = (WORKBOOK_SCHEMA_VERSION, metadata.get("workbook_schema_version"))
     if not review_id_schema_compatible(metadata.get("review_id_schema_version"), REVIEW_ID_SCHEMA_VERSION):
         mismatched["review_id_schema_version"] = (REVIEW_ID_SCHEMA_VERSION, metadata.get("review_id_schema_version"))
+    if mismatched:
+        raise ValueError(f"匯入 workbook session/evidence 不相容：{mismatched}")
+    if str(metadata.get("session_id") or "") != str(manifest.get("session_id") or ""):
+        from pdf_portability import import_expected_excel
+        return import_expected_excel.__wrapped__(output_dir, xlsx, dry_run=dry_run,
+            _original_xlsx=_original_xlsx, _snapshot_sha=_snapshot_sha)
     # Tool version is intentionally ignored. The exported expected fingerprint
     # is compared to the session snapshot, so an old workbook from the same
     # project remains importable after an application upgrade.
