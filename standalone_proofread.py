@@ -1611,14 +1611,20 @@ def plan_gpt_auto_imports(paths: Iterable[str | Path]) -> list[tuple[Path, str]]
     return sorted(items, key=lambda item: (order.get(item[1], 99), str(item[0])))
 
 
+def _snapshot_gpt_decisions_entry(operation):
+    """Keep one workbook snapshot inside the serialized public import."""
+    @wraps(operation)
+    def snapshotted(output_dir: Path, xlsx: Path, *, dry_run: bool = False):
+        from pdf_portability import _stable_excel_import
+
+        return _stable_excel_import(operation)(output_dir, xlsx, dry_run=dry_run)
+    return snapshotted
+
+
 @_serialized_user_project_entry
-def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False) -> tuple[int, int, Path]:
-    from pdf_portability import _stable_excel_import
-    return _stable_excel_import(_import_gpt_decisions_snapshot)(output_dir, xlsx, dry_run=dry_run)
-
-
-def _import_gpt_decisions_snapshot(output_dir: Path, xlsx: Path, *, dry_run: bool = False,
-                                   _original_xlsx: Path, _snapshot_sha: str):
+@_snapshot_gpt_decisions_entry
+def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False,
+                         _original_xlsx: Path, _snapshot_sha: str) -> tuple[int, int, Path]:
     _reject_incomplete_portable_project(output_dir)
     manifest, manifest_before_sha = json_load_snapshot(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
