@@ -299,6 +299,98 @@ class ManualReviewGuiTests(unittest.TestCase):
         self.assertNotIn(other["review_id"], app.db["events"])
         self.assertIn(first["review_id"], [row["review_id"] for row in app.records])
 
+    def test_undo_reenter_expected_continues_to_next_pending_item(self):
+        app = self.app
+        first = app.current()
+        app.primary.invoke()  # Save A, then show pending B.
+        wait_for_save(app)
+        second = app.current()
+        self.assertNotEqual(second["review_id"], first["review_id"])
+
+        app._review_action_cooldown_until = 0
+        with patch.object(gui.messagebox, "askyesno", return_value=True):
+            app.undo_last_expected()
+            wait_for_save(app)
+        self.assertEqual(app.current()["review_id"], first["review_id"])
+        self.assertEqual(app.focused_entry["review_id"], first["review_id"])
+
+        app._review_action_cooldown_until = 0
+        with patch.object(gui, "ExpectedDialog") as dialog, patch.object(gui.messagebox, "showwarning"):
+            dialog.return_value.result = {"expected_set": "ㄎㄢˋ", "expected_evidence": "", "resolution_reason": ""}
+            app.resolve_expected()  # Re-enter A through the real GUI action.
+            wait_for_save(app)
+        self.assertEqual(app.db["events"][first["review_id"]]["expected_set"], ["ㄎㄢˋ"])
+        self.assertIsNone(app.focused_entry)
+        self.assertEqual(app.current()["review_id"], second["review_id"])
+        self.assertEqual(app.last_expected_review_id, first["review_id"])
+
+    def test_undo_reenter_last_pending_item_shows_empty_state(self):
+        app = self.app
+        first = app.current()
+        app.deferred_items = {(gui.review_lane(row), row["occurrence_id"])
+                              for row in app.records if row["review_id"] != first["review_id"]}
+        app.reload_records()
+        app.primary.invoke()
+        wait_for_save(app)
+        self.assertEqual(app.records, [])
+
+        app._review_action_cooldown_until = 0
+        with patch.object(gui.messagebox, "askyesno", return_value=True):
+            app.undo_last_expected()
+            wait_for_save(app)
+        self.assertEqual(app.current()["review_id"], first["review_id"])
+
+        app._review_action_cooldown_until = 0
+        app._shortcut_cooldown_until = 0
+        app.primary.invoke()
+        wait_for_save(app)
+        self.assertIsNone(app.focused_entry)
+        self.assertIsNone(app.current())
+        self.assertEqual(app.records, [])
+        self.assertIn("稍後處理", app.status.cget("text"))
+        self.assertIsNone(app._rendered_review_id)
+
+    def test_failed_reentry_after_undo_keeps_item_and_undo_target(self):
+        app = self.app
+        first = app.current()
+        app.primary.invoke()
+        wait_for_save(app)
+        app._review_action_cooldown_until = 0
+        with patch.object(gui.messagebox, "askyesno", return_value=True):
+            app.undo_last_expected()
+            wait_for_save(app)
+        before = (self.output / "人工判定資料庫.json").read_bytes()
+        app._review_action_cooldown_until = 0
+        app._shortcut_cooldown_until = 0
+        with patch.object(sp, "json_save", side_effect=OSError("isolated re-entry failure")), \
+                patch.object(gui.messagebox, "showerror") as error:
+            app.primary.invoke()
+            wait_for_save(app)
+        error.assert_called_once()
+        self.assertEqual((self.output / "人工判定資料庫.json").read_bytes(), before)
+        self.assertEqual(app.current()["review_id"], first["review_id"])
+        self.assertEqual(app.focused_entry["review_id"], first["review_id"])
+        self.assertIsNone(app.last_expected_review_id)
+
+    def test_undo_reentry_keeps_difference_pending_in_queue(self):
+        app = self.app
+        first = app.current()
+        app.primary.invoke()
+        wait_for_save(app)
+        app._review_action_cooldown_until = 0
+        with patch.object(gui.messagebox, "askyesno", return_value=True):
+            app.undo_last_expected()
+            wait_for_save(app)
+        app._review_action_cooldown_until = 0
+        with patch.object(gui, "ExpectedDialog") as dialog, patch.object(gui.messagebox, "showwarning"):
+            dialog.return_value.result = {"expected_set": "ㄎㄢ", "expected_evidence": "", "resolution_reason": ""}
+            app.resolve_expected()
+            wait_for_save(app)
+        self.assertIsNone(app.focused_entry)
+        pending = next(row for row in app.records if row["review_id"] == first["review_id"])
+        self.assertEqual(pending["state"], "DIFFERENCE_PENDING_CONFIRMATION")
+        self.assertEqual(sp.load_or_initialize_db(self.output)["events"][first["review_id"]]["expected_set"], ["ㄎㄢ"])
+
     def _assert_browsing_older_confirmation_keeps_last_undo_target(self, return_to_pending):
         app = self.app
         first = app.current()

@@ -967,6 +967,7 @@ class ReviewApp:
         self.photo = None
         self.records = []
         self.focused_entry = None
+        self._focused_from_undo = False
         self.last_expected_review_id = None
         self.tech_visible = False
         self.staging_summary = {}
@@ -1078,6 +1079,7 @@ class ReviewApp:
         if getattr(self, "_save_in_progress", False):
             return
         self.focused_entry = None
+        self._focused_from_undo = False
         self._invalidate_save_snapshot()
         if getattr(self, "_character_order_manifest", None) is not self.manifest:
             self.__dict__.pop("_character_order", None)
@@ -1216,6 +1218,7 @@ class ReviewApp:
         if self._save_busy() or getattr(self, "_apply_in_progress", False):
             return
         self.focused_entry = None
+        self._focused_from_undo = False
         self.show()
 
     def open_confirmed_items(self):
@@ -1233,6 +1236,7 @@ class ReviewApp:
         dialog = ConfirmedItemsDialog(self.root, entries)
         if dialog.result:
             self.focused_entry = next(entry for entry in entries if entry["review_id"] == dialog.result)
+            self._focused_from_undo = False
             self.show()
 
     def _last_expected_target(self):
@@ -1367,7 +1371,10 @@ class ReviewApp:
                    "db": self.db, "output_dir": self.output_dir,
                    "entry": entry, "event": event, "explain_expected": explain_expected,
                    "current_review_id": current.get("review_id") if current else None,
-                   "focus_after_save": focus_after_save or getattr(self, "focused_entry", None) is not None,
+                   "focus_after_save": focus_after_save or (
+                       getattr(self, "focused_entry", None) is not None
+                       and not getattr(self, "_focused_from_undo", False)),
+                   "return_after_undo": focus_after_save,
                    "started": started}
         self._save_request = request
         completed = queue.Queue(maxsize=1)
@@ -1463,6 +1470,10 @@ class ReviewApp:
                 self._publish_review_queue(prepared)
                 if request["focus_after_save"]:
                     self.focused_entry = result.resolved_entry
+                    self._focused_from_undo = request["return_after_undo"]
+                else:
+                    self.focused_entry = None
+                    self._focused_from_undo = False
                 render_started = time.perf_counter()
                 self.show()
                 self.last_save_timings["preview_and_show"] = time.perf_counter() - render_started
@@ -1491,6 +1502,7 @@ class ReviewApp:
         if self._save_busy() or getattr(self, "_apply_in_progress", False):
             return
         self.focused_entry = None
+        self._focused_from_undo = False
         self.index = max(0, self.index - 1)
         self.show()
 
@@ -1499,6 +1511,7 @@ class ReviewApp:
             return
         if getattr(self, "focused_entry", None) is not None:
             self.focused_entry = None
+            self._focused_from_undo = False
         if not self.records:
             return
         self.index = min(len(self.records) - 1, self.index + 1)
