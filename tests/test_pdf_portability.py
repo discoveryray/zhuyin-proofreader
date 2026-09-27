@@ -472,6 +472,126 @@ def test_expected_excel_rechecks_actual_conflict_after_preflight(tmp_path, monke
     assert not list((tmp_path / "isolated-localappdata").rglob("*.sqlite*"))
 
 
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_expected_excel_rejects_target_pdf_changed_after_mapping(tmp_path, monkeypatch, dry_run):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
+    a_pdf, b_pdf, changed_pdf = (tmp_path / name for name in ("A.pdf", "B.pdf", "changed.pdf"))
+    pdf(a_pdf, title="A")
+    pdf(b_pdf, title="B")
+    pdf(changed_pdf, title="changed", text="different textbook content")
+    source, target = tmp_path / "source", tmp_path / "target"
+    project(source, a_pdf, session="A")
+    project(target, b_pdf, session="B")
+    filled = _filled_expected_excel(source, tmp_path / "filled.xlsx", action="補建expected證據")
+    watched = [target / name for name in (
+        "人工判定資料庫.json", portable.INCOMPLETE_FILE, portable.CONFLICT_FILE,
+        "待人工確認.json", "pipeline_status.json", "注音校對_最終報告.xlsx",
+    )]
+    watched.append(sp.project_actual_evidence_root(target) / ar.OCCURRENCE_OVERRIDE_FILE)
+    before = {path: path.read_bytes() if path.exists() else None for path in watched}
+    original = portable._verify_excel_import_snapshot
+    calls = 0
+
+    def replace_after_mapping(*args):
+        nonlocal calls
+        result = original(*args)
+        calls += 1
+        if calls == (1 if dry_run else 2):
+            b_pdf.write_bytes(changed_pdf.read_bytes())
+        return result
+
+    with patch.object(portable, "_verify_excel_import_snapshot", side_effect=replace_after_mapping):
+        with pytest.raises(ValueError, match="目標 PDF|PDF SHA|頁面內容"):
+            sp.import_gpt_decisions(target, filled, dry_run=dry_run)
+    assert calls == (1 if dry_run else 2)
+    assert {path: path.read_bytes() if path.exists() else None for path in watched} == before
+    assert not list((tmp_path / "isolated-localappdata").rglob("*.sqlite*"))
+
+
+def test_project_import_rejects_target_pdf_changed_after_mapping(tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
+    a_pdf, b_pdf, changed_pdf = (tmp_path / name for name in ("A.pdf", "B.pdf", "changed.pdf"))
+    pdf(a_pdf, title="A")
+    pdf(b_pdf, title="B")
+    pdf(changed_pdf, title="changed", text="different textbook content")
+    source, target = tmp_path / "source", tmp_path / "target"
+    project(source, a_pdf, session="A", event_positions=(0,))
+    project(target, b_pdf, session="B")
+    portable.prepare_portable_project(source)
+    watched = [target / name for name in (
+        "人工判定資料庫.json", portable.INCOMPLETE_FILE, portable.CONFLICT_FILE,
+        "待人工確認.json", "pipeline_status.json", "注音校對_最終報告.xlsx",
+    )]
+    watched.append(sp.project_actual_evidence_root(target) / ar.OCCURRENCE_OVERRIDE_FILE)
+    before = {path: path.read_bytes() if path.exists() else None for path in watched}
+    original = portable._mapped_occurrence_overrides
+    changed = False
+
+    def replace_after_mapping(*args):
+        nonlocal changed
+        result = original(*args)
+        changed = True
+        b_pdf.write_bytes(changed_pdf.read_bytes())
+        return result
+
+    with patch.object(portable, "_mapped_occurrence_overrides", side_effect=replace_after_mapping):
+        with pytest.raises(ValueError, match="目標 PDF|PDF SHA|頁面內容"):
+            portable.import_project_decisions(source, target)
+    assert changed
+    assert {path: path.read_bytes() if path.exists() else None for path in watched} == before
+    assert not list((tmp_path / "isolated-localappdata").rglob("*.sqlite*"))
+
+
+def test_incomplete_actual_excel_marker_cannot_be_cleared_without_owner_plan(tmp_path):
+    source_pdf = tmp_path / "textbook.pdf"
+    pdf(source_pdf, title="textbook")
+    target = tmp_path / "target"
+    project(target, source_pdf, session="B")
+    marker = target / portable.INCOMPLETE_FILE
+    sp.json_save(marker, {"status": "ACTUAL_EXCEL_REFRESH_PENDING",
+                          "source_excel_sha256": "0" * 64,
+                          "pre_state": portable._actual_excel_file_snapshot(target)})
+    before = marker.read_bytes()
+    db_before = (target / "人工判定資料庫.json").read_bytes()
+    with pytest.raises(ValueError, match="標記|恢復材料|不完整"):
+        portable.resume_actual_excel_project(target)
+    assert marker.read_bytes() == before
+    assert (target / "人工判定資料庫.json").read_bytes() == db_before
+
+
+@pytest.mark.parametrize("mutation", ["missing_owner", "foreign_owner", "future_version", "changed_plan"])
+def test_actual_excel_marker_owner_and_plan_must_match_before_recovery(tmp_path, mutation):
+    from global_glyph_promotion import post_commit_recovery_plan_from_results
+
+    source_pdf = tmp_path / "textbook.pdf"
+    pdf(source_pdf, title="textbook")
+    target = tmp_path / "target"
+    manifest, _ = project(target, source_pdf, session="B")
+    plan = post_commit_recovery_plan_from_results([])
+    complete = portable._sealed_actual_excel_marker({
+        "status": "ACTUAL_EXCEL_REFRESH_PENDING", "source_excel_sha256": "a" * 64,
+        "import_token": "b" * 32, "pre_state": portable._actual_excel_file_snapshot(target),
+        "sealed_workbooks": portable._sealed_workbook_snapshot(target, manifest),
+        "recovery_plan": plan,
+        "recovery_plan_sha256": hashlib.sha256(portable._canonical(plan)).hexdigest(),
+    })
+    if mutation == "missing_owner":
+        complete.pop("import_token")
+    elif mutation == "foreign_owner":
+        complete["import_token"] = "c" * 32
+    elif mutation == "future_version":
+        complete["version"] += 1
+    else:
+        complete["recovery_plan_sha256"] = "0" * 64
+    marker = target / portable.INCOMPLETE_FILE
+    sp.json_save(marker, complete)
+    watched = [marker, target / "人工判定資料庫.json", target / "校對工作階段.json"]
+    before = {path: path.read_bytes() for path in watched}
+    with pytest.raises(ValueError, match="標記|恢復材料"):
+        portable.resume_actual_excel_project(target)
+    assert {path: path.read_bytes() for path in watched} == before
+
+
 @pytest.mark.parametrize("malformed", [False, True])
 def test_project_import_rechecks_actual_conflict_after_preflight(tmp_path, monkeypatch, malformed):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))

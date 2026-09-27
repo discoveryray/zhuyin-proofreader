@@ -1307,11 +1307,19 @@ def test_parallel_actual_excel_imports_preserve_marker_and_recovery(tmp_path, mo
             original_load = portability.load_excel_content_proof
             def incomplete_after_preflight(*args, **kwargs):
                 result = original_load(*args, **kwargs)
-                sp.json_save(target / portability.INCOMPLETE_FILE, {
+                from global_glyph_promotion import post_commit_recovery_plan_from_results
+                plan = post_commit_recovery_plan_from_results([])
+                current_manifest = sp.json_load_strict(target / "校對工作階段.json")
+                sp.json_save(target / portability.INCOMPLETE_FILE,
+                             portability._sealed_actual_excel_marker({
                     "status": "ACTUAL_EXCEL_REFRESH_PENDING",
                     "source_excel_sha256": portability._sha(filled),
+                    "import_token": "1" * 32,
                     "pre_state": portability._actual_excel_file_snapshot(target),
-                })
+                    "sealed_workbooks": portability._sealed_workbook_snapshot(target, current_manifest),
+                    "recovery_plan": plan,
+                    "recovery_plan_sha256": hashlib.sha256(portability._canonical(plan)).hexdigest(),
+                }))
                 return result
             with patch.object(portability, "load_excel_content_proof", side_effect=incomplete_after_preflight):
                 with pytest.raises(ValueError, match="待專用恢復"):
@@ -1378,7 +1386,7 @@ def test_actual_excel_midrefresh_workbook_rewrite_can_resume_twice(tmp_path, mon
         damaged_marker = copy.deepcopy(intact_marker)
         damaged_marker["sealed_workbooks"]["entries"][0]["bytes"] = "AA=="
         sp.json_save(marker, damaged_marker)
-        with pytest.raises(ValueError, match="備份內容不符"):
+        with pytest.raises(ValueError, match="完整性|備份內容不符"):
             portability.resume_actual_excel_project(target)
         assert promotion.committed_project_recovery(root) is not None
         sp.json_save(marker, intact_marker)
