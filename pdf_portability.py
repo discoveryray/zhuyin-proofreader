@@ -1814,20 +1814,25 @@ def import_actual_excel(target_dir: Path, xlsx: Path, *,
             if all_conflicts != previous["conflicts"]:
                 status_path = target_dir / "pipeline_status.json"
                 original_status = status_path.read_bytes() if status_path.exists() else None
-                status_written = False
+                status_written_sha = None
                 try:
                     if original_status is not None:
                         live_status = sp.json_load_strict(status_path)
                         if not isinstance(live_status, dict):
                             raise ValueError("既有 pipeline status 無法驗證；未登記 actual 衝突")
-                        sp.json_save(status_path, _actual_excel_conflict_status(live_status, all_conflicts),
-                                     expected_sha256=hashlib.sha256(original_status).hexdigest())
-                        status_written = True
+                        status_written_sha = sp.json_save(
+                            status_path, _actual_excel_conflict_status(live_status, all_conflicts),
+                            expected_sha256=hashlib.sha256(original_status).hexdigest())
                     sp.json_save(receipt, _sealed_actual_excel_conflicts(all_conflicts),
                                  expected_sha256=previous_sha)
                 except Exception:
-                    if status_written:
-                        _restore_exact_file(status_path, original_status)
+                    if status_written_sha is not None:
+                        try:
+                            status_still_ours = _sha(status_path) == status_written_sha
+                        except FileNotFoundError:
+                            status_still_ours = False
+                        if status_still_ours:
+                            _restore_exact_file(status_path, original_status)
                     raise
         raise ValueError("Excel actual 同位置已有不同判定；既有與本次來源均保留於跨Excel_actual衝突.json，目標未覆寫")
     if existing_actual_conflicts:

@@ -70,6 +70,43 @@ def test_actual_conflict_receipt_snapshot_cas_preserves_other_sources(
     assert not (b / p.INCOMPLETE_FILE).exists()
 
 
+def test_actual_conflict_receipt_cas_failure_preserves_late_status_and_receipt(
+        actual_projects, tmp_path, monkeypatch):
+    a, b, _ = actual_projects
+    second, _ = inputs(a, b, tmp_path)
+    receipt = b / p.ACTUAL_EXCEL_CONFLICT_FILE
+    status = b / 'pipeline_status.json'
+    before = {path: read(path) for path in watched(b)}
+    assert not receipt.exists()
+    original_save = sp.json_save
+    observed = {}
+
+    def inject_late_writer(path, value, **kwargs):
+        if Path(path) == receipt and not observed:
+            foreign = copy.deepcopy(value)
+            foreign['conflicts'][0]['source_record']['source_excel_sha256'] = 'e' * 64
+            original_save(receipt, p._sealed_actual_excel_conflicts(foreign['conflicts']),
+                          expected_sha256='')
+            foreign_status = sp.json_load_strict(status)
+            foreign_status['foreign_writer'] = 'after-actual-import-status-write'
+            original_save(status, foreign_status)
+            observed['receipt'] = receipt.read_bytes()
+            observed['status'] = status.read_bytes()
+        return original_save(path, value, **kwargs)
+
+    monkeypatch.setattr(sp, 'json_save', inject_late_writer)
+    conflict_import(b, second)
+    assert observed, 'the receipt CAS boundary must be reached'
+    assert receipt.read_bytes() == observed['receipt']
+    assert status.read_bytes() == observed['status']
+    assert status.read_bytes() != before[status]
+    assert before[receipt] is None
+    assert {path: read(path) for path in before if path not in {status, receipt}} == {
+        path: content for path, content in before.items()
+        if path not in {status, receipt}}
+    assert not (b / p.INCOMPLETE_FILE).exists()
+
+
 def test_actual_conflict_receipt_first_append_and_replay(actual_projects, tmp_path):
     a, b, _ = actual_projects
     second, third = inputs(a, b, tmp_path)
