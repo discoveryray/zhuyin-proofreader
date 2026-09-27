@@ -64,7 +64,7 @@ def _pdf_content_snapshot(path: Path, *, expected_sha256: str | None = None):
     with tempfile.TemporaryDirectory(prefix="portable-pdf-snapshot-") as folder:
         snapshot_path = Path(folder) / "content.pdf"
         snapshot_path.write_bytes(data)
-        line_index = build_pdf_line_index(snapshot_path)
+        line_index = build_pdf_line_index(snapshot_path, strict_extraction=True)
         if _sha(snapshot_path) != digest:
             raise ValueError("PDF 校對文字快照於讀取期間變動")
     signatures = []

@@ -1746,6 +1746,10 @@ def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False)
     # Full materialization validates every transition and terminal invariant
     # before the first persistent write.
     materialize_ledger(manifest, staged_db)
+    from pdf_portability import validate_conflict_state
+    unresolved_conflicts = validate_conflict_state(output_dir, manifest, db)
+    if set(staged_events) & set(unresolved_conflicts):
+        raise ValueError("同 session Excel 判定包含未經本地裁決的跨專案衝突位置；未寫入任何判定")
     if dry_run:
         # Bundle preflight: validate expected actions before any actual evidence
         # is committed.  This prevents avoidable half-applied bundles.
@@ -1753,6 +1757,9 @@ def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False)
     _reject_incomplete_portable_project(output_dir)
     if sha256_file(output_dir / "校對工作階段.json") != manifest_before_sha:
         raise ValueError("匯入期間工作階段已變動；未寫入判定")
+    unresolved_conflicts = validate_conflict_state(output_dir, manifest, db)
+    if set(staged_events) & set(unresolved_conflicts):
+        raise ValueError("匯入期間同 session Excel 判定位置出現未裁決跨專案衝突；未寫入任何判定")
     from pdf_portability import INCOMPLETE_FILE, _new_presentation_marker, resume_portable_project
     marker = output_dir / INCOMPLETE_FILE
     owned_marker = _new_presentation_marker(

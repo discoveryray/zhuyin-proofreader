@@ -401,3 +401,81 @@ def test_cross_session_expected_postcommit_interrupt_can_repair(
     assert sp.json_load_strict(target / "校對工作階段.json")["session_id"] == target_manifest["session_id"]
     assert sp.json_load_strict(target / "pipeline_status.json")["user_report"] == str(
         target / "注音校對_最終報告.xlsx")
+
+
+def test_failed_rawdict_extraction_cannot_seal_or_match_pdf_text(tmp_path, monkeypatch):
+    first, second = tmp_path / "first.pdf", tmp_path / "second.pdf"
+    for path, hidden in ((first, "hidden source"), (second, "hidden target")):
+        with fitz.open() as document:
+            page = document.new_page(width=300, height=200)
+            page.insert_text((20, 40), "visible lesson")
+            page.insert_text((20, 80), hidden, render_mode=3)
+            document.save(path)
+    assert portable._page_signatures(first) != portable._page_signatures(second)
+    source, target = tmp_path / "source", tmp_path / "target"
+    source_manifest, _ = project(source, first, session="source")
+    target_manifest, _ = project(target, second, session="target")
+    watched = [source / portable.PROOF_FILE, source / "人工判定資料庫.json",
+               target / "人工判定資料庫.json", target / portable.INCOMPLETE_FILE]
+    before = {path: read(path) for path in watched}
+    real_get_text = fitz.Page.get_text
+
+    def failed_rawdict(page, option="text", *args, **kwargs):
+        if option == "rawdict":
+            raise RuntimeError("RAWDICT unavailable")
+        return real_get_text(page, option, *args, **kwargs)
+
+    with patch.object(fitz.Page, "get_text", failed_rawdict):
+        with pytest.raises((ValueError, RuntimeError), match="RAWDICT|文字|抽取"):
+            portable.prepare_portable_project(source)
+        from check_pronunciation_candidates import build_pdf_line_index
+        assert build_pdf_line_index(first) == {1: []}
+    assert {path: read(path) for path in watched} == before
+    proof = portable._proof_payload(source, source_manifest)
+    with patch.object(fitz.Page, "get_text", failed_rawdict):
+        with pytest.raises((ValueError, RuntimeError), match="RAWDICT|文字|抽取"):
+            portable._match_pdfs(proof, source_manifest, target_manifest, target)
+    assert {path: read(path) for path in watched} == before
+
+
+def test_stale_same_session_excel_cannot_overwrite_unresolved_project_conflict(
+        tmp_path, monkeypatch):
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
+    first, second = _pdfs(tmp_path)
+    source, target = tmp_path / "source", tmp_path / "target"
+    with patch.object(sp, "decode", side_effect=_synthetic_decode), \
+         patch.object(sp, "actual_workbook_global_exact_dependencies", return_value=()), \
+         patch("check_pronunciation_candidates.actual_workbook_global_exact_dependencies", return_value=()):
+        sp.run_pipeline_pdfs([first], source)
+        sp.run_pipeline_pdfs([second], target)
+    target_manifest = sp.json_load_strict(target / "校對工作階段.json")
+    target_ids = [item["review_id"] for item in target_manifest["records"]]
+    old_excel = expected_workbook(tmp_path, target)
+    source_id = sp.json_load_strict(source / "校對工作階段.json")["records"][0]["review_id"]
+    ReviewSaveService(source).save_event(source_id, {
+        "action": "確認非校對範圍", "exclusion_reason": "source decision",
+        "exclusion_evidence": "A PDF page 1"})
+    ReviewSaveService(target).save_event(target_ids[0], {
+        "action": "確認非校對範圍", "exclusion_reason": "target decision",
+        "exclusion_evidence": "B PDF page 1"})
+    assert portable.import_project_decisions(source, target)["conflicts"]
+    db = sp.json_load_strict(target / "人工判定資料庫.json")
+    assert portable.validate_conflict_state(target, target_manifest, db) == [target_ids[0]]
+    watched = [target / name for name in ("人工判定資料庫.json", portable.CONFLICT_FILE,
+                                          portable.INCOMPLETE_FILE, "待人工確認.json",
+                                          "pipeline_status.json", "注音校對_最終報告.xlsx")]
+    before = {path: read(path) for path in watched}
+    with pytest.raises(ValueError, match="衝突|裁決"):
+        sp.import_gpt_decisions(target, old_excel)
+    assert {path: read(path) for path in watched} == before
+    assert portable.validate_conflict_state(
+        target, target_manifest, sp.json_load_strict(target / "人工判定資料庫.json")) == [target_ids[0]]
+    ReviewSaveService(target).save_event(target_ids[0], {
+        "action": "確認非校對範圍", "exclusion_reason": "fresh local visual",
+        "exclusion_evidence": "B PDF page 1 rechecked"})
+    assert portable.validate_conflict_state(
+        target, target_manifest, sp.json_load_strict(target / "人工判定資料庫.json")) == []
+    filled = expected_workbook(tmp_path, target)
+    assert sp.import_gpt_decisions(target, filled)[0] == 1
+    assert not (target / portable.INCOMPLETE_FILE).exists()
+    assert len(sp.json_load_strict(target / "人工判定資料庫.json")["events"]) == 2
