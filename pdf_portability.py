@@ -226,10 +226,11 @@ def _sealed_actual_excel_conflicts(conflicts: list[dict[str, Any]]) -> dict[str,
     return {**payload, "integrity_sha256": hashlib.sha256(_canonical(payload)).hexdigest()}
 
 
-def _validated_actual_excel_receipt(path: Path) -> dict[str, Any]:
+def _validated_actual_excel_receipt(path: Path, *, with_digest: bool = False
+                                    ) -> dict[str, Any] | tuple[dict[str, Any], str]:
     import standalone_proofread as sp
 
-    receipt = sp.json_load_strict(path)
+    receipt, digest = sp.json_load_snapshot(path)
     if (not isinstance(receipt, dict)
             or set(receipt) != {"version", "conflicts", "integrity_sha256"}
             or receipt.get("version") != 1
@@ -238,7 +239,7 @@ def _validated_actual_excel_receipt(path: Path) -> dict[str, Any]:
     expected = hashlib.sha256(_canonical({"version": 1, "conflicts": receipt["conflicts"]})).hexdigest()
     if receipt["integrity_sha256"] != expected:
         raise ValueError("Excel actual 衝突紀錄完整性無法驗證")
-    return receipt
+    return (receipt, digest) if with_digest else receipt
 
 
 def actual_excel_conflict_state(output_dir: Path, manifest: Mapping[str, Any],
@@ -1790,8 +1791,10 @@ def import_actual_excel(target_dir: Path, xlsx: Path, *,
             validate_live_target()
             if ar._read_csv(override_path, ar.OVERRIDE_HEADERS) != original_rows:
                 raise ValueError("目標 actual 證據於衝突登記前已變動；未覆寫任何紀錄")
-            previous_sha = _sha(receipt) if receipt.exists() else None
-            previous = _validated_actual_excel_receipt(receipt) if receipt.exists() else {"conflicts": []}
+            try:
+                previous, previous_sha = _validated_actual_excel_receipt(receipt, with_digest=True)
+            except FileNotFoundError:
+                previous, previous_sha = {"conflicts": []}, ""
             all_conflicts = copy.deepcopy(previous["conflicts"])
             for conflict in conflict_records:
                 source = conflict["source_record"]
