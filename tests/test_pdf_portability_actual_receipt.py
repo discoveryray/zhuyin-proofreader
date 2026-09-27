@@ -107,6 +107,82 @@ def test_actual_conflict_receipt_cas_failure_preserves_late_status_and_receipt(
     assert not (b / p.INCOMPLETE_FILE).exists()
 
 
+def test_receipt_cas_failure_does_not_enter_nonatomic_status_restore(
+        actual_projects, tmp_path, monkeypatch):
+    a, b, _ = actual_projects
+    second, _ = inputs(a, b, tmp_path)
+    receipt = b / p.ACTUAL_EXCEL_CONFLICT_FILE
+    status = b / 'pipeline_status.json'
+    before = {path: read(path) for path in watched(b)}
+    original_save = sp.json_save
+    original_restore = p._restore_exact_file
+    observed = {}
+
+    def inject_foreign_receipt(path, value, **kwargs):
+        if Path(path) == receipt and 'receipt' not in observed:
+            foreign = copy.deepcopy(value)
+            foreign['conflicts'][0]['source_record']['source_excel_sha256'] = 'e' * 64
+            original_save(receipt, p._sealed_actual_excel_conflicts(foreign['conflicts']),
+                          expected_sha256='')
+            observed['receipt'] = receipt.read_bytes()
+        return original_save(path, value, **kwargs)
+
+    def inject_at_old_restore_window(path, original):
+        if Path(path) == status:
+            foreign_status = sp.json_load_strict(status)
+            foreign_status['foreign_writer'] = 'after-status-hash-before-restore'
+            original_save(status, foreign_status)
+            observed['foreign_status'] = status.read_bytes()
+        return original_restore(path, original)
+
+    monkeypatch.setattr(sp, 'json_save', inject_foreign_receipt)
+    monkeypatch.setattr(p, '_restore_exact_file', inject_at_old_restore_window)
+    conflict_import(b, second)
+    assert receipt.read_bytes() == observed['receipt']
+    if 'foreign_status' in observed:
+        assert status.read_bytes() == observed['foreign_status']
+    else:
+        assert status.read_bytes() == before[status]
+    assert {path: read(path) for path in before if path not in {receipt, status}} == {
+        path: content for path, content in before.items()
+        if path not in {receipt, status}}
+    assert not (b / p.INCOMPLETE_FILE).exists()
+
+
+def test_status_write_failure_keeps_durable_conflict_receipt_and_blocks_report(
+        actual_projects, tmp_path, monkeypatch):
+    a, b, _ = actual_projects
+    second, _ = inputs(a, b, tmp_path)
+    receipt = b / p.ACTUAL_EXCEL_CONFLICT_FILE
+    status = b / 'pipeline_status.json'
+    before = {path: read(path) for path in watched(b)}
+    original_save = sp.json_save
+    observed = {}
+
+    def fail_late_status(path, value, **kwargs):
+        if Path(path) == status and receipt.exists():
+            observed['receipt'] = receipt.read_bytes()
+            raise OSError('status disk full')
+        return original_save(path, value, **kwargs)
+
+    monkeypatch.setattr(sp, 'json_save', fail_late_status)
+    with pytest.raises(OSError, match='status disk full'):
+        sp.import_actual_gpt_decisions(b, second)
+    assert observed, 'receipt must be durable before the status write'
+    assert receipt.read_bytes() == observed['receipt']
+    assert status.read_bytes() == before[status]
+    assert {path: read(path) for path in before if path not in {receipt, status}} == {
+        path: content for path, content in before.items()
+        if path not in {receipt, status}}
+    assert not (b / p.INCOMPLETE_FILE).exists()
+    manifest = sp.json_load_strict(b / '校對工作階段.json')
+    db = sp.json_load_strict(b / '人工判定資料庫.json')
+    assert p.actual_excel_conflict_state(b, manifest, db)
+    with pytest.raises(ValueError, match='actual.*衝突'):
+        sp.regenerate_report(b)
+    assert read(b / '注音校對_最終報告.xlsx') == before[b / '注音校對_最終報告.xlsx']
+
+
 def test_actual_conflict_receipt_first_append_and_replay(actual_projects, tmp_path):
     a, b, _ = actual_projects
     second, third = inputs(a, b, tmp_path)

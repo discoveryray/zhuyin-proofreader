@@ -1814,26 +1814,19 @@ def import_actual_excel(target_dir: Path, xlsx: Path, *,
             if all_conflicts != previous["conflicts"]:
                 status_path = target_dir / "pipeline_status.json"
                 original_status = status_path.read_bytes() if status_path.exists() else None
-                status_written_sha = None
-                try:
-                    if original_status is not None:
-                        live_status = sp.json_load_strict(status_path)
-                        if not isinstance(live_status, dict):
-                            raise ValueError("既有 pipeline status 無法驗證；未登記 actual 衝突")
-                        status_written_sha = sp.json_save(
-                            status_path, _actual_excel_conflict_status(live_status, all_conflicts),
-                            expected_sha256=hashlib.sha256(original_status).hexdigest())
-                    sp.json_save(receipt, _sealed_actual_excel_conflicts(all_conflicts),
-                                 expected_sha256=previous_sha)
-                except Exception:
-                    if status_written_sha is not None:
-                        try:
-                            status_still_ours = _sha(status_path) == status_written_sha
-                        except FileNotFoundError:
-                            status_still_ours = False
-                        if status_still_ours:
-                            _restore_exact_file(status_path, original_status)
-                    raise
+                next_status = None
+                if original_status is not None:
+                    live_status = sp.json_parse_strict(original_status, status_path)
+                    if not isinstance(live_status, dict):
+                        raise ValueError("既有 pipeline status 無法驗證；未登記 actual 衝突")
+                    next_status = _actual_excel_conflict_status(live_status, all_conflicts)
+                # The receipt is the durable conflict gate. Publish it before
+                # status so a rejected receipt CAS cannot require status rollback.
+                sp.json_save(receipt, _sealed_actual_excel_conflicts(all_conflicts),
+                             expected_sha256=previous_sha)
+                if next_status is not None:
+                    sp.json_save(status_path, next_status,
+                                 expected_sha256=hashlib.sha256(original_status).hexdigest())
         raise ValueError("Excel actual 同位置已有不同判定；既有與本次來源均保留於跨Excel_actual衝突.json，目標未覆寫")
     if existing_actual_conflicts:
         raise ValueError("Excel actual 衝突尚未在原頁重新核對；未匯入其他判定或回報完成")
