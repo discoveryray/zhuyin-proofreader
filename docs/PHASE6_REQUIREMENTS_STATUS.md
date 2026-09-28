@@ -31,7 +31,7 @@ fingerprint。原有 strict validation、actual-only proof、完整 PDF bbox、s
 
 ## 尚未提供的完整統計與範圍
 
-[早期 architecture audit §19](../GLOBAL_EXACT_GLYPH_LIBRARY_AUDIT_v5.8.md)
+[早期 architecture audit §19](archive/audits/GLOBAL_EXACT_GLYPH_LIBRARY_AUDIT_v5.8.md)
 列過下列 aggregate metrics。現行 A～D 的程式與證據尚不能證明它們完整實現；
 本輪沒有將其全部採納為驗收或新增實作授權。具體缺口如下：
 
