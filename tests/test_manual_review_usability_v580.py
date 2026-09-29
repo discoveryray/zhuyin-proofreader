@@ -25,9 +25,10 @@ REGRESSION = {"ok": True, "required": 1, "executed": 1, "passed": 1, "failed": 0
               "not_executed": 0, "duplicate_case_id": 0}
 
 
-def make_entry(n=1, *, actual="ㄎㄢˋ", expected=(), blocked="", excluded=False, pdf="fixture.pdf", pdf_sha="f" * 64):
+def make_entry(n=1, *, actual="ㄎㄢˋ", expected=(), blocked="", excluded=False, pdf="fixture.pdf", pdf_sha="f" * 64,
+               printed_page="1"):
     source = {"pdf_sha256": pdf_sha, "pdf": str(pdf), "pdf_name": Path(pdf).name,
-              "實體頁碼": 1, "課本頁": "1", "字元": "看", "穩定注音鍵": f"fixture-{n}",
+              "實體頁碼": 1, "課本頁": printed_page, "字元": "看", "穩定注音鍵": f"fixture-{n}",
               "font": "fixture", "font_xref": 1, "glyph_id_字形索引": n,
               "x0": 72.0, "y0": float(72 + n * 45), "x1": 96.0, "y1": float(96 + n * 45),
               "source_row_number": n, "所在行": f"看一看窗外的風景（隔離操作樣本 {n}）", "局部詞境": "看一看"}
@@ -57,7 +58,7 @@ def make_manifest(entries):
     })
 
 
-def create_gui_fixture(output_dir: Path, *, mixed=True):
+def create_gui_fixture(output_dir: Path, *, mixed=True, missing_printed_page=False):
     """Isolated synthetic PDF/session for tests and actual Windows GUI evidence.
 
     The source reading and regression rows are explicit fixture inputs, not a
@@ -77,7 +78,8 @@ def create_gui_fixture(output_dir: Path, *, mixed=True):
         entries.extend([
             make_entry(3, actual="", pdf=pdf, pdf_sha=sha),
             make_entry(4, actual="", expected=["ㄎㄢˋ"], pdf=pdf, pdf_sha=sha),
-            make_entry(5, expected=["ㄎㄢ"], pdf=pdf, pdf_sha=sha),
+            make_entry(5, expected=["ㄎㄢ"], pdf=pdf, pdf_sha=sha,
+                       printed_page="" if missing_printed_page else "1"),
             make_entry(6, blocked="DATA_INTEGRITY_ERROR", pdf=pdf, pdf_sha=sha),
             make_entry(7, excluded=True, pdf=pdf, pdf_sha=sha),
         ])
@@ -88,6 +90,18 @@ def create_gui_fixture(output_dir: Path, *, mixed=True):
 
 
 class ManualExpectedContractTests(unittest.TestCase):
+    def test_gui_confirmation_allows_missing_printed_page_but_requires_physical_target(self):
+        row = make_entry(expected=["ㄎㄢ"], printed_page="")
+        self.assertEqual(row["printed_page"], "")
+        self.assertEqual(row["state"], "DIFFERENCE_PENDING_CONFIRMATION")
+        record = sp.build_gui_confirmation(row)
+        self.assertEqual(record["target"]["printed_page"], "")
+        self.assertTrue(ol.valid_gui_confirmation({**row, "gui_confirmation": record}))
+        self.assertFalse(ol.valid_gui_confirmation({**row, "printed_page": "2", "gui_confirmation": record}))
+        for missing in ("physical_page", "x0", "y0", "x1", "y1", "pdf_sha256"):
+            with self.subTest(missing=missing), self.assertRaises(ol.InvalidTransitionError):
+                sp.build_gui_confirmation({**row, missing: ""})
+
     def test_gui_confirmation_is_bound_to_one_mismatch_and_both_evidence_lanes(self):
         row = make_entry(expected=["ㄎㄢ"])
         record = sp.build_gui_confirmation(row)
@@ -309,6 +323,46 @@ class ManualReviewGuiTests(unittest.TestCase):
     def tearDown(self):
         self.window.destroy()
         self.temp.cleanup()
+
+    def test_missing_printed_page_gui_save_reopen_and_report(self):
+        with tempfile.TemporaryDirectory() as td:
+            output = Path(td)
+            manifest = create_gui_fixture(output, missing_printed_page=True)
+            owner = tk.Toplevel(self.root)
+            try:
+                app = gui.ReviewApp(owner, output)
+                owner.update()
+                target = next(row for row in app.records if row["state"] == "DIFFERENCE_PENDING_CONFIRMATION"
+                              and row["printed_page"] == "")
+                self.assertEqual(target["physical_page"], 1)
+                self.assertEqual(target["source_record"]["課本頁"], "")
+                app.index = app.records.index(target)
+                app.show()
+                app.primary.invoke()
+                wait_for_save(app)
+                self.assertTrue(app._last_event_saved)
+                self.assertNotEqual(app.current()["review_id"], target["review_id"])
+            finally:
+                owner.destroy()
+
+            reopened = sp.load_or_initialize_db(output)
+            saved = reopened["events"][target["review_id"]]
+            self.assertEqual(saved["gui_confirmation"]["target"]["printed_page"], "")
+            self.assertEqual(saved["gui_confirmation"]["target"]["physical_page"], "1")
+            ledger = sp.materialize_ledger(sp.json_load_strict(output / "校對工作階段.json"), reopened)
+            row = next(item for item in ledger if item["review_id"] == target["review_id"])
+            self.assertEqual(row["state"], "TEXTBOOK_ERROR_CONFIRMED")
+            self.assertEqual(row["note"], saved["note"])
+            sp.generate_report(output, manifest, reopened)
+            with closing(load_workbook(output / "注音校對_最終報告.xlsx", read_only=True)) as wb:
+                headers, *values = list(wb["修正清單"].values)
+                self.assertEqual(len(values), 1)
+                self.assertIsNone(values[0][headers.index("課本頁")])
+                self.assertEqual(values[0][headers.index("確認紀錄")], saved["note"])
+            with closing(load_workbook(output / "注音校對_技術稽核.xlsx", read_only=True)) as wb:
+                headers, *values = list(wb["Occurrence Ledger"].values)
+                recorded = next(value for value in values if value[headers.index("review_id")] == target["review_id"])
+                self.assertEqual(json.loads(recorded[headers.index("本筆 GUI 教材錯誤確認紀錄")]), saved["gui_confirmation"])
 
     def test_difference_button_saves_once_without_dialog_then_reopens_and_reports(self):
         app = self.app

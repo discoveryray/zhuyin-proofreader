@@ -422,8 +422,10 @@ def valid_gui_confirmation(entry: Mapping[str, Any]) -> bool:
     if type(record["version"]) is not int or record["version"] != 1 or record["method"] != GUI_CONFIRMATION_METHOD:
         return False
     target = manual_expected_target(entry)
+    # A PDF may have no printed footer number. Keep that optional value bound
+    # in the snapshot while requiring the physical page and glyph coordinates.
     if not all(target[key] for key in (
-        "occurrence_id", "review_id", "pdf_sha256", "pdf_name", "printed_page", "char",
+        "occurrence_id", "review_id", "pdf_sha256", "pdf_name", "char",
         "physical_page", "x0", "y0", "x1", "y1",
     )) or not (target["line"] or target["local_context"]):
         return False
