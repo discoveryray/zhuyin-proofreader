@@ -1535,6 +1535,7 @@ class ReviewApp:
             **({"undo_previous_event": copy.deepcopy(self.db["events"][entry["review_id"]]["undo_previous_event"])}
                if "undo_previous_event" in self.db.get("events", {}).get(entry["review_id"], {}) else {}),
             "source": "人工 GUI 本筆單次確認",
+            "note": f"本筆主畫面單次確認教材錯誤；確認時間：{confirmation['confirmed_at']}",
             "updated_at": confirmation["confirmed_at"],
         })
 

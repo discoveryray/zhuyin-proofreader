@@ -341,10 +341,18 @@ class ManualReviewGuiTests(unittest.TestCase):
         saved = app.db["events"][target["review_id"]]
         self.assertEqual(saved["gui_confirmation"]["method"], ol.GUI_CONFIRMATION_METHOD)
         self.assertFalse(any(saved.get(gate) is True for gate in ol.CONFIRMATION_GATES))
+        self.assertIn(saved["gui_confirmation"]["confirmed_at"], saved["note"])
+        self.assertNotIn("六閘門", saved["note"])
         reopened = sp.materialize_ledger(self.manifest, sp.load_or_initialize_db(self.output))
         row = next(item for item in reopened if item["review_id"] == target["review_id"])
         self.assertEqual(row["state"], "TEXTBOOK_ERROR_CONFIRMED")
+        self.assertEqual(row["note"], saved["note"])
         sp.generate_report(self.output, self.manifest, sp.load_or_initialize_db(self.output))
+        with closing(load_workbook(self.output / "注音校對_最終報告.xlsx", read_only=True)) as wb:
+            headers, *values = list(wb["修正清單"].values)
+            recorded = next(value for value in values if value[headers.index("字")] == target["char"]
+                            and value[headers.index("課本頁")] == target["printed_page"])
+            self.assertEqual(recorded[headers.index("確認紀錄")], saved["note"])
         with closing(load_workbook(self.output / "注音校對_技術稽核.xlsx", read_only=True)) as wb:
             headers, *values = list(wb["Occurrence Ledger"].values)
             recorded = next(value for value in values if value[headers.index("review_id")] == target["review_id"])
