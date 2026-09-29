@@ -9,7 +9,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from review_gui import (  # noqa: E402
-    ConfirmationDialog,
     ExpectedDialog,
     review_action_labels,
     screen_safe_window_size,
@@ -113,21 +112,8 @@ class ReviewGuiVisibleFooterTests(unittest.TestCase):
             dialog.grab_release()
             dialog.destroy()
 
-    def test_confirmation_dialog_submit_and_cancel_are_visible(self):
-        entry = dict(ENTRY)
-        entry.update({
-            "state": "DIFFERENCE_PENDING_CONFIRMATION",
-            "expected_set": ["ㄎㄢ"],
-            "expected_evidence": "公司規定",
-        })
-        dialog = ConfirmationDialog(self.root, entry, wait=False)
-        try:
-            _wait_for_dialog_layout(dialog)
-            self._assert_button_inside_dialog(dialog, "確認為教材錯誤")
-            self._assert_button_inside_dialog(dialog, "取消")
-        finally:
-            dialog.grab_release()
-            dialog.destroy()
+    def test_difference_uses_main_action_label(self):
+        self.assertEqual(review_action_labels("DIFFERENCE_PENDING_CONFIRMATION")[0], "確認教材錯誤")
 
 
 if __name__ == "__main__":

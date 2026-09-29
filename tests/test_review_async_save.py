@@ -62,7 +62,6 @@ def exercise_closed_root_worker(output_dir, mode):
             for factory in (
                 lambda: gui.ExpectedDialog(root, row, "closed expected", wait=False),
                 lambda: gui.ActualReadingDialog(root, row, {"members": [row]}, output, wait=False),
-                lambda: gui.ConfirmationDialog(root, row, wait=False),
             ):
                 dialog = factory()
                 dialog.update()
@@ -585,7 +584,7 @@ class AsyncOwnerTkTests(unittest.TestCase):
 
     def test_submit_cancel_and_owner_destroy_release_dialog_variables_and_photos(self):
         row = self.app.current()
-        for kind in ("expected", "confirmation", "actual"):
+        for kind in ("expected", "actual"):
             for close in ("submit", "cancel", "owner_destroy"):
                 with self.subTest(kind=kind, close=close), traced_tk_finalizers() as finalized:
                     owner = tk.Toplevel(self.window)
@@ -595,10 +594,6 @@ class AsyncOwnerTkTests(unittest.TestCase):
                             resources = [weakref.ref(getattr(dialog, name))
                                          for name in ("expected", "evidence", "context", "reason")]
                             dialog.expected.set(row["actual"])
-                        elif kind == "confirmation":
-                            dialog = gui.ConfirmationDialog(owner, row, wait=False)
-                            resources = [weakref.ref(value) for value in dialog.vars]
-                            [value.set(True) for value in dialog.vars]
                         else:
                             dialog = gui.ActualReadingDialog(owner, row, {"members": [row]}, self.output, wait=False)
                             deadline = time.monotonic() + 5
