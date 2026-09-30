@@ -339,8 +339,8 @@ class ReviewSaveServiceTests(unittest.TestCase):
         before = (self.output / "人工判定資料庫.json").read_bytes()
         replay = sp._apply_review_event
 
-        def external_edit(row, event):
-            result = replay(row, event)
+        def external_edit(row, event, *, expected_manifest=None):
+            result = replay(row, event, expected_manifest=expected_manifest)
             changed = copy.deepcopy(self.manifest)
             changed["session_id"] = "changed during worker"
             sp.json_save(path, sp.seal_manifest(changed))

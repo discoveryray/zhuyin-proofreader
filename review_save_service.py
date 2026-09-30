@@ -286,7 +286,18 @@ class ReviewSaveService:
                         "portability_conflict_resolution")
             if resolution is not None:
                 staged_db["events"][review_id]["portability_conflict_resolution"] = copy.deepcopy(resolution)
-            resolved = sp._apply_review_event(baseline[index[review_id]], staged_db["events"][review_id])
+            staged_event = staged_db["events"][review_id]
+            if (staged_event.get("action") in sp.EXPECTED_RESOLUTION_ACTIONS
+                    and "manual_expected_decision" not in staged_event
+                    and "expected_resolution_binding" not in staged_event
+                    and manifest.get("expected_asset_fingerprint")):
+                staged_event = sp.bind_expected_resolution(baseline[index[review_id]], staged_event, manifest)
+                staged_db["events"][review_id] = staged_event
+            if staged_event.get("action") == "確認現版差異":
+                prior_binding = (db["events"].get(review_id) or {}).get("expected_resolution_binding")
+                if staged_event.get("expected_resolution_binding") != prior_binding:
+                    raise ValueError("GUI 確認必須保留既有已驗證 expected binding；不得新增／丟棄來源")
+            resolved = sp._apply_review_event(baseline[index[review_id]], staged_event, expected_manifest=manifest)
         original = baseline[index[review_id]]
         if (resolved.get("review_id"), resolved.get("occurrence_id")) != (
                 original.get("review_id"), original.get("occurrence_id")):

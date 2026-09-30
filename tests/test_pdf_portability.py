@@ -768,6 +768,43 @@ def test_project_expected_transfer_accepts_more_specific_event_context(tmp_path,
     assert sp.materialize_ledger(target_manifest, sp.json_load_strict(target / "人工判定資料庫.json"))[0]["context_evidence"] == event["context_evidence"]
 
 
+def test_project_expected_binding_transfers_only_after_proven_mapping_and_unchanged_baseline(tmp_path):
+    a_pdf, b_pdf = tmp_path / "A.pdf", tmp_path / "B.pdf"
+    pdf(a_pdf, title="A")
+    pdf(b_pdf, title="B")
+    source, target = tmp_path / "source", tmp_path / "target"
+    source_manifest, source_db = project(source, a_pdf, session="A", event_positions=(0,))
+    target_manifest, _ = project(target, b_pdf, session="B")
+    for directory, manifest in ((source, source_manifest), (target, target_manifest)):
+        # Explicit synthetic expected contract and common printed text context.
+        manifest["expected_asset_fingerprint"] = "b" * 64
+        manifest["expected_asset_fingerprint_components"] = {"expected_resolver_semantics_epoch": "1"}
+        for row in manifest["records"]:
+            row["source_record"].update({"所在行": "角色", "局部詞境": "角色"})
+        sp.json_save(directory / "校對工作階段.json", sp.seal_manifest(manifest))
+    source_row, target_row = source_manifest["records"][0], target_manifest["records"][0]
+    event = source_db["events"][source_row["review_id"]]
+    bound = sp.bind_expected_resolution(source_row, event, source_manifest)
+    bound["undo_previous_event"] = copy_binding = sp.bind_expected_resolution(source_row, event, source_manifest)
+    source_db["events"][source_row["review_id"]] = bound
+    sp.json_save(source / "人工判定資料庫.json", source_db)
+    result = portable.import_project_decisions(source, target)
+    assert result["imported"] == 1 and result["conflicts"] == []
+    db = sp.json_load_strict(target / "人工判定資料庫.json")
+    transferred = db["events"][target_row["review_id"]]
+    assert transferred["expected_resolution_binding"]["session_id"] == "B"
+    assert transferred["undo_previous_event"]["expected_resolution_binding"]["session_id"] == "B"
+    assert copy_binding["expected_resolution_binding"]["session_id"] == "A"
+    assert transferred["portability_source"]["source_expected_resolution_binding"] == bound["expected_resolution_binding"]
+    assert sp.materialize_ledger(target_manifest, db)[0]["state"] == "PASS"
+    for update in ({"expected_evidence": "same-reading new independent source"},
+                   {"context_evidence": "new independent context"}):
+        with pytest.raises(ValueError, match="baseline"):
+            portable._transfer_event(bound, source_row, {**target_row, **update},
+                source_manifest=source_manifest, target_manifest=target_manifest,
+                source_baseline=source_row, target_baseline={**target_row, **update})
+
+
 @pytest.mark.parametrize("same_decision", [True, False])
 def test_project_transfer_keeps_prior_human_expected_duplicate_or_conflict(tmp_path, same_decision):
     a_pdf, b_pdf = tmp_path / "A.pdf", tmp_path / "B.pdf"
