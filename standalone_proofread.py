@@ -46,6 +46,7 @@ from occurrence_ledger import (
     ALL_STATES,
     COMPARABLE_TERMINAL_STATES,
     CONFIRMATION_GATES,
+    GUI_CONFIRMATION_METHOD,
     EXCLUDED_STATES,
     HARD_BLOCKING_STATES,
     LEDGER_SCHEMA_VERSION,
@@ -73,6 +74,8 @@ from occurrence_ledger import (
     infer_expected_status,
     has_expected_evidence,
     manual_expected_target,
+    confirmation_expected_snapshot,
+    valid_gui_confirmation,
     valid_manual_expected_decision,
     derive_comparison_result,
     derive_authoritative_state,
@@ -2612,6 +2615,21 @@ def actual_confirmation_snapshot(entry: Mapping[str, Any]) -> dict[str, str]:
             "actual_status": infer_actual_status(entry)}
 
 
+def build_gui_confirmation(entry: Mapping[str, Any]) -> dict[str, Any]:
+    """Record the one explicit GUI action against this occurrence and both lanes."""
+    record = {
+        "version": 1,
+        "method": GUI_CONFIRMATION_METHOD,
+        "target": manual_expected_target(entry),
+        "actual_snapshot": actual_confirmation_snapshot(entry),
+        "expected_snapshot": confirmation_expected_snapshot(entry),
+        "confirmed_at": datetime.now().astimezone().isoformat(timespec="microseconds"),
+    }
+    if entry.get("state") != "DIFFERENCE_PENDING_CONFIRMATION" or not valid_gui_confirmation({**entry, "gui_confirmation": record}):
+        raise InvalidTransitionError("本筆缺少可確認的來源、位置、語境或獨立差異證據")
+    return record
+
+
 def _apply_review_event(entry: dict[str, Any], event: Mapping[str, Any]) -> dict[str, Any]:
     action = str(event.get("action") or "").strip()
     if action == "保留待人工":
@@ -2689,10 +2707,27 @@ def _apply_review_event(entry: dict[str, Any], event: Mapping[str, Any]) -> dict
         # so the confirmation event must carry enough independent expected evidence
         # to reconstruct that intermediate DIFFERENCE state from the frozen manifest.
         working = dict(entry)
+        gui_record = event.get("gui_confirmation")
+        if "gui_confirmation" in event:
+            if (not isinstance(gui_record, dict) or set(gui_record) != {
+                    "version", "method", "target", "actual_snapshot", "expected_snapshot", "confirmed_at"}
+                    or type(gui_record["version"]) is not int or gui_record["version"] != 1
+                    or gui_record["method"] != GUI_CONFIRMATION_METHOD
+                    or not isinstance(gui_record["target"], dict)
+                    or not isinstance(gui_record["actual_snapshot"], dict)
+                    or not isinstance(gui_record["expected_snapshot"], dict)):
+                raise InvalidTransitionError("未知或缺失的 GUI 確認方式")
+            if any(event.get(gate) is True for gate in CONFIRMATION_GATES):
+                raise InvalidTransitionError("GUI 單次確認不得冒稱舊六閘門已完成")
         if "manual_expected_decision" in event:
             # Reconstruct the explicitly reviewed expected lane before comparing.
             # A later automatic resolver cannot silently replace a local human judgment.
-            working = _apply_review_event(working, {**event, "action": "解決expected證據"})
+            working = _apply_review_event(working, {
+                **event, "action": "解決expected證據",
+                "source": str(event.get("expected_resolution_source") or event.get("source") or "人工現版證據"),
+                "resolution_reason": str(event.get("expected_resolution_reason") or ""),
+                "note": str(event.get("expected_resolution_note") or ""),
+            })
             snapshot = event.get("confirmation_actual_snapshot")
             if not isinstance(snapshot, dict) or set(snapshot) != {"actual", "actual_evidence", "actual_status"}:
                 raise InvalidTransitionError("人工差異確認缺少當次 actual 比較 snapshot")
@@ -2709,7 +2744,7 @@ def _apply_review_event(entry: dict[str, Any], event: Mapping[str, Any]) -> dict
             and event_expected
             and current_expected != event_expected
         ):
-            # A six-gate conclusion is bound to the expected truth reviewed at
+            # A final conclusion is bound to the expected truth reviewed at
             # that time.  Rebuilding candidates with a different independent
             # expected truth invalidates only the terminal conclusion; it must
             # not resurrect the embedded historical expected evidence.
@@ -2734,12 +2769,19 @@ def _apply_review_event(entry: dict[str, Any], event: Mapping[str, Any]) -> dict
                 })
             if working.get("state") != "DIFFERENCE_PENDING_CONFIRMATION":
                 raise InvalidTransitionError(
-                    "只有現版機械比較差異可進六閘門確認；若此差異由先前 expected 證據建立，"
+                    "只有現版機械比較差異可確認教材錯誤；若此差異由先前 expected 證據建立，"
                     "確認事件必須一併保留該 expected 讀音、來源與詞境證據"
                 )
         gates = {gate: event.get(gate) is True for gate in CONFIRMATION_GATES}
+        if gui_record is not None:
+            working["gui_confirmation"] = copy.deepcopy(gui_record)
+            if not valid_gui_confirmation(working):
+                working.pop("gui_confirmation", None)
+                working["review_event_replay_status"] = "INVALIDATED_CONFIRMATION_SNAPSHOT"
+                return working
         return transition_state(working, "TEXTBOOK_ERROR_CONFIRMED", {
             "confirmation_gates": gates,
+            **({"gui_confirmation": gui_record} if gui_record is not None else {}),
             "note": str(event.get("note") or "").strip(),
         })
     if action == "確認非校對範圍":
@@ -3071,6 +3113,7 @@ def _ledger_report_row(entry: Mapping[str, Any]) -> list[Any]:
         entry.get("font"), entry.get("font_xref"), entry.get("glyph_id"), entry.get("zhuyin_component_id"),
         entry.get("x0"), entry.get("y0"), entry.get("x1"), entry.get("y1"), entry.get("note"),
         json.dumps(entry["manual_expected_decision"], ensure_ascii=False, sort_keys=True) if "manual_expected_decision" in entry else "",
+        json.dumps(entry["gui_confirmation"], ensure_ascii=False, sort_keys=True) if "gui_confirmation" in entry else "",
     ]
 
 
@@ -3226,7 +3269,7 @@ def generate_report(
         ("規則衝突", state_counts["RULE_CONFLICT"]),
         ("解碼錯誤", state_counts["ACTUAL_DECODE_ERROR"] + state_counts["ACTUAL_UNRESOLVED"]),
         ("確認通過", state_counts["PASS"]),
-        ("現版六閘門確認教材錯誤", state_counts["TEXTBOOK_ERROR_CONFIRMED"]),
+        ("已確認教材錯誤", state_counts["TEXTBOOK_ERROR_CONFIRMED"]),
         ("非獨立技術層排除", state_counts["EXCLUDED_NONINDEPENDENT_LAYER"]),
         ("真正不在範圍排除", state_counts["EXCLUDED_OUT_OF_SCOPE"]),
         ("mandatory regression required", (manifest.get("mandatory_regression") or {}).get("required", 0)),
@@ -3260,7 +3303,7 @@ def generate_report(
         "occurrence_id", "review_id", "state", "active_review", "actual_status", "expected_status", "PDF", "課本頁", "實體頁碼", "字元",
         "所在行", "局部詞境", "actual", "expected_set", "機械比較", "actual證據", "expected證據", "語境／位置證據",
         "來源view", "identity confidence", "row fallback", "canonical occurrence", "排除理由", "穩定注音鍵",
-        "font", "font_xref", "glyph_id", "注音元件ID", "x0", "y0", "x1", "y1", "備註", "本筆人工應標判定紀錄",
+        "font", "font_xref", "glyph_id", "注音元件ID", "x0", "y0", "x1", "y1", "備註", "本筆人工應標判定紀錄", "本筆 GUI 教材錯誤確認紀錄",
     ]
     ws_ledger = wb.create_sheet("Occurrence Ledger")
     ws_ledger.append(headers)
@@ -3277,7 +3320,7 @@ def generate_report(
                 state_sheet.append(_ledger_report_row(entry))
 
     wr = wb.create_sheet("已補建預期音_稽核事件")
-    wr.append(["review_id", "occurrence_id", "action", "expected_set", "expected_evidence", "event_source", "updated_at", "note", "manual_expected_decision"])
+    wr.append(["review_id", "occurrence_id", "action", "expected_set", "expected_evidence", "event_source", "updated_at", "note", "manual_expected_decision", "gui_confirmation"])
     by_review_id = {entry["review_id"]: entry for entry in ledger}
     for review_id, event in normalize_db(db).get("events", {}).items():
         if event.get("action") not in {"補建expected證據", "解決expected證據", "確認現版差異"}:
@@ -3288,6 +3331,7 @@ def generate_report(
             "|".join(normalize_expected_set(event.get("expected_set"))), event.get("expected_evidence", ""),
             event.get("source", ""), event.get("updated_at", ""), event.get("note", ""),
             json.dumps(event["manual_expected_decision"], ensure_ascii=False, sort_keys=True) if "manual_expected_decision" in event else "",
+            json.dumps(event["gui_confirmation"], ensure_ascii=False, sort_keys=True) if "gui_confirmation" in event else "",
         ])
 
     wc = wb.create_sheet("集合對帳")
@@ -3450,8 +3494,8 @@ def generate_report(
             expected_text = " | ".join(normalize_expected_set(event.get("expected_set")))
             evidence_text = str(event.get("expected_evidence") or ("" if "manual_expected_decision" in event else event.get("source")) or "")
         elif action == "確認現版差異":
-            if entry.get("review_event_replay_status") == "INVALIDATED_EXPECTED_DRIFT":
-                label = "舊確認已失效（expected 已變更）"
+            if entry.get("review_event_replay_status", "").startswith("INVALIDATED_"):
+                label = "舊確認已失效"
             else:
                 label = "確認教材錯誤"
             expected_text = " | ".join(entry.get("expected_set") or [])

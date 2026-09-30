@@ -84,6 +84,18 @@ class ReviewSaveServiceTests(unittest.TestCase):
         result = self.save(None)
         self.assertEqual(result.ledger, sp.materialize_ledger(self.manifest, result.db))
 
+    def test_gui_confirmation_source_change_before_save_rejects_without_db_write(self):
+        reviewed = self.save(self.event(reading="ㄎㄢ")).resolved_entry
+        event = {**self.db["events"][reviewed["review_id"]], "action": "確認現版差異",
+                 "gui_confirmation": sp.build_gui_confirmation(reviewed),
+                 "confirmation_actual_snapshot": sp.actual_confirmation_snapshot(reviewed)}
+        before = (self.output / "人工判定資料庫.json").read_bytes()
+        source = Path(reviewed["pdf"])
+        source.write_bytes(source.read_bytes() + b"source changed before save")
+        with self.assertRaisesRegex(ValueError, "SOURCE_INVALID|DATA_INTEGRITY_ERROR"):
+            self.save(event)
+        self.assertEqual((self.output / "人工判定資料庫.json").read_bytes(), before)
+
     def test_reusable_rule_baseline_is_restored_by_undo(self):
         rules = sp._canonical_rule_doc({"rules": [{
             "rule_id": "isolated-test-rule", "phrase": "看一看", "target_char": "看", "target_index": 0,

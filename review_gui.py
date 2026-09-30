@@ -14,7 +14,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 
 from occurrence_ledger import (
-    CONFIRMATION_GATES, NON_TERMINAL_STATES, HARD_BLOCKING_STATES, EXCLUDED_STATES,
+    NON_TERMINAL_STATES, HARD_BLOCKING_STATES, EXCLUDED_STATES, InvalidTransitionError,
     canonical_bopomofo, infer_actual_status, infer_expected_status, valid_manual_expected_decision,
 )
 from standalone_proofread import (
@@ -22,6 +22,7 @@ from standalone_proofread import (
     VERSION,
     apply_staged_manual_actual_corrections,
     actual_confirmation_snapshot,
+    build_gui_confirmation,
     build_reusable_rule,
     build_manual_expected_event,
     friendly_state,
@@ -788,100 +789,6 @@ class ActualReadingDialog(_ReviewDialog):
         self.destroy()
 
 
-class ConfirmationDialog(_ReviewDialog):
-    _variable_attributes = ("vars",)
-    _widget_attributes = ("body_canvas", "note")
-
-    def __init__(self, parent, entry, *, wait: bool = True):
-        super().__init__(parent)
-        self.result = None
-        self.entry = entry
-        self.title("確認教材錯誤")
-        apply_screen_safe_geometry(self, 780, 680, min_width=620, min_height=440)
-        self.resizable(True, True)
-        self.transient(parent)
-        self.grab_set()
-
-        buttons = ActionRows(self, bd=1, relief="groove")
-        buttons.pack(side="bottom", fill="x")
-        cancel = tk.Button(buttons, text="取消", command=self.destroy)
-        save = tk.Button(buttons, text="確認為教材錯誤", command=self.submit, default="active")
-        buttons.set_items([save, cancel])
-
-        body, self.body_canvas = create_scrollable_body(self)
-
-        source = entry.get("source_record") or {}
-        phrase = str(source.get("局部詞境") or entry.get("context_evidence") or "").strip()
-        sentence = str(source.get("所在行") or "").strip()
-        expected_text = " | ".join(entry.get("expected_set") or [])
-
-        WrappedLabel(body, text="確認教材錯誤", font=("Microsoft JhengHei UI", 14, "bold")).pack(fill="x", anchor="w", padx=18, pady=(16, 6))
-        summary = tk.LabelFrame(body, text="本筆證據")
-        summary.pack(fill="x", padx=18, pady=6)
-        lines = (
-            f"課本頁：{entry.get('printed_page', '')}　詞語：{phrase}\n"
-            f"所在句：{sentence}\n"
-            f"課本現標：{entry.get('char', '')}　{entry.get('actual', '')}\n"
-            f"應標：{entry.get('char', '')}　{expected_text}\n"
-            f"應標文字依據：{entry.get('expected_evidence') or '未填寫（選填）'}"
-        )
-        if "manual_expected_decision" in entry:
-            decision = entry["manual_expected_decision"]
-            operation = "確認目前注音就是應標注音" if decision.get("operation") == "CONFIRM_CURRENT_AS_EXPECTED" else "人工輸入應標注音"
-            lines += f"\n本筆人工判定：{operation}；{decision.get('decided_at', '')}"
-        WrappedLabel(summary, text=lines, justify="left", anchor="w", wraplength=700).pack(fill="x", padx=10, pady=10)
-
-        WrappedLabel(
-            body,
-            text="思考模式 2.5 的六閘門全部保留，但集中在同一個視窗。只有六項都確認才會正式列為教材錯誤。",
-            justify="left", wraplength=700, fg="#555555",
-        ).pack(fill="x", anchor="w", padx=18, pady=(4, 8))
-
-        gate_texts = [
-            "我已回原頁確認課本現標注音。",
-            "我已確認應標注音的現行來源證據。",
-            "課本現標與應標讀音的兩條證據鏈互相獨立。",
-            "完整詞語、所在句與目標字位置都已確認。",
-            "我已檢查公司規定／來源優先序，沒有更高優先的衝突規則。",
-            "我本人確認這個現版差異是教材錯誤。",
-        ]
-        self.vars = []
-        gate_frame = tk.Frame(body)
-        gate_frame.pack(fill="x", padx=24, pady=4)
-        for text in gate_texts:
-            var = tk.BooleanVar(master=self, value=False)
-            self.vars.append(var)
-            wrap_checkbutton(tk.Checkbutton(gate_frame, text=text, variable=var)).pack(fill="x", anchor="w", pady=5)
-
-        note_frame = tk.LabelFrame(body, text="補充說明（可空白）")
-        note_frame.pack(fill="x", padx=18, pady=6)
-        self.note = tk.Text(note_frame, height=4, wrap="word")
-        self.note.pack(fill="x", padx=8, pady=8)
-
-        self.protocol("WM_DELETE_WINDOW", self.destroy)
-        self.bind("<Escape>", lambda _event: self.destroy())
-        self.bind("<Control-Return>", lambda _event: self.submit())
-        if wait:
-            self.wait_window(self)
-
-    def submit(self):
-        if not all(var.get() for var in self.vars):
-            messagebox.showinfo("尚未完成", "六項確認必須全部勾選；不確定時請先取消並保留待處理。", parent=self)
-            return
-        source = self.entry.get("source_record") or {}
-        phrase = str(source.get("局部詞境") or self.entry.get("context_evidence") or "").strip()
-        auto_note = (
-            f"P{self.entry.get('printed_page', '')}「{phrase}」之「{self.entry.get('char', '')}」現標"
-            f"{self.entry.get('actual', '')}；應標{' | '.join(self.entry.get('expected_set') or [])}。"
-            f"已完成思考模式2.5現版六閘門確認。"
-        )
-        extra = self.note.get("1.0", "end").strip()
-        note = auto_note if not extra else f"{auto_note} {extra}"
-        self.result = {gate: True for gate in CONFIRMATION_GATES}
-        self.result["note"] = note
-        self.destroy()
-
-
 class ConfirmedItemsDialog(_ReviewDialog):
     """Find a durable local expected decision without using the pending queue."""
 
@@ -1574,7 +1481,7 @@ class ReviewApp:
                     "仍有注音差異，尚未確認教材錯誤",
                     f"本筆應標判定已保存。課本目前注音：{updated.get('actual')}；"
                     f"應標注音：{' | '.join(updated.get('expected_set') or [])}。\n"
-                    "仍保留差異待確認；需要時另按「確認教材錯誤」完成六閘門。",
+                    "仍保留差異待確認；需要時另按「確認教材錯誤」確認本筆。",
                     parent=self.root,
                 )
 
@@ -1603,12 +1510,16 @@ class ReviewApp:
         messagebox.showinfo("已儲存可重用規則", "本規則會在更新報告及未來校對時套用相同完整詞與目標位置。", parent=self.root)
 
     def _confirm_difference_entry(self, entry):
-        dialog = ConfirmationDialog(self.root, entry)
-        if not dialog.result:
+        if entry.get("state") != "DIFFERENCE_PENDING_CONFIRMATION":
+            return
+        try:
+            confirmation = build_gui_confirmation(entry)
+        except InvalidTransitionError as exc:
+            messagebox.showerror("無法確認教材錯誤", str(exc), parent=self.root)
             return
         self.save_event(entry, {
             "action": "確認現版差異",
-            **dialog.result,
+            "gui_confirmation": confirmation,
             # Preserve the independent expected evidence in the same authoritative
             # event.  This is required when the current mismatch was created by a
             # prior GPT/GUI expected-evidence event, because the DB stores one event
@@ -1623,8 +1534,9 @@ class ReviewApp:
             **({"manual_expected_decision": entry["manual_expected_decision"]} if "manual_expected_decision" in entry else {}),
             **({"undo_previous_event": copy.deepcopy(self.db["events"][entry["review_id"]]["undo_previous_event"])}
                if "undo_previous_event" in self.db.get("events", {}).get(entry["review_id"], {}) else {}),
-            "source": "人工 GUI 現版六閘門",
-            "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "source": "人工 GUI 本筆單次確認",
+            "note": f"本筆主畫面單次確認教材錯誤；確認時間：{confirmation['confirmed_at']}",
+            "updated_at": confirmation["confirmed_at"],
         })
 
     @guarded_review_action

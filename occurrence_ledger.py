@@ -62,6 +62,7 @@ CONFIRMATION_GATES = (
     "source_priority_verified",
     "human_confirmation",
 )
+GUI_CONFIRMATION_METHOD = "GUI_SINGLE_CLICK_V1"
 
 BOPOMOFO = set("ㄅㄆㄇㄈㄉㄊㄋㄌㄍㄎㄏㄐㄑㄒㄓㄔㄕㄖㄗㄘㄙㄧㄨㄩㄚㄛㄜㄝㄞㄟㄠㄡㄢㄣㄤㄥㄦ")
 TONES = set("ˊˇˋ˙")
@@ -401,6 +402,59 @@ def has_expected_evidence(entry: Mapping[str, Any]) -> bool:
     return bool(str(entry.get("expected_evidence") or "").strip())
 
 
+def confirmation_expected_snapshot(entry: Mapping[str, Any]) -> dict[str, Any]:
+    """Comparison evidence only; this never feeds an expected fingerprint."""
+    return {
+        "expected_set": list(normalize_expected_set(entry.get("expected_set"))),
+        "expected_evidence": str(entry.get("expected_evidence") or ""),
+        "expected_status": infer_expected_status(entry),
+        "context_evidence": str(entry.get("context_evidence") or ""),
+        "manual_expected_decision": deepcopy(entry.get("manual_expected_decision")),
+    }
+
+
+def valid_gui_confirmation(entry: Mapping[str, Any]) -> bool:
+    record = entry.get("gui_confirmation")
+    if not isinstance(record, dict) or set(record) != {
+        "version", "method", "target", "actual_snapshot", "expected_snapshot", "confirmed_at",
+    }:
+        return False
+    if type(record["version"]) is not int or record["version"] != 1 or record["method"] != GUI_CONFIRMATION_METHOD:
+        return False
+    target = manual_expected_target(entry)
+    # A PDF may have no printed footer number. Keep that optional value bound
+    # in the snapshot while requiring the physical page and glyph coordinates.
+    if not all(target[key] for key in (
+        "occurrence_id", "review_id", "pdf_sha256", "pdf_name", "char",
+        "physical_page", "x0", "y0", "x1", "y1",
+    )) or not (target["line"] or target["local_context"]):
+        return False
+    if not re.fullmatch(r"[0-9a-f]{64}", target["pdf_sha256"]):
+        return False
+    if record["target"] != target:
+        return False
+    actual_snapshot = {
+        "actual": canonical_bopomofo(entry.get("actual")),
+        "actual_evidence": str(entry.get("actual_evidence") or ""),
+        "actual_status": infer_actual_status(entry),
+    }
+    if record["actual_snapshot"] != actual_snapshot or not actual_snapshot["actual_evidence"]:
+        return False
+    if record["expected_snapshot"] != confirmation_expected_snapshot(entry):
+        return False
+    if not has_expected_evidence(entry) or not str(entry.get("context_evidence") or "").strip():
+        return False
+    timestamp = record["confirmed_at"]
+    try:
+        parsed = datetime.fromisoformat(timestamp) if isinstance(timestamp, str) else None
+        if parsed is None or parsed.tzinfo is None or parsed.isoformat(timespec="microseconds") != timestamp:
+            return False
+    except ValueError:
+        return False
+    return (derive_comparison_result(entry) == "MISMATCH"
+            and derive_authoritative_state(entry, preserve_confirmed=False) == "DIFFERENCE_PENDING_CONFIRMATION")
+
+
 def infer_expected_status(entry: Mapping[str, Any]) -> str:
     explicit = _text(entry.get("expected_status")).upper()
     if explicit in EXPECTED_STATUSES:
@@ -466,7 +520,8 @@ def derive_authoritative_state(entry: Mapping[str, Any], *, preserve_confirmed: 
     if comparison == "MISMATCH":
         if preserve_confirmed and state == "TEXTBOOK_ERROR_CONFIRMED":
             gates = entry.get("confirmation_gates") or {}
-            if all(gates.get(gate) is True for gate in CONFIRMATION_GATES):
+            if (valid_gui_confirmation(entry) if "gui_confirmation" in entry else
+                    all(gates.get(gate) is True for gate in CONFIRMATION_GATES)):
                 return "TEXTBOOK_ERROR_CONFIRMED"
         return "DIFFERENCE_PENDING_CONFIRMATION"
     return "REVIEW_PENDING"
@@ -580,9 +635,13 @@ def validate_terminal_state(entry: Mapping[str, Any]) -> None:
             raise LedgerError("TEXTBOOK_ERROR_CONFIRMED 缺少語境／位置證據")
         if actual in expected or entry.get("comparison_result") != "MISMATCH":
             raise LedgerError("TEXTBOOK_ERROR_CONFIRMED 必須由 actual ∉ expected_set 的機械比較產生")
-        missing = [gate for gate in CONFIRMATION_GATES if gates.get(gate) is not True]
-        if missing:
-            raise LedgerError(f"TEXTBOOK_ERROR_CONFIRMED 六閘門未全數通過：{missing}")
+        if "gui_confirmation" in entry:
+            if not valid_gui_confirmation(entry) or any(gates.get(gate) is True for gate in CONFIRMATION_GATES):
+                raise LedgerError("TEXTBOOK_ERROR_CONFIRMED GUI 確認紀錄或比較證據無效")
+        else:
+            missing = [gate for gate in CONFIRMATION_GATES if gates.get(gate) is not True]
+            if missing:
+                raise LedgerError(f"TEXTBOOK_ERROR_CONFIRMED 六閘門未全數通過：{missing}")
     elif state == "EXCLUDED_NONINDEPENDENT_LAYER":
         if not entry.get("canonical_occurrence_id") or not entry.get("exclusion_reason"):
             raise LedgerError("非獨立技術層必須記錄 canonical occurrence 與排除理由")
