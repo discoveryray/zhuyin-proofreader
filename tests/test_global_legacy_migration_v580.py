@@ -746,9 +746,36 @@ class MigrationTests(unittest.TestCase):
 
 class MigrationArchitectureTests(unittest.TestCase):
     PHASE5_BASELINE = "d2d558808bd2902857fad30f824d8bdc352beb73"
+    _FINGERPRINT_CONTRACT_CALLS = {
+        "compute_actual_asset_fingerprint", "compute_expected_asset_fingerprint",
+        "rewrite_actual_workbook_fingerprint", "fingerprint_compatible",
+        "schema_compatible", "review_id_schema_compatible", "validate_asset_manifest",
+        "actual_workbook_dynamic_dependencies", "actual_workbook_global_exact_dependencies",
+        "global_exact_glyph_evidence_hashes",
+    }
 
-    @staticmethod
-    def _standalone_fingerprint_contract(tree):
+    @classmethod
+    def _assert_legacy_expected_adapter_contract(cls, tree, *, required=True):
+        """An independent, exact allowlist; never derive its answer from current code."""
+        adapters = [node for node in tree.body
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and node.name == "bind_legacy_gui_expected_resolutions"]
+        if not adapters and not required:  # Phase 5 predates this explicitly named adapter.
+            return
+        if len(adapters) != 1 or type(adapters[0]) is not ast.FunctionDef:
+            raise AssertionError("Exactly one synchronous legacy expected adapter is required")
+        expected = [ast.dump(node.value) for node in ast.parse(
+            "schema_compatible(metadata.get('session_schema_version'), SESSION_SCHEMA_VERSION)\n"
+            "schema_compatible(metadata.get('workbook_schema_version'), WORKBOOK_SCHEMA_VERSION)\n"
+            "review_id_schema_compatible(metadata.get('review_id_schema_version'), REVIEW_ID_SCHEMA_VERSION)\n"
+        ).body]
+        actual = [ast.dump(call) for call in ast.walk(adapters[0]) if isinstance(call, ast.Call)
+                  and getattr(call.func, "id", getattr(call.func, "attr", "")) in cls._FINGERPRINT_CONTRACT_CALLS]
+        if actual != expected:
+            raise AssertionError("Legacy expected adapter schema/fingerprint calls differ from the exact contract")
+
+    @classmethod
+    def _standalone_fingerprint_contract(cls, tree):
         """Freeze Phase 5 cache boundaries, not unrelated manual/report code.
 
         The producer/comparator modules remain byte-pinned below. Here retain
@@ -758,13 +785,8 @@ class MigrationArchitectureTests(unittest.TestCase):
         """
         declarations = {"ACTUAL_DECODER_SOURCE_FILES", "COMPATIBLE_SESSION_VERSIONS"}
         guards = {"output_is_reusable", "candidate_is_baseline_reusable"}
-        calls = {
-            "compute_actual_asset_fingerprint", "compute_expected_asset_fingerprint",
-            "rewrite_actual_workbook_fingerprint", "fingerprint_compatible",
-            "schema_compatible", "review_id_schema_compatible", "validate_asset_manifest",
-            "actual_workbook_dynamic_dependencies", "actual_workbook_global_exact_dependencies",
-            "global_exact_glyph_evidence_hashes",
-        }
+        calls = cls._FINGERPRINT_CONTRACT_CALLS
+        cls._assert_legacy_expected_adapter_contract(tree, required=False)
         imports = calls | {
             "EXPECTED_RESOLVER_SOURCE_FILES", "LEDGER_SCHEMA_VERSION", "SESSION_SCHEMA_VERSION",
             "WORKBOOK_SCHEMA_VERSION", "REVIEW_ID_SCHEMA_VERSION", "GlobalExactGlyphRepository",
@@ -777,9 +799,19 @@ class MigrationArchitectureTests(unittest.TestCase):
             "reuse_guards": {node.name: ast.dump(node) for node in tree.body
                              if isinstance(node, ast.FunctionDef) and node.name in guards},
             "contract_calls": {node.name: selected for node in tree.body if isinstance(node, ast.FunctionDef)
+                               and node.name != "bind_legacy_gui_expected_resolutions"
                                if (selected := [ast.dump(call) for call in ast.walk(node)
                                                 if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
                                                 and call.func.id in calls])},
+            "qualified_contract_calls": {node.name: selected for node in tree.body
+                                         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                                         if (selected := [ast.dump(call) for call in ast.walk(node)
+                                                          if isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                                                          and call.func.attr in calls])},
+            "async_contract_calls": {node.name: selected for node in tree.body if isinstance(node, ast.AsyncFunctionDef)
+                                     if (selected := [ast.dump(call) for call in ast.walk(node)
+                                                      if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+                                                      and call.func.id in calls])},
         }
 
     @classmethod
@@ -819,6 +851,7 @@ class MigrationArchitectureTests(unittest.TestCase):
             committed = subprocess.check_output(["git", "show", self.PHASE5_BASELINE + ":" + name], cwd=ROOT)
             self.assertEqual((ROOT / name).read_bytes().replace(b"\r\n", b"\n"), committed.replace(b"\r\n", b"\n"))
         current = ast.parse((ROOT / "standalone_proofread.py").read_text(encoding="utf-8"))
+        self._assert_legacy_expected_adapter_contract(current)
         self.assertEqual(self._standalone_fingerprint_contract(current),
                          self._standalone_fingerprint_contract(self._historical_standalone()))
 
@@ -832,6 +865,83 @@ class MigrationArchitectureTests(unittest.TestCase):
         self.assertNotEqual(ast.dump(changed), ast.dump(historical))
         self.assertEqual(self._standalone_fingerprint_contract(changed),
                          self._standalone_fingerprint_contract(historical))
+
+    @classmethod
+    def _historical_with_authorized_adapter(cls):
+        tree = cls._historical_standalone()
+        # Deliberately hard-written independently of the current implementation.
+        tree.body.extend(ast.parse(
+            "def bind_legacy_gui_expected_resolutions():\n"
+            "    schema_compatible(metadata.get('session_schema_version'), SESSION_SCHEMA_VERSION)\n"
+            "    schema_compatible(metadata.get('workbook_schema_version'), WORKBOOK_SCHEMA_VERSION)\n"
+            "    review_id_schema_compatible(metadata.get('review_id_schema_version'), REVIEW_ID_SCHEMA_VERSION)\n"
+        ).body)
+        return tree
+
+    def test_exact_authorized_adapter_keeps_historical_fingerprint_projection(self):
+        historical = self._historical_standalone()
+        authorized = self._historical_with_authorized_adapter()
+        self._assert_legacy_expected_adapter_contract(authorized)
+        self.assertEqual(self._standalone_fingerprint_contract(authorized),
+                         self._standalone_fingerprint_contract(historical))
+
+    def test_adapter_missing_duplicate_or_changed_schema_checks_are_rejected(self):
+        authorized = self._historical_with_authorized_adapter()
+        mutations = ["missing_adapter", "duplicate_adapter", "async_adapter", "renamed_adapter",
+                     "duplicate_check", "added_check", "changed_metadata", "changed_metadata_key",
+                     "changed_schema", "changed_callee", "qualified_callee", "reordered_args", "extra_keyword"]
+        mutations += [f"missing_check_{index}" for index in range(3)]
+        for mutation in mutations:
+            changed = copy.deepcopy(authorized)
+            adapter = changed.body[-1]
+            call = adapter.body[0].value
+            if mutation == "missing_adapter":
+                changed.body.pop()
+            elif mutation == "duplicate_adapter":
+                changed.body.append(copy.deepcopy(adapter))
+            elif mutation == "async_adapter":
+                changed.body[-1] = ast.AsyncFunctionDef(**vars(adapter))
+            elif mutation == "renamed_adapter":
+                adapter.name = "unrecognized_legacy_adapter"
+            elif mutation.startswith("missing_check_"):
+                adapter.body.pop(int(mutation.rsplit("_", 1)[1]))
+            elif mutation == "duplicate_check":
+                adapter.body.append(copy.deepcopy(adapter.body[0]))
+            elif mutation == "added_check":
+                adapter.body.extend(ast.parse("schema_compatible(metadata.get('future_schema'), FUTURE_SCHEMA)").body)
+            elif mutation == "changed_metadata":
+                call.args[0].func.value.id = "unverified_metadata"
+            elif mutation == "changed_metadata_key":
+                call.args[0].args[0].value = "future_schema"
+            elif mutation == "changed_schema":
+                call.args[1].id = "WORKBOOK_SCHEMA_VERSION"
+            elif mutation == "changed_callee":
+                call.func.id = "unverified_schema_compatible"
+            elif mutation == "qualified_callee":
+                call.func = ast.Attribute(value=ast.Name(id="unverified", ctx=ast.Load()),
+                                          attr="schema_compatible", ctx=ast.Load())
+            elif mutation == "reordered_args":
+                call.args.reverse()
+            else:
+                call.keywords.append(ast.keyword(arg="allow_unknown", value=ast.Constant(value=True)))
+            with self.subTest(mutation=mutation), self.assertRaises(AssertionError):
+                self._assert_legacy_expected_adapter_contract(changed)
+
+    def test_protected_calls_in_adapter_or_other_new_functions_are_rejected(self):
+        authorized = self._historical_with_authorized_adapter()
+        expected = self._standalone_fingerprint_contract(self._historical_standalone())
+        for name in sorted(self._FINGERPRINT_CONTRACT_CALLS):
+            for location in ("adapter", "other_function", "other_async_function"):
+                for qualified in (False, True):
+                    changed = copy.deepcopy(authorized)
+                    expression = f"{'provider.' if qualified else ''}{name}()"
+                    if location == "adapter":
+                        changed.body[-1].body.extend(ast.parse(expression).body)
+                    else:
+                        prefix = "async " if location == "other_async_function" else ""
+                        changed.body.extend(ast.parse(f"{prefix}def future_function():\n    {expression}\n").body)
+                    with self.subTest(name=name, location=location, qualified=qualified), self.assertRaises(AssertionError):
+                        self.assertEqual(self._standalone_fingerprint_contract(changed), expected)
 
     def test_changed_dependencies_chain_and_fail_open_guard_are_detected(self):
         historical = self._historical_standalone()
