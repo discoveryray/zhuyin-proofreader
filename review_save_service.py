@@ -298,6 +298,13 @@ class ReviewSaveService:
                 if staged_event.get("expected_resolution_binding") != prior_binding:
                     raise ValueError("GUI 確認必須保留既有已驗證 expected binding；不得新增／丟棄來源")
             resolved = sp._apply_review_event(baseline[index[review_id]], staged_event, expected_manifest=manifest)
+            if (staged_event.get("action") == "確認現版差異"
+                    and (resolved.get("state") != "TEXTBOOK_ERROR_CONFIRMED"
+                         or resolved.get("review_event_replay_status"))):
+                # Replay may legitimately retain a pending row for an invalid
+                # confirmation. It is not a successful new decision: replacing
+                # the prior event would discard its still-valid expected source.
+                raise ValueError("差異確認已失效；未保存，原判定及 expected 證據仍保留。請重新核對目前證據。")
         original = baseline[index[review_id]]
         if (resolved.get("review_id"), resolved.get("occurrence_id")) != (
                 original.get("review_id"), original.get("occurrence_id")):
