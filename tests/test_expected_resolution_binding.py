@@ -300,6 +300,129 @@ class ExpectedResolutionReplayTests(_ResolutionFixture, unittest.TestCase):
         self.assertFalse(gate["completion_gate"]["complete"])
 
 
+class ExpectedResolutionMaterializationTests(_ResolutionFixture, unittest.TestCase):
+    def bound_batch(self, count):
+        baseline, _ = sp.prepare_review_ledger(self.manifest, {})
+        db = sp.normalize_db({})
+        expected = copy.deepcopy(baseline)
+        for index, row in enumerate(baseline[:count]):
+            event = sp.bind_expected_resolution(row, {
+                "action": "解決expected證據", "expected_set": ["ㄎㄢ"],
+                "expected_evidence": f"independent dictionary proof {index}",
+                "context_evidence": f"independent occurrence context {index}",
+                "source": "isolated expected evidence", "resolution_reason": "", "note": "",
+            }, self.manifest)
+            reviewed = sp._apply_review_event(row, event, expected_manifest=self.manifest)
+            db["events"][row["review_id"]] = event
+            if reviewed["state"] == "DIFFERENCE_PENDING_CONFIRMATION":
+                event = captured_confirmation(reviewed, db)
+                db["events"][row["review_id"]] = event
+                reviewed = sp._apply_review_event(row, event, expected_manifest=self.manifest)
+            expected[index] = reviewed
+        return baseline, db, expected
+
+    def test_whole_manifest_hash_is_once_for_one_or_many_bound_events(self):
+        for count in (1, len(self.manifest["records"])):
+            baseline, db, expected = self.bound_batch(count)
+            original = copy.deepcopy((self.manifest, db))
+            for operation in (sp.prepare_review_ledger, sp.materialize_ledger):
+                with self.subTest(count=count, operation=operation.__name__), \
+                        patch.object(sp, "manifest_integrity_sha256", wraps=sp.manifest_integrity_sha256) as hash_manifest:
+                    result = operation(self.manifest, db)
+                    actual = result[1] if operation is sp.prepare_review_ledger else result
+                    self.assertEqual(actual, expected)
+                    self.assertEqual(hash_manifest.call_count, 1)
+                self.assertEqual(actual[0]["state"], "TEXTBOOK_ERROR_CONFIRMED")
+                self.assertEqual(actual[0]["expected_set"], ["ㄎㄢ"])
+                self.assertEqual(actual[0]["expected_evidence"], "independent dictionary proof 0")
+                self.assertEqual([row["actual"] for row in actual], [row["actual"] for row in baseline])
+                if operation is sp.prepare_review_ledger:
+                    self.assertEqual(result[0], baseline)
+                self.assertEqual((self.manifest, db), original)
+
+    def test_validation_and_replay_use_one_detached_nested_snapshot(self):
+        self.manifest["reusable_expected_rules"] = sp._canonical_rule_doc({})
+        sp.seal_manifest(self.manifest)
+        baseline, db, expected = self.bound_batch(2)
+        original = copy.deepcopy(self.manifest)
+        validate = sp.validate_manifest_integrity
+
+        def mutate_source_after_validation(snapshot):
+            validate(snapshot)
+            self.manifest["records"][0]["source_record"]["所在行"] = "changed source context"
+            self.manifest["records"][1]["expected_set"].append("ㄎㄢˊ")
+            self.manifest["expected_asset_fingerprint_components"]["expected_resolver_semantics_epoch"] = "future"
+            self.manifest["reusable_expected_rules"]["rules"].append({"invalid": "new rule"})
+
+        with patch.object(sp, "validate_manifest_integrity", side_effect=mutate_source_after_validation) as validator:
+            result = sp.prepare_review_ledger(self.manifest, db)
+        self.assertEqual(validator.call_count, 1)
+        self.assertEqual(result, (baseline, expected))
+        self.assertNotEqual(self.manifest, original)
+        with self.assertRaisesRegex(ValueError, "payload hash"):
+            sp.materialize_ledger(self.manifest, db)
+
+    def test_reloaded_changed_manifest_is_revalidated_and_stale_event_invalidated(self):
+        _, db, expected = self.bound_batch(2)
+        self.assertEqual(sp.materialize_ledger(self.manifest, db), expected)
+        changed = copy.deepcopy(self.manifest)
+        changed["records"][0]["source_record"]["所在行"] = "new sealed source context"
+        sp.json_save(self.output / "校對工作階段.json", sp.seal_manifest(changed))
+        reloaded = sp.json_load_strict(self.output / "校對工作階段.json")
+        with patch.object(sp, "manifest_integrity_sha256", wraps=sp.manifest_integrity_sha256) as hash_manifest:
+            baseline, actual = sp.prepare_review_ledger(reloaded, db)
+        self.assertEqual(hash_manifest.call_count, 1)
+        self.assertEqual(actual[0]["review_event_replay_status"], "INVALIDATED_EXPECTED_BINDING_DRIFT")
+        self.assertEqual(actual[0]["expected_evidence"], baseline[0]["expected_evidence"])
+        self.assertNotIn("gui_confirmation", actual[0])
+        self.assertEqual(actual[1:], expected[1:])
+
+    def test_later_event_integrity_source_and_gui_checks_are_not_skipped(self):
+        _, db, expected = self.bound_batch(2)
+        review_id = self.manifest["records"][1]["review_id"]
+        for mutation in ("binding", "source", "legacy"):
+            changed = copy.deepcopy(db)
+            event = changed["events"][review_id]
+            binding = event["expected_resolution_binding"]
+            if mutation == "binding":
+                binding["integrity_sha256"] = "0" * 64
+            elif mutation == "source":
+                event["expected_evidence"] = "tampered source payload"
+            else:
+                binding["legacy_evidence"] = {"adapter": "unknown"}
+                binding["integrity_sha256"] = sp._hash_review_payload({
+                    k: v for k, v in binding.items() if k != "integrity_sha256"})
+            with self.subTest(mutation=mutation), self.assertRaisesRegex(ol.InvalidTransitionError, review_id):
+                sp.materialize_ledger(self.manifest, changed)
+        changed = copy.deepcopy(db)
+        changed["events"][review_id]["gui_confirmation"]["actual_snapshot"]["actual"] = "ㄎㄢˊ"
+        actual = sp.materialize_ledger(self.manifest, changed)
+        self.assertEqual(actual[0], expected[0])
+        self.assertEqual(actual[1]["review_event_replay_status"], "INVALIDATED_CONFIRMATION_SNAPSHOT")
+        self.assertEqual(actual[1]["expected_evidence"], "independent dictionary proof 1")
+        self.assertNotIn("gui_confirmation", actual[1])
+
+    def test_standalone_validation_never_reuses_previous_manifest_trust(self):
+        baseline, db, expected = self.bound_batch(1)
+        event = next(iter(db["events"].values()))
+        self.assertEqual(sp.materialize_ledger(self.manifest, db), expected)
+        for operation in (
+            lambda: sp._validate_expected_resolution_binding(baseline[0], event, self.manifest),
+            lambda: sp._apply_review_event(baseline[0], event, expected_manifest=self.manifest),
+        ):
+            with patch.object(sp, "manifest_integrity_sha256", wraps=sp.manifest_integrity_sha256) as hash_manifest:
+                operation()
+                self.assertEqual(hash_manifest.call_count, 1)
+        self.manifest["records"][0]["source_record"]["所在行"] = "unsealed edit"
+        for operation in (
+            lambda: sp._validate_expected_resolution_binding(baseline[0], event, self.manifest),
+            lambda: sp._apply_review_event(baseline[0], event, expected_manifest=self.manifest),
+            lambda: sp.materialize_ledger(self.manifest, db),
+        ):
+            with self.assertRaisesRegex(ValueError, "payload hash"):
+                operation()
+
+
 class ExpectedResolutionGuiTests(_ResolutionFixture, unittest.TestCase):
     def test_real_tk_invalid_unbound_confirmation_reports_failure_and_keeps_current_row(self):
         db, source, reviewed = self.legacy_resolution(with_fingerprint=False)

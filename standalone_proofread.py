@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 from datetime import datetime
 from functools import wraps
 from pathlib import Path
@@ -2688,7 +2689,35 @@ def bind_expected_resolution(entry, event, manifest, *, legacy_evidence=None):
     return out
 
 
+@dataclass(frozen=True)
+class _ExpectedResolutionContext:
+    session_id: str | None
+    expected_asset_fingerprint: str | None
+    expected_resolver_semantics_epoch: str | None
+
+
+def _validated_expected_manifest(manifest):
+    """Detach replay inputs before validating; retain only immutable context."""
+    if manifest is None:
+        raise InvalidTransitionError("expected resolution binding 缺少目前 sealed manifest context")
+    snapshot = copy.deepcopy(dict(manifest))
+    validate_manifest_integrity(snapshot)
+    values = (
+        snapshot.get("session_id"), snapshot.get("expected_asset_fingerprint"),
+        (snapshot.get("expected_asset_fingerprint_components") or {}).get("expected_resolver_semantics_epoch"),
+    )
+    context = _ExpectedResolutionContext(*(value if isinstance(value, str) else None for value in values))
+    return snapshot, context
+
+
 def _validate_expected_resolution_binding(entry, event, manifest):
+    # Standalone callers always validate fresh data, including mutable manifests
+    # that have already been used by a previous materialization.
+    _, context = _validated_expected_manifest(manifest)
+    return _validate_expected_resolution_binding_in_context(entry, event, context)
+
+
+def _validate_expected_resolution_binding_in_context(entry, event, context):
     """Return the saved source only after format/integrity/applicability checks.
 
     None means a known binding has become stale; malformed or missing proof is
@@ -2745,13 +2774,11 @@ def _validate_expected_resolution_binding(entry, event, manifest):
         raise InvalidTransitionError("expected resolution binding 不適用此 action")
     if candidate != resolution:
         raise InvalidTransitionError("expected resolution binding 與事件來源 payload 不一致")
-    if manifest is None:
+    if context is None:
         raise InvalidTransitionError("expected resolution binding 缺少目前 sealed manifest context")
-    validate_manifest_integrity(manifest)
-    current_epoch = (manifest.get("expected_asset_fingerprint_components") or {}).get("expected_resolver_semantics_epoch")
-    if (binding["session_id"] != manifest.get("session_id")
-            or binding["expected_asset_fingerprint"] != manifest.get("expected_asset_fingerprint")
-            or binding["expected_resolver_semantics_epoch"] != current_epoch
+    if (binding["session_id"] != context.session_id
+            or binding["expected_asset_fingerprint"] != context.expected_asset_fingerprint
+            or binding["expected_resolver_semantics_epoch"] != context.expected_resolver_semantics_epoch
             or target != manual_expected_target(entry)
             or snapshot != confirmation_expected_snapshot(entry)):
         return None
@@ -2759,12 +2786,19 @@ def _validate_expected_resolution_binding(entry, event, manifest):
 
 
 def _apply_review_event(entry: dict[str, Any], event: Mapping[str, Any], *, expected_manifest=None) -> dict[str, Any]:
+    context = None
+    if "expected_resolution_binding" in event and str(event.get("action") or "").strip() != "保留待人工":
+        _, context = _validated_expected_manifest(expected_manifest)
+    return _apply_review_event_in_context(entry, event, context)
+
+
+def _apply_review_event_in_context(entry, event, context):
     action = str(event.get("action") or "").strip()
     if action == "保留待人工":
         return dict(entry)
     saved_resolution = None
     if "expected_resolution_binding" in event:
-        saved_resolution = _validate_expected_resolution_binding(entry, event, expected_manifest)
+        saved_resolution = _validate_expected_resolution_binding_in_context(entry, event, context)
         if saved_resolution is None:
             out = dict(entry)
             out["review_event_replay_status"] = "INVALIDATED_EXPECTED_BINDING_DRIFT"
@@ -2972,6 +3006,13 @@ def prepare_review_ledger(manifest: Mapping[str, Any], db: Mapping[str, Any]):
     occurrence event; replaying onto an already reviewed row changes semantics.
     """
     db = normalize_db(dict(db))
+    context = None
+    if any(isinstance(event, dict) and "expected_resolution_binding" in event
+           and str(event.get("action") or "").strip() != "保留待人工"
+           for event in db.get("events", {}).values()):
+        # One sealed snapshot supplies both the rule-applied rows and immutable
+        # binding context for this operation. Never cache trust on caller data.
+        manifest, context = _validated_expected_manifest(manifest)
     ledger = [dict(entry) for entry in manifest.get("records", [])]
     rules_doc = _canonical_rule_doc(manifest.get("reusable_expected_rules") or {})
     expected_rules_hash = str(manifest.get("reusable_expected_rules_sha256") or reusable_rules_sha256(rules_doc))
@@ -2991,7 +3032,7 @@ def prepare_review_ledger(manifest: Mapping[str, Any], db: Mapping[str, Any]):
             raise ValueError(f"review event 格式錯誤：{review_id}")
         index = by_review_id[review_id]
         try:
-            ledger[index] = _apply_review_event(ledger[index], event, expected_manifest=manifest)
+            ledger[index] = _apply_review_event_in_context(ledger[index], event, context)
         except InvalidTransitionError as exc:
             raise InvalidTransitionError(
                 f"review event replay 失敗：review_id={review_id}；"
