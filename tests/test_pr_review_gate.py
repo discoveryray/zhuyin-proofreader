@@ -818,7 +818,15 @@ class ReviewGateTests(unittest.TestCase):
             self.assertIn(f"|| '[\"{version}\"]'", workflow)
         self.assertIn("&& '3.13.0'", workflow)
         self.assertIn("github.head_ref == 'codex/simplify-validation'", workflow)
-        self.assertEqual(workflow.count("github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c'"), 2)
+        legacy_lines = [line for line in workflow.splitlines()
+                        if "github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c'" in line]
+        self.assertGreaterEqual(len(legacy_lines), 2)
+        for line in legacy_lines:
+            self.assertIn("github.event_name == 'pull_request'", line)
+            self.assertIn("github.head_ref == 'codex/simplify-validation'", line)
+        self.assertIn("- name: Verify required validation results", workflow)
+        self.assertIn("needs.grouped.result", workflow)
+        self.assertIn("needs.short.result", workflow)
 
 
 if __name__ == "__main__":

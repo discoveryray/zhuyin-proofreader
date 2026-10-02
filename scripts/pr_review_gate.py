@@ -11,9 +11,11 @@ import json
 from pathlib import Path
 import re
 import sys
+import zipfile
 
 
 SCHEMA = "zhuyin-pr-review-gate/3"
+STAGED_SCHEMA = "zhuyin-pr-review-gate/4"
 REPOSITORY = "discoveryray/zhuyin-proofreader"
 WORKFLOW = ".github/workflows/ci.yml"
 PYTHONS = ("3.13",)
@@ -106,9 +108,20 @@ def _ci_schema(ci, where):
 
 def validate_state(state):
     """Validate the closed input schema. This does not grant permission."""
-    _fields(state, "schema task authorization current implementers corrections reviews "
-            "unavailable_review_rounds pr pr_ci merge push_ci handoffs", "state")
-    _require(state["schema"] == SCHEMA, "unsupported schema")
+    staged = type(state) is dict and state.get("schema") == STAGED_SCHEMA
+    fields = "schema task authorization current implementers corrections reviews unavailable_review_rounds pr pr_ci merge push_ci handoffs"
+    _fields(state, fields + (" execution coverage short_validation" if staged else ""), "state")
+    _require(state["schema"] in (SCHEMA, STAGED_SCHEMA), "unsupported schema")
+    if staged:
+        _fields(state["execution"], "mode validation_authorization_ref", "execution")
+        _require(state["execution"]["mode"] in ("development", "validation"), "unknown execution mode")
+        if state["execution"]["mode"] == "validation":
+            _text(state["execution"]["validation_authorization_ref"], "explicit start-validation authorization")
+        else:
+            _require(state["execution"]["validation_authorization_ref"] is None, "development cannot claim validation authorization")
+        for field in ("coverage", "short_validation"):
+            if state[field] is not None:
+                _text(state[field], field)
     task = state["task"]
     _fields(task, "id repository baseline base_branch head_branch", "task")
     for field in ("id", "repository", "base_branch", "head_branch"):
@@ -155,7 +168,7 @@ def validate_state(state):
     for review in state["reviews"]:
         _fields(review, "round reviewer baseline base head scope verdict independent "
                 "full_diff_reviewed findings report_ref ci blocker_kind "
-                "supersedes_report_ref resolution_evidence_ref review_mode", "review")
+                "supersedes_report_ref resolution_evidence_ref review_mode" + (" coverage_sha256 finalizes_report_ref" if staged else ""), "review")
         _require(review["review_mode"] in ("full_diff", "evidence_gap"), "unknown review mode")
         _require(review["full_diff_reviewed"] == (review["review_mode"] == "full_diff"),
                  "review mode must accurately describe the work performed")
@@ -167,14 +180,18 @@ def validate_state(state):
         for field in ("independent", "full_diff_reviewed"):
             _boolean(review[field], f"review.{field}")
         _texts(review["findings"], "review.findings")
-        _require(review["verdict"] in ("PASS", "BLOCKED"), "unknown review verdict")
-        if review["verdict"] == "PASS":
+        _require(review["verdict"] in (("PASS", "BLOCKED", "CODE_REVIEWED") if staged else ("PASS", "BLOCKED")), "unknown review verdict")
+        if staged:
+            digest = review["coverage_sha256"]
+            _require(digest is None or (type(digest) is str and re.fullmatch(r"[0-9a-f]{64}", digest)), "invalid review coverage digest")
+            _require((review["verdict"] == "PASS") == (digest is not None), "only formal PASS binds verified functional coverage")
+        if review["verdict"] in ("PASS", "CODE_REVIEWED"):
             _require(review["blocker_kind"] is None and not review["findings"],
                      "PASS cannot contain a blocker")
         else:
             _require(review["blocker_kind"] in ("code", "evidence", "capability", "contract")
                      and bool(review["findings"]), "BLOCKED needs an explicit kind and findings")
-        for field in ("supersedes_report_ref", "resolution_evidence_ref"):
+        for field in (("supersedes_report_ref", "resolution_evidence_ref", "finalizes_report_ref") if staged else ("supersedes_report_ref", "resolution_evidence_ref")):
             if review[field] is not None:
                 _text(review[field], f"review.{field}")
         if review["round"] == 1:
@@ -185,7 +202,7 @@ def validate_state(state):
             _integer(review["ci"]["attempt"], "review.ci.attempt")
             _sha(review["ci"]["tested_sha"], "review.ci.tested_sha")
         else:
-            _require(review["verdict"] == "BLOCKED" and review["blocker_kind"] != "code",
+            _require((staged and review["verdict"] == "CODE_REVIEWED") or (review["verdict"] == "BLOCKED" and review["blocker_kind"] != "code"),
                      "round 2 without CI metadata must remain a non-code BLOCKED")
     _validate_review_history(state)
     pr = state["pr"]
@@ -224,7 +241,7 @@ def validate_state(state):
 def _decision(state, action, reason, **details):
     needed = {
         "REQUEST_REVIEW_1": {"delegate"}, "REQUEST_REVIEW_2": {"delegate"},
-        "ENSURE_PR": {"pr"}, "MERGE_PROPOSAL": {"merge"},
+        "ENSURE_PR": {"pr"}, "ENSURE_DRAFT_PR": {"pr"}, "MERGE_PROPOSAL": {"merge"},
         "CORRECT_IMPLEMENTATION": {"implement", "test", "commit", "push", "delegate"},
     }.get(action, set())
     missing = needed - set(state["authorization"]["operations"])
@@ -265,6 +282,9 @@ def _validate_review_history(state):
     reports, superseded = {}, set()
     for review in state["reviews"]:
         ref, prior = review["report_ref"], review["supersedes_report_ref"]
+        finalizes = review.get("finalizes_report_ref")
+        _require(not (prior and finalizes), "finalization and supersession are distinct relations")
+        prior = prior or finalizes
         _require(ref not in reports, "report_ref must uniquely identify an original report")
         if prior is None:
             _require(review["resolution_evidence_ref"] is None, "resolution needs a supersession target")
@@ -273,8 +293,11 @@ def _validate_review_history(state):
             _require(prior in reports and prior not in superseded,
                      "supersession target must be earlier, retained, and not already superseded")
             old = reports[prior]
-            _require(old["verdict"] == "BLOCKED" and old["blocker_kind"] != "code",
-                     "only non-code BLOCKED reports may be supplemented at unchanged HEAD")
+            if finalizes:
+                _require(old["verdict"] == "CODE_REVIEWED", "finalization must target a code-review intermediate report")
+            else:
+                _require(old["verdict"] == "BLOCKED" and old["blocker_kind"] != "code",
+                         "only non-code BLOCKED reports may be supplemented at unchanged HEAD")
             _require(_review_scope(review) == _review_scope(old), "supersession must retain the exact code scope")
             _text(review["resolution_evidence_ref"], "supersession resolution evidence")
             if review["review_mode"] == "evidence_gap":
@@ -289,19 +312,29 @@ def _validate_review_history(state):
     for ref, review in reports.items():
         if ref not in superseded:
             key = (*_review_scope(review), json.dumps(review["ci"], sort_keys=True))
+            if state["schema"] == STAGED_SCHEMA:
+                key += (review["coverage_sha256"],)
             _require(key not in seen, "ambiguous unlinked review for the same scope")
             seen.add(key)
 
 
 def _review(state, number, base, head):
-    superseded = {r["supersedes_report_ref"] for r in state["reviews"]}
+    superseded = {r["supersedes_report_ref"] or r.get("finalizes_report_ref") for r in state["reviews"]}
     matches = [r for r in state["reviews"] if r["report_ref"] not in superseded and r["round"] == number and
                (r["baseline"], r["base"], r["head"]) == (state["task"]["baseline"], base, head)]
     # Unresolved blockers survive CI reruns and unrelated PASS records.
     blockers = [r for r in matches if r["verdict"] == "BLOCKED"]
     if blockers:
         return min(blockers, key=lambda r: r["blocker_kind"] != "code")
-    if number == 2 and state["pr_ci"] is not None:
+    if state["schema"] == STAGED_SCHEMA and state["coverage"] is not None:
+        try:
+            digest = hashlib.sha256(Path(state["coverage"]).read_bytes()).hexdigest()
+        except OSError:
+            digest = None
+        applicable = [r for r in matches if r["coverage_sha256"] == digest]
+        if applicable:
+            matches = applicable
+    if number == 2 and state["pr_ci"] is not None and state["schema"] == SCHEMA:
         ci = state["pr_ci"]
         expected = {field: ci[field] for field in ("run_id", "attempt", "tested_sha")}
         matches = [r for r in matches if r["ci"] == expected]
@@ -370,6 +403,8 @@ def next_action(state):
         validate_state(state)
     except (EvidenceError, TypeError, KeyError) as exc:
         return {"action": "STOP", "reason": f"invalid evidence: {exc}"}
+    if state["schema"] == STAGED_SCHEMA:
+        return _next_action_staged(state)
     if not state["authorization"]["active"]:
         return _decision(state, "STOP", "task authorization is absent or revoked")
     if not state["current"]["working_tree_clean"]:
@@ -450,6 +485,140 @@ def next_action(state):
     return _decision(state, "MERGE_PROPOSAL", "recheck remote base/head and protection immediately before write",
                      pr_number=pr["number"], merge_method="merge", expected_head_sha=head,
                      expected_base_sha=base)
+
+
+def _staged_ci_problem(ci, event, branch, head, parents):
+    """v4 checks the required summary plus file-backed group/short evidence."""
+    if ci["workflow"] != WORKFLOW or ci["event"] != event or ci["branch"] != branch:
+        return "wrong CI workflow, event, or branch"
+    if ci["head_sha"] != head or ci["parents"] != parents or ci["tested_sha"] in parents:
+        return "CI checkout or ordered parents differ from the reviewed scope"
+    if event == "push" and ci["tested_sha"] != head:
+        return "push CI must check out the actual merge SHA"
+    if (ci["run_id"], ci["attempt"]) != (ci["latest_run_id"], ci["latest_attempt"]):
+        return "a newer applicable CI attempt is unresolved"
+    if ci["status"] != "completed" or ci["conclusion"] != "success":
+        return "required CI is not successful"
+    jobs = {job["name"]: job for job in ci["jobs"]}
+    summary = jobs.get("Python 3.13")
+    if summary is None:
+        return "missing Python 3.13 required check"
+    required_name = "Grouped validation" if event == "pull_request" else "Merge short validation"
+    if required_name not in jobs:
+        return "missing applicable validation job"
+    for job in jobs.values():
+        if job["name"] in {"Grouped validation", "Merge short validation"} - {required_name} and job["conclusion"] == "skipped":
+            continue
+        if job["conclusion"] != "success":
+            return "a required CI job is unsuccessful"
+        if (job["run_id"], job["attempt"], job["tested_sha"]) != (ci["run_id"], ci["attempt"], ci["tested_sha"]):
+            return "job metadata belongs to a different run/attempt/checkout"
+    if not summary["runner"].startswith("windows-") or summary["python_version"] != "3.13.0":
+        return "summary lacks the supported Windows Python environment"
+    step = "Verify required validation results"
+    if summary["steps"].get(step) != "success":
+        return "required evidence verifier step is missing or unsuccessful"
+    return None
+
+
+def _next_action_staged(state):
+    if not state["authorization"]["active"] or not state["current"]["working_tree_clean"]:
+        return _decision(state, "STOP", "active authorization and clean working tree required")
+    pr, merge = state["pr"], state["merge"]
+    merged = pr is not None and pr["state"] == "merged"
+    if merge is not None and not merged:
+        return _decision(state, "STOP", "merge contradicts PR state")
+    base, head = (pr["base_sha"], pr["head_sha"]) if merged else (state["current"]["base"], state["current"]["head"])
+    if pr is not None:
+        if (pr["base_branch"], pr["head_branch"]) != (state["task"]["base_branch"], state["task"]["head_branch"]):
+            return _decision(state, "STOP", "PR branch pair differs from task")
+        if pr["state"] == "closed":
+            return _decision(state, "STOP", "closed unmerged PR must not be duplicated")
+        if not merged and (pr["base_sha"], pr["head_sha"]) != (base, head):
+            return _decision(state, "REFRESH_EVIDENCE", "PR scope changed")
+        if not pr["findings_checked"]:
+            return _decision(state, "REFRESH_EVIDENCE", "latest findings have not been checked")
+        if pr["new_blockers"]:
+            return _post_merge_blocked(state, "confirmed PR finding") if merged else _correct(state, "confirmed PR finding")
+    reviews = [_review(state, number, base, head) for number in (1, 2)]
+    # Confirmed blockers are handled before any wait or test requirement.
+    for number, review in enumerate(reviews, 1):
+        if review is None:
+            continue
+        problem = _review_problem(state, review, number)
+        if problem:
+            return _decision(state, "STOP", problem)
+        if review["verdict"] == "BLOCKED":
+            kind = review["blocker_kind"]
+            if kind == "code":
+                return _post_merge_blocked(state, "confirmed review finding") if merged else _correct(state, "confirmed review finding; both full scopes need review at new HEAD")
+            return _decision(state, "REFRESH_EVIDENCE" if kind == "evidence" else "STOP",
+                             f"round {number} BLOCKED ({kind}); retain original report",
+                             blocked_report_ref=review["report_ref"])
+    if reviews[0] is None:
+        return _decision(state, "STOP" if merged or 1 in state["unavailable_review_rounds"] else "REQUEST_REVIEW_1", "full cumulative code review required")
+    if state["execution"]["mode"] == "development":
+        return _decision(state, "WAIT_VALIDATION_AUTHORIZATION", "code review is intermediate; wait for explicit start-validation instruction")
+    if pr is None:
+        return _decision(state, "ENSURE_DRAFT_PR", "code reviewed without a confirmed blocker; find unique PR before draft creation",
+                         base_branch="develop", head_branch=state["task"]["head_branch"])
+    if reviews[1] is None:
+        return _decision(state, "STOP" if merged or 2 in state["unavailable_review_rounds"] else "REQUEST_REVIEW_2", "full PR code review may overlap CI")
+    ci = state["pr_ci"]
+    if ci is None or ci["status"] in ("queued", "in_progress"):
+        return _decision(state, "WAIT_PR_CI", "formal functional coverage is pending")
+    problem = _staged_ci_problem(ci, "pull_request", state["task"]["head_branch"], head, [base, head])
+    if problem:
+        return _decision(state, "STOP" if merged else "REFRESH_EVIDENCE", problem)
+    try:
+        try:
+            from scripts.validation_evidence import verify_coverage, verify_reuse, sha256_file
+        except ModuleNotFoundError:
+            from validation_evidence import verify_coverage, verify_reuse, sha256_file
+        if state["coverage"] is None:
+            raise ValueError("missing PR coverage bundle")
+        coverage = verify_coverage(Path(state["coverage"]))
+        if coverage["candidate"] != {"head": ci["tested_sha"], "tree": ci["tree"], "parents": [base, head]}:
+            raise ValueError("coverage candidate differs from current PR integration")
+        coverage_ci = coverage["ci"]
+        if any(coverage_ci[k] != ci[k] for k in ("run_id", "attempt")) or coverage_ci["event"] != "pull_request":
+            raise ValueError("coverage is not bound to this PR run/attempt")
+        digest = sha256_file(Path(state["coverage"]))
+    except (OSError, ValueError, TypeError, KeyError, zipfile.BadZipFile) as exc:
+        return _decision(state, "STOP" if merged else "REFRESH_EVIDENCE", f"functional evidence invalid: {exc}")
+    for number, review in enumerate(reviews, 1):
+        if review["verdict"] != "PASS" or review["coverage_sha256"] != digest:
+            return _decision(state, "REFRESH_EVIDENCE", f"round {number} must append formal evidence supplement",
+                             blocked_report_ref=review["report_ref"])
+    if reviews[1]["ci"] != {key: ci[key] for key in ("run_id", "attempt", "tested_sha")}:
+        return _decision(state, "REFRESH_EVIDENCE", "round two formal attestation must bind latest PR CI")
+    if merged:
+        if merge is None:
+            return _decision(state, "VERIFY_MERGE", "retrieve actual merge; never repeat merge")
+        if merge["parents"] != [base, head] or merge["tree"] != ci["tree"]:
+            return _post_merge_blocked(state, "actual merge ordered parents/tree differ", code=False)
+        if merge["develop_head"] != state["current"]["base"] or not merge["develop_contains_merge"]:
+            return _post_merge_blocked(state, "develop ancestry has not been established", code=False)
+        push = state["push_ci"]
+        if push is None or push["status"] in ("queued", "in_progress"):
+            return _decision(state, "WAIT_PUSH_CI", "actual merge requires its own short push validation")
+        problem = _staged_ci_problem(push, "push", "develop", merge["sha"], [base, head])
+        if problem or push["tree"] != merge["tree"]:
+            return _post_merge_blocked(state, problem or "push tree mismatch", code=False)
+        try:
+            short = verify_reuse(Path(state["coverage"]), Path(state["short_validation"]))
+            if short["candidate"] != {"head": merge["sha"], "parents": [base, head], "tree": merge["tree"]}:
+                raise ValueError("short evidence is not for the actual merge")
+            if any(short["ci"][key] != push[key] for key in ("run_id", "attempt")):
+                raise ValueError("short evidence belongs to another push attempt")
+        except (OSError, ValueError, TypeError, KeyError, zipfile.BadZipFile) as exc:
+            return _post_merge_blocked(state, f"short validation cannot reuse PR coverage: {exc}", code=False)
+        return _decision(state, "COMPLETE", "formal independent reviews, PR functional coverage and actual merge short checks verified",
+                         merge_sha=merge["sha"], develop_head=merge["develop_head"])
+    if not pr["mergeable"] or not pr["protection_satisfied"]:
+        return _decision(state, "STOP", "mergeability or protection requirements are unsatisfied")
+    return _decision(state, "MERGE_PROPOSAL", "recheck remote scope/findings/protection immediately before merge",
+                     pr_number=pr["number"], merge_method="merge", expected_head_sha=head, expected_base_sha=base)
 
 
 def _unique_object(pairs):
