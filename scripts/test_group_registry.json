@@ -1,0 +1,2080 @@
+{
+  "schema": "zhuyin-test-group-registry/1",
+  "source_scope": "repository",
+  "source_review": {
+    "basis": "Correction 3: retain correction1 independently reviewed GUI classification basis, explicitly source-review original cases and nine added non-window classifier regressions. Products and existing test expectations are unchanged. Finite registration is authoritative; positive bounded Tk guard rejects proven core conflicts.",
+    "prior_classification_ref": "correction1-fa6d3b724cfb46f982bddbd7b9131141/inventory.json",
+    "prior_classification_head": "16cac994bf44fb4f9a278ce851d6f0848416987e",
+    "prior_classification_tree": "8495c003e66f39561cda42016e09a58b7ce48b8a",
+    "prior_classification_sha256": "267696312155583d8fd606cfafbc5dc0c8e09b6aad94250080b2e3149fcbdc4b",
+    "normalization": "SHA256 of file bytes with CRLF replaced by LF; physical bytes are retained separately in execution evidence",
+    "normalized_source_sha256": {
+      "actual_review.py": "d882b4ae42bb02c69cdda0016a8d0eaff94227584b8e49c022e6e99602b80dae",
+      "build_handbook_rules.py": "62056a0a617f399423800ef04e9dfb2c6a88d8a026f2184c071f78942debb9c0",
+      "cff_unseen_family_bootstrap.py": "69d680451647d7cb61685d860af5e81339e40f313186a78fabdfb50a0258ee66",
+      "cff_zero_map_batch.py": "a78e5256885b3cab8f5d7ea157bd8a3c7f375b266c77b926409b2fb2ead5fa22",
+      "cff_zhuyin_decoder.py": "81ebcc999645185ca9ab0eabc6e64143f28f116e62cbc7e9cff22915f062d4dc",
+      "check_pronunciation_candidates.py": "dca94d7a0662780c1be813ef13ef6733f236c2e269c4d7a69b63bd865c170713",
+      "concise_expected_resolver.py": "20dbe9e4406f3ad90a93fcfd6691ebb9f684e527ae056ccab029c4559db0bdcb",
+      "cross_version_compat.py": "cc50fc913cac0626c02e8977652dc100213372fb5dfbbc8308da30a47c7fbeae",
+      "delivery_recovery_inspector.py": "7bdda7e4dbc06b19de820723c1f9c1a72889cf9956abd2c5263098d53ad9fe65",
+      "delivery_recovery_service.py": "8beeafd3eeacaa59f52aae2627b979a146cdf4c7934ef64ba50624a04260b346",
+      "exact_glyph_identity.py": "b739f226caa3725950e329f216d551f4eef87d176cf454dddcf7c79d40099903",
+      "export_pdf_text_diagnostics.py": "fdc4a2fe6b731860712ef2ca54380215a3d7e42ee95e2c79fc71675d62e219c6",
+      "export_zhuyin_readings.py": "3ef05e3556afcea1ce2e0f440b13baefa747a7b7a51b9657574828ca3023b232",
+      "global_exact_glyph_library.py": "3f713c7662a4613c0b2bfd3dc6205cfbd37bfbc7f067f5d34008b78c74a5ea56",
+      "global_glyph_promotion.py": "e757d8b0e8aa75d356e36fb96aa99594dd4e9bb70d8905fc8a3320db86c5efd1",
+      "global_library_approval.py": "d35f93a23d8c712f7e75512e7517ab84fed4294fcb04e8a6296b7b24775ff58f",
+      "global_library_inspector.py": "70ef48b87f41f6835f96eb3f5074d39cc353aee9ddc55eafb99e1e3a18ec6ddd",
+      "legacy_global_migration.py": "124767d6cb6b016bf4b1dcaaf0827b272953418c1a292a974b57363e4404cc56",
+      "legacy_migration_inspection.py": "6186746c8fdd82978be8b0ec4de65ae3fa056870e57bb4b3cf244e25b6c04552",
+      "legacy_migration_inspector.py": "989192128943846d70abbc03f5fde16c9743762d1500e6b81520eb7fc883b86b",
+      "migrate_legacy_global_candidates.py": "fc72f005a4a354a6f0b3d4f79b99051802ada9592752a5ac24ee3431ca974527",
+      "occurrence_ledger.py": "c37cce67ac7876c991b4a3edd06dde99976b14e8cd1788f22470609c1f5eb58e",
+      "pdf_portability.py": "b9143b309e67ce8aa411c5f559d70cbfd701060e7365bd3df51b2c765c54614a",
+      "pronunciation_rule_engine.py": "27fadd760c509546f59c042d1fb48fb4e076c9aba1c4d1834365f9d09baf4fc4",
+      "review_display.py": "577b6b5912134921c9f7ab11c93e1ae8ee81fc528a06170ca5c51720aa674b9b",
+      "review_gui.py": "1b43f61f837d634cfe823003c93603f5486023d19f99c15dd1176f3925bb32e9",
+      "review_save_service.py": "177c9639f396a5516d37804ec2ba2bcdb4e824e6360f5366c25fd803843eca04",
+      "revision_diff.py": "5062e986de7728ca523d5825f00a467206525cf8150fda9630101615c8776b3d",
+      "runtime_regression_gate.py": "a9c1064eb573690a9df61566c3eaebd5b352cb6b65be0b9e38a33e6809443a66",
+      "runtime_source_validation.py": "560e75a651b67cbef034d780d20cc005aaa6e4f65674eb8a79e59cabd54b5704",
+      "scripts/benchmark_review_confirm.py": "c8e2b5e92c50f3e3a890ff9d1760a054e2e6992b30340795202ed5d7ccb92b0d",
+      "scripts/gui_preflight.py": "1a1ea97b83e1ea405090cb039a46c978dc4eb596ff1b5e0420eb7e0c39738fce",
+      "scripts/pr29_review_gate.py": "63ddb7ce48dbc3a8a9ddd121742efab8831b1976041c2e85594996879b79b7cd",
+      "scripts/pr_review_gate.py": "93152dab5a9d99d63eea9380a93a56340077d42a77002cb501694ee69e143d63",
+      "scripts/test_entrypoint_audit.py": "38d62ac9e3c0f32266cb68cc7ca60a3ba9c6dea45693f951901ce00ba27d0054",
+      "scripts/validation_evidence.py": "ac6d497338a9e99fdac68e0cf187c195f9e78d928cc0e13210e4a98c7b56a3e0",
+      "scripts/validation_runner.py": "30452368f477dfafb093b0c8d93f3b340ce57a3b80a785ae75f4caa53bab75e5",
+      "standalone_gui.py": "99dd840ca050478763e75b0444ca241c9a109a2e0ab2fc7af907e34c48c9bc63",
+      "standalone_proofread.py": "9a0eff7ffaee0aa6c7182925a3feabe19b584cfa9c0e960b2a9ea2a4b1c55993",
+      "tests/review_save_test_support.py": "7d39422c637eda60506103c8c087a2fcb872be31c779472a7e1378f3961ea357",
+      "tests/test_actual_post_commit_recovery_v580.py": "5b8d129c5148ee6e0ad0b328b4709a5f089c7c4cef7863a289d07a523ba1677f",
+      "tests/test_actual_review_v540.py": "cc1d60e408a9a5e63311365f53691abf5c5d2e2fa15b21f0e067e4bbed164498",
+      "tests/test_architecture.py": "41132266b15d802170d905052f275a99d9127e9b52f94577f6708bdf7fdda65f",
+      "tests/test_ci_validation_workflow.py": "42be8f13a81c4660166fd9d910b6d6e305fc0a66006d2ab6339bf68c6f435838",
+      "tests/test_company_semantic_rules_v522.py": "65666976d0478a5fac2d382d1a0d60900ea0e86a577e6312aa72d5b82148117f",
+      "tests/test_completion_repair_v562.py": "f36c9d645320ed686a15100b500880a40fe6b77801ab617082aece21ad6b2e83",
+      "tests/test_cross_version_compat_v560.py": "a2fb3fa2dd1e0c819f36fb63856885222d8a7f44c5d4a2c9f6e607ee24eaf5f1",
+      "tests/test_delivery_recovery_inspector_v580.py": "f8f6cd29ff9939e7be2b11637031b01378029390e8d813c0e2e292c6111202aa",
+      "tests/test_dual_evidence_architecture_v550.py": "a82b5dc8a156e39a1527e5512353183eee93d16dbbd590eebb5d9f55a4e86c87",
+      "tests/test_exact_glyph_identity_v580.py": "f9ee7500e9fe8f673065c3cb1b742aa6835e4715874aedea6a7f15e6ada8437f",
+      "tests/test_expected_resolution_binding.py": "b86c028f91ca706a6313e6a340351ad7394f8858afc0c749cb2bc21ebe9df57b",
+      "tests/test_fingerprint_compat_contract.py": "94cba0e1602e22618a344460d48e6092da57cfbd7cabe0f6fc2d30e95e70fa63",
+      "tests/test_global_exact_glyph_read_reuse_v580.py": "428d8414e5c0f35df538ea80f56e7e91d16fbeb64ca9af7862d6f4f0bd4b647a",
+      "tests/test_global_exact_glyph_repository_v580.py": "a198389de6f4901a77ba85f02a18772c1ae9a9395c76b42558ca7b383eac6d62",
+      "tests/test_global_legacy_migration_review_v580.py": "090adc235072b89aebec57483bc31c1c2f986a78b661e30a7e74e8942f8b3d17",
+      "tests/test_global_legacy_migration_v580.py": "a174d9fcd25cce198070145b4e4ea1bb130fe0146786ce8dc0f085191ec791e0",
+      "tests/test_global_library_approval_v580.py": "a213d90c2d87f2773dbf20b959d9a8a6b044ae84fe9e2bc6cba2bb489ea4d17e",
+      "tests/test_global_library_inspector_v580.py": "eb53d949070f5ed7e1303f73b71171f28e35cb7722e3c9c16418370f06dc77ee",
+      "tests/test_global_promotion_v580.py": "2934a7c9fca8cd3f8b279270f4b496f27346b18d99b6f820066e193c464548a0",
+      "tests/test_glyph_truth_conflict_v551.py": "034c6443945114142a6c8225beb9400522c20cfc5ead77aa4c055cb8331e0155",
+      "tests/test_gpt_import_autodetect_v541.py": "febfaf0cd51a10a2f50913da8c33bd6d91eacd9d0ff3a82c2b5bf7ac59af2f3e",
+      "tests/test_gpt_safe_rebase_v541.py": "d371ef4223d23a800a8540789444b539ef9265d79b5120ad2ba57de73d4c178a",
+      "tests/test_gpt_single_bundle_v541.py": "ac61a03250bef31ea45cc10540b2d2b86020b0ec1e788d501872261aacf4ef86",
+      "tests/test_historical_regression_locator_v521.py": "ff2b78373ded6d3ac3d7ef4ec0b5ff231f61e02092a65248053db0962830a67d",
+      "tests/test_hotfix_tone_and_followup_v531.py": "59eefb39e25f39b20a05b8372c775eb1fa63c6300f591df6d48f2ce3e848b2c6",
+      "tests/test_import_transaction.py": "f6faf8a832db551e290d15736e038723f715edf4db70ed6685d850533138dfa2",
+      "tests/test_incremental_actual_v541.py": "2ce06f43e51417722422268aafebdf3841c661d80be3234c3a14db3b7da85d88",
+      "tests/test_legacy_migration_inspector_v580.py": "f1619caa042d9b9b00a9f608de59a62bd34384971371bb60b6b210b2d8eab6f8",
+      "tests/test_mandatory_resolver_integration.py": "e40ab925e2a12bf05b6901cde09972b5aa4c06f2547b414f4e0c9678649d5ea7",
+      "tests/test_manual_actual_batch_apply_v570.py": "d3a9ed5a5e5c08adeef7bb721ba2b38f481c06239fe4a6d4c4ed41ddf30d859f",
+      "tests/test_manual_actual_gui_batch_v570.py": "1373c00997ca98db7562a39b1b0370b818bc9302c1e2c3a9ef7bc915ade416da",
+      "tests/test_manual_actual_staging_v570.py": "14f3ccc744c4e1b5dfd327b07ec6165781414a5e1fac921a5b95b0542e2b4155",
+      "tests/test_manual_review_usability_v580.py": "e167e72f15dad5319a82ad19ecf855b512b216f9c728d45ae6dd2dab9f6b7bd2",
+      "tests/test_pdf_portability.py": "ddbe3fb655355233b5312f7316e8a060a252640b2e6eda9e60588b3766d43939",
+      "tests/test_pdf_portability_actual_receipt.py": "d1ea6b1de211005a604e433d27b55aabc50761e72cfc9f7dcfd62308322499db",
+      "tests/test_pdf_portability_actual_schema.py": "dd135a31b581d4de770f6c6ec846894fb6d287b59efde51528660d091efadaca",
+      "tests/test_pdf_portability_binding.py": "40958c75e10bf4eff96346a50d35a573a2b45bf15af8b094005aa4c3fa3381cc",
+      "tests/test_pdf_portability_expected_schema.py": "ef2ca4b3ff00032f8f5ca3ac5781fcefa95a9753353b7121510e185302367b47",
+      "tests/test_pdf_portability_integration.py": "6096acf4fc4f2ade5803249c72989a4cb362acb90fa9d8c9c1d7e84c3c79ab34",
+      "tests/test_pdf_portability_presentation.py": "cf5b40a41c187ebb16ff334a9ab181c37649143741aaab0e40118ae01c4431f3",
+      "tests/test_pdf_portability_prewrite.py": "510a342b0ae0a0fa5bf0cfcca5c356831b7df14b98e458dd1f7899699f80d1e5",
+      "tests/test_pdf_portability_replay.py": "7926253b9ac063131318fbb101bb159d1bdd5c48dbdc4d3a3eefd0f6c8ad2949",
+      "tests/test_pr29_review_gate.py": "41ec6a934f220e2dbec0e2a898fdab679f9a11d0fc8658be6e87824d47c05206",
+      "tests/test_pr_review_gate.py": "b238383f4e353c0fb3054803f6dfde4db1cc5f8872a7875bb4cebf6f222384ea",
+      "tests/test_project_path_recovery_v541.py": "3c9519b4bfe328a0a9e09f51fd979ef98459766d7373d547daa363dd9248ea6e",
+      "tests/test_project_repair_integration_v562.py": "d41fd27cabcf3673bd2f7c42da99b95ef6e75d1108ab48dbcfb5b847b15fdd69",
+      "tests/test_regression_applicability_v562.py": "16076b803604f6009a319b51a9f528950213809c77d3c8f3865d02aa336432e7",
+      "tests/test_regression_semantics_v521.py": "1055a3982866116939485de875eca25facbc2c71193990558225b1401e062964",
+      "tests/test_release_version_v570.py": "e1971ff37e1043133c77d9910b0825ea2ec4681a7e0f4430423704eff2eda29e",
+      "tests/test_report_integrity.py": "fbfccf49a2738f966376160c2e8d3bddabc125ada383b8312c8978705a23b592",
+      "tests/test_reusable_expected_rule_preservation.py": "0d2a564f5c2d13e673d70abe25a48cf39841ac5db30fd643feb25d037aaece8f",
+      "tests/test_review_async_save.py": "3b6ea842f701f290c73bbab4f8a6b4b938b0c727d1f877cd7d21d1cbf0b96441",
+      "tests/test_review_gui_layout_v531.py": "f439e60905979f1cdac0f78f795baed29cc5b246cb44c6faa7888a7dfd081e14",
+      "tests/test_review_preview_sizing_v580.py": "966e9187f9f6c45217ecc31c0fa48d2736e153d0ce9ebff55a8368464ba474b0",
+      "tests/test_review_save_service.py": "07903b175c3d108bd23d7efc3ee0a3c4e84042903b1e9f99bfc6ed9f4fb07fa0",
+      "tests/test_review_visual_corrective_v580.py": "6631a99729d2d8da13cb32c4eef35cfdda746364bcf7fb87b8a2e6c26f6b00d3",
+      "tests/test_review_visual_usability_v580.py": "16d8875021557717b4d0399b3668923fa69d6913c7a94ef4a757b9f2c3a01bc2",
+      "tests/test_runtime_asset_manifest_integrity_v562.py": "1a5a416d5c1c4ba1cc2e958476c35e636bee9eb11d8930e1ba1e82dbdc55dd91",
+      "tests/test_semantics_epoch_contract.py": "263f543b6d2ca5b0f69b2b59bd292992a52a9724b90980819d8de9a9e2f51294",
+      "tests/test_staged_review_navigation_v580.py": "4af5f9d591a93cefe427c8fefb7478dbde60802de175b43e536bd06e4dc344b3",
+      "tests/test_test_entrypoint_audit.py": "00c74efb18da82322b0210f43a7011411120b93f061aa5ebcc56dc821ceee995",
+      "tests/test_test_group_registry.py": "6d4556b63b72d47e3b1b0391f1c4882b7d45a9383af9d5f1b0833c94dc36716f",
+      "tests/test_validation_evidence.py": "4c43f6c8b4ad24c5e5f8d8e43780cdea1ce7843eb6b41812428db4a62db837ce",
+      "tests/test_validation_local_history.py": "1e79b1ed7bb5f5eb92ac8c73948850511e73d17059bf87c5231fd0091eda5d9c",
+      "tests/test_validation_runner.py": "19400b38d754a0b2a8a317bbbf6c61c633f234d44c29f86857da79f57adba75c",
+      "tests/test_visual_context_repairs_v521.py": "53c869e48900c2fa24616a9afad6c12b4f831c4ea054d6d8c4a6af7baa9b9741",
+      "tests/test_zero_occurrence_pdf_v541.py": "ac5c123a1e57a56e574b23bc12be7a270346c5cd05af13f5a3ceda3953505666",
+      "tests/test_zero_summary_and_project_status_v541.py": "90ee2ac9a16db64ea2379eb12286b25da24883fee93b7a33cae5402c80517dd1",
+      "ttf_symbol_recombination.py": "58f4156cab507c81690775e1b8c94449b808b63f74fc0637f0fc72ce061fc091",
+      "ttf_zhuyin_shape_decoder.py": "612dfb13c2be1ffa2ba32ae5d47136ef207180361c7785c2e6dc205cb45f07c5"
+    }
+  },
+  "entries": [
+    {
+      "prefix": "test_actual_post_commit_recovery_v580.DurableActualRecoveryTests",
+      "core": [
+        "test_checked_mismatch_fails_closed_and_retains_plan",
+        "test_clear_failure_preserves_plan_and_retries_durable_affected_ids",
+        "test_crash_after_refresh_before_ack_is_idempotent",
+        "test_global_failure_is_nonfatal_split_pending_retry",
+        "test_ineligible_local_correction_has_durable_plan_without_outbox",
+        "test_no_pending_refresh_preserves_existing_behavior_without_creating_root",
+        "test_plan_is_durable_before_committed_and_prepared_still_rolls_back",
+        "test_previous_plan_blocks_new_commit_without_losing_old_plan",
+        "test_process_restart_after_global_delivery_reuses_original_receipt",
+        "test_process_restart_after_project_commit_before_global_delivery",
+        "test_recovery_plan_accepts_existing_canonical_neutral_tone",
+        "test_refresh_actual_controller_finishes_pending_recovery",
+        "test_refresh_failure_preserves_both_commits_and_plan",
+        "test_single_correction_can_defer_ack_until_additional_postcondition",
+        "test_strict_plan_and_journal_reject_malformed_contracts_without_mutation"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_actual_review_v540.ActualReviewV540Tests",
+      "core": [
+        "test_cff_learning_uses_full_glyph_sha_not_annotation_signature",
+        "test_cff_same_full_glyph_sha_can_group_for_double_visual_confirmation",
+        "test_cff_verified_truth_is_keyed_by_full_glyph_sha",
+        "test_dynamic_hash_changes_when_user_truth_changes",
+        "test_exact_ttf_groups_and_promotes_only_with_two_examples",
+        "test_gpt_package_has_no_expected_columns_and_imports_transactionally",
+        "test_user_flagged_non_actual_state_can_build_group",
+        "test_v540_migrates_only_the_known_bad_p122_override"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_architecture.CompletionGateTests",
+      "core": [
+        "test_processing_finished_when_pending",
+        "test_proofread_complete_only_when_all_gates_pass",
+        "test_source_invalid_blocks_pipeline",
+        "test_zero_executed_regression_never_passes"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_architecture.IndependenceStaticTests",
+      "core": [
+        "test_actual_decoder_does_not_import_expected_modules",
+        "test_actual_fingerprint_source_lists_do_not_drift",
+        "test_expected_decider_does_not_load_actual_variable"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_architecture.MandatoryRegressionTests",
+      "core": [
+        "test_execution_count_and_all_case_ids_required",
+        "test_not_executed_is_not_success"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_architecture.OccurrenceLedgerTests",
+      "core": [
+        "test_duplicate_id_detection",
+        "test_existing_difference_can_be_closed_as_pass_only_by_rebuilding_expected_evidence",
+        "test_existing_session_snapshot_is_immutable_when_global_rule_file_changes",
+        "test_expected_evidence_update_does_not_mutate_actual",
+        "test_expected_set_membership_passes",
+        "test_invalid_manual_conclusion_rejected",
+        "test_materialize_applies_session_snapshot_reusable_rule_without_using_actual_as_rule_input",
+        "test_nonindependent_layer_requires_canonical_occurrence",
+        "test_occurrence_id_stable_across_excel_row_reorder",
+        "test_pass_rejects_actual_outside_expected_set",
+        "test_pdf_change_changes_occurrence_id",
+        "test_reconciliation_detects_missing_source",
+        "test_reusable_rule_builds_only_exact_phrase_and_target_position",
+        "test_reusable_rule_conflicting_same_condition_fails_closed",
+        "test_reusable_rule_rejects_ambiguous_target_position_without_coordinate_context",
+        "test_review_id_independent_of_category",
+        "test_row_fallback_is_explicit",
+        "test_rule_conflict_can_be_resolved_by_independent_expected_evidence",
+        "test_state_transition_requires_six_gates"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_architecture.SourceAndFingerprintTests",
+      "core": [
+        "test_actual_asset_change_invalidates_fingerprint",
+        "test_actual_fingerprint_excludes_expected_assets",
+        "test_asset_manifest_duplicate_json_key_fails",
+        "test_asset_manifest_hash_mismatch_fails",
+        "test_blocked_source_overwrites_current_pipeline_status",
+        "test_cache_requires_matching_actual_fingerprint",
+        "test_corrupt_xlsx_fails_closed",
+        "test_csv_blank_unique_key_fails",
+        "test_csv_duplicate_header_fails",
+        "test_csv_schema_missing_column_fails",
+        "test_current_asset_manifest_validates",
+        "test_expected_asset_change_invalidates_candidate_fingerprint",
+        "test_expected_fingerprint_excludes_actual_assets",
+        "test_invalid_expected_chain_does_not_block_actual_fingerprint"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_ci_validation_workflow.ValidationWorkflowTests",
+      "core": [
+        "test_legacy_exception_keeps_exact_original_identity_predicates",
+        "test_new_paths_keep_default_capture_and_independent_group_processes",
+        "test_required_check_executes_real_failure_sensitive_summary",
+        "test_short_path_uses_exact_dependency_lock_and_api_token_name",
+        "test_upload_cannot_overwrite_or_export_test_scratch"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_company_semantic_rules_v522",
+      "core": [
+        "test_baobao_company_second_is_neutral_and_first_not_overridden",
+        "test_dongxi_object_sense_uses_visible_context_only",
+        "test_haowan_fun_sense",
+        "test_kankan_second_position_semantics",
+        "test_v56_incompatible_schema_still_blocks_decision_database",
+        "test_v56_tool_version_does_not_block_same_schema_decision_database"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_completion_repair_v562.CompletionRepairV562Tests",
+      "core": [
+        "test_export_actual_zero_is_normal_exit_without_traceback",
+        "test_gui_surfaces_failed_gate_when_pending_is_zero",
+        "test_reference_only_and_sha_mismatch_are_not_applicable",
+        "test_repair_project_reuses_pipeline_with_same_session",
+        "test_three_up_zhuandong_uses_user_confirmed_zhuan_third_tone"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_cross_version_compat_v560",
+      "core": [
+        "test_actual_tool_and_source_code_drift_do_not_change_reuse_fingerprint",
+        "test_expected_tool_and_source_code_drift_do_not_change_reuse_fingerprint",
+        "test_schema_patch_family_is_compatible_but_minor_break_is_not",
+        "test_v551_style_actual_components_have_no_adapter_to_v58_phase3_payload",
+        "test_v551_style_expected_components_are_semantically_compatible_with_v56_payload"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_delivery_recovery_inspector_v580.DeliveryReaderTests",
+      "core": [
+        "test_close_while_worker_blocked_never_applies_late_result",
+        "test_switch_refresh_failure_deselect_and_close_discard_late_results"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_delivery_recovery_inspector_v580.DeliveryRecoveryServiceTests",
+      "core": [
+        "test_actual_invalid_database_and_schema_fail_closed_even_with_empty_roster",
+        "test_all_inspection_and_filtering_preserve_project_bytes_and_logical_database",
+        "test_committed_pending_global_committed_unacked_then_acked_refresh_unconfirmed",
+        "test_continuous_project_changes_and_global_roster_changes_are_bounded",
+        "test_forged_local_receipt_and_mismatched_global_receipt_are_rejected",
+        "test_global_commit_between_snapshots_retries_exact_receipt_roster",
+        "test_global_second_read_failure_preserves_local_but_not_first_global_confirmation",
+        "test_invalid_outbox_and_corrupt_journal_do_not_erase_independent_valid_facts",
+        "test_journal_change_during_outbox_capture_retries_before_global_read",
+        "test_local_receipt_survives_absent_and_failing_global",
+        "test_missing_project_missing_artifacts_and_empty_outbox_stay_distinct",
+        "test_no_effect_receipt_is_not_labeled_new_commit",
+        "test_no_selection_does_not_resolve_or_read",
+        "test_only_explicit_project_and_exact_helper_path",
+        "test_path_resolution_failure_preserves_committed_local_facts",
+        "test_permission_and_busy_sqlite_errors_translate_without_writes",
+        "test_prepared_partial_outbox_is_never_presented_as_committed",
+        "test_project_changes_between_reads_retry_and_do_not_mix_transactions",
+        "test_repository_validation_and_receipts_share_one_sqlite_snapshot",
+        "test_same_intent_different_persisted_payload_does_not_confirm_delivery",
+        "test_unknown_journal_schema_invalid_plan_and_corrupt_preimage_fail_closed"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_delivery_recovery_inspector_v580.DeliveryTkTests",
+      "core": [],
+      "gui": [
+        "test_no_project_and_main_entry_forward_only_selected_project",
+        "test_real_widgets_selection_filter_refresh_failure_and_destroy"
+      ]
+    },
+    {
+      "prefix": "test_dual_evidence_architecture_v550",
+      "core": [
+        "test_actual_gap_cannot_hide_expected_conflict_gate",
+        "test_actual_gap_does_not_erase_resolved_expected_lane",
+        "test_expected_review_event_survives_actual_unresolved_then_mechanically_matches",
+        "test_expected_workbook_filter_excludes_pure_actual_problem",
+        "test_project_actual_evidence_is_not_written_back_to_program_directory"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_exact_glyph_identity_v580.CFFExactIdentityTests",
+      "core": [
+        "test_cff_group_id_and_snapshot_are_explicitly_style_bound",
+        "test_cff_identity_is_style_plus_complete_sha_only",
+        "test_cff_live_revalidation_rejects_member_from_another_style_before_mutation",
+        "test_same_audit_signature_with_different_complete_sha_is_different_identity",
+        "test_same_cff_sha_different_style_creates_distinct_groups_ids_and_peers"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_exact_glyph_identity_v580.ExactIdentitySchemaTests",
+      "core": [
+        "test_identity_helper_is_present_in_both_actual_source_audit_rosters",
+        "test_identity_module_is_actual_only_and_has_no_sqlite_or_expected_imports",
+        "test_legacy_v1_empty_and_ttf_staging_use_read_only_explicit_adapter",
+        "test_legacy_v1_pending_cff_fails_closed_without_rewrite",
+        "test_new_cff_staging_is_schema_1_1_and_style_bound",
+        "test_old_actual_review_workbook_schema_is_rejected_before_evidence_write",
+        "test_ttf_group_id_and_single_group_snapshot_remain_v1_compatible",
+        "test_unknown_staging_schema_and_stale_snapshot_fail_closed"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_exact_glyph_identity_v580.TTFExactIdentityTests",
+      "core": [
+        "test_equal_composite_raw_sha_with_different_component_outlines_is_never_global_eligible",
+        "test_header_only_zero_contour_simple_glyph_is_empty_not_truncated",
+        "test_legal_simple_glyf_is_globally_eligible_and_hashes_complete_raw_record",
+        "test_overlap_simple_on_first_encoded_flag_is_eligible",
+        "test_overlap_simple_on_later_encoded_flag_fails_closed",
+        "test_overlap_simple_repeat_on_first_encoded_flag_remains_eligible",
+        "test_project_local_raw_sha_group_and_promotion_remain_available_for_composite",
+        "test_same_simple_record_ignores_font_name_and_glyph_index",
+        "test_truncated_invalid_range_and_illegal_simple_structure_fail_closed"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_expected_resolution_binding.ExpectedResolutionGuiTests",
+      "core": [],
+      "gui": [
+        "test_real_tk_imported_expected_confirm_saves_reopens_and_advances",
+        "test_real_tk_invalid_unbound_confirmation_reports_failure_and_keeps_current_row"
+      ]
+    },
+    {
+      "prefix": "test_expected_resolution_binding.ExpectedResolutionMaterializationTests",
+      "core": [],
+      "gui": [
+        "test_later_event_integrity_source_and_gui_checks_are_not_skipped",
+        "test_reloaded_changed_manifest_is_revalidated_and_stale_event_invalidated",
+        "test_standalone_validation_never_reuses_previous_manifest_trust",
+        "test_validation_and_replay_use_one_detached_nested_snapshot",
+        "test_whole_manifest_hash_is_once_for_one_or_many_bound_events"
+      ]
+    },
+    {
+      "prefix": "test_expected_resolution_binding.ExpectedResolutionReplayTests",
+      "core": [],
+      "gui": [
+        "test_actual_drift_revokes_confirmation_but_retains_independent_resolution",
+        "test_binding_contains_no_actual_and_confirmation_cannot_mint_or_drop_it",
+        "test_direct_baseline_gui_confirmation_without_binding_saves_and_reopens",
+        "test_import_gui_confirm_save_reopen_repair_pending_export",
+        "test_invalid_gui_actual_target_or_expected_evidence_snapshot_is_not_written",
+        "test_legacy_adapter_requires_exact_workbook_and_preserves_original_event",
+        "test_missing_unknown_tampered_or_noncanonical_binding_is_rejected",
+        "test_same_reading_baseline_source_context_or_fingerprint_drift_is_not_overwritten",
+        "test_unbound_legacy_resolution_invalid_confirmation_never_replaces_durable_source"
+      ]
+    },
+    {
+      "prefix": "test_fingerprint_compat_contract",
+      "core": [
+        "test_actual_and_expected_contracts_remain_separate",
+        "test_audit_only_source_and_tool_drift_remains_compatible",
+        "test_exact_fingerprint_equality_fast_path_still_validates_contract",
+        "test_future_declared_contract_key_cannot_be_silently_ignored",
+        "test_missing_required_contract_fields_fail_closed",
+        "test_presentation_only_metadata_is_not_a_semantic_cache_key",
+        "test_result_affecting_actual_evidence_changes_fail_closed",
+        "test_reuse_fingerprint_payload_contains_schema_policy_and_epoch_but_not_audit_metadata",
+        "test_reuse_policy_mismatch_fails_closed_for_both_chains",
+        "test_unknown_fingerprint_schema_transition_fails_closed_for_both_chains",
+        "test_v29_actual_components_have_no_adapter_to_v30"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_global_exact_glyph_read_reuse_v580.CFFGlobalExactReuseTests",
+      "core": [
+        "test_global_exact_rescues_normal_symbol_table_unresolved",
+        "test_global_quarantine_is_not_donor_but_independent_decoder_survives",
+        "test_project_global_agreement_label_and_disagreement_fallback",
+        "test_same_complete_sha_different_style_does_not_reuse"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_global_exact_glyph_read_reuse_v580.ExactReusePrecedenceTests",
+      "core": [
+        "test_candidate_and_promotion_ready_are_not_snapshot_reading_donors",
+        "test_global_only_and_project_global_agreement_reuse",
+        "test_multisyllable_neutral_positions_fail_single_and_list_validation",
+        "test_neutral_tone_is_canonical_for_ttf_and_cff_project_exact_reuse",
+        "test_neutral_tone_reading_list_keeps_json_and_whitespace_contracts",
+        "test_project_and_global_quarantine_are_union_conflict_gate",
+        "test_project_global_or_global_static_disagreement_suppresses_all_exact_donors",
+        "test_ttf_global_label_and_exact_disagreement",
+        "test_ttf_structural_noneligibility_never_calls_global_resolver"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_global_exact_glyph_read_reuse_v580.GlobalFingerprintScopingTests",
+      "core": [
+        "test_empty_sealed_roster_is_distinct_from_nonreusable_provisional_roster",
+        "test_generation_timestamps_path_provenance_revision_and_counts_are_audit_only",
+        "test_global_component_is_required_and_v29_has_no_v30_adapter",
+        "test_per_pdf_subset_changes_only_for_requested_identity",
+        "test_unknown_identity_or_promotion_contract_fails_closed",
+        "test_verified_global_store_disappearance_invalidates_dependent_subset"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_global_exact_glyph_read_reuse_v580.Phase3ArchitectureTests",
+      "core": [
+        "test_absent_read_creates_neither_directory_nor_database",
+        "test_actual_fingerprint_and_source_roster_contract",
+        "test_epochs_and_expected_fingerprint_contract_remain_unchanged",
+        "test_present_invalid_store_blocks_before_project_or_decode_mutation",
+        "test_read_paths_do_not_connect_global_mutation_promotion_outbox_or_migration"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_global_exact_glyph_read_reuse_v580.TTFWorkbookReadReuseIntegrationTests",
+      "core": [
+        "test_absent_preserves_existing_decoder_global_preempts_it_and_conflict_falls_back_with_audit",
+        "test_occurrence_override_remains_highest_authority_during_global_conflict"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_global_exact_glyph_read_reuse_v580.WorkbookDependencyRevalidationTests",
+      "core": [
+        "test_cff_dependency_is_style_plus_complete_glyph_sha",
+        "test_missing_exact_columns_force_decode_and_corrupt_workbook_is_integrity_error",
+        "test_ttf_candidates_are_reparsed_and_include_unresolved_eligible_and_noneligible_rows",
+        "test_workbook_pdf_ttf_sha_mismatch_forces_decode"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_global_exact_glyph_repository_v580.GlobalLibraryArchitectureBoundaryTests",
+      "core": [
+        "test_cff_eligibility_constant_remains_exact_style_bound_contract",
+        "test_global_module_is_actual_only_and_schema_has_no_expected_fields",
+        "test_global_store_is_dynamic_not_runtime_asset_and_no_project_outbox_exists",
+        "test_phase3_actual_read_paths_import_global_store_but_gui_does_not",
+        "test_phase3_global_fingerprint_source_roster_policy_schema_and_epochs"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_global_exact_glyph_repository_v580.GlobalLibraryBackupTests",
+      "core": [
+        "test_backup_implementation_uses_sqlite_api_not_live_file_copy",
+        "test_backup_rejects_live_destination_existing_destination_and_corrupt_source",
+        "test_sqlite_backup_validates_and_atomically_publishes_without_changing_source"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_global_exact_glyph_repository_v580.GlobalLibraryCorruptionAndDiagnosticsTests",
+      "core": [
+        "test_malformed_and_truncated_databases_are_corrupt_not_absent",
+        "test_permission_denied_is_not_collapsed_to_absent",
+        "test_sqlite_ignores_orphan_invalid_wal_and_validates_consistent_main_db",
+        "test_sqlite_reported_malformed_wal_is_typed_corrupt",
+        "test_unknown_schema_and_invalid_row_have_distinct_diagnostics",
+        "test_wal_observation_open_disappearance_cannot_escape_sqlite_boundary"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_global_exact_glyph_repository_v580.GlobalLibraryEvidenceIdTests",
+      "core": [
+        "test_evidence_id_is_versioned_timestamp_free_and_stable",
+        "test_evidence_id_schema_version_is_in_canonical_payload"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_global_exact_glyph_repository_v580.GlobalLibraryEvidenceInvariantTests",
+      "core": [
+        "test_approval_requires_distinct_occurrences",
+        "test_approval_requires_distinct_review_decisions",
+        "test_candidate_with_contradictory_direct_readings_fails_closed",
+        "test_conflict_payload_may_include_migration_only_safety_reading",
+        "test_five_axis_independent_approval_remains_valid",
+        "test_matching_direct_conflict_is_valid",
+        "test_matching_revocation_disables_approval_without_deleting_history",
+        "test_quarantine_open_conflict_must_cover_all_retained_direct_readings",
+        "test_resolved_conflict_does_not_reauthorize_retained_direct_contradiction",
+        "test_resolved_history_alone_blocks_verified_global_reauthorization",
+        "test_resolved_history_does_not_invalidate_nonreusable_states",
+        "test_revoked_without_matching_approved_identity_fails_closed",
+        "test_verified_global_with_third_contradictory_direct_reading_fails_closed"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_global_exact_glyph_repository_v580.GlobalLibraryLogicalSubsetTests",
+      "core": [
+        "test_explicit_absent_noneligible_verified_and_quarantined_rows",
+        "test_generation_path_timestamp_provenance_and_record_timestamp_are_excluded",
+        "test_payload_order_is_deterministic_and_duplicate_requests_are_deduped",
+        "test_result_affecting_reading_conflict_policy_and_identity_changes_alter_digest",
+        "test_unrelated_identity_change_does_not_affect_requested_subset"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_global_exact_glyph_repository_v580.GlobalLibraryMultiProcessTests",
+      "core": [
+        "test_bounded_begin_immediate_lock_is_typed_and_store_remains_valid",
+        "test_concurrency_tests_use_deterministic_sync_not_sleep",
+        "test_different_identity_concurrent_writes_are_both_retained",
+        "test_initializer_during_uncommitted_publication_gets_typed_busy",
+        "test_reader_during_normal_write_gets_consistent_snapshot_or_typed_busy",
+        "test_same_processed_intent_retry_from_two_processes_has_one_effect",
+        "test_simultaneous_explicit_initializers_leave_one_retryable_valid_store",
+        "test_two_process_same_revision_cas_has_at_most_one_success"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_global_exact_glyph_repository_v580.GlobalLibraryRootAndInitializationTests",
+      "core": [
+        "test_explicit_initialize_creates_strict_v1_generation_zero_and_wal",
+        "test_glyph_id_and_repository_never_infer_global_eligibility_from_sha",
+        "test_initialize_preexisting_empty_sqlite_database_fails_closed",
+        "test_initialize_preexisting_partial_user_version_zero_fails_closed",
+        "test_initialize_preexisting_unknown_user_version_fails_closed",
+        "test_initialize_present_invalid_database_preserves_original_bytes",
+        "test_initialize_publishes_only_a_committed_valid_candidate",
+        "test_missing_localappdata_fails_without_cwd_fallback",
+        "test_production_localappdata_path_and_explicit_root_override",
+        "test_read_only_absent_is_typed_and_creates_no_directory",
+        "test_repeated_initialize_is_idempotent_without_destructive_rewrite"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_global_exact_glyph_repository_v580.GlobalLibrarySnapshotTests",
+      "core": [
+        "test_snapshot_ends_read_transaction_and_later_mutation_does_not_change_old_snapshot",
+        "test_valid_verified_and_conflict_snapshots_are_immutable"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_global_exact_glyph_repository_v580.GlobalLibraryStrictValidationTests",
+      "core": [
+        "test_broken_foreign_key_fails_before_partial_row_loading",
+        "test_duplicate_meta_row_fails_closed",
+        "test_exact_tables_columns_primary_keys_foreign_keys_checks_and_indexes",
+        "test_invalid_noncanonical_reading_fails_entire_store",
+        "test_invalid_state_sha_glyph_id_and_cached_count_each_fail_entire_store",
+        "test_meta_version_mismatch_fails_closed",
+        "test_missing_column_extra_column_and_extra_table_fail_closed",
+        "test_missing_table_and_index_fail_as_schema_incompatible",
+        "test_quarantined_conflict_requires_two_canonical_readings",
+        "test_undeclared_view_and_trigger_fail_as_schema_incompatible",
+        "test_unknown_user_version_fails_closed",
+        "test_verified_global_without_exact_approval_fails_entire_store"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_global_exact_glyph_repository_v580.GlobalLibraryTransactionPrimitiveTests",
+      "core": [
+        "test_cas_success_then_stale_miss_does_not_overwrite_or_bump_again",
+        "test_failed_transaction_rolls_back_mutation_intent_and_generation",
+        "test_idempotent_intent_retry_and_restart_preserve_single_effect_and_receipt",
+        "test_mutation_receipt_must_match_actual_sqlite_effect",
+        "test_no_effect_retry_does_not_bump_generation",
+        "test_one_effective_batch_with_two_rows_bumps_generation_once",
+        "test_same_intent_different_payload_is_hard_error_without_generation_change"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_global_exact_glyph_repository_v580.Phase3ImmutableSnapshotConsistencyTests",
+      "core": [
+        "test_mid_session_database_change_cannot_mix_fingerprint_and_decoder_snapshots"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_global_legacy_migration_review_v580.FrozenV0CompatibilityTests",
+      "core": [
+        "test_baseline_validator_omissions_stay_blocked_and_preserve_bytes",
+        "test_cff_v0_conflict_uses_the_same_style_scoped_dependency_gate",
+        "test_concurrent_mutations_and_approval_replay_preserve_v0_counterevidence",
+        "test_conflict_transaction_failure_rolls_back_all_three_delivery_paths",
+        "test_current_imports_cannot_submit_v0_ids",
+        "test_dry_run_and_empty_apply_report_read_side_conflict_without_writes",
+        "test_fresh_delivery_and_approval_commit_quarantine_revoke_and_replay",
+        "test_frozen_schema_and_id_algorithm_remain_the_compatibility_boundary",
+        "test_illegal_id_rejected_by_both_actual_validators",
+        "test_later_direct_and_migration_conflicts_never_rewrite_v0_rows",
+        "test_matching_v0_audit_preserves_verified_digest_and_has_zero_quorum",
+        "test_new_import_and_approval_conflict_receipt_provenance_remain_required",
+        "test_occurrence_direct_override_remains_first_and_decoder_fallback_remains_independent",
+        "test_ordinary_v0_conflicts_are_readable_and_suppress_candidate_ready_and_verified",
+        "test_ordinary_v0_exception_cannot_hide_direct_approval_schema_or_count_corruption",
+        "test_read_only_compatibility_preserves_nonempty_wal_and_every_v0_column",
+        "test_read_side_conflict_preserves_unrelated_verified_result_and_subset",
+        "test_single_agreeing_insufficient_and_explicit_conflict_read_without_rewrite",
+        "test_stale_or_invalid_approval_request_cannot_mutate_compatible_store"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_global_legacy_migration_review_v580.MigrationReviewTests",
+      "core": [
+        "test_empty_apply_strict_validation_matrix",
+        "test_quarantined_retained_reading_missing_blocks_before_any_global_write",
+        "test_quarantined_stale_sample_blocks_even_with_valid_conflict_samples",
+        "test_valid_quarantined_learning_keeps_matching_reconfirmation_targets"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_global_legacy_migration_review_v580.ReconfirmationBBoxTests",
+      "core": [
+        "test_duplicate_pdf_text_trace_still_blocks_unique_locator",
+        "test_existing_locator_tolerance_is_not_widened_for_any_coordinate",
+        "test_full_bbox_does_not_bypass_character_font_glyph_or_page_checks",
+        "test_missing_nonfinite_and_invalid_bbox_coordinates_block_before_write",
+        "test_resealed_wrong_right_bottom_bbox_blocks_whole_project_before_write",
+        "test_ttf_cff_targets_use_complete_pdf_bbox_including_tolerated_rounding"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_global_legacy_migration_v580.MigrationArchitectureTests",
+      "core": [
+        "test_adapter_exemption_is_only_the_verified_top_level_definition_and_calls",
+        "test_adapter_missing_duplicate_or_changed_schema_checks_are_rejected",
+        "test_changed_dependencies_chain_and_fail_open_guard_are_detected",
+        "test_changed_schema_epoch_and_dependency_versions_are_detected",
+        "test_exact_authorized_adapter_keeps_historical_fingerprint_projection",
+        "test_import_chain_has_no_expected_resolver",
+        "test_protected_calls_in_adapter_or_other_new_functions_are_rejected",
+        "test_recursive_records_preserve_full_scope_duplicate_definitions_and_call_multiplicity",
+        "test_reviewer_nested_scope_reproductions_and_top_level_control_are_detected",
+        "test_schema_and_fingerprint_boundaries_unchanged",
+        "test_unrelated_manual_and_report_changes_do_not_change_contract"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_global_legacy_migration_v580.MigrationTests",
+      "core": [
+        "test_all_replay_checks_before_first_mutation",
+        "test_apply_preserves_source_bytes_and_cannot_put_global_inside_project",
+        "test_audit_readings_and_workbook_values_are_not_donors",
+        "test_bad_manifest_schema_seal_duplicate_keys_and_roster",
+        "test_bidirectional_legacy_direct_and_legacy_legacy_conflicts",
+        "test_cff_complete_sha_and_style_are_separate",
+        "test_cff_invalid_and_stale_style_fail",
+        "test_changed_workbook_and_stale_source_block",
+        "test_cli_default_dry_run_explicit_apply_and_invalid_project",
+        "test_concurrent_same_and_contradictory_imports",
+        "test_copy_relocation_keeps_import_identity_and_project_identity",
+        "test_corrupt_and_unknown_schema_db_never_recreated",
+        "test_current_migration_requires_linked_import_receipt_and_provenance",
+        "test_current_source_example_cannot_point_to_another_identity",
+        "test_deterministic_row_key_and_current_contract",
+        "test_dry_run_is_read_only_absent_and_no_historical_override_repair",
+        "test_duplicate_canonical_row_rejects_even_different_notes",
+        "test_duplicate_conflict_and_bad_kind_style_sha_status_are_rejected",
+        "test_fresh_phase4_confirmation_is_only_new_direct_evidence",
+        "test_global_failure_rolls_back_whole_batch",
+        "test_insufficient_and_reconfirmation_do_not_create_decisions",
+        "test_invalid_project_conflicts_block_whole_project",
+        "test_late_conflict_and_receipt_failure_roll_back_imports_generation_approval",
+        "test_learning_validation_is_whole_project_before_write",
+        "test_missing_csv_and_bad_headers_do_not_seed_files",
+        "test_missing_numeric_sealed_locator_does_not_equal_zero",
+        "test_old_draft_exact_id_is_readable_without_rewrite",
+        "test_partial_conflict_and_multiple_projects_reject_before_initialize",
+        "test_partial_reconfirmation_mapping_and_deduped_source_examples",
+        "test_payload_unknown_fields_and_bad_last_intent_fail_before_initialize",
+        "test_pdf_missing_mismatch_and_no_parent_scan",
+        "test_pending_project_transaction_blocks_readonly",
+        "test_project_conflict_all_readings_no_sources_and_never_auto_recovers",
+        "test_pure_legacy_never_changes_independent_quorum",
+        "test_replay_and_changed_source_bytes_append_not_overwrite",
+        "test_single_and_verified_are_nonreusable_with_no_source_or_approval",
+        "test_source_changes_during_validation_block_before_global_mutation",
+        "test_strict_db_reader_rejects_legacy_conflict_gate_bypass",
+        "test_structurally_ineligible_skip_not_global_identity",
+        "test_unprovable_exact_identity_and_stale_sealed_locator_block",
+        "test_verified_matching_audit_keeps_digest_revision_approval_conflict_revokes"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_global_library_approval_v580.ApprovalTests",
+      "core": [
+        "test_absent_preview_and_outcome_create_nothing",
+        "test_approval_and_conflict_change_only_affected_global_dependency",
+        "test_fixed_outcome_cannot_match_other_request_or_repository_and_keeps_revoked_history",
+        "test_lost_success_response_resolves_durable_approval_without_retry",
+        "test_parallel_sessions_claim_one_repository_and_closed_session_stays_recoverable",
+        "test_preview_corrupt_incompatible_permission_errors_are_blocked_read_only",
+        "test_preview_full_roster_and_immutable_fixed_request_no_writes",
+        "test_preview_snapshot_consistency_when_writer_adds_direct_source",
+        "test_query_rejects_noncanonical_revision_without_reading_or_writing",
+        "test_quorum_axes_legacy_only_quarantine_and_verified_blocked",
+        "test_stale_revision_roster_and_reading_never_refresh_request",
+        "test_success_state_approval_provenance_revision_no_new_source_or_receipt",
+        "test_transaction_failure_busy_permission_and_unknown_never_imply_commit",
+        "test_unknown_not_found_query_failure_and_explicit_read_only_recovery"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_global_library_approval_v580.ApprovalTkTests",
+      "core": [],
+      "gui": [
+        "test_actual_cancel_selection_and_refresh_never_write",
+        "test_close_reopen_during_submit_uses_same_request_and_only_one_write",
+        "test_custom_loader_alone_cannot_fall_through_to_live_database",
+        "test_default_target_resolved_once_even_if_environment_changes",
+        "test_dialog_render_failure_during_submission_preserves_real_committed_outcome",
+        "test_initial_failure_in_each_required_tab_blocks_handler_until_complete_new_confirmation",
+        "test_late_preview_after_selection_change_never_updates_or_submits_other_row",
+        "test_success_then_read_or_renderer_failure_preserves_commit"
+      ]
+    },
+    {
+      "prefix": "test_global_library_approval_v580.LegacyApprovalTests",
+      "core": [
+        "test_v0_read_suppression_blocks_preview_but_post_preview_conflict_commits"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_global_library_inspector_v580.InspectionReaderTests",
+      "core": [
+        "test_close_drops_delayed_result_without_waiting_for_worker",
+        "test_distinct_database_messages_and_unexpected_error_fail_closed",
+        "test_latest_request_wins_and_worker_never_calls_main_thread_callback",
+        "test_refresh_failure_clears_old_data_and_keeps_last_success_time"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_global_library_inspector_v580.InspectionRepositoryTests",
+      "core": [
+        "test_absent_never_initializes_or_creates_parent",
+        "test_all_states_and_linked_audit_details_counts_are_read_only",
+        "test_audit_rows_share_validated_read_transaction_under_concurrent_writer",
+        "test_corrupt_incompatible_invalid_busy_permission_are_typed_failures",
+        "test_empty_candidate_and_cff_style_identities_are_distinct",
+        "test_empty_valid_database_is_distinct_from_absent_and_failures",
+        "test_filters_use_stored_state_and_search_exact_identification",
+        "test_nonempty_wal_read_preserves_durable_bytes_and_rejects_sql_writes",
+        "test_raw_details_and_overview_do_not_present_fabricated_preview",
+        "test_source_counts_do_not_imply_occurrence_or_review_quorum"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_global_library_inspector_v580.InspectorTkTests",
+      "core": [],
+      "gui": [
+        "test_actual_widgets_filter_select_refresh_fail_and_close",
+        "test_destroy_root_during_read_does_not_leave_tk_callbacks",
+        "test_standalone_entry_needs_no_project_and_reuses_open_window"
+      ]
+    },
+    {
+      "prefix": "test_global_library_inspector_v580.LegacyInspectionTests",
+      "core": [
+        "test_stored_verified_v0_suppression_never_implies_durable_quarantine_or_revocation"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_global_promotion_v580.AdmissionAndProjectIntegrationTests",
+      "core": [
+        "test_delivery_failure_does_not_prevent_controller_refresh",
+        "test_ineligible_ttf_and_sha_mismatch_preserve_local_correction",
+        "test_low_level_unsealed_entry_is_explicitly_excluded",
+        "test_only_checked_current_ttf_creates_deterministic_intents",
+        "test_pdf_font_page_and_missing_context_fail_global_admission_only",
+        "test_propagated_peers_commit_locally_but_never_become_direct_sources",
+        "test_real_cff_parser_complete_recording_and_style_separation",
+        "test_real_embedded_pdf_ttf_admission_and_locator_rejection",
+        "test_staged_ack_failure_rolls_back_six_and_retains_staging",
+        "test_successful_global_delivery_then_refresh_failure_is_structured"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_global_promotion_v580.GlobalPromotionTests",
+      "core": [
+        "test_absent_read_does_not_initialize_but_explicit_delivery_does",
+        "test_batch_prevalidation_precedes_initialization",
+        "test_complete_independence_ready_without_auto_approval",
+        "test_contradiction_quarantines_retains_and_revokes_without_auto_resolution",
+        "test_each_required_independence_axis_is_a_gate",
+        "test_existing_invalid_store_is_never_reinitialized",
+        "test_first_source_candidate_and_retry_receipt_no_extra_effect",
+        "test_late_mutation_exception_rolls_back_entire_batch",
+        "test_malformed_multisyllable_neutral_does_not_change_verified_global_truth",
+        "test_multiprocess_different_reading_always_quarantines",
+        "test_multiprocess_independent_same_reading_serializes_to_ready",
+        "test_multiprocess_same_intent_preserves_one_effect_and_receipt",
+        "test_neutral_tone_conflict_remains_quarantined_after_reopen_and_retry",
+        "test_neutral_tone_direct_evidence_promotes_reopens_and_retries_idempotently",
+        "test_process_crash_before_sqlite_commit_is_retryable",
+        "test_result_affecting_subset_only_and_snapshot_remains_immutable",
+        "test_same_id_different_payload_rejected_and_preserves_store",
+        "test_same_occurrence_reconfirmed_cannot_form_quorum",
+        "test_same_reading_growth_preserves_approved_revision_and_logical_digest",
+        "test_stale_or_invalid_explicit_approval_is_atomic"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_global_promotion_v580.OutboxTests",
+      "core": [
+        "test_global_failure_keeps_project_committed_and_pending",
+        "test_outbox_ack_failure_restart_reuses_original_receipt",
+        "test_outbox_and_receipts_are_not_dynamic_actual_truth",
+        "test_prepared_and_malformed_journal_read_paths_fail_without_mutation",
+        "test_project_crash_journal_recovers_before_delivery",
+        "test_project_six_file_rollback_and_global_untouched",
+        "test_refresh_marker_survives_delivery_and_blocks_newer_transaction",
+        "test_stale_ack_token_cannot_erase_newer_queue",
+        "test_strict_schema_rejects_every_malformed_item_without_repair"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_glyph_truth_conflict_v551",
+      "core": [
+        "test_conflict_registry_is_part_of_per_pdf_dynamic_fingerprint_scope",
+        "test_conflicting_global_truth_does_not_block_occurrence_local_correction",
+        "test_gpt_import_conflict_is_not_batch_fatal_and_local_override_commits"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_gpt_import_autodetect_v541.GptImportAutodetectV541Tests",
+      "core": [
+        "test_actual_workbook_detected_from_sheet_structure",
+        "test_expected_workbook_detected_from_sheet_structure",
+        "test_mixed_expected_actual_workbook_is_fail_closed",
+        "test_multi_select_plan_orders_actual_before_expected",
+        "test_project_status_reads_new_pending_count_after_status_rewrite",
+        "test_unknown_workbook_is_rejected"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_gpt_safe_rebase_v541.GptSafeRebaseTests",
+      "core": [
+        "test_actual_refresh_downgrades_confirmation_to_expected_evidence",
+        "test_actual_refresh_preserves_expected_events_but_revokes_confirmation",
+        "test_changed_expected_domain_still_rejects_stale_workbook",
+        "test_existing_expected_event_replays_on_pass_after_actual_refresh",
+        "test_expected_action_rebases_after_actual_only_change",
+        "test_expected_action_rebases_when_actual_change_makes_current_state_pass",
+        "test_export_contains_expected_domain_snapshot",
+        "test_untouched_stale_rows_do_not_reject_batch"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_gpt_single_bundle_v541.GptSingleBundleV541Tests",
+      "core": [
+        "test_occurrence_actual_import_is_actual_only_and_refreshes_once",
+        "test_zip_bundle_detected_and_ordered_first"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_historical_regression_locator_v521",
+      "core": [
+        "test_a_yi_a_span_excludes_unrelated_yi_on_same_line",
+        "test_fallback_context_refuses_ambiguous_repeated_target",
+        "test_invalid_target_occurrence_index_fails_closed",
+        "test_phrase_must_cover_target_not_merely_exist_elsewhere_on_line",
+        "test_repeated_target_inside_phrase_uses_identity_only_occurrence_index",
+        "test_single_character_line_can_use_unique_target_centered_fallback_context"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_hotfix_tone_and_followup_v531.ExpectedResolutionFollowupTests",
+      "core": [
+        "test_expected_match_does_not_open_six_gate_followup",
+        "test_expected_still_mismatch_warns_but_does_not_auto_open_six_gate",
+        "test_saved_mismatch_without_successful_refresh_has_no_normal_followup"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_hotfix_tone_and_followup_v531.TonePositionCanonicalizationTests",
+      "core": [
+        "test_erhua_and_legacy_duplicate_tone_are_source_compatible",
+        "test_malformed_tone_placement_fails_closed",
+        "test_neutral_tone_front_and_back_are_equal",
+        "test_non_neutral_tone_front_and_back_are_equal",
+        "test_tone_kind_still_matters"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_import_transaction.ImportTransactionTests",
+      "core": [
+        "test_current_database_corruption_is_not_silently_reset",
+        "test_current_database_duplicate_json_key_is_rejected",
+        "test_duplicate_excel_header_is_rejected",
+        "test_duplicate_row_rejects_entire_batch",
+        "test_legacy_database_is_quarantined_without_migration",
+        "test_legacy_schema_rejected",
+        "test_successful_expected_evidence_import_is_atomic",
+        "test_tampered_session_manifest_is_rejected"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_incremental_actual_v541.IncrementalActualV541Tests",
+      "core": [
+        "test_occurrence_override_accepts_physical_page_and_tight_key_drift",
+        "test_occurrence_override_does_not_relax_key_when_coordinates_are_not_exact",
+        "test_pending_seed_expands_to_nonpending_same_exact_glyph",
+        "test_scoped_dynamic_hash_ignores_unrelated_pdf_and_glyph_truth"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_legacy_migration_inspector_v580.MigrationInspectionTests",
+      "core": [
+        "test_absent_empty_corrupt_incompatible_invalid_and_busy_global_distinguished",
+        "test_actual_pinned_v0_suppression_not_durable_quarantine_or_plan_conflict",
+        "test_durable_global_conflict_and_source_plan_are_separate_readonly_snapshots",
+        "test_insufficient_conflict_and_noneligible_are_not_successful_imports_or_quorum",
+        "test_invalid_duplicate_stale_missing_and_pending_block_whole_batch_without_repair",
+        "test_live_source_watch_invalidates_even_same_size_and_timestamp_without_new_plan",
+        "test_missing_pdf_explicit_root_only_and_wrong_sha",
+        "test_one_plan_and_one_snapshot_with_post_snapshot_source_bracketing",
+        "test_readonly_adapter_import_chain_has_no_expected_resolver_or_cli",
+        "test_real_ttf_cff_mapping_sources_counts_and_relocation_keep_import_identity"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_legacy_migration_inspector_v580.MigrationReaderTests",
+      "core": [
+        "test_close_during_work_stops_watcher_and_never_publishes_late_result",
+        "test_selection_no_autorun_duplicate_switch_failure_and_late_result"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_legacy_migration_inspector_v580.MigrationTkTests",
+      "core": [],
+      "gui": [
+        "test_main_entry_uses_only_explicit_project_and_open_or_cancel_never_loads",
+        "test_widgets_filters_details_failed_clear_source_switch_duplicate_and_destroy"
+      ]
+    },
+    {
+      "prefix": "test_mandatory_resolver_integration.MandatoryResolverIntegrationTests",
+      "core": [
+        "test_all_mandatory_cases_reach_the_frozen_resolver"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_manual_actual_batch_apply_v570.ManualActualBatchApplyV570Tests",
+      "core": [
+        "test_atomic_acknowledgement_rejects_one_stale_token_without_partial_removal",
+        "test_batch_acknowledgement_performs_one_atomic_staging_write",
+        "test_batch_does_not_refresh_decode_or_touch_expected_evidence",
+        "test_changed_live_identity_fields_fail_before_any_authoritative_mutation",
+        "test_changed_member_roster_fails_before_any_authoritative_mutation",
+        "test_empty_staging_is_deterministic_noop_without_authoritative_mutation",
+        "test_existing_glyph_conflict_is_quarantined_without_rolling_back_other_group",
+        "test_invalidated_checked_occurrence_fails_before_any_authoritative_mutation",
+        "test_missing_live_group_fails_before_any_authoritative_mutation",
+        "test_newer_same_group_upsert_during_apply_rolls_back_evidence_and_preserves_new_intent",
+        "test_second_group_late_exception_rolls_back_all_five_files_and_keeps_staging",
+        "test_selected_tokens_are_rechecked_before_first_authoritative_apply",
+        "test_stale_live_snapshot_fails_before_any_authoritative_mutation",
+        "test_two_valid_groups_apply_once_in_group_id_order_and_acknowledge_together",
+        "test_unrelated_group_staged_during_apply_is_preserved"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_manual_actual_gui_batch_v570.ManualActualGuiBatchOrchestrationTests",
+      "core": [
+        "test_all_checked_actual_postconditions_pass",
+        "test_conflict_is_successful_quarantine_and_refreshes_once",
+        "test_disappeared_checked_occurrence_never_reports_success",
+        "test_empty_staging_is_noop_without_clear_or_refresh",
+        "test_final_apply_rebuilds_live_groups_from_current_member_objects",
+        "test_one_mismatched_checked_actual_never_reports_success",
+        "test_one_refresh_pass_decodes_each_invalidated_pdf_once_and_reuses_unaffected",
+        "test_postcondition_ignores_expected_lane",
+        "test_refresh_actual_project_forwards_the_complete_session_pdf_roster_once",
+        "test_refresh_failure_reports_evidence_committed_and_recovery_path",
+        "test_stale_current_live_group_fails_in_phase_2a_before_refresh",
+        "test_ten_groups_on_same_pdf_still_refresh_once",
+        "test_two_groups_call_batch_clear_and_refresh_once_with_union"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_manual_actual_gui_batch_v570.ManualActualGuiBehaviorTests",
+      "core": [
+        "test_all_actionable_staged_keeps_batch_enabled_and_explains_next_step",
+        "test_all_exact_group_occurrences_are_listed_with_checked_peers_last",
+        "test_correct_actual_removes_all_checked_and_advances_from_b_to_d",
+        "test_count_zero_disables_and_positive_count_enables_button",
+        "test_filtering_staged_last_item_clamps_to_new_last_item",
+        "test_final_button_asks_confirmation_before_starting_worker",
+        "test_final_worker_is_one_thread_and_success_reloads_current_state",
+        "test_invalidated_staging_restores_hidden_record_even_when_dialog_is_cancelled",
+        "test_new_app_filters_durable_checked_occurrence_without_changing_ledger_truth",
+        "test_only_directly_checked_member_is_removed_from_actionable_queue",
+        "test_reload_records_also_reloads_durable_staging_count",
+        "test_reload_records_excludes_checked_occurrences_and_reduces_denominator",
+        "test_save_event_does_not_reintroduce_previously_staged_occurrence",
+        "test_unvalidated_staging_does_not_hide_sample_b"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_manual_actual_gui_batch_v570.ManualActualGuiStagingServiceTests",
+      "core": [
+        "test_gui_service_rejects_different_reading_without_replacing_prior",
+        "test_missing_current_review_id_fails_closed_without_staging",
+        "test_restart_summary_recovers_count_group_ids_and_member_ids_read_only",
+        "test_stage_one_only_writes_staging_and_never_refreshes_or_regenerates",
+        "test_stage_service_rebuilds_group_from_current_materialized_ledger"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_manual_actual_gui_batch_v570.ManualActualGuiVisibleLayoutTests",
+      "core": [],
+      "gui": [
+        "test_actual_dialog_lists_all_locations_and_marks_staged_peers",
+        "test_actual_dialog_uses_staging_label_and_explains_no_immediate_refresh",
+        "test_exact_glyph_group_includes_distinct_char_but_marks_it_for_review",
+        "test_lazy_preview_requires_successful_image_and_explicit_check",
+        "test_main_batch_button_is_visible_and_not_clipped_at_screen_safe_size",
+        "test_previously_staged_peer_does_not_require_a_new_view_or_checkbox",
+        "test_real_tk_check_waits_for_drawn_page_and_target",
+        "test_scroll_visibility_callback_is_cancelled_during_dialog_teardown",
+        "test_target_without_drawn_photo_times_out_and_cannot_be_checked",
+        "test_two_member_dialog_preloads_b_without_accepting_an_implicit_check",
+        "test_unseen_b_cannot_be_submitted_by_setting_checkbox_variable"
+      ]
+    },
+    {
+      "prefix": "test_manual_actual_staging_v570.ManualActualStagingV570Tests",
+      "core": [
+        "test_absent_file_is_valid_empty_staging_without_creating_it",
+        "test_atomic_replace_failure_preserves_old_bytes_and_removes_temp",
+        "test_compare_and_remove_cannot_clear_a_later_upsert",
+        "test_invalid_checked_occurrence_and_duplicate_group_fail_closed",
+        "test_invalid_reading_is_rejected_without_creating_store",
+        "test_malformed_json_fails_closed",
+        "test_missing_required_decision_field_fails_closed",
+        "test_non_object_root_and_duplicate_json_keys_fail_closed",
+        "test_restart_reload_in_fresh_python_process_preserves_decision",
+        "test_same_group_id_with_changed_snapshot_fails_closed_without_write",
+        "test_same_group_upsert_is_deduplicated_and_keeps_original_staged_at",
+        "test_serialized_payload_contains_no_expected_or_dictionary_evidence",
+        "test_staging_calls_neither_apply_nor_refresh",
+        "test_staging_does_not_change_dynamic_actual_hashes",
+        "test_staging_does_not_modify_authoritative_dynamic_actual_files",
+        "test_unknown_expected_field_in_existing_payload_fails_closed",
+        "test_unknown_schema_fails_closed",
+        "test_valid_stage_is_persisted_to_project_actual_directory"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_manual_review_usability_v580.ManualExpectedContractTests",
+      "core": [
+        "test_blank_rationale_reopen_replay_report_and_completion",
+        "test_blocks_exclusion_and_missing_evidence_remain_fail_closed",
+        "test_confirmation_then_actual_refresh_preserves_expected_and_revokes_comparison",
+        "test_gui_confirmation_allows_missing_printed_page_but_requires_physical_target",
+        "test_gui_confirmation_is_bound_to_one_mismatch_and_both_evidence_lanes",
+        "test_gui_confirmation_replay_keeps_manual_expected_and_actual_revoke",
+        "test_illegal_expected_mixed_with_valid_is_rejected",
+        "test_legacy_requires_evidence_and_malformed_new_record_never_upgrades",
+        "test_no_operation_no_event_and_shortcut_freezes_one_occurrence",
+        "test_numeric_workbook_roundtrip_preserves_target_and_changed_position_rejects",
+        "test_shortcut_rejects_unresolved_invalid_or_missing_actual_proof"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_manual_review_usability_v580.ManualReviewGuiTests",
+      "core": [],
+      "gui": [
+        "test_browsing_older_confirmation_keeps_last_undo_target",
+        "test_confirmed_lookup_reopens_with_filters_and_corrects_one_item",
+        "test_correction_undo_restores_previous_manual_decision",
+        "test_ctrl_enter_dialog_repetition_and_busy_action_save_only_one_item",
+        "test_difference_button_saves_once_without_dialog_then_reopens_and_reports",
+        "test_failed_reentry_after_undo_keeps_item_and_undo_target",
+        "test_failed_save_has_no_db_or_navigation_change_and_no_success",
+        "test_failed_undo_keeps_saved_decision_and_does_not_show_success",
+        "test_last_pending_confirmation_can_be_undone_after_it_leaves_queue",
+        "test_legacy_manual_event_without_snapshot_needs_explicit_revoke",
+        "test_missing_printed_page_gui_save_reopen_and_report",
+        "test_next_preview_failure_after_save_does_not_enable_fast_confirmation",
+        "test_one_real_button_invoke_saves_without_dialog_and_duplicate_cannot_apply_next",
+        "test_only_one_undo_snapshot_is_consumed_after_three_decisions",
+        "test_optional_blank_dialog_actual_unresolved_then_actual_group",
+        "test_pdf_read_failure_disables_shortcut",
+        "test_preview_failure_during_failed_save_stays_disabled",
+        "test_returning_from_older_confirmation_keeps_last_undo_target",
+        "test_reusable_failure_after_saved_item_does_not_undo_judgment",
+        "test_saved_event_survives_native_show_failure_and_reopens",
+        "test_shortcut_full_label_and_staged_batch_footer_remain_visible",
+        "test_staged_actual_does_not_hide_expected_or_integrity_and_defer_is_finite",
+        "test_undo_reenter_expected_continues_to_next_pending_item",
+        "test_undo_reenter_last_pending_item_shows_empty_state",
+        "test_undo_reentry_keeps_difference_pending_in_queue"
+      ]
+    },
+    {
+      "prefix": "test_pdf_portability",
+      "core": [
+        "test_actual_excel_marker_owner_and_plan_must_match_before_recovery[changed_plan]",
+        "test_actual_excel_marker_owner_and_plan_must_match_before_recovery[foreign_owner]",
+        "test_actual_excel_marker_owner_and_plan_must_match_before_recovery[future_version]",
+        "test_actual_excel_marker_owner_and_plan_must_match_before_recovery[missing_owner]",
+        "test_b_new_actual_override_returns_to_a_in_new_project",
+        "test_concurrent_save_is_retained_during_explicit_import",
+        "test_conflict_preserves_both_and_write_failure_keeps_target",
+        "test_continue_operation_uses_local_pdf_and_only_clears_success_marker",
+        "test_cross_session_expected_excel_preserves_formal_target_expected[\\u88dc\\u5efaexpected\\u8b49\\u64da-\\u3110\\u3129\\u311d\\u02ca-\\u3110\\u3129\\u311d\\u02c7-DIFFERENCE_PENDING_CONFIRMATION]",
+        "test_cross_session_expected_excel_preserves_formal_target_expected[\\u89e3\\u6c7aexpected\\u8b49\\u64da-\\u3110\\u3129\\u311d\\u02c7-\\u3110\\u3129\\u311d\\u02ca-DIFFERENCE_PENDING_CONFIRMATION]",
+        "test_cross_session_expected_excel_preserves_formal_target_expected[\\u89e3\\u6c7aexpected\\u8b49\\u64da-\\u3110\\u3129\\u311d\\u02ca-\\u3110\\u3129\\u311d\\u02c7-DIFFERENCE_PENDING_CONFIRMATION]",
+        "test_cross_session_expected_excel_preserves_formal_target_expected[\\u89e3\\u6c7aexpected\\u8b49\\u64da-\\u3110\\u3129\\u311d\\u02ca-\\u3110\\u3129\\u311d\\u02ca-PASS]",
+        "test_different_pdf_object_storage_and_identity_mapping",
+        "test_different_sha_same_pages_a_to_b_to_a_with_reopen",
+        "test_duplicate_carries_source_conflict_adjudication_across_hops",
+        "test_existing_target_rejects_unmapped_actual_without_changing_either_project",
+        "test_expected_excel_does_not_clear_another_publication_marker[False]",
+        "test_expected_excel_does_not_clear_another_publication_marker[True]",
+        "test_expected_excel_precommit_rollback_preserves_foreign_marker_and_receipt",
+        "test_expected_excel_rechecks_actual_conflict_after_preflight[False]",
+        "test_expected_excel_rechecks_actual_conflict_after_preflight[True]",
+        "test_expected_excel_rechecks_incomplete_marker_after_preflight",
+        "test_expected_excel_rejects_target_pdf_changed_after_mapping[False]",
+        "test_expected_excel_rejects_target_pdf_changed_after_mapping[True]",
+        "test_failed_continue_keeps_source_and_marks_target_incomplete",
+        "test_falsy_nonobject_database_root_is_rejected_without_mutation[False-0]",
+        "test_falsy_nonobject_database_root_is_rejected_without_mutation[False-[]]",
+        "test_falsy_nonobject_database_root_is_rejected_without_mutation[False-false]",
+        "test_falsy_nonobject_database_root_is_rejected_without_mutation[False-null]",
+        "test_falsy_nonobject_database_root_is_rejected_without_mutation[True-0]",
+        "test_falsy_nonobject_database_root_is_rejected_without_mutation[True-[]]",
+        "test_falsy_nonobject_database_root_is_rejected_without_mutation[True-false]",
+        "test_falsy_nonobject_database_root_is_rejected_without_mutation[True-null]",
+        "test_imported_project_can_show_local_page_save_and_reopen",
+        "test_incomplete_actual_excel_marker_cannot_be_cleared_without_owner_plan",
+        "test_manual_expected_event_rebinds_exact_target_and_keeps_origin",
+        "test_missing_source_pdf_requires_prior_proof_and_moved_artifact_is_checked",
+        "test_missing_source_uses_only_explicit_identical_sha_local_pdf",
+        "test_multi_hop_provenance_retains_first_source",
+        "test_noop_and_clear_do_not_adjudicate_conflict",
+        "test_pending_actual_transaction_rejects_transfer_without_touching_target",
+        "test_project_expected_binding_transfers_only_after_proven_mapping_and_unchanged_baseline",
+        "test_project_expected_transfer_accepts_more_specific_event_context[\\u88dc\\u5efaexpected\\u8b49\\u64da]",
+        "test_project_expected_transfer_accepts_more_specific_event_context[\\u89e3\\u6c7aexpected\\u8b49\\u64da]",
+        "test_project_expected_transfer_rechecks_independent_target_context[\\u88dc\\u5efaexpected\\u8b49\\u64da-context_evidence]",
+        "test_project_expected_transfer_rechecks_independent_target_context[\\u88dc\\u5efaexpected\\u8b49\\u64da-line]",
+        "test_project_expected_transfer_rechecks_independent_target_context[\\u88dc\\u5efaexpected\\u8b49\\u64da-local_context]",
+        "test_project_expected_transfer_rechecks_independent_target_context[\\u89e3\\u6c7aexpected\\u8b49\\u64da-context_evidence]",
+        "test_project_expected_transfer_rechecks_independent_target_context[\\u89e3\\u6c7aexpected\\u8b49\\u64da-line]",
+        "test_project_expected_transfer_rechecks_independent_target_context[\\u89e3\\u6c7aexpected\\u8b49\\u64da-local_context]",
+        "test_project_import_rechecks_actual_conflict_after_preflight[False]",
+        "test_project_import_rechecks_actual_conflict_after_preflight[True]",
+        "test_project_import_rechecks_conflict_receipt_after_preflight",
+        "test_project_import_rejects_target_pdf_changed_after_mapping",
+        "test_project_six_gate_transfer_requires_target_actual_snapshot[context]",
+        "test_project_six_gate_transfer_requires_target_actual_snapshot[evidence]",
+        "test_project_six_gate_transfer_requires_target_actual_snapshot[expected]",
+        "test_project_six_gate_transfer_requires_target_actual_snapshot[expected_evidence]",
+        "test_project_six_gate_transfer_requires_target_actual_snapshot[expected_missing]",
+        "test_project_six_gate_transfer_requires_target_actual_snapshot[missing_snapshot]",
+        "test_project_six_gate_transfer_requires_target_actual_snapshot[reading]",
+        "test_project_six_gate_transfer_requires_target_actual_snapshot[same]",
+        "test_project_six_gate_transfer_requires_target_actual_snapshot[source_snapshot]",
+        "test_project_transfer_keeps_prior_human_expected_duplicate_or_conflict[False]",
+        "test_project_transfer_keeps_prior_human_expected_duplicate_or_conflict[True]",
+        "test_project_transfer_preserves_formal_target_expected[\\u88dc\\u5efaexpected\\u8b49\\u64da-context]",
+        "test_project_transfer_preserves_formal_target_expected[\\u88dc\\u5efaexpected\\u8b49\\u64da-evidence]",
+        "test_project_transfer_preserves_formal_target_expected[\\u88dc\\u5efaexpected\\u8b49\\u64da-reading]",
+        "test_project_transfer_preserves_formal_target_expected[\\u89e3\\u6c7aexpected\\u8b49\\u64da-context]",
+        "test_project_transfer_preserves_formal_target_expected[\\u89e3\\u6c7aexpected\\u8b49\\u64da-evidence]",
+        "test_project_transfer_preserves_formal_target_expected[\\u89e3\\u6c7aexpected\\u8b49\\u64da-reading]",
+        "test_repeated_character_requires_its_own_position",
+        "test_report_publication_failure_retains_data_and_blocks_partial_target",
+        "test_rotated_reviewed_page_maps_same_char_by_display_position",
+        "test_rotation_storage_on_unreviewed_equal_page_does_not_reject",
+        "test_same_decision_from_two_sources_keeps_both_exact_identities",
+        "test_same_filename_different_content_rejected[picture]",
+        "test_same_filename_different_content_rejected[text]",
+        "test_same_filename_different_content_rejected[zhuyin]",
+        "test_saved_actual_override_maps_without_global_promotion",
+        "test_sealed_but_incomplete_target_cannot_be_reexported",
+        "test_source_actual_override_change_after_fingerprint_check_rejects_public_import[False]",
+        "test_source_actual_override_change_after_fingerprint_check_rejects_public_import[True]",
+        "test_source_actual_staging_is_preserved_as_recheck_not_new_global_evidence",
+        "test_staged_actual_receipt_survives_a_to_b_to_c",
+        "test_tampered_forwarded_actual_receipt_is_rejected_before_target_creation",
+        "test_tampered_source_actual_override_cannot_be_imported",
+        "test_target_db_becomes_nonobject_before_locked_candidate_read",
+        "test_two_independent_projects_merge_in_new_project_and_preserve_sources",
+        "test_two_project_conflicting_decisions_keep_both_sources",
+        "test_two_sources_keep_both_actual_staging_originals_without_promotion",
+        "test_unrelated_pdf_actual_override_does_not_invalidate_sealed_source"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_pdf_portability_actual_receipt",
+      "core": [
+        "test_actual_conflict_receipt_cas_failure_preserves_late_status_and_receipt",
+        "test_actual_conflict_receipt_first_append_and_replay",
+        "test_actual_conflict_receipt_invalid_input_preserves_bytes[duplicate_json_key]",
+        "test_actual_conflict_receipt_invalid_input_preserves_bytes[integrity]",
+        "test_actual_conflict_receipt_snapshot_cas_preserves_other_sources[absent]",
+        "test_actual_conflict_receipt_snapshot_cas_preserves_other_sources[present_swap_restore]",
+        "test_receipt_cas_failure_does_not_enter_nonatomic_status_restore",
+        "test_status_write_failure_keeps_durable_conflict_receipt_and_blocks_report"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_pdf_portability_actual_schema",
+      "core": [
+        "test_actual_excel_invalid_source_schema_preserves_target[future-review_id_schema_version-cross]",
+        "test_actual_excel_invalid_source_schema_preserves_target[future-review_id_schema_version-same]",
+        "test_actual_excel_invalid_source_schema_preserves_target[future-session_schema_version-cross]",
+        "test_actual_excel_invalid_source_schema_preserves_target[future-session_schema_version-same]",
+        "test_actual_excel_invalid_source_schema_preserves_target[future-workbook_schema_version-cross]",
+        "test_actual_excel_invalid_source_schema_preserves_target[future-workbook_schema_version-same]",
+        "test_actual_excel_invalid_source_schema_preserves_target[missing-review_id_schema_version-cross]",
+        "test_actual_excel_invalid_source_schema_preserves_target[missing-review_id_schema_version-same]",
+        "test_actual_excel_invalid_source_schema_preserves_target[missing-session_schema_version-cross]",
+        "test_actual_excel_invalid_source_schema_preserves_target[missing-session_schema_version-same]",
+        "test_actual_excel_invalid_source_schema_preserves_target[missing-workbook_schema_version-cross]",
+        "test_actual_excel_invalid_source_schema_preserves_target[missing-workbook_schema_version-same]"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_pdf_portability_binding",
+      "core": [
+        "test_actual_marker_ownership_at_each_boundary[acknowledgement]",
+        "test_actual_marker_ownership_at_each_boundary[creation]",
+        "test_actual_marker_ownership_at_each_boundary[post_ack_resume]",
+        "test_actual_marker_ownership_at_each_boundary[precommit_failure]",
+        "test_actual_marker_ownership_at_each_boundary[rollback]",
+        "test_actual_marker_ownership_at_each_boundary[transition]",
+        "test_actual_pdf_change_after_mapping_prevents_any_commit",
+        "test_actual_pdf_change_blocks_receipt_and_no_change_paths[conflict]",
+        "test_actual_pdf_change_blocks_receipt_and_no_change_paths[no_changes]",
+        "test_actual_recovery_preserves_foreign_marker",
+        "test_attachment_actual_uses_one_workbook",
+        "test_attachment_expected_uses_one_workbook",
+        "test_bundle_actual_late_marker_prevents_commit[False]",
+        "test_bundle_actual_late_marker_prevents_commit[True]",
+        "test_resolved_adjudication_cannot_be_overwritten_by_old_expected[\\u88dc\\u5efaexpected\\u8b49\\u64da]",
+        "test_resolved_adjudication_cannot_be_overwritten_by_old_expected[\\u89e3\\u6c7aexpected\\u8b49\\u64da]",
+        "test_same_actual_preserves_existing_nested_pdf_relocation",
+        "test_same_actual_rechecks_late_marker[False]",
+        "test_same_actual_rechecks_late_marker[True]",
+        "test_same_actual_rechecks_late_unresolved_conflict[False]",
+        "test_same_actual_rechecks_late_unresolved_conflict[True]",
+        "test_same_session_excel_source_change_is_rejected_before_write[actual]",
+        "test_same_session_excel_source_change_is_rejected_before_write[expected]",
+        "test_source_actual_workbook_swap_after_seal_is_rejected[False]",
+        "test_source_actual_workbook_swap_after_seal_is_rejected[True]"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_pdf_portability_expected_schema",
+      "core": [
+        "test_expected_excel_invalid_source_schema_preserves_target[future-review_id_schema_version-cross]",
+        "test_expected_excel_invalid_source_schema_preserves_target[future-review_id_schema_version-same]",
+        "test_expected_excel_invalid_source_schema_preserves_target[future-session_schema_version-cross]",
+        "test_expected_excel_invalid_source_schema_preserves_target[future-session_schema_version-same]",
+        "test_expected_excel_invalid_source_schema_preserves_target[future-workbook_schema_version-cross]",
+        "test_expected_excel_invalid_source_schema_preserves_target[future-workbook_schema_version-same]",
+        "test_expected_excel_invalid_source_schema_preserves_target[missing-review_id_schema_version-cross]",
+        "test_expected_excel_invalid_source_schema_preserves_target[missing-review_id_schema_version-same]",
+        "test_expected_excel_invalid_source_schema_preserves_target[missing-session_schema_version-cross]",
+        "test_expected_excel_invalid_source_schema_preserves_target[missing-session_schema_version-same]",
+        "test_expected_excel_invalid_source_schema_preserves_target[missing-workbook_schema_version-cross]",
+        "test_expected_excel_invalid_source_schema_preserves_target[missing-workbook_schema_version-same]"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_pdf_portability_integration",
+      "core": [
+        "test_actual_excel_conflict_and_precommit_write_failure_preserve_target",
+        "test_actual_excel_midrefresh_workbook_rewrite_can_resume_twice",
+        "test_actual_excel_prepared_and_post_ack_crash_windows_can_resume",
+        "test_cross_session_excel_edit_after_rows_read_preserves_target[actual]",
+        "test_cross_session_excel_edit_after_rows_read_preserves_target[expected]",
+        "test_direct_actual_excel_import_is_local_only_across_different_sha[different]",
+        "test_direct_actual_excel_import_is_local_only_across_different_sha[same]",
+        "test_direct_expected_excel_import_maps_different_sha_session[different]",
+        "test_direct_expected_excel_import_maps_different_sha_session[same]",
+        "test_excel_expected_conflict_and_same_decision_keep_sources",
+        "test_excel_full_page_proof_rejects_same_filename_content_changes[image]",
+        "test_excel_full_page_proof_rejects_same_filename_content_changes[text]",
+        "test_excel_full_page_proof_rejects_same_filename_content_changes[zhuyin]",
+        "test_existing_target_event_cannot_bypass_six_gate_actual_evidence_match",
+        "test_expected_excel_sequential_conflicts_keep_local_adjudication_and_history",
+        "test_expected_export_without_local_pdf_preserves_same_session_work[False]",
+        "test_expected_export_without_local_pdf_preserves_same_session_work[True]",
+        "test_full_pipeline_different_sha_continues_and_returns",
+        "test_incomplete_portable_project_rejects_same_session_excel_before_writes[auto-actual]",
+        "test_incomplete_portable_project_rejects_same_session_excel_before_writes[auto-expected]",
+        "test_incomplete_portable_project_rejects_same_session_excel_before_writes[direct-actual]",
+        "test_incomplete_portable_project_rejects_same_session_excel_before_writes[direct-expected]",
+        "test_old_filled_actual_excel_imported_in_a_can_gain_present_proof",
+        "test_old_filled_expected_excel_imported_in_a_can_gain_present_proof",
+        "test_old_proofless_excel_only_maps_exact_same_sha_and_snapshot[actual]",
+        "test_old_proofless_excel_only_maps_exact_same_sha_and_snapshot[expected]",
+        "test_parallel_actual_excel_imports_preserve_marker_and_recovery[False]",
+        "test_parallel_actual_excel_imports_preserve_marker_and_recovery[True]",
+        "test_partial_portable_publication_requires_bound_repair_or_new_success",
+        "test_real_pipeline_actual_override_refresh_publishes_current_manifest",
+        "test_real_pipeline_conflict_stays_pending_until_new_local_adjudication"
+      ],
+      "gui": [
+        "test_actual_excel_conflict_requires_fresh_local_visual_adjudication",
+        "test_review_app_reopens_continued_project"
+      ]
+    },
+    {
+      "prefix": "test_pdf_portability_presentation",
+      "core": [
+        "test_committed_project_import_presentation_can_resume_safely",
+        "test_cross_session_expected_postcommit_interrupt_can_repair[False]",
+        "test_cross_session_expected_postcommit_interrupt_can_repair[True]",
+        "test_failed_rawdict_extraction_cannot_seal_or_match_pdf_text",
+        "test_foreign_marker_inserted_at_creation_is_not_overwritten[project]",
+        "test_foreign_marker_inserted_at_creation_is_not_overwritten[same_session_expected]",
+        "test_legacy_visual_proof_requires_exact_source_to_map_different_sha",
+        "test_pdf_sha_and_page_proof_share_the_same_bytes_snapshot",
+        "test_presentation_plan_tamper_keeps_committed_db_and_marker",
+        "test_presentation_precommit_failure_restores_receipts_and_clears_only_own_marker",
+        "test_presentation_second_failure_then_repair_and_unknown_marker_refused",
+        "test_project_import_never_clears_foreign_marker_after_publish",
+        "test_report_only_rechecks_foreign_marker_inside_publication_lock",
+        "test_same_render_different_candidate_text_is_not_equivalent",
+        "test_same_session_expected_postcommit_report_failure_uses_repair",
+        "test_same_session_expected_rechecks_foreign_marker_before_writes",
+        "test_stale_same_session_excel_cannot_overwrite_unresolved_project_conflict"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_pdf_portability_prewrite",
+      "core": [
+        "test_expected_keeps_legitimate_offline_and_relocated_pdf[offline]",
+        "test_expected_keeps_legitimate_offline_and_relocated_pdf[relocated]",
+        "test_expected_rejects_known_changed_pdf_after_excel_read[auto]",
+        "test_expected_rejects_known_changed_pdf_after_excel_read[direct]",
+        "test_expected_rejects_known_changed_pdf_after_excel_read[dry_run]",
+        "test_expected_snapshot_does_not_adopt_later_preimage[db_other]",
+        "test_expected_snapshot_does_not_adopt_later_preimage[db_same]",
+        "test_expected_snapshot_does_not_adopt_later_preimage[manifest]",
+        "test_expected_snapshot_restored_original_bytes_is_safe",
+        "test_foreign_owner_after_marker_creation_prevents_db_and_receipts[project]",
+        "test_foreign_owner_after_marker_creation_prevents_db_and_receipts[project_conflict]",
+        "test_foreign_owner_after_marker_creation_prevents_db_and_receipts[same_expected]",
+        "test_mapped_pdf_renders_once_then_checks_verified_target_bytes",
+        "test_merge_never_adopts_foreign_marker[after_import]",
+        "test_merge_never_adopts_foreign_marker[creation]",
+        "test_merge_never_adopts_foreign_marker[final_plan]",
+        "test_project_revalidates_source_before_commit[conflict]",
+        "test_project_revalidates_source_before_commit[marker]",
+        "test_project_revalidates_source_before_commit[transaction]",
+        "test_publication_handoff_cannot_adopt_another_valid_owner[merge]",
+        "test_publication_handoff_cannot_adopt_another_valid_owner[project]",
+        "test_publication_handoff_cannot_adopt_another_valid_owner[same_expected]",
+        "test_receipt_backup_and_digest_use_one_read",
+        "test_receipt_candidate_cannot_lose_later_record[after_plan-cross_expected]",
+        "test_receipt_candidate_cannot_lose_later_record[after_plan-project]",
+        "test_receipt_candidate_cannot_lose_later_record[before_plan-cross_expected]",
+        "test_receipt_candidate_cannot_lose_later_record[before_plan-project]",
+        "test_receipt_candidate_cannot_lose_later_record[receipt_write-cross_expected]",
+        "test_receipt_candidate_cannot_lose_later_record[receipt_write-project]",
+        "test_receipt_snapshot_still_rejects_duplicate_json_keys",
+        "test_report_repair_rechecks_late_conflict[regenerate_report]",
+        "test_report_repair_rechecks_late_conflict[repair_project_state]",
+        "test_report_repair_rechecks_marker_after_collect[cli-regenerate_report]",
+        "test_report_repair_rechecks_marker_after_collect[cli-repair_project_state]",
+        "test_report_repair_rechecks_marker_after_collect[direct-regenerate_report]",
+        "test_report_repair_rechecks_marker_after_collect[direct-repair_project_state]",
+        "test_target_late_journal_prevents_all_presentation_writes[cross_expected]",
+        "test_target_late_journal_prevents_all_presentation_writes[project]",
+        "test_target_late_journal_prevents_all_presentation_writes[same_expected]"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_pdf_portability_replay",
+      "core": [
+        "test_cross_expected_binds_pdf_at_each_final_write[after_plan]",
+        "test_cross_expected_binds_pdf_at_each_final_write[after_receipt]",
+        "test_cross_expected_binds_pdf_at_each_final_write[foreign_after_receipt]",
+        "test_exact_historical_reimport_preserves_local_adjudication[expected_first]",
+        "test_exact_historical_reimport_preserves_local_adjudication[expected_second]",
+        "test_exact_historical_reimport_preserves_local_adjudication[project]",
+        "test_new_matching_source_keeps_provenance_then_replays_from_history",
+        "test_real_source_change_after_adjudication_is_still_conflict[new-expected]",
+        "test_real_source_change_after_adjudication_is_still_conflict[new-project]",
+        "test_real_source_change_after_adjudication_is_still_conflict[same-expected]",
+        "test_real_source_change_after_adjudication_is_still_conflict[same-project]",
+        "test_retained_duplicate_source_replay_preserves_adjudication[expected]",
+        "test_retained_duplicate_source_replay_preserves_adjudication[project]"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_pr29_review_gate.PR29GateTests",
+      "core": [
+        "test_adoption_raw_bytes_survive_a_fresh_windows_autocrlf_checkout",
+        "test_ci_checks_run_attempt_checkout_parents_tree_all_jobs_and_steps",
+        "test_ci_rerun_requires_new_second_review_but_cannot_erase_blockers",
+        "test_closed_schema_and_cli_reject_duplicate_keys_without_writes",
+        "test_exact_scope_history_and_maximum_five_are_closed",
+        "test_general_gate_still_rejects_four_rounds_and_pr29_schema",
+        "test_illegal_supplements_never_clear_code_or_cross_scope",
+        "test_known_findings_and_local_acceptance_cannot_be_ignored",
+        "test_missing_historical_originals_are_not_fabricated_or_required",
+        "test_no_metadata_fabrication_or_remote_drift_after_push",
+        "test_non_code_supplements_preserve_full_review_and_history",
+        "test_original_adoption_is_portable_and_hash_bound",
+        "test_pre_push_requires_first_review_and_preserves_old_api_base",
+        "test_second_round_code_blocker_is_not_hidden_by_missing_first_report",
+        "test_sixth_code_round_stops_even_with_failed_ci",
+        "test_two_fresh_independent_full_reviews_cannot_reuse_history",
+        "test_unmerged_delivery_never_demands_merge_approval_or_changes_its_truth",
+        "test_workflow_actual_condition_is_limited_to_adopted_pr_and_target"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_pr29_review_gate.PR29MergeContinuationTests",
+      "core": [
+        "test_actual_merge_and_its_own_push_ci_are_required",
+        "test_adopted_source_and_fifth_stop_remain_bound",
+        "test_closed_schema_and_cli_keep_old_and_new_read_only",
+        "test_exact_sixth_round_and_external_drift",
+        "test_kf07_c_ci_is_pending_only_until_exact_new_pr_run",
+        "test_missing_and_failed_candidate_validation_or_ci",
+        "test_reviews_are_fresh_independent_and_no_seventh_code_fix",
+        "test_stage_order_and_no_draft_merge"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_pr_review_gate.ReviewGateTests",
+      "core": [
+        "test_actual_merge_must_have_reviewed_parents_tree_and_ancestry",
+        "test_append_only_non_code_supplement_can_resume_at_unchanged_head",
+        "test_authorization_only_through_pr_cannot_expand_to_merge_or_correction",
+        "test_authorization_scope_and_clean_tree_are_required",
+        "test_base_change_invalidates_old_passes_without_changing_baseline",
+        "test_blocked_either_round_prevents_merge",
+        "test_blocker_classification_is_explicit_and_schema_one_is_not_guessed",
+        "test_ci_blocker_correction_keeps_authorization_independence_and_evidence_checks",
+        "test_ci_evidence_problems_do_not_consume_or_bypass_correction_budget",
+        "test_ci_requires_exact_run_event_attempt_checkout_and_parents",
+        "test_cli_is_read_only_and_schema_validation_is_not_attestation",
+        "test_closed_pr_or_mismatched_pair_does_not_create_replacement",
+        "test_closed_schema_rejects_missing_unknown_duplicate_or_malformed_data",
+        "test_confirmed_blockers_reach_correction_before_ci_success_with_one_task_limit",
+        "test_coordinator_must_recheck_remote_base_and_head_before_merge",
+        "test_corrective_head_requires_two_fresh_full_reviews",
+        "test_decisions_are_deterministic_and_input_is_not_modified",
+        "test_develop_advancement_is_reported_separately_from_verified_merge",
+        "test_drift_invalidates_confirmed_blockers_before_any_correction",
+        "test_each_job_requires_its_own_matching_checkout_attempt_and_windows_python",
+        "test_evidence_blocked_can_record_unavailable_ci_then_supplement_real_attestation",
+        "test_failed_ci_without_confirmed_finding_does_not_create_correction",
+        "test_gap_review_cannot_replace_initial_review_or_change_reviewer_or_scope",
+        "test_gap_review_never_clears_code_blocker_or_fabricates_full_review",
+        "test_gate_required_step_names_still_match_repository_workflow",
+        "test_invalid_predecessor_or_cross_round_supersession_cannot_hide_independence_failure",
+        "test_new_ci_attempt_requires_new_round_two_attestation",
+        "test_new_schema_does_not_silently_adopt_old_task_contract",
+        "test_non_code_blocked_never_requests_a_corrective_commit",
+        "test_pass_progresses_through_both_reviews_and_post_merge",
+        "test_pending_ci_is_not_success",
+        "test_post_merge_blockers_stop_completion_with_same_task_handoff_and_history",
+        "test_post_merge_findings_must_be_checked_before_completion",
+        "test_pr_ci_cannot_substitute_for_actual_merge_push_ci",
+        "test_pr_ci_failure_or_missing_step_never_merges",
+        "test_pr_findings_and_protection_are_checked",
+        "test_remote_head_or_base_drift_cannot_merge",
+        "test_replay_and_uncertain_response_do_not_duplicate_pr_or_merge",
+        "test_rerun_ci_does_not_erase_blocked_review_against_unchanged_code",
+        "test_review_must_cover_original_cumulative_baseline",
+        "test_review_separation_and_direct_review_are_required",
+        "test_same_reviewer_may_close_only_evidence_gap_at_unchanged_scope",
+        "test_supersession_rejects_missing_resolution_scope_changes_and_invalid_reviewers",
+        "test_supplement_chain_preserves_exhausted_budget_merge_and_replay",
+        "test_supplement_does_not_bypass_current_ci_or_clear_confirmed_code",
+        "test_three_corrections_are_a_task_wide_limit",
+        "test_unavailable_or_missing_review_never_becomes_pass",
+        "test_unlinked_pass_or_ci_rerun_does_not_resolve_non_code_blocked"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_project_path_recovery_v541",
+      "core": [
+        "test_cli_recovers_from_duplicated_output_child",
+        "test_cli_recovers_from_textbook_parent",
+        "test_exact_project_path_always_wins",
+        "test_gui_recovers_same_two_common_mistakes",
+        "test_no_guess_when_no_adjacent_session"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_project_repair_integration_v562.ProjectRepairIntegrationV562Tests",
+      "core": [
+        "test_exact_sha_hard_gate_not_found_is_blocking",
+        "test_incompatible_session_and_review_identity_schemas_are_rejected",
+        "test_optional_manual_expected_survives_real_repair_and_report_regeneration",
+        "test_pdf_bytes_change_rejects_reuse_before_pipeline",
+        "test_portable_ambiguous_match_fails_without_selecting_an_occurrence",
+        "test_portable_zero_match_is_not_executed_and_repair_fails_closed",
+        "test_relevant_actual_evidence_invalidates_only_actual_and_calls_decoder",
+        "test_repair_reuses_actual_rebuilds_expected_replays_events_and_recomputes_completion",
+        "test_tampered_actual_workbook_is_rejected_by_artifact_hash",
+        "test_unrelated_actual_evidence_keeps_per_pdf_actual_reusable"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_regression_applicability_v562.HistoricalApplicabilityStateMachineTests",
+      "core": [
+        "test_all_definitions_fail_closed_before_filename_routing",
+        "test_exact_sha_hard_gate_matches_and_executes",
+        "test_exact_sha_hard_gate_mismatch_is_not_applicable",
+        "test_exact_sha_hard_gate_routes_even_if_pdf_was_renamed",
+        "test_historical_pronunciation_truth_does_not_change_locator",
+        "test_portable_gate_context_can_make_locator_unique",
+        "test_portable_gate_multiple_matches_fail_identity_ambiguity",
+        "test_portable_gate_unique_match_ignores_historical_page",
+        "test_portable_gate_zero_match_is_not_executed_fail_closed",
+        "test_reference_only_ambiguous_match_is_visible_but_non_gating",
+        "test_reference_only_found_is_evaluated_but_non_gating",
+        "test_reference_only_not_found_is_explicit",
+        "test_three_up_legacy_cases_are_individually_classified"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_regression_applicability_v562.WholeBookApplicabilityAggregationTests",
+      "core": [
+        "test_applicability_and_locator_fields_are_authoritative_payload",
+        "test_definition_drift_in_locator_context_is_rejected",
+        "test_duplicate_portable_execution_across_splits_fails",
+        "test_one_portable_owner_executes_once_across_split_pdfs",
+        "test_reference_audit_cannot_relax_mandatory_regression",
+        "test_reference_failure_is_audited_without_entering_gate"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_regression_semantics_v521.HistoricalRegressionSemanticsTests",
+      "core": [
+        "test_former_error_corrected_now_passes",
+        "test_former_error_hidden_by_wrong_current_expected_fails",
+        "test_former_error_still_wrong_but_currently_detected_passes",
+        "test_historical_correct_control_must_remain_currently_correct"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_regression_semantics_v521.WholeBookRegressionAggregationTests",
+      "core": [
+        "test_definition_drift_across_splits_is_integrity_error",
+        "test_multiple_executions_are_fail_closed",
+        "test_no_execution_anywhere_is_one_not_executed",
+        "test_one_execution_plus_split_not_executed_counts_once",
+        "test_reference_only_case_is_audited_but_not_required",
+        "test_split_pdfs_with_no_applicable_rows_is_neutral_pass",
+        "test_zero_applicable_historical_cases_is_neutral_pass"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_release_version_v570.ReleaseVersionConsistencyTests",
+      "core": [
+        "test_current_release_metadata_is_consistently_v570"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_report_integrity.ReportIntegrityTests",
+      "core": [
+        "test_user_report_is_simple_and_technical_audit_keeps_full_state_views"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_reusable_expected_rule_preservation.ReusableExpectedRulePreservationTests",
+      "core": [
+        "test_etou_head_resolves_to_neutral_tone",
+        "test_expected_resolution_is_independent_of_actual_reading",
+        "test_ok_band_beng_resolves_to_first_tone",
+        "test_repeated_save_keeps_existing_id_timestamp_and_stronger_evidence",
+        "test_saving_new_rule_preserves_all_existing_approved_rules",
+        "test_v561_approved_seed_rules_load_with_original_provenance",
+        "test_yihuir_er_resolves_to_er"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_review_async_save.AsyncOwnerTkTests",
+      "core": [],
+      "gui": [
+        "test_actual_poll_owner_disposal_cancels_pending_timer",
+        "test_actual_success_and_failure_release_owned_poll",
+        "test_disposed_save_owner_cancels_only_owned_poll_and_saved_work_reopens",
+        "test_lazy_peer_rotation_and_owner_destroy_release_images_and_only_owned_timers",
+        "test_native_tcl_owner_destroy_cancels_only_owned_preview_callbacks",
+        "test_owner_close_releases_preview_before_pending_save_worker_collects",
+        "test_real_root_and_prior_dialogs_release_before_expected_or_actual_worker_gc",
+        "test_save_completion_and_failure_release_owned_poll",
+        "test_submit_cancel_and_owner_destroy_release_dialog_variables_and_photos",
+        "test_submitted_expected_variables_release_on_main_before_save_worker_gc"
+      ]
+    },
+    {
+      "prefix": "test_review_async_save.AsyncReviewSaveTests",
+      "core": [
+        "test_async_undo_uses_saved_state_and_reopens_without_the_event",
+        "test_corrupt_db_root_never_publishes_or_advances_and_valid_bytes_restore_retry",
+        "test_evidence_rejection_survives_retry_reload_and_defer_revisit",
+        "test_missing_or_wrong_preview_never_starts_shortcut",
+        "test_ordinary_write_failure_can_retry_with_same_evidence_anchor",
+        "test_post_save_queue_failure_is_saved_and_recoverable_after_reopen",
+        "test_project_generation_and_review_id_reject_stale_saved_result",
+        "test_real_actual_transaction_refresh_allows_verified_new_snapshot",
+        "test_worker_keeps_ui_unlocked_but_guards_all_mutating_actions_and_debounce",
+        "test_write_failure_leaves_current_memory_disk_and_reopen_unchanged"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_review_gui_layout_v531.ReviewGuiPureLayoutTests",
+      "core": [
+        "test_no_visible_action_label_is_blank",
+        "test_screen_safe_size_never_exceeds_available_screen"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_review_gui_layout_v531.ReviewGuiVisibleFooterTests",
+      "core": [],
+      "gui": [
+        "test_difference_uses_main_action_label",
+        "test_expected_dialog_submit_and_cancel_are_visible"
+      ]
+    },
+    {
+      "prefix": "test_review_preview_sizing_v580.PreviewSizingTkTests",
+      "core": [],
+      "gui": [
+        "test_actual_expanded_samples_first_target_and_form_reachable",
+        "test_actual_expanded_samples_with_constrained_window_manager",
+        "test_all_owned_resize_and_locate_callbacks_cancel_on_destruction",
+        "test_body_reconciliation_callbacks_cancel_with_any_owned_surface",
+        "test_explicit_outer_overflow_reveals_first_and_next_in_both_window_limits",
+        "test_inner_wheel_consumes_once_and_boundary_hands_off_to_long_body",
+        "test_long_summary_can_scroll_then_returns_remaining_space_to_preview",
+        "test_main_fills_remaining_space_width_and_switch_reveals_target",
+        "test_manual_scroll_cancels_pending_initial_target_placement",
+        "test_near_viewport_height_target_uses_origin_between_24_pixel_steps",
+        "test_ordinary_first_and_next_fit_outer_with_sufficient_allocated_height",
+        "test_pdf_rerenders_after_resize_manual_scroll_stays_and_events_converge",
+        "test_resize_read_failure_clears_and_revokes_confirmation",
+        "test_wide_short_first_and_next_have_full_inner_outer_target_and_context",
+        "test_wide_short_first_and_next_with_constrained_window_manager",
+        "test_width_only_resize_long_summary_technical_and_manual_scroll",
+        "test_width_only_resize_reconciles_requests_before_show_and_next_placement"
+      ]
+    },
+    {
+      "prefix": "test_review_preview_sizing_v580.WidthRenderTests",
+      "core": [
+        "test_invalid_resolution_and_resource_limit_fail_before_allocation",
+        "test_width_render_preserves_crop_rotation_pixels_and_input"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_review_save_service.ReviewSaveServiceTests",
+      "core": [
+        "test_actual_evidence_external_change_invalidates_cache",
+        "test_atomic_db_guard_rejects_concurrent_edit",
+        "test_changed_sealed_snapshot_requires_full_validation_before_reanchor",
+        "test_changed_staging_forces_full_and_invalid_staging_never_hides",
+        "test_dependency_changed_during_replay_rejected_before_write",
+        "test_expected_survives_unresolved_actual_and_confirmation_replacement",
+        "test_external_rule_change_and_explicit_reload_invalidation",
+        "test_external_sealed_session_and_database_changes_rejected",
+        "test_failed_first_write_keeps_verified_anchor_and_unchanged_source_can_retry",
+        "test_failed_write_retains_snapshot_then_reopen_recovers",
+        "test_gui_confirmation_source_change_before_save_rejects_without_db_write",
+        "test_incremental_overwrite_undo_match_full_and_preserve_actual",
+        "test_malformed_staging_does_not_lose_saved_expected_or_hide",
+        "test_missing_and_empty_object_databases_keep_initialization_contract",
+        "test_no_staging_does_not_materialize_or_read_again",
+        "test_non_object_db_roots_reject_before_replay_and_write_in_cold_and_warm_cache",
+        "test_object_root_preserves_version_normalization_and_schema_rejection",
+        "test_reusable_rule_baseline_is_restored_by_undo",
+        "test_same_size_mtime_source_and_artifact_mutation_rejected",
+        "test_service_reentrancy_and_runtime_failure_rejected",
+        "test_valid_staging_expected_edit_and_undo_match_full_summary"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_review_visual_corrective_v580.CorrectiveTkTests",
+      "core": [],
+      "gui": [
+        "test_actual_apply_progress_constructor_keeps_bar_visible_and_text_readable",
+        "test_owned_idle_callbacks_cancel_on_child_parent_and_canvas_destruction",
+        "test_real_expected_and_actual_form_labels_converge_at_narrow_and_wide_sizes",
+        "test_unallocated_wrapped_label_does_not_erode_its_own_width"
+      ]
+    },
+    {
+      "prefix": "test_review_visual_corrective_v580.ProgressFilesystemRegressionTests",
+      "core": [
+        "test_retained_complete_snapshot_requires_session_file_and_keeps_raw_gate"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_review_visual_usability_v580.GroupOrderTests",
+      "core": [
+        "test_fixed_char_order_both_lanes_defer_stage_and_revisit"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_review_visual_usability_v580.PreviewGeometryTests",
+      "core": [
+        "test_page_edges_missing_nonfinite_and_nonzero_cropbox",
+        "test_rotated_crop_rounding_and_raw_bytes"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_review_visual_usability_v580.ProgressPresentationTests",
+      "core": [
+        "test_gate_complete_and_unknown_missing_or_failed_data",
+        "test_overlapping_causes_count_rows_once_and_hide_internal_diagnostics"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_review_visual_usability_v580.VisualGuiTests",
+      "core": [],
+      "gui": [
+        "test_main_occurrence_switch_failure_resize_and_source_invariance",
+        "test_page_change_and_fractional_resize_clear_previous_frame",
+        "test_real_save_only_current_row_and_same_character_navigation",
+        "test_responsive_buttons_wrapped_labels_and_complete_path_copy",
+        "test_sample_positions_are_individual_failed_sample_cannot_be_checked"
+      ]
+    },
+    {
+      "prefix": "test_runtime_asset_manifest_integrity_v562.RuntimeAssetManifestIntegrityV562Tests",
+      "core": [
+        "test_git_attributes_freeze_every_manifest_csv_as_raw_bytes",
+        "test_manifest_chain_roster_is_unchanged",
+        "test_production_runtime_root_validates_without_exceptions",
+        "test_repaired_assets_are_identical_to_historical_rows_after_eol_normalization"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_semantics_epoch_contract",
+      "core": [
+        "test_actual_and_expected_epoch_contracts_are_independent",
+        "test_actual_producer_writes_epoch_to_components_reuse_and_digest",
+        "test_actual_same_epoch_is_compatible_and_different_epoch_fails_closed",
+        "test_exact_equal_fingerprint_cannot_bypass_invalid_missing_epoch_profile",
+        "test_exact_fingerprint_equality_cannot_bypass_epoch_boundary",
+        "test_expected_producer_writes_epoch_to_components_reuse_and_digest",
+        "test_expected_same_epoch_is_compatible_and_different_epoch_fails_closed",
+        "test_initial_epochs_are_explicit_required_contract_fields",
+        "test_legacy_fingerprint_profiles_are_finite_chain_specific_and_frozen",
+        "test_missing_current_epoch_and_blank_stored_epoch_fail_closed",
+        "test_phase0b1_transitional_actual_digest_maps_only_to_initial_epoch",
+        "test_phase0b1_transitional_expected_digest_maps_only_to_initial_epoch",
+        "test_post_epoch_digest_with_epoch_removed_from_stored_components_fails_closed",
+        "test_presentation_only_metadata_does_not_change_epoch_contract",
+        "test_producer_epoch_bumps_do_not_cross_invalidate_chains",
+        "test_released_v562_actual_digest_has_no_adapter_to_v30",
+        "test_released_v562_actual_digest_is_incompatible_with_current_epoch_two",
+        "test_released_v562_expected_digest_is_incompatible_with_current_epoch_two",
+        "test_released_v562_expected_digest_maps_missing_epoch_to_initial_epoch",
+        "test_same_schema_policy_missing_epoch_with_arbitrary_fingerprint_fails_closed",
+        "test_same_schema_policy_missing_epoch_with_invalid_profile_digest_fails_closed",
+        "test_tool_and_source_hash_drift_remain_audit_only_when_epoch_is_unchanged",
+        "test_unknown_legacy_schema_or_policy_missing_epoch_is_incompatible",
+        "test_v551_actual_has_no_transitive_adapter_to_v30_while_expected_adapter_remains"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_staged_review_navigation_v580.SameExactStagedNavigationTests",
+      "core": [
+        "test_accumulated_checks_survive_apply_failure_and_committed_refresh_recovery",
+        "test_bad_checked_lists_and_failed_stage_write_do_not_change_prior",
+        "test_different_reading_or_rejudgment_preserves_prior_and_does_not_advance",
+        "test_individual_a_b_c_accumulate_only_checked_then_reopen_and_apply_once",
+        "test_stale_snapshot_or_changed_pdf_cannot_retain_prior_checks"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_staged_review_navigation_v580.StagedNavigationTests",
+      "core": [
+        "test_actual_save_with_expected_pending_advances_but_keeps_expected_task",
+        "test_apply_double_click_and_invalid_summary_do_not_launch_another_worker",
+        "test_commit_refresh_failure_is_visible_and_recoverable_without_reapplying",
+        "test_difference_stage_removes_only_pending_comparison_and_navigates",
+        "test_expected_before_stage_then_changed_expected_uses_provable_projection",
+        "test_expected_save_failure_does_not_advance_and_actual_duplicate_does_not_stage_next",
+        "test_failed_transaction_preserves_stage_expected_and_gui_work_then_retry",
+        "test_last_item_waiting_is_not_complete",
+        "test_no_stage_real_difference_remains_but_success_selects_next_same_character",
+        "test_real_transaction_expected_retained_and_refresh_match_or_difference",
+        "test_saved_expected_survives_render_failure_without_extra_success_prompt",
+        "test_stage_failure_never_advances_or_reports_success",
+        "test_staged_expected_unresolved_remains_then_save_does_not_reselect_old_difference",
+        "test_staging_read_failure_reveals_previous_waiting_without_losing_expected",
+        "test_stale_actual_roster_and_source_changes_never_hide",
+        "test_unchecked_exact_peer_remains_and_defer_revisit_preserve_counts",
+        "test_unknown_pending_and_hard_blocks_are_not_hidden"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_test_entrypoint_audit.EntrypointAuditTests",
+      "core": [
+        "test_collection_stops_on_imported_load_tests_hook",
+        "test_custom_loader_cannot_silently_bypass_entrypoint_review",
+        "test_every_collected_case_must_execute_successfully_exactly_once",
+        "test_gui_missing_skipped_failed_error_duplicate_are_rejected",
+        "test_identity_comparison_catches_equal_count_substitution",
+        "test_inherited_gui_cases_are_mandatory_across_modules",
+        "test_module_load_tests_bindings_rejected_before_hook_even_with_same_ids",
+        "test_wildcard_tk_import_requires_inventory_review"
+      ],
+      "gui": [
+        "test_cross_module_tk_helper_skip_cannot_escape_junit_gate",
+        "test_pytest_only_tk_functions_are_mandatory_even_when_skipped"
+      ]
+    },
+    {
+      "prefix": "test_test_group_registry.RegisteredGroupsTests",
+      "core": [
+        "test_bounded_positive_guard_keeps_existing_alias_loop_context_and_imported_helper_paths",
+        "test_finite_class_members_reject_new_unknown_and_missing_cases",
+        "test_formal_classifier_never_uses_generic_provider_analyzer",
+        "test_inherited_cases_and_fixture_requirements_reject_core_then_expand_gui",
+        "test_original_f1_instance_and_returned_call_are_gui_with_independent_sentinel",
+        "test_real_cli_rejects_unregistered_missing_duplicate_and_conflicting_registration",
+        "test_source_drift_and_new_source_cannot_reuse_registration"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_validation_evidence.RawEvidenceTests",
+      "core": [
+        "test_actual_merge_complete_requires_raw_short_result",
+        "test_archive_path_escape_or_duplicate_cannot_overwrite_evidence",
+        "test_coverage_keeps_original_pr_identity_under_push_environment",
+        "test_latest_pr_run_is_selected_and_archive_read_through_real_fetch_interface",
+        "test_local_success_is_not_formal_pr_coverage",
+        "test_real_cli_rejects_missing_corrupt_stale_and_failed_raw_evidence",
+        "test_real_cli_short_reuse_rejects_merge_dependencies_assets_and_latest_failure",
+        "test_short_cli_without_push_context_retains_failure_and_unique_execution",
+        "test_short_finalization_failure_or_source_drift_never_persists_success",
+        "test_summary_success_does_not_mask_failed_group_exit"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_validation_evidence.StagedGateTests",
+      "core": [
+        "test_development_and_draft_are_intermediate_not_formal_pass",
+        "test_finalization_cannot_clear_code_or_change_scope_or_reviewer_for_gap",
+        "test_formal_pass_never_creates_authorization_or_legacy_upgrade",
+        "test_old_formal_result_cannot_select_or_clear_later_evidence_blocker",
+        "test_real_cli_development_correction_is_local_only_and_v3_stays_frozen",
+        "test_real_cli_requires_both_formal_reviews_bound_to_raw_coverage"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_validation_local_history.LocalHistoryTests",
+      "core": [
+        "test_archive_cannot_include_live_database_or_escape_output",
+        "test_common_git_directory_is_shared_across_checkouts_and_bad_identity_stops",
+        "test_declared_core_and_one_gui_retry_export_and_import_with_all_raw_files",
+        "test_empty_export_is_original_raw_ledger_and_seals_every_output_path",
+        "test_export_refuses_collision_and_size_without_erasing_prior_state",
+        "test_interrupted_export_stays_sealed_and_cannot_start_another_gui_attempt",
+        "test_missing_multiple_corrupt_and_cross_task_handoff_cannot_reset_history",
+        "test_one_bootstrap_missing_corrupt_history_and_authorization_are_not_defaults",
+        "test_real_cli_bootstrap_export_and_sealed_group_use_isolated_git_repository",
+        "test_real_cli_missing_store_declared_execution_and_interruption_cannot_export_empty"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_validation_runner.GroupedCollectionTests",
+      "core": [
+        "test_async_save_adapter_binds_initialization_and_recurses_into_real_service",
+        "test_bounded_alias_adapters_bind_sources_and_still_follow_target",
+        "test_busy_operation_adapter_rejects_guard_caller_and_method_drift",
+        "test_callable_binding_union_is_finite_and_keeps_distinct_targets",
+        "test_exact_mock_forwarding_adapter_preserves_actual_callbacks",
+        "test_imported_helper_inherited_setup_and_pure_logic",
+        "test_local_imports_cannot_silently_become_core",
+        "test_package_alias_requires_the_exact_already_loaded_helper_source",
+        "test_partition_rejects_missing_duplicate_unknown_and_overlap",
+        "test_real_cli_instance_and_returned_callees_share_source_resolution",
+        "test_real_cli_unknown_callable_shapes_and_protocols_fail_closed",
+        "test_real_collection_cli_tracks_aliases_and_rejects_unknown_callbacks",
+        "test_script_entrypoint_alias_requires_exact_loaded_sibling"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_validation_runner.HistoryRetrievalTests",
+      "core": [
+        "test_prior_attempt_missing_artifact_fails_cli_without_reset",
+        "test_retry_suite_requires_initializer_trace_not_arbitrary_tclerror"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_validation_runner.RunnerCliTests",
+      "core": [
+        "test_cli_setup_error_and_failure_leave_raw_events",
+        "test_cli_skip_is_not_success",
+        "test_cli_subtest_failure_is_retained_and_rejected",
+        "test_cli_success_counts_top_level_separately_from_subtests",
+        "test_development_cli_cannot_start_formal_group",
+        "test_gui_retry_requires_original_link_and_only_one_retry",
+        "test_interrupt_keeps_reported_failure_even_without_junit",
+        "test_missing_partial_or_wrong_junit_is_rejected",
+        "test_only_specific_initialization_resource_failure_is_retryable",
+        "test_write_and_process_log_are_exclusive"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_validation_runner.RunnerOrchestrationTests",
+      "core": [
+        "test_again_failed_gui_does_not_allow_third_attempt",
+        "test_core_failure_cannot_be_cleared_by_same_candidate_rerun",
+        "test_incomplete_history_and_corrupt_artifact_fail_closed",
+        "test_mixed_candidate_and_later_failure_reject_aggregate",
+        "test_preflight_failure_retains_core_and_retry_uses_full_gui_only"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_visual_context_repairs_v521",
+      "core": [
+        "test_p156_line_wrap_context_repair_supplies_text_only",
+        "test_p32_effective_date_structural_exclusion_matches_current_split_pdf"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_zero_occurrence_pdf_v541.ZeroOccurrencePdfV541Tests",
+      "core": [
+        "test_all_empty_batch_materializes_without_fatal_error",
+        "test_candidate_builder_accepts_truly_empty_pdf",
+        "test_candidate_builder_does_not_hide_orphan_classification",
+        "test_candidate_parser_accepts_header_only_ledger_sheet",
+        "test_empty_batch_is_not_declared_complete"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_zero_summary_and_project_status_v541.ZeroSummaryAndProjectStatusV541Tests",
+      "core": [
+        "test_blocked_pipeline_is_visible_without_session_manifest",
+        "test_brand_new_folder_still_reports_new_project",
+        "test_pre_session_recovery_only_triggers_when_all_stage_outputs_exist",
+        "test_processing_phase_is_visible_before_session_manifest",
+        "test_zero_summary_value_is_not_treated_as_missing"
+      ],
+      "gui": []
+    }
+  ]
+}

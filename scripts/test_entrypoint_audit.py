@@ -1034,50 +1034,257 @@ def _cached_uses_tk(function, owner):
 # Source hashes make the adapter fail closed when either opaque path changes.
 OPAQUE_GUI_ADAPTERS = {'test_test_entrypoint_audit.EntrypointAuditTests.test_pytest_only_tk_functions_are_mandatory_even_when_skipped': '702e123fba48168398e8555cdf66b46f49f7d63f158c91e18ce38a2cb7ed3b09', 'test_test_entrypoint_audit.EntrypointAuditTests.test_cross_module_tk_helper_skip_cannot_escape_junit_gate': 'd83588da65cfe10328a5d829beb32d7718b4aadfde985244bc473ea633b840cf'}
 
-def classify_item(item):
+REGISTRY_PATH = ROOT / "scripts/test_group_registry.json"
+
+
+def normalized_source_sha256(path):
+    """Review binding ignores checkout CRLF/LF only; raw bytes stay in evidence."""
+    source = Path(path).read_bytes().replace(b"\r\n", b"\n")
+    return hashlib.sha256(source).hexdigest()
+
+
+def expand_registry(registry):
+    """Expand explicitly listed members, never a class or function wildcard."""
+    if registry.get("schema") != "zhuyin-test-group-registry/1":
+        raise ValueError("unknown group registry schema")
+    if not isinstance(registry.get("source_review"), dict) or not registry["source_review"].get("basis"):
+        raise ValueError("missing registry source review")
+    entries = registry.get("entries")
+    if not isinstance(entries, list) or not entries:
+        raise ValueError("empty group registry")
+    expanded = {}
+    for entry in entries:
+        if not isinstance(entry, dict) or set(entry) != {"prefix", "core", "gui"}:
+            raise ValueError("unknown registration fields")
+        prefix = entry["prefix"]
+        if not isinstance(prefix, str) or not prefix or any(c in prefix for c in "*?[]"):
+            raise ValueError("invalid registration prefix")
+        for group in ("core", "gui"):
+            members = entry[group]
+            if not isinstance(members, list):
+                raise ValueError("registration members must be a list")
+            for member in members:
+                if not isinstance(member, str) or not member or "*" in member or "?" in member:
+                    raise ValueError("invalid registration member")
+                identity = prefix + "." + member
+                if identity in expanded:
+                    raise ValueError("duplicate or conflicting registration: " + identity)
+                expanded[identity] = group
+    if not expanded:
+        raise ValueError("empty expanded registration")
+    return expanded
+
+
+def registry_source_paths(source_root, scope):
+    if scope == "repository":
+        return sorted([*source_root.glob("*.py"), *source_root.joinpath("tests").rglob("*.py"),
+                       *source_root.joinpath("scripts").rglob("*.py")])
+    if scope == "tests":
+        return sorted(source_root.rglob("*.py"))
+    raise ValueError("unknown registry source scope")
+
+
+def validate_registry_sources(registry, source_root):
+    hashes = registry["source_review"].get("normalized_source_sha256")
+    if not isinstance(hashes, dict) or not hashes:
+        raise ValueError("missing registry source hashes")
+    paths = registry_source_paths(source_root, registry.get("source_scope"))
+    actual = {path.relative_to(source_root).as_posix(): normalized_source_sha256(path) for path in paths}
+    missing = sorted(set(hashes) - set(actual))
+    unknown = sorted(set(actual) - set(hashes))
+    changed = sorted(name for name in set(hashes) & set(actual) if hashes[name] != actual[name])
+    if missing or unknown or changed:
+        raise ValueError(f"registry reviewed source changed: missing={missing}, unregistered={unknown}, changed={changed}")
+    return actual
+
+
+def reconcile_registered_cases(records, registration):
+    identities = [record["identity"] for record in records]
+    duplicate = sorted(name for name, count in Counter(identities).items() if count != 1)
+    unknown = sorted(set(identities) - set(registration))
+    missing = sorted(set(registration) - set(identities))
+    if duplicate or unknown or missing or not identities:
+        raise ValueError(f"unresolved registration: duplicate={duplicate}, unregistered={unknown}, missing={missing}")
+    if len({record["nodeid"] for record in records}) != len(records):
+        raise ValueError("duplicate collected nodeid")
+    return records
+
+
+def bounded_tk_requirement(function, owner=None, seen=None):
+    """Positive leak guard for direct Tk, aliases and loaded source-local helpers.
+
+    This is deliberately not a proof about arbitrary callees, receivers,
+    returned values or providers. Only explicit reviewed registration admits
+    core. No provider adapter is invoked, and no test/helper is executed.
+    """
+    seen = set() if seen is None else seen
+    function = inspect.unwrap(function)
+    if inspect.ismethod(function):
+        owner, function = function.__self__, function.__func__
+    module = getattr(function, "__module__", "") or ""
+    if module == "tkinter" or module.startswith("tkinter."):
+        return getattr(function, "__name__", "") != "Tcl"
+    if not inspect.isfunction(function) or function in seen:
+        return False
+    source = inspect.getsourcefile(function)
+    if not source or not Path(source).resolve().is_relative_to(ROOT.resolve()):
+        return False
+    # Follow only test/helper source. Product call semantics are source-reviewed
+    # registration obligations, not a transitive arbitrary-call analysis.
+    if not Path(source).resolve().is_relative_to((ROOT / "tests").resolve()) and not Path(source).resolve().is_relative_to((ROOT / "tmp").resolve()):
+        return False
+    seen.add(function)
+    try:
+        tree = ast.parse(textwrap.dedent(inspect.getsource(function)))
+    except (OSError, TypeError, IndentationError, SyntaxError):
+        return False
+    namespace = dict(function.__globals__)
+    namespace.update(inspect.getclosurevars(function).nonlocals)
+    for imported in ast.walk(tree):
+        if isinstance(imported, ast.ImportFrom):
+            if imported.module == "tkinter":
+                if any(alias.name in {"Tk", "Toplevel", "*"} for alias in imported.names):
+                    return True
+            provider = loaded_source_module(imported.module or "", source)
+            if provider is not None:
+                for alias in imported.names:
+                    if hasattr(provider, alias.name):
+                        namespace[alias.asname or alias.name] = inspect.getattr_static(provider, alias.name)
+        elif isinstance(imported, ast.Import):
+            for alias in imported.names:
+                provider = loaded_source_module(alias.name, source)
+                if provider is not None:
+                    namespace[alias.asname or alias.name.split(".")[0]] = provider
+    names = {name for name, value in namespace.items()
+             if getattr(value, "__module__", "") == "tkinter" and getattr(value, "__name__", "") in {"Tk", "Toplevel"}}
+    if calls_tk(tree, names):
+        return True
+    assignments = {}
+
+    def bind_literal(target, value):
+        if isinstance(target, ast.Name):
+            assignments.setdefault(target.id, []).append(value)
+        elif isinstance(target, (ast.Tuple, ast.List)) and isinstance(value, (ast.Tuple, ast.List)) and len(target.elts) == len(value.elts):
+            for child, source_value in zip(target.elts, value.elts):
+                bind_literal(child, source_value)
+
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.Assign, ast.AnnAssign)) and node.value is not None:
+            for target in node.targets if isinstance(node, ast.Assign) else [node.target]:
+                bind_literal(target, node.value)
+        elif isinstance(node, (ast.For, ast.AsyncFor)) and isinstance(node.iter, (ast.Tuple, ast.List)):
+            for element in node.iter.elts:
+                bind_literal(node.target, element)
+
+    def known_targets(node, resolving=None):
+        resolving = set() if resolving is None else resolving
+        if isinstance(node, ast.Name):
+            if node.id in resolving:
+                return []
+            result = [namespace[node.id]] if node.id in namespace else []
+            for value in assignments.get(node.id, []):
+                result.extend(known_targets(value, resolving | {node.id}))
+            if node.id in {"self", "cls"} and owner is not None:
+                result.append(owner)
+            return result
+        if isinstance(node, ast.Attribute):
+            result = []
+            for base in known_targets(node.value, resolving):
+                try:
+                    target = inspect.getattr_static(base, node.attr)
+                except (AttributeError, TypeError):
+                    continue
+                if isinstance(target, (staticmethod, classmethod)):
+                    target = target.__func__
+                result.append(target)
+            return result
+        if isinstance(node, (ast.Tuple, ast.List)):
+            return [target for element in node.elts for target in known_targets(element, resolving)]
+        return []
+
+    for call in (node for node in ast.walk(tree) if isinstance(node, ast.Call)):
+        targets = known_targets(call.func)
+        # A source-local direct callback parameter is useful positive evidence;
+        # merely passing a callable (e.g. patch.object) does not invoke it.
+        callbacks = []
+        for target in targets:
+            if not inspect.isfunction(target):
+                continue
+            target_source = inspect.getsourcefile(target)
+            if not target_source or not Path(target_source).resolve().is_relative_to(Path(source).resolve().parent):
+                continue
+            try:
+                target_tree = ast.parse(textwrap.dedent(inspect.getsource(target)))
+                parameters = list(inspect.signature(target).parameters)
+            except (OSError, TypeError, ValueError, SyntaxError, IndentationError):
+                continue
+            invoked = {node.func.id for node in ast.walk(target_tree)
+                       if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+            for parameter, argument in zip(parameters, call.args):
+                if parameter in invoked:
+                    callbacks.extend(known_targets(argument))
+            for keyword in call.keywords:
+                if keyword.arg in invoked:
+                    callbacks.extend(known_targets(keyword.value))
+        targets.extend(callbacks)
+        for target in targets:
+            if bounded_tk_requirement(target, owner, seen):
+                return True
+    return False
+
+
+def classify_item(item, registration):
     parts = item.nodeid.split("::")
     identity = ".".join([Path(parts[0]).stem, *parts[1:]])
-    if identity in OPAQUE_GUI_ADAPTERS:
-        source_hash = hashlib.sha256(inspect.getsource(item.obj).encode()).hexdigest()
-        if source_hash != OPAQUE_GUI_ADAPTERS[identity]:
-            raise ValueError("opaque GUI adapter source changed: " + identity)
-        return "gui"
+    if identity not in registration:
+        raise ValueError("unregistered collected identity: " + identity)
+    group = registration[identity]
+    if group not in {"core", "gui"}:
+        raise ValueError("unknown registered group: " + identity)
+    if group == "gui":
+        return group
     owner = getattr(item, "cls", None)
     functions = [item.obj]
     if owner is not None:
         functions.extend(getattr(owner, name) for name in
-                         ("setUp", "setUpClass", "setup_method", "setup_class")
+                         ("setUp", "setUpClass", "tearDown", "tearDownClass", "setup_method", "setup_class", "teardown_method", "teardown_class")
                          if hasattr(owner, name))
-    functions.extend(definition.func for definitions in
-                     getattr(item, "_fixtureinfo", None).name2fixturedefs.values()
-                     for definition in definitions)
-    unresolved = []
-    for function in functions:
-        try:
-            if _cached_uses_tk(function, owner):
-                return "gui"  # A proved required-Tk path suffices for isolation.
-        except (ValueError, RecursionError) as error:
-            unresolved.append(str(error))
-    if unresolved:
-        raise ValueError("; ".join(unresolved))
-    return "core"
+    fixtureinfo = getattr(item, "_fixtureinfo", None)
+    if fixtureinfo is not None:
+        for name in fixtureinfo.names_closure:
+            definitions = fixtureinfo.name2fixturedefs.get(name, ())
+            if definitions:
+                functions.append(definitions[-1].func)
+    if any(bounded_tk_requirement(function, owner) for function in functions):
+        raise ValueError("registered core conflicts with bounded Tk requirement: " + identity)
+    return group
 
 
-def grouped_collection(output, tests=None):
+def grouped_collection(output, tests=None, registry_path=None):
+    if output.exists():
+        raise FileExistsError("refuse existing grouped inventory: " + str(output))
     _CLASSIFICATION_UNKNOWN_SOURCES.clear()
     sys.path.insert(0, str(ROOT))
     import pytest
     tests = Path(tests or ROOT / "tests").resolve()
+
+    registry = json.loads(Path(registry_path or REGISTRY_PATH).read_text(encoding="utf-8"))
+    registration = expand_registry(registry)
+    source_root = ROOT if registry.get("source_scope") == "repository" else tests
 
     class Groups:
         records = []
 
         def pytest_collection_finish(self, session):
             failures = []
+            collected = [{"identity": ".".join([Path(item.nodeid.split("::")[0]).stem, *item.nodeid.split("::")[1:]]),
+                          "nodeid": item.nodeid} for item in session.items]
+            reconcile_registered_cases(collected, registration)
+            validate_registry_sources(registry, source_root)
             for item in session.items:
                 parts = item.nodeid.split("::")
                 try:
-                    group = classify_item(item)
+                    group = classify_item(item, registration)
                 except (ValueError, RecursionError) as error:
                     failure = item.nodeid + ": " + str(error)
                     failures.append(failure)
@@ -1107,8 +1314,11 @@ def grouped_collection(output, tests=None):
         result.update(compare_collections(unittest_ids, result["pytest_ids"]))
     else:
         result.update(unittest_ids=[], pytest_only=result["pytest_ids"], same_common_order=True)
+    result["registration"] = {"registry_sha256": hashlib.sha256(Path(registry_path or REGISTRY_PATH).read_bytes()).hexdigest(),
+                              "source_review": registry["source_review"], "source_scope": registry["source_scope"]}
     validate_groups(result)
-    output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    with output.open("x", encoding="utf-8") as handle:
+        json.dump(result, handle, ensure_ascii=False, indent=2)
     return result
 
 
@@ -1155,9 +1365,10 @@ def main(argv=None):
     parser.add_argument("output", type=Path)
     parser.add_argument("--junit", type=Path)
     parser.add_argument("--tests", type=Path)
+    parser.add_argument("--registry", type=Path)
     args = parser.parse_args(argv)
     if args.command == "collect-groups":
-        grouped_collection(args.output, args.tests)
+        grouped_collection(args.output, args.tests, args.registry)
     elif args.command.startswith("_"):
         collect(args.command[1:], args.output, args.tests)
     elif args.command == "collect":

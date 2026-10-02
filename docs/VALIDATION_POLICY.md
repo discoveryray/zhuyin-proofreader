@@ -34,7 +34,7 @@
 
 pytest 仍是唯一例行完整功能測試入口，正式覆蓋改成 **一次核心全集＋全部必要 GUI** 的兩個獨立 pytest process；不另跑混合 full pytest 或完整 unittest。本機定向測試 → PR 一次正式分組功能驗證 → 實際 merge SHA 的 post-merge 短檢查。第一版不選擇性省略 GUI、不用 xdist、不重寫大量測試或共用可變 DB fixture。
 
-`scripts/test_entrypoint_audit.py` 保留 unittest／pytest identity 對照，collection 不代表測試已執行。分類從實際收集案例與真實 Tk 建立路徑產生，核對繼承、函式、helper；不能只看檔名／GUI 字樣。核心與 GUI 必須 disjoint，聯集精確等於全集；不明的動態 helper、fixture 或 discovery contract 必須停止釐清，不能猜成核心或省略。既有純邏輯確認、保存、binding、actual／expected 案例照常保留。測試數以當次清冊為準，top-level cases 與 subtests 分開記錄。
+`scripts/test_entrypoint_audit.py` 保留 unittest／pytest identity 對照，collection 不代表測試已執行。分類採明確分組登記＋實際 pytest collection 完整對帳。`scripts/test_group_registry.json` 可按 class／module 簡寫，但每個 member 都是有限、精確的 case identity（含 inherited cases／參數化 identity），沒有 class wildcard；新增或未登記案例、重複、遺漏及分組衝突一律拒絕。分組正確性由既有有效 GUI 清冊分類依據、來源審查及回歸共同確認，不能只看檔名／GUI 字樣，也不要求工具自行證明任意 Python 呼叫或標準函式庫不會使用 Tk。核心與 GUI 必須 disjoint，聯集精確等於當次 collection；只有明確 core 登記可納入核心，不因未辨認 Tk 就默認 core。既有有限正向 Tk 防漏掃描核對 case、MRO setup／teardown、真正 fixture closure 與 loaded source-local helper／簡單 alias；已證 Tk 與 core 登記衝突即停止。未知呼叫行為由明確登記的來源審查負責，不擴成通用 callee／provider resolver。既有純邏輯確認、保存、binding、actual／expected 案例照常保留。測試數以當次清冊為準，top-level cases 與 subtests 分開記錄。
 
 各組使用隔離 temp、JUnit 與原始 log，逐一核對每個必要 identity 恰好成功一次。unknown、missing、duplicate、skip、failure、error 都拒絕；缺失、舊 execution、其他 SHA、損毀 JUnit 不能替代。失敗後不得製造空白成功報告。只跑 collection／preflight 不代表 GUI 驗收。具體跨測試順序線索才使用最小 targeted order regression，不能因集合相等宣稱執行順序完全等價。
 
@@ -70,14 +70,14 @@ PR 功能覆蓋沿用到 merge 必須同時證明：
 本機開發短回歸（使用已核對的 Python 3.13.0 環境；這不是正式核心／GUI驗收）：
 
 ```powershell
-python -m pytest tests/test_pr_review_gate.py tests/test_validation_evidence.py tests/test_validation_runner.py tests/test_validation_local_history.py tests/test_ci_validation_workflow.py tests/test_test_entrypoint_audit.py -q -k "not test_pytest_only_tk_functions_are_mandatory_even_when_skipped and not test_cross_module_tk_helper_skip_cannot_escape_junit_gate"
+python -m pytest tests/test_pr_review_gate.py tests/test_validation_evidence.py tests/test_validation_runner.py tests/test_validation_local_history.py tests/test_ci_validation_workflow.py tests/test_test_entrypoint_audit.py tests/test_test_group_registry.py -q -k "not test_pytest_only_tk_functions_are_mandatory_even_when_skipped and not test_cross_module_tk_helper_skip_cannot_escape_junit_gate"
 python -m compileall -q scripts
 New-Item -ItemType Directory -Force tmp | Out-Null
 python scripts/test_entrypoint_audit.py collect-groups tmp/group-inventory.json
 git diff --check
 ```
 
-短回歸排除的兩個既有工具 fixture 會在子程序中建立真實 Tk；它們仍在正式 GUI 清冊中，不是免驗或永久 skip。`collect-groups` 只收集而不執行案例；不可把 collection 成功報成 GUI 成功。 Callable aliases 只沿可證明的區域別名、literal list／tuple、明確 callback 及標準 contextmanager 的唯一 nested-callable yield 追蹤；未知 lookup／容器仍 fail closed。同次 collection 逐 identity 保留未知診斷，任一未知即不產生成功清冊。任何 callee AST 形態（包括 instance Attribute、returned Call）及未有證明的 native／external provider 都不得默認 core；receiver／return 只接受有限來源證明，不執行 constructor、不由 annotation 或套件名稱猜純邏輯。四個限定動態 alias 契約僅處理 fixture_path_alias 的 kernel32.GetShortPathNameW、MigrationInspectionTests 的 GlobalExactGlyphRepository.load_snapshot，AsyncReviewSaveTests 的 ReviewSaveService.save_event／已證 busy guard 的 operation loop，以及 test_bundle_actual_late_marker_prevents_commit 的精確 mock forward；精確 path／qualname／callsite／caller與初始化來源 hash 失配即停止，兩個 instance adapter 仍遞迴核對實際 target；save adapter 另綁定 headless_app、QueuedRoot、reload_records 與 _invalidate_save_snapshot 的初始化來源。Literal dictionary 分支與固定 key 寫入採有限聯集，未知 key、opaque 逃逸或未證明的 splat callback 仍拒絕；forward adapter 必須綁定真正入口／callsite，遞迴檢查 actual callback targets；busy loop 的 caller、等待／release、guards 與所有 method entry／closure 均受來源綁定。明確 positional callback 不被未知 splat 覆蓋。修改這些來源必須重新獨立審查 adapter，不能自動重算 hash 或推廣到其他 native API。
+短回歸排除的兩個既有工具 fixture 會在子程序中建立真實 Tk；它們仍在正式 GUI 清冊中，不是免驗或永久 skip。`collect-groups` 只收集而不執行案例；不可把 collection 成功報成 GUI 成功。 登記 source review 綁定 repository 根目錄、tests 與 scripts 的 `.py` 來源清單及 SHA256（只正規化 CRLF→LF；實體 bytes/hash 另存 execution evidence）。來源增刪或 hash 改變必須重新來源審查與明確更新登記；工具不自動刷 hash，不沿用舊清冊冒充新來源。`--registry` 可提供隔離小 fixture 的明確有限登記，其來源 scope 是該 tests 目錄。原 F1 instance method 與 factory()() 以明確 GUI 登記、原重現 sentinel 及真 CLI 回歸驗證。保留的 `callable_uses_tk` 舊 source-pattern regression API 不參與正式分類，也不是 core admission；不新增 provider adapter。
 
 本機分組是可選的昂貴驗證，也只能在「開始驗證」後按具體驗證需求執行。先以原 task、baseline、原始需求 reference bootstrap 一次 canonical ledger；`git-common-dir` 的共同 repository 旁 `tmp/validation-task-ledgers/<task-id>` 是持久來源，跨 worktree、session 或 `--evidence-root` 共用，不因輸出目錄改變重設額度。缺失／損毀 ledger、未知 task、已封存 handoff 均停止，不能自行重新初始化。 Local ledger／handoff v2 另保存固定 store identity、兩份 store marker 及獨立 append-only execution declarations；每次啟動前先 durable 寫入宣告。read／export／import 必須證明全部宣告與 execution 目錄一一對應，且原始 manifest／log 等檔案完整；整個 store、單次 execution 或宣告遺失都不能當成空 history。真正空 handoff 仍包含 ledger 和兩份 marker；舊 v1 不自動遷移或追認。以下為本 task 的具體命令：
 

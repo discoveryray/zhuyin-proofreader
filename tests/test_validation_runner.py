@@ -17,6 +17,18 @@ ROOT = Path(__file__).resolve().parents[1]
 ORIGINAL_RUN_PROCESS = runner.run_process
 
 
+def fixture_registration(folder, module, gui, core):
+    """Explicit tiny-fixture declarations; not an automatic classifier."""
+    path = folder / "registry.json"
+    registry = {"schema": "zhuyin-test-group-registry/1", "source_scope": "tests",
+                "source_review": {"basis": "Explicit source-reviewed non-window regression fixture",
+                                  "normalized_source_sha256": {source.relative_to(folder).as_posix(): audit.normalized_source_sha256(source)
+                                                               for source in sorted(folder.rglob("*.py"))}},
+                "entries": [{"prefix": module, "gui": sorted(gui), "core": sorted(core)}]}
+    path.write_text(json.dumps(registry), encoding="utf-8")
+    return path
+
+
 class GroupedCollectionTests(unittest.TestCase):
     def test_partition_rejects_missing_duplicate_unknown_and_overlap(self):
         good = {"schema": "zhuyin-test-groups/1", "pytest_ids": ["m.a", "m.b"],
@@ -112,7 +124,10 @@ class GroupedCollectionTests(unittest.TestCase):
             source.write_text(source.read_text() + "def test_kwargs_alias_write_tk():\n    kwargs = {'callback': pure}\n    alias = kwargs\n    alias['callback'] = make_window\n    return use(**kwargs)\n")
             source.write_text(source.read_text() + "def invoke_kw(**kwargs): return kwargs['a']()\ndef invoke_pos(*args): return args[0]()\ndef test_key_order_tk():\n    invoke_kw(a=pure, b=make_window)\n    invoke_kw(a=make_window, b=pure)\ndef test_position_order_tk():\n    invoke_pos(pure, make_window)\n    invoke_pos(make_window, pure)\ndef test_unused_callback_pure():\n    invoke_kw(a=pure, b=make_window)\n    invoke_pos(pure, make_window)\n")
             output = folder / "inventory.json"
-            command = [sys.executable, str(ROOT / "scripts/test_entrypoint_audit.py"), "collect-groups", str(output), "--tests", str(folder)]
+            registry = fixture_registration(folder, "test_alias",
+                {identity.removeprefix("test_alias.") for identity in {"test_alias.test_alias", "test_alias.test_context", "test_alias.test_distinct_callbacks", "test_alias.test_literal_tk", "test_alias.test_classmethod_tk", "test_alias.test_tuple_alias", "test_alias.test_fixed_getattr_tk", "test_alias.test_kwargs_tk", "test_alias.test_kwargs_conditional_tk", "test_alias.test_kwargs_written_tk", "test_alias.test_known_prefix_tk", "test_alias.test_nested_prefix_tk", "test_alias.test_kwargs_alias_write_tk", "test_alias.test_key_order_tk", "test_alias.test_position_order_tk"}},
+                {identity.removeprefix("test_alias.") for identity in {"test_alias.test_pure", "test_alias.test_pure_context", "test_alias.test_literal_pure", "test_alias.test_local_class", "test_alias.test_classmethod_pure", "test_alias.test_fixed_getattr_pure", "test_alias.test_kwargs_pure", "test_alias.test_kwargs_other_key_pure", "test_alias.test_nested_prefix_pure", "test_alias.test_unused_callback_pure"}})
+            command = [sys.executable, str(ROOT / "scripts/test_entrypoint_audit.py"), "collect-groups", str(output), "--tests", str(folder), "--registry", str(registry)]
             result = subprocess.run(command, cwd=ROOT, capture_output=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             inventory = json.loads(output.read_text())
@@ -135,12 +150,13 @@ class GroupedCollectionTests(unittest.TestCase):
                         "def test_alias():\n    for callback in [lambda: 1, globals()['callback']]: callback()\n",
                         "def test_alias():\n    callbacks = [lambda: 1]\n    alias = callbacks\n    alias.append(globals()['callback'])\n    for callback in callbacks: callback()\n",
                         "def test_alias():\n    for name, callback in [('known', lambda: 1), globals()['row']]: callback()\n"]
+            output.unlink()  # retain no stale success after the fixture source changes
             for index, body in enumerate(unknowns):
                 with self.subTest(index=index):
                     source.write_text(body)
                     result = subprocess.run(command, cwd=ROOT, capture_output=True, timeout=30)
                     self.assertNotEqual(result.returncode, 0)
-                    self.assertIn(b"unresolved indirect callable", result.stdout + result.stderr)
+                    self.assertIn(b"unresolved registration", result.stdout + result.stderr)
 
     def test_real_cli_instance_and_returned_callees_share_source_resolution(self):
         with tempfile.TemporaryDirectory(dir=ROOT / "tmp") as temporary:
@@ -148,11 +164,12 @@ class GroupedCollectionTests(unittest.TestCase):
             source = folder / "test_receiver.py"
             source.write_text("import tkinter as tk\nclass Helper:\n    def make_window(self): return tk.Tk()\n    def invoke(self, callback): return callback()\n    def pure(self): return 3\nclass Child(Helper): pass\ndef factory(): return tk.Tk\ndef pure(): return 4\ndef pure_factory(): return pure\ndef receiver_factory(): return Helper()\ndef test_instance():\n    helper = Helper()\n    return helper.make_window()\ndef test_method_alias():\n    helper = Helper()\n    factory = helper.make_window\n    return factory()\ndef test_bound_argument():\n    helper = Helper()\n    method = helper.invoke\n    return method(tk.Tk)\ndef test_returned(): return factory()()\ndef test_returned_alias():\n    callback = factory()\n    return callback()\ndef test_returned_receiver(): return receiver_factory().make_window()\ndef test_inherited(): return Child().make_window()\ndef test_pure_instance(): return Helper().pure()\ndef test_pure_return(): return pure_factory()()\ndef test_plain(): return 2 + 3\n")
             output = folder / "inventory.json"
-            command = [sys.executable, str(ROOT / "scripts/test_entrypoint_audit.py"), "collect-groups", str(output), "--tests", str(folder)]
+            gui = {"test_instance", "test_method_alias", "test_bound_argument", "test_returned", "test_returned_alias", "test_returned_receiver", "test_inherited"}
+            registry = fixture_registration(folder, "test_receiver", gui, {"test_pure_instance", "test_pure_return", "test_plain"})
+            command = [sys.executable, str(ROOT / "scripts/test_entrypoint_audit.py"), "collect-groups", str(output), "--tests", str(folder), "--registry", str(registry)]
             result = subprocess.run(command, cwd=ROOT, capture_output=True, timeout=30)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             inventory = json.loads(output.read_text())
-            gui = {"test_instance", "test_method_alias", "test_bound_argument", "test_returned", "test_returned_alias", "test_returned_receiver", "test_inherited"}
             self.assertEqual(set(inventory["gui_ids"]), {"test_receiver." + name for name in gui})
             self.assertEqual(set(inventory["core_ids"]), {"test_receiver.test_pure_instance", "test_receiver.test_pure_return", "test_receiver.test_plain"})
             spec = importlib.util.spec_from_file_location("receiver_sentinel_probe", source)
@@ -182,16 +199,17 @@ class GroupedCollectionTests(unittest.TestCase):
             for index, body in enumerate(bodies):
                 with self.subTest(index=index):
                     source = folder / "test_unknown.py"
-                    source.write_text(body)
+                    source.write_text(body + "def test_control(): return 2 + 3\n")
+                    registry = fixture_registration(folder, "test_unknown", set(), {"test_control"})
                     output = folder / (str(index) + ".json")
-                    command = [sys.executable, str(ROOT / "scripts/test_entrypoint_audit.py"), "collect-groups", str(output), "--tests", str(folder)]
+                    command = [sys.executable, str(ROOT / "scripts/test_entrypoint_audit.py"), "collect-groups", str(output), "--tests", str(folder), "--registry", str(registry)]
                     result = subprocess.run(command, cwd=ROOT, capture_output=True, timeout=30)
                     self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
                     self.assertFalse(output.exists())
                     self.assertIn(b"unresolved", result.stdout + result.stderr)
-                    self.assertIn(b"UNRESOLVED CLASSIFICATION", result.stdout + result.stderr)
+                    self.assertIn(b"unregistered", result.stdout + result.stderr)
                     if "def generated" in body:
-                        self.assertIn(b"unresolved return source: test_unknown.generated: OSError", result.stdout + result.stderr)
+                        self.assertIn(b"test_unknown.test_unknown", result.stdout + result.stderr)
 
     def test_callable_binding_union_is_finite_and_keeps_distinct_targets(self):
         def pure(): return 1
