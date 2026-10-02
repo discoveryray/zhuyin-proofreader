@@ -1,0 +1,105 @@
+name: Fixed-merge Tk initialization diagnostic
+
+on:
+  push:
+    branches:
+      - codex/tk-b873-bounded-diagnostic
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostic:
+    name: One default-capture sequence at b873
+    if: ${{ github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/codex/tk-b873-bounded-diagnostic' && github.run_attempt == 1 && github.event.created == true && github.event.before == '0000000000000000000000000000000000000000' }}
+    runs-on: windows-2025
+    timeout-minutes: 20
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTEST_ADDOPTS: ""
+    steps:
+      - name: Check out diagnostic definition D
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          path: diagnostic
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Set up original Python version
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.13.0"
+
+      - name: Stage helper and prepare failure evidence outside source
+        shell: pwsh
+        run: |
+          $helperDirectory = Join-Path $env:RUNNER_TEMP 'tk-b873-helper'
+          if (Test-Path -LiteralPath $helperDirectory) {
+            throw 'Helper directory already exists; no retry.'
+          }
+          New-Item -ItemType Directory -Path $helperDirectory -ErrorAction Stop | Out-Null
+          $helper = Join-Path $helperDirectory 'tk_postmerge_diagnostic.py'
+          Copy-Item -LiteralPath 'diagnostic/tools/tk_postmerge_diagnostic.py' -Destination $helper -ErrorAction Stop
+          $source = Join-Path $env:GITHUB_WORKSPACE 'source'
+          $output = Join-Path $env:RUNNER_TEMP 'tk-b873-diagnostic'
+          python $helper prepare --source $source --output $output --definition-head $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Check out fixed tested merge M
+        uses: actions/checkout@v7
+        with:
+          ref: b8733e85300139748079130eb9d10c5d9685f22f
+          path: source
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Show Python version
+        run: python --version
+
+      - name: Upgrade pip as in original CI
+        run: python -m pip install --upgrade pip
+
+      - name: Install fixed-source development dependencies
+        run: python -m pip install -r source/requirements-ci.txt
+
+      - name: Run exactly one original default-capture sequence
+        shell: pwsh
+        run: |
+          $helper = Join-Path $env:RUNNER_TEMP 'tk-b873-helper/tk_postmerge_diagnostic.py'
+          $source = Join-Path $env:GITHUB_WORKSPACE 'source'
+          $output = Join-Path $env:RUNNER_TEMP 'tk-b873-diagnostic'
+          python $helper run --source $source --output $output --definition-head $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Export approved records to job log for byte-exact recovery
+        if: ${{ always() }}
+        shell: pwsh
+        run: |
+          $helper = Join-Path $env:RUNNER_TEMP 'tk-b873-helper/tk_postmerge_diagnostic.py'
+          $output = Join-Path $env:RUNNER_TEMP 'tk-b873-diagnostic'
+          if (-not (Test-Path -LiteralPath $helper)) {
+            throw 'Diagnostic helper was not staged; raw records unavailable.'
+          }
+          python $helper export --output $output --definition-head $env:GITHUB_SHA
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Preserve approved synthetic technical records once
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: tk-b873-default-${{ github.run_id }}-attempt-1
+          path: |
+            ${{ runner.temp }}/tk-b873-diagnostic/environment.json
+            ${{ runner.temp }}/tk-b873-diagnostic/summary.json
+            ${{ runner.temp }}/tk-b873-diagnostic/process.json
+            ${{ runner.temp }}/tk-b873-diagnostic/pytest.log
+            ${{ runner.temp }}/tk-b873-diagnostic/junit.xml
+            ${{ runner.temp }}/tk-b873-diagnostic/events.json
+            ${{ runner.temp }}/tk-b873-diagnostic/source-before.json
+            ${{ runner.temp }}/tk-b873-diagnostic/source-after.json
+          include-hidden-files: false
+          overwrite: false
+          if-no-files-found: error
