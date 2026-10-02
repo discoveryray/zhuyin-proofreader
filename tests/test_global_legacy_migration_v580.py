@@ -746,9 +746,66 @@ class MigrationTests(unittest.TestCase):
 
 class MigrationArchitectureTests(unittest.TestCase):
     PHASE5_BASELINE = "d2d558808bd2902857fad30f824d8bdc352beb73"
+    _FINGERPRINT_CONTRACT_CALLS = {
+        "compute_actual_asset_fingerprint", "compute_expected_asset_fingerprint",
+        "rewrite_actual_workbook_fingerprint", "fingerprint_compatible",
+        "schema_compatible", "review_id_schema_compatible", "validate_asset_manifest",
+        "actual_workbook_dynamic_dependencies", "actual_workbook_global_exact_dependencies",
+        "global_exact_glyph_evidence_hashes",
+    }
 
-    @staticmethod
-    def _standalone_fingerprint_contract(tree):
+    @classmethod
+    def _protected_call_records(cls, tree):
+        """One recursive inventory: lexical scope, definition ordinal and every call.
+
+        Conditional statements do not create Python lexical scopes; traverse
+        their children just like every other AST node. Repeated definitions in
+        the same enclosing scope get distinct ordinals, and repeated calls
+        remain separate list entries. No aliases or reflection are resolved.
+        """
+        records, occurrences = [], {}
+
+        def visit(node, scope=(("Module", "<module>", 0),), owners=()):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+                kind, name = type(node).__name__, getattr(node, "name", "<lambda>")
+                key = (scope, kind, name)
+                ordinal = occurrences.get(key, 0)
+                occurrences[key] = ordinal + 1
+                scope = (*scope, (kind, name, ordinal))
+                owners = (*owners, node)
+            if (isinstance(node, ast.Call)
+                    and getattr(node.func, "id", getattr(node.func, "attr", "")) in cls._FINGERPRINT_CONTRACT_CALLS):
+                records.append((scope, owners, node))
+            for child in ast.iter_child_nodes(node):
+                visit(child, scope, owners)
+
+        visit(tree)
+        return records
+
+    @classmethod
+    def _assert_legacy_expected_adapter_contract(cls, tree, *, required=True, records=None):
+        """An independent, exact allowlist; never derive its answer from current code."""
+        adapters = [node for node in tree.body
+                    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and node.name == "bind_legacy_gui_expected_resolutions"]
+        if not adapters and not required:  # Phase 5 predates this explicitly named adapter.
+            return []
+        if len(adapters) != 1 or type(adapters[0]) is not ast.FunctionDef:
+            raise AssertionError("Exactly one synchronous legacy expected adapter is required")
+        expected = [ast.dump(node.value) for node in ast.parse(
+            "schema_compatible(metadata.get('session_schema_version'), SESSION_SCHEMA_VERSION)\n"
+            "schema_compatible(metadata.get('workbook_schema_version'), WORKBOOK_SCHEMA_VERSION)\n"
+            "review_id_schema_compatible(metadata.get('review_id_schema_version'), REVIEW_ID_SCHEMA_VERSION)\n"
+        ).body]
+        records = cls._protected_call_records(tree) if records is None else records
+        selected = [(owners, call) for _, owners, call in records if adapters[0] in owners]
+        actual = [ast.dump(call) for _, call in selected]
+        if actual != expected or any(owners != (adapters[0],) for owners, _ in selected):
+            raise AssertionError("Legacy expected adapter schema/fingerprint calls differ from the exact contract")
+        return [call for _, call in selected]
+
+    @classmethod
+    def _standalone_fingerprint_contract(cls, tree):
         """Freeze Phase 5 cache boundaries, not unrelated manual/report code.
 
         The producer/comparator modules remain byte-pinned below. Here retain
@@ -758,13 +815,9 @@ class MigrationArchitectureTests(unittest.TestCase):
         """
         declarations = {"ACTUAL_DECODER_SOURCE_FILES", "COMPATIBLE_SESSION_VERSIONS"}
         guards = {"output_is_reusable", "candidate_is_baseline_reusable"}
-        calls = {
-            "compute_actual_asset_fingerprint", "compute_expected_asset_fingerprint",
-            "rewrite_actual_workbook_fingerprint", "fingerprint_compatible",
-            "schema_compatible", "review_id_schema_compatible", "validate_asset_manifest",
-            "actual_workbook_dynamic_dependencies", "actual_workbook_global_exact_dependencies",
-            "global_exact_glyph_evidence_hashes",
-        }
+        calls = cls._FINGERPRINT_CONTRACT_CALLS
+        records = cls._protected_call_records(tree)
+        exempt_calls = set(cls._assert_legacy_expected_adapter_contract(tree, required=False, records=records))
         imports = calls | {
             "EXPECTED_RESOLVER_SOURCE_FILES", "LEDGER_SCHEMA_VERSION", "SESSION_SCHEMA_VERSION",
             "WORKBOOK_SCHEMA_VERSION", "REVIEW_ID_SCHEMA_VERSION", "GlobalExactGlyphRepository",
@@ -777,9 +830,12 @@ class MigrationArchitectureTests(unittest.TestCase):
             "reuse_guards": {node.name: ast.dump(node) for node in tree.body
                              if isinstance(node, ast.FunctionDef) and node.name in guards},
             "contract_calls": {node.name: selected for node in tree.body if isinstance(node, ast.FunctionDef)
+                               and node.name != "bind_legacy_gui_expected_resolutions"
                                if (selected := [ast.dump(call) for call in ast.walk(node)
                                                 if isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
                                                 and call.func.id in calls])},
+            "recursive_contract_calls": [(scope, ast.dump(call)) for scope, _, call in records
+                                         if call not in exempt_calls],
         }
 
     @classmethod
@@ -819,6 +875,7 @@ class MigrationArchitectureTests(unittest.TestCase):
             committed = subprocess.check_output(["git", "show", self.PHASE5_BASELINE + ":" + name], cwd=ROOT)
             self.assertEqual((ROOT / name).read_bytes().replace(b"\r\n", b"\n"), committed.replace(b"\r\n", b"\n"))
         current = ast.parse((ROOT / "standalone_proofread.py").read_text(encoding="utf-8"))
+        self._assert_legacy_expected_adapter_contract(current)
         self.assertEqual(self._standalone_fingerprint_contract(current),
                          self._standalone_fingerprint_contract(self._historical_standalone()))
 
@@ -832,6 +889,155 @@ class MigrationArchitectureTests(unittest.TestCase):
         self.assertNotEqual(ast.dump(changed), ast.dump(historical))
         self.assertEqual(self._standalone_fingerprint_contract(changed),
                          self._standalone_fingerprint_contract(historical))
+
+    @classmethod
+    def _historical_with_authorized_adapter(cls):
+        tree = cls._historical_standalone()
+        # Deliberately hard-written independently of the current implementation.
+        tree.body.extend(ast.parse(
+            "def bind_legacy_gui_expected_resolutions():\n"
+            "    schema_compatible(metadata.get('session_schema_version'), SESSION_SCHEMA_VERSION)\n"
+            "    schema_compatible(metadata.get('workbook_schema_version'), WORKBOOK_SCHEMA_VERSION)\n"
+            "    review_id_schema_compatible(metadata.get('review_id_schema_version'), REVIEW_ID_SCHEMA_VERSION)\n"
+        ).body)
+        return tree
+
+    def test_exact_authorized_adapter_keeps_historical_fingerprint_projection(self):
+        historical = self._historical_standalone()
+        authorized = self._historical_with_authorized_adapter()
+        self._assert_legacy_expected_adapter_contract(authorized)
+        self.assertEqual(self._standalone_fingerprint_contract(authorized),
+                         self._standalone_fingerprint_contract(historical))
+
+    def test_adapter_missing_duplicate_or_changed_schema_checks_are_rejected(self):
+        authorized = self._historical_with_authorized_adapter()
+        mutations = ["missing_adapter", "duplicate_adapter", "async_adapter", "renamed_adapter",
+                     "duplicate_check", "added_check", "changed_metadata", "changed_metadata_key",
+                     "changed_schema", "changed_callee", "qualified_callee", "reordered_args", "extra_keyword"]
+        mutations += [f"missing_check_{index}" for index in range(3)]
+        for mutation in mutations:
+            changed = copy.deepcopy(authorized)
+            adapter = changed.body[-1]
+            call = adapter.body[0].value
+            if mutation == "missing_adapter":
+                changed.body.pop()
+            elif mutation == "duplicate_adapter":
+                changed.body.append(copy.deepcopy(adapter))
+            elif mutation == "async_adapter":
+                changed.body[-1] = ast.AsyncFunctionDef(**vars(adapter))
+            elif mutation == "renamed_adapter":
+                adapter.name = "unrecognized_legacy_adapter"
+            elif mutation.startswith("missing_check_"):
+                adapter.body.pop(int(mutation.rsplit("_", 1)[1]))
+            elif mutation == "duplicate_check":
+                adapter.body.append(copy.deepcopy(adapter.body[0]))
+            elif mutation == "added_check":
+                adapter.body.extend(ast.parse("schema_compatible(metadata.get('future_schema'), FUTURE_SCHEMA)").body)
+            elif mutation == "changed_metadata":
+                call.args[0].func.value.id = "unverified_metadata"
+            elif mutation == "changed_metadata_key":
+                call.args[0].args[0].value = "future_schema"
+            elif mutation == "changed_schema":
+                call.args[1].id = "WORKBOOK_SCHEMA_VERSION"
+            elif mutation == "changed_callee":
+                call.func.id = "unverified_schema_compatible"
+            elif mutation == "qualified_callee":
+                call.func = ast.Attribute(value=ast.Name(id="unverified", ctx=ast.Load()),
+                                          attr="schema_compatible", ctx=ast.Load())
+            elif mutation == "reordered_args":
+                call.args.reverse()
+            else:
+                call.keywords.append(ast.keyword(arg="allow_unknown", value=ast.Constant(value=True)))
+            with self.subTest(mutation=mutation), self.assertRaises(AssertionError):
+                self._assert_legacy_expected_adapter_contract(changed)
+
+    def test_protected_calls_in_adapter_or_other_new_functions_are_rejected(self):
+        authorized = self._historical_with_authorized_adapter()
+        expected = self._standalone_fingerprint_contract(self._historical_standalone())
+        for name in sorted(self._FINGERPRINT_CONTRACT_CALLS):
+            for location in ("adapter", "other_function", "other_async_function"):
+                for qualified in (False, True):
+                    changed = copy.deepcopy(authorized)
+                    expression = f"{'provider.' if qualified else ''}{name}()"
+                    if location == "adapter":
+                        changed.body[-1].body.extend(ast.parse(expression).body)
+                    else:
+                        prefix = "async " if location == "other_async_function" else ""
+                        changed.body.extend(ast.parse(f"{prefix}def future_function():\n    {expression}\n").body)
+                    with self.subTest(name=name, location=location, qualified=qualified), self.assertRaises(AssertionError):
+                        self.assertEqual(self._standalone_fingerprint_contract(changed), expected)
+
+    def test_reviewer_nested_scope_reproductions_and_top_level_control_are_detected(self):
+        historical = self._historical_standalone()
+        expected = self._standalone_fingerprint_contract(historical)
+        samples = {
+            "class_method": "class FutureProvider:\n    def future_function(self):\n        compute_actual_asset_fingerprint()\n",
+            "conditional_function": "if True:\n    def future_function():\n        compute_actual_asset_fingerprint()\n",
+            "class_async_method": "class FutureProvider:\n    async def future_function(self):\n        provider.fingerprint_compatible()\n",
+            "top_level_positive_control": "def future_function():\n    compute_actual_asset_fingerprint()\n",
+        }
+        for label, source in samples.items():
+            changed = copy.deepcopy(historical)
+            changed.body.extend(ast.parse(source).body)
+            with self.subTest(scenario=label), self.assertRaises(AssertionError):
+                self.assertEqual(self._standalone_fingerprint_contract(changed), expected)
+
+    def test_recursive_records_preserve_full_scope_duplicate_definitions_and_call_multiplicity(self):
+        addition = ast.parse(
+            "class FirstProvider:\n"
+            "    def shared(self):\n"
+            "        compute_actual_asset_fingerprint()\n"
+            "        compute_actual_asset_fingerprint()\n"
+            "    def shared(self):\n"
+            "        compute_actual_asset_fingerprint()\n"
+            "class SecondProvider:\n"
+            "    async def shared(self):\n"
+            "        provider.fingerprint_compatible()\n"
+        )
+        module = (("Module", "<module>", 0),)
+        first = (*module, ("ClassDef", "FirstProvider", 0))
+        second = (*module, ("ClassDef", "SecondProvider", 0))
+        records = self._protected_call_records(addition)
+        self.assertEqual([scope for scope, _, _ in records], [
+            (*first, ("FunctionDef", "shared", 0)),
+            (*first, ("FunctionDef", "shared", 0)),
+            (*first, ("FunctionDef", "shared", 1)),
+            (*second, ("AsyncFunctionDef", "shared", 0)),
+        ])
+        self.assertEqual([ast.dump(call) for _, _, call in records], [
+            *[ast.dump(ast.parse("compute_actual_asset_fingerprint()").body[0].value)] * 3,
+            ast.dump(ast.parse("provider.fingerprint_compatible()").body[0].value),
+        ])
+        historical = self._historical_standalone()
+        changed = copy.deepcopy(historical)
+        changed.body.extend(addition.body)
+        with self.assertRaises(AssertionError):
+            self.assertEqual(self._standalone_fingerprint_contract(changed),
+                             self._standalone_fingerprint_contract(historical))
+
+    def test_adapter_exemption_is_only_the_verified_top_level_definition_and_calls(self):
+        authorized = self._historical_with_authorized_adapter()
+        expected = self._standalone_fingerprint_contract(self._historical_standalone())
+        for prefix in ("class OtherScope:", "if True:"):
+            changed = copy.deepcopy(authorized)
+            changed.body.extend(ast.parse(
+                prefix + "\n    def bind_legacy_gui_expected_resolutions():\n"
+                "        schema_compatible(metadata.get('session_schema_version'), SESSION_SCHEMA_VERSION)\n"
+            ).body)
+            # The real top-level adapter remains valid, but the other definition
+            # has no exemption, even when its name and call are identical.
+            self._assert_legacy_expected_adapter_contract(changed)
+            with self.subTest(scope=prefix), self.assertRaises(AssertionError):
+                self.assertEqual(self._standalone_fingerprint_contract(changed), expected)
+        changed = copy.deepcopy(authorized)
+        adapter = changed.body[-1]
+        nested = ast.parse("def nested_validation():\n    pass\n").body[0]
+        nested.body = adapter.body
+        adapter.body = [nested]
+        # Moving exactly the three calls into a different lexical scope cannot
+        # inherit the verified adapter's exception.
+        with self.assertRaises(AssertionError):
+            self._assert_legacy_expected_adapter_contract(changed)
 
     def test_changed_dependencies_chain_and_fail_open_guard_are_detected(self):
         historical = self._historical_standalone()

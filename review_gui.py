@@ -1531,6 +1531,8 @@ class ReviewApp:
             "expected_resolution_reason": str(entry.get("expected_resolution_reason") or ""),
             "expected_resolution_note": str(entry.get("note") or ""),
             "confirmation_actual_snapshot": actual_confirmation_snapshot(entry),
+            **({"expected_resolution_binding": copy.deepcopy(entry["expected_resolution_binding"])}
+               if "expected_resolution_binding" in entry else {}),
             **({"manual_expected_decision": entry["manual_expected_decision"]} if "manual_expected_decision" in entry else {}),
             **({"undo_previous_event": copy.deepcopy(self.db["events"][entry["review_id"]]["undo_previous_event"])}
                if "undo_previous_event" in self.db.get("events", {}).get(entry["review_id"], {}) else {}),

@@ -90,6 +90,7 @@ from runtime_source_validation import (
     write_pipeline_blocked,
 )
 from cross_version_compat import (
+    EXPECTED_RESOLVER_SEMANTICS_EPOCH,
     fingerprint_compatible,
     metadata_compatibility_warnings,
     review_id_schema_compatible,
@@ -1683,7 +1684,8 @@ def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False,
                                  _check_receipt_shas, _actual_transfer_state)
     receipt_snapshots = _read_presentation_receipts(output_dir)
     receipt_shas = _receipt_snapshot_shas(receipt_snapshots)
-    current_ledger = materialize_ledger(manifest, db)
+    import_baseline, current_ledger = prepare_review_ledger(manifest, db)
+    import_baseline_by_id = {entry["review_id"]: entry for entry in import_baseline}
     assert_unique_ids(current_ledger, "occurrence_id")
     assert_unique_ids(current_ledger, "review_id")
     by_review_id = {entry["review_id"]: entry for entry in current_ledger}
@@ -1764,6 +1766,8 @@ def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False,
             if value not in {"", "Y", "N"}:
                 errors.append(f"row {row_number}: gate {gate} 必須是 Y/N")
             event[gate] = value == "Y"
+        if action in expected_only_actions and manifest.get("expected_asset_fingerprint"):
+            event = bind_expected_resolution(import_baseline_by_id[review_id], event, manifest)
         staged_events[review_id] = event
 
     if errors:
@@ -2630,10 +2634,142 @@ def build_gui_confirmation(entry: Mapping[str, Any]) -> dict[str, Any]:
     return record
 
 
-def _apply_review_event(entry: dict[str, Any], event: Mapping[str, Any]) -> dict[str, Any]:
+EXPECTED_RESOLUTION_BINDING_VERSION = 1
+EXPECTED_RESOLUTION_ACTIONS = {"補建expected證據", "解決expected證據"}
+_EXPECTED_RESOLUTION_PAYLOAD_KEYS = {
+    "action", "expected_set", "expected_evidence", "context_evidence", "source", "resolution_reason", "note",
+}
+_EXPECTED_RESOLUTION_BINDING_KEYS = {
+    "version", "session_id", "target", "baseline_expected_snapshot", "expected_asset_fingerprint",
+    "expected_resolver_semantics_epoch", "resolution", "legacy_evidence", "integrity_sha256",
+}
+
+
+def expected_resolution_payload(event: Mapping[str, Any]) -> dict[str, Any]:
+    """Canonical independent source event, never derived from a GUI snapshot."""
+    if event.get("action") not in EXPECTED_RESOLUTION_ACTIONS or "manual_expected_decision" in event:
+        raise InvalidTransitionError("expected binding 必須來自獨立 expected 操作；人工本筆判定使用既有契約")
+    readings = list(normalize_expected_set(event.get("expected_set")))
+    raw = event.get("expected_set")
+    raw_items = re.split(r"[|；;]", raw) if isinstance(raw, str) else raw
+    if not isinstance(raw_items, list) or not raw_items or any(not canonical_bopomofo(x) for x in raw_items):
+        raise InvalidTransitionError("expected binding 讀音必須完整合法")
+    payload = {"action": event["action"], "expected_set": readings}
+    for key in _EXPECTED_RESOLUTION_PAYLOAD_KEYS - {"action", "expected_set"}:
+        value = event.get(key, "")
+        if not isinstance(value, str):
+            raise InvalidTransitionError(f"expected binding {key} 必須是文字")
+        payload[key] = value.strip()
+    payload["source"] = payload["source"] or "人工現版證據"
+    if not readings or not payload["expected_evidence"] or not payload["context_evidence"]:
+        raise InvalidTransitionError("expected binding 缺少獨立讀音／來源／語境")
+    return payload
+
+
+def bind_expected_resolution(entry, event, manifest, *, legacy_evidence=None):
+    """Called only after the expected save/import transaction has validated inputs."""
+    payload = expected_resolution_payload(event)
+    fingerprint = manifest.get("expected_asset_fingerprint")
+    epoch = (manifest.get("expected_asset_fingerprint_components") or {}).get("expected_resolver_semantics_epoch")
+    if (not isinstance(manifest.get("session_id"), str) or not manifest["session_id"]
+            or not isinstance(fingerprint, str) or not re.fullmatch(r"[0-9a-f]{64}", fingerprint)
+            or epoch != EXPECTED_RESOLVER_SEMANTICS_EPOCH):
+        raise InvalidTransitionError("expected binding 缺少已知 session／fingerprint／semantics 契約")
+    binding = {
+        "version": EXPECTED_RESOLUTION_BINDING_VERSION,
+        "session_id": manifest["session_id"], "target": manual_expected_target(entry),
+        "baseline_expected_snapshot": confirmation_expected_snapshot(entry),
+        "expected_asset_fingerprint": fingerprint, "expected_resolver_semantics_epoch": epoch,
+        "resolution": payload, "legacy_evidence": copy.deepcopy(legacy_evidence),
+    }
+    binding["integrity_sha256"] = _hash_review_payload(binding)
+    out = {**event, "expected_resolution_binding": binding}
+    _validate_expected_resolution_binding(entry, out, manifest)
+    return out
+
+
+def _validate_expected_resolution_binding(entry, event, manifest):
+    """Return the saved source only after format/integrity/applicability checks.
+
+    None means a known binding has become stale; malformed or missing proof is
+    an error. No actual evidence participates in this expected-only contract.
+    """
+    binding = event.get("expected_resolution_binding")
+    if (not isinstance(binding, dict) or set(binding) != _EXPECTED_RESOLUTION_BINDING_KEYS
+            or type(binding["version"]) is not int or binding["version"] != EXPECTED_RESOLUTION_BINDING_VERSION):
+        raise InvalidTransitionError("未知或缺失的 expected resolution binding")
+    if (not isinstance(binding["integrity_sha256"], str)
+            or binding["integrity_sha256"] != _hash_review_payload({k:v for k,v in binding.items() if k != "integrity_sha256"})):
+        raise InvalidTransitionError("expected resolution binding integrity 不符")
+    resolution = binding["resolution"]
+    if (not isinstance(resolution, dict) or set(resolution) != _EXPECTED_RESOLUTION_PAYLOAD_KEYS
+            or expected_resolution_payload(resolution) != resolution):
+        raise InvalidTransitionError("expected resolution binding payload 非完整 canonical 格式")
+    target = binding["target"]
+    snapshot = binding["baseline_expected_snapshot"]
+    if (not isinstance(target, dict) or set(target) != set(manual_expected_target(entry))
+            or any(not isinstance(v, str) for v in target.values())
+            or not all(target[k] for k in ("occurrence_id", "review_id", "pdf_sha256", "pdf_name", "char", "physical_page", "x0", "y0", "x1", "y1"))
+            or not (target["line"] or target["local_context"])
+            or not re.fullmatch(r"[0-9a-f]{64}", target["pdf_sha256"])
+            or not isinstance(snapshot, dict) or set(snapshot) != set(confirmation_expected_snapshot(entry))
+            or not isinstance(snapshot["expected_set"], list)
+            or list(normalize_expected_set(snapshot["expected_set"])) != snapshot["expected_set"]
+            or any(not isinstance(snapshot[k], str) for k in ("expected_evidence", "expected_status", "context_evidence"))
+            or snapshot["expected_status"] not in {"RESOLVED", "UNRESOLVED", "AMBIGUOUS", "CONFLICT", "EXCLUDED"}
+            or snapshot["manual_expected_decision"] is not None
+            or not isinstance(binding["session_id"], str) or not binding["session_id"]
+            or not isinstance(binding["expected_asset_fingerprint"], str)
+            or not re.fullmatch(r"[0-9a-f]{64}", binding["expected_asset_fingerprint"])
+            or binding["expected_resolver_semantics_epoch"] != EXPECTED_RESOLVER_SEMANTICS_EPOCH):
+        raise InvalidTransitionError("expected resolution binding target／baseline／fingerprint 格式無效")
+    legacy = binding["legacy_evidence"]
+    if legacy is not None and (not isinstance(legacy, dict) or set(legacy) != {
+            "adapter", "workbook_sha256", "manifest_sha256", "decision_db_sha256", "source_row"}
+            or legacy["adapter"] != "explicit_expected_workbook_v1"
+            or type(legacy["source_row"]) is not int or legacy["source_row"] < 2
+            or any(not isinstance(legacy[k], str) or not re.fullmatch(r"[0-9a-f]{64}", legacy[k])
+                   for k in ("workbook_sha256", "manifest_sha256", "decision_db_sha256"))):
+        raise InvalidTransitionError("未知或缺失的 legacy expected binding proof")
+    if event.get("action") in EXPECTED_RESOLUTION_ACTIONS:
+        candidate = expected_resolution_payload(event)
+    elif event.get("action") == "確認現版差異":
+        candidate = expected_resolution_payload({
+            "action": resolution["action"], "expected_set": event.get("expected_set"),
+            "expected_evidence": event.get("expected_evidence"), "context_evidence": event.get("context_evidence"),
+            "source": event.get("expected_resolution_source", ""),
+            "resolution_reason": event.get("expected_resolution_reason", ""),
+            "note": event.get("expected_resolution_note", ""),
+        })
+    else:
+        raise InvalidTransitionError("expected resolution binding 不適用此 action")
+    if candidate != resolution:
+        raise InvalidTransitionError("expected resolution binding 與事件來源 payload 不一致")
+    if manifest is None:
+        raise InvalidTransitionError("expected resolution binding 缺少目前 sealed manifest context")
+    validate_manifest_integrity(manifest)
+    current_epoch = (manifest.get("expected_asset_fingerprint_components") or {}).get("expected_resolver_semantics_epoch")
+    if (binding["session_id"] != manifest.get("session_id")
+            or binding["expected_asset_fingerprint"] != manifest.get("expected_asset_fingerprint")
+            or binding["expected_resolver_semantics_epoch"] != current_epoch
+            or target != manual_expected_target(entry)
+            or snapshot != confirmation_expected_snapshot(entry)):
+        return None
+    return copy.deepcopy(resolution)
+
+
+def _apply_review_event(entry: dict[str, Any], event: Mapping[str, Any], *, expected_manifest=None) -> dict[str, Any]:
     action = str(event.get("action") or "").strip()
     if action == "保留待人工":
         return dict(entry)
+    saved_resolution = None
+    if "expected_resolution_binding" in event:
+        saved_resolution = _validate_expected_resolution_binding(entry, event, expected_manifest)
+        if saved_resolution is None:
+            out = dict(entry)
+            out["review_event_replay_status"] = "INVALIDATED_EXPECTED_BINDING_DRIFT"
+            out["review_event_replay_note"] = "保存 expected resolution 的 baseline／target／session／fingerprint 已變更"
+            return out
     if action in {"補建expected證據", "解決expected證據"}:
         # v5.5.0: expected events write only the expected lane.  They never
         # consult current actual to decide *what* expected should be, and they
@@ -2675,6 +2811,9 @@ def _apply_review_event(entry: dict[str, Any], event: Mapping[str, Any]) -> dict
             return out
 
         out = dict(entry)
+        out.pop("expected_resolution_binding", None)
+        if "expected_resolution_binding" in event:
+            out["expected_resolution_binding"] = copy.deepcopy(event["expected_resolution_binding"])
         out.pop("manual_expected_decision", None)
         if "manual_expected_decision" in event:
             out["manual_expected_decision"] = copy.deepcopy(event["manual_expected_decision"])
@@ -2707,6 +2846,11 @@ def _apply_review_event(entry: dict[str, Any], event: Mapping[str, Any]) -> dict
         # so the confirmation event must carry enough independent expected evidence
         # to reconstruct that intermediate DIFFERENCE state from the frozen manifest.
         working = dict(entry)
+        if saved_resolution is not None:
+            # Reapply only the validated original independent expected action.
+            # The GUI comparison snapshot is never used to manufacture a source.
+            working = _apply_review_event(working, saved_resolution)
+            working["expected_resolution_binding"] = copy.deepcopy(event["expected_resolution_binding"])
         gui_record = event.get("gui_confirmation")
         if "gui_confirmation" in event:
             if (not isinstance(gui_record, dict) or set(gui_record) != {
@@ -2719,6 +2863,12 @@ def _apply_review_event(entry: dict[str, Any], event: Mapping[str, Any]) -> dict
                 raise InvalidTransitionError("未知或缺失的 GUI 確認方式")
             if any(event.get(gate) is True for gate in CONFIRMATION_GATES):
                 raise InvalidTransitionError("GUI 單次確認不得冒稱舊六閘門已完成")
+            if (saved_resolution is None and "manual_expected_decision" not in event
+                    and gui_record["expected_snapshot"] != confirmation_expected_snapshot(working)):
+                # Unbound GUI history may confirm unchanged baseline evidence,
+                # but cannot reconstruct a historical source from its snapshot.
+                working["review_event_replay_status"] = "INVALIDATED_CONFIRMATION_SNAPSHOT"
+                return working
         if "manual_expected_decision" in event:
             # Reconstruct the explicitly reviewed expected lane before comparing.
             # A later automatic resolver cannot silently replace a local human judgment.
@@ -2841,7 +2991,7 @@ def prepare_review_ledger(manifest: Mapping[str, Any], db: Mapping[str, Any]):
             raise ValueError(f"review event 格式錯誤：{review_id}")
         index = by_review_id[review_id]
         try:
-            ledger[index] = _apply_review_event(ledger[index], event)
+            ledger[index] = _apply_review_event(ledger[index], event, expected_manifest=manifest)
         except InvalidTransitionError as exc:
             raise InvalidTransitionError(
                 f"review event replay 失敗：review_id={review_id}；"
@@ -2855,6 +3005,108 @@ def prepare_review_ledger(manifest: Mapping[str, Any], db: Mapping[str, Any]):
 
 def materialize_ledger(manifest: Mapping[str, Any], db: Mapping[str, Any]) -> list[dict[str, Any]]:
     return prepare_review_ledger(manifest, db)[1]
+
+
+@_serialized_user_project_entry
+def bind_legacy_gui_expected_resolutions(output_dir: Path, workbook: Path, *, review_ids: list[str],
+                                        expected_manifest_sha256: str, expected_db_sha256: str,
+                                        expected_workbook_sha256: str, dry_run: bool = False) -> dict[str, Any]:
+    """Explicit adapter for same-baseline GUI v1 confirmations with workbook proof.
+
+    No discovery, new decision, timestamp or GUI snapshot source is generated.
+    Callers select the existing project, original filled workbook and exact IDs.
+    The only persisted change is attaching a validated expected-only binding.
+    """
+    from pdf_portability import _workbook_snapshot, _verify_available_session_pdfs
+
+    output_dir, workbook = Path(output_dir).resolve(), Path(workbook).resolve()
+    _reject_incomplete_portable_project(output_dir)
+    if (not isinstance(review_ids, list) or not review_ids or any(not isinstance(x, str) or not x for x in review_ids)
+            or len(review_ids) != len(set(review_ids))):
+        raise ValueError("legacy adapter 必須明確指定唯一非空 review_ids")
+    for value in (expected_manifest_sha256, expected_db_sha256, expected_workbook_sha256):
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+            raise ValueError("legacy adapter 缺少原始 SHA proof")
+    manifest_path, db_path = output_dir / "校對工作階段.json", output_dir / "人工判定資料庫.json"
+    manifest, manifest_sha = json_load_snapshot(manifest_path)
+    raw_db, db_sha = json_load_snapshot(db_path)
+    if (manifest_sha, db_sha) != (expected_manifest_sha256, expected_db_sha256):
+        raise ValueError("legacy adapter 原 manifest／decision DB SHA 不符")
+    validate_manifest_integrity(manifest)
+    validate_output_artifact_hashes(manifest)
+    db = normalize_db(raw_db)
+    baseline = {row["review_id"]:row for row in prepare_review_ledger(manifest, normalize_db({}))[0]}
+    staged = copy.deepcopy(raw_db)
+    expected_keys = {"action", "confirmation_actual_snapshot", "context_evidence", "expected_evidence",
+                     "expected_resolution_note", "expected_resolution_reason", "expected_resolution_source",
+                     "expected_set", "gui_confirmation", "note", "source", "updated_at"}
+    with _workbook_snapshot(workbook, expected_sha256=expected_workbook_sha256) as (snapshot, observed_sha):
+        metadata = workbook_metadata(snapshot, "匯入中繼資料")
+        if (metadata.get("session_id") != manifest.get("session_id")
+                or metadata.get("expected_asset_fingerprint") != manifest.get("expected_asset_fingerprint")
+                or not schema_compatible(metadata.get("session_schema_version"), SESSION_SCHEMA_VERSION)
+                or not schema_compatible(metadata.get("workbook_schema_version"), WORKBOOK_SCHEMA_VERSION)
+                or not review_id_schema_compatible(metadata.get("review_id_schema_version"), REVIEW_ID_SCHEMA_VERSION)):
+            raise ValueError("legacy adapter workbook session／fingerprint／schema 不符")
+        rows = workbook_rows(snapshot, "待判定候選", ["review_id", "occurrence_id", "expected_snapshot",
+            "expected_target_snapshot", "action", "proposed_expected_set", "proposed_expected_evidence",
+            "proposed_context_evidence", "note"])
+        assert_unique_ids(rows, "review_id")
+        assert_unique_ids(rows, "occurrence_id")
+        by_id = {row["review_id"]:(number,row) for number,row in enumerate(rows,2)}
+        for rid in review_ids:
+            entry, event = baseline.get(rid), db["events"].get(rid)
+            if entry is None or not isinstance(event, dict) or rid not in by_id:
+                raise ValueError(f"legacy adapter unknown review_id：{rid}")
+            if (set(event) != expected_keys or event.get("action") != "確認現版差異"
+                    or event.get("source") != "人工 GUI 本筆單次確認"
+                    or event.get("expected_resolution_source") != "GPT／人工 expected 證據報表匯入（v5.5 dual-lane transaction）"
+                    or event.get("expected_resolution_reason") != ""
+                    or entry.get("state") != "DIFFERENCE_PENDING_CONFIRMATION"
+                    or event.get("expected_set") != list(normalize_expected_set(entry.get("expected_set")))):
+                raise ValueError(f"legacy adapter 不支援的歷史事件：{rid}")
+            number,row = by_id[rid]
+            if (row.get("occurrence_id") != entry["occurrence_id"]
+                    or row.get("expected_snapshot") != _expected_review_snapshot_from_export_row(row)
+                    or row.get("expected_snapshot") != _expected_review_snapshot(entry)
+                    or row.get("expected_target_snapshot") != _expected_target_snapshot_from_export_row(row)
+                    or row.get("expected_target_snapshot") != _expected_target_snapshot(entry)):
+                raise ValueError(f"legacy adapter 原 baseline／target 已漂移：{rid}")
+            source_event = expected_resolution_payload({
+                "action": row.get("action"), "expected_set": row.get("proposed_expected_set"),
+                "expected_evidence": row.get("proposed_expected_evidence"),
+                "context_evidence": row.get("proposed_context_evidence"),
+                "source": "GPT／人工 expected 證據報表匯入（v5.5 dual-lane transaction）",
+                "resolution_reason": "", "note": str(row.get("note") or ""),
+            })
+            if any(source_event[key] != event.get(event_key) for key,event_key in (
+                    ("expected_set","expected_set"), ("expected_evidence","expected_evidence"),
+                    ("context_evidence","context_evidence"), ("note","expected_resolution_note"))):
+                raise ValueError(f"legacy adapter 原 workbook resolution 與事件不符：{rid}")
+            bound = bind_expected_resolution(entry, source_event, manifest, legacy_evidence={
+                "adapter": "explicit_expected_workbook_v1", "workbook_sha256": observed_sha,
+                "manifest_sha256": manifest_sha, "decision_db_sha256": db_sha, "source_row": number,
+            })
+            staged["events"][rid] = {**copy.deepcopy(event), "expected_resolution_binding": bound["expected_resolution_binding"]}
+        ledger = materialize_ledger(manifest, staged)
+        selected = {r["review_id"]:r for r in ledger if r["review_id"] in review_ids}
+        if any(r.get("state") != "TEXTBOOK_ERROR_CONFIRMED" or r.get("review_event_replay_status") for r in selected.values()):
+            raise ValueError("legacy adapter 原 GUI／actual confirmation 不適用；未寫入")
+        _reject_incomplete_portable_project(output_dir)
+        from pdf_portability import validate_conflict_state
+        if validate_conflict_state(output_dir, manifest, db):
+            raise ValueError("legacy adapter 專案存在未裁決衝突；未寫入")
+        _verify_available_session_pdfs(output_dir, manifest)
+        validate_output_artifact_hashes(manifest)
+        if sha256_file(manifest_path) != manifest_sha or sha256_file(workbook) != observed_sha:
+            raise ValueError("legacy adapter 驗證期間原 proof 已變動；未寫入")
+        if sha256_file(db_path) != db_sha:
+            raise ValueError("legacy adapter 驗證期間 decision DB 已變動；未寫入")
+        if not dry_run:
+            json_save(db_path, staged, expected_sha256=db_sha)
+    return {"bound_review_ids": list(review_ids), "dry_run": dry_run,
+            "workbook_sha256": expected_workbook_sha256, "manifest_sha256": manifest_sha,
+            "original_db_sha256": db_sha, "decision_db_sha256": sha256_file(db_path)}
 
 
 def save_pending_json(output_dir: Path, manifest: dict[str, Any], db: dict[str, Any]) -> int:
@@ -3655,7 +3907,7 @@ def _manual_actual_snapshot_ledger(manifest, db, ledger, *, base_ledger=None):
                 and row.get("blocking_state") not in HARD_BLOCKING_STATES
                 and original.get("blocking_state") not in HARD_BLOCKING_STATES
                 and not row.get("review_event_replay_status")):
-            replayed = _apply_review_event(original, event)
+            replayed = _apply_review_event(original, event, expected_manifest=manifest)
             if replayed != row or actual_confirmation_snapshot(original) != actual_confirmation_snapshot(row):
                 raise ValueError("manual actual snapshot 無法證明是獨立 expected 變更")
             # The whole source record (PDF/identity/coordinates/exact metadata)
@@ -3848,6 +4100,19 @@ def _clear_actual_dependent_events(output_dir: Path, ledger: list[dict[str, Any]
             context_evidence = str(event.get("context_evidence") or "").strip()
             retained = {**next((entry for entry in ledger if entry.get("review_id") == rid), {}), **event}
             if expected_set and has_expected_evidence(retained) and context_evidence:
+                if "expected_resolution_binding" in event:
+                    # Revoke only the actual-dependent conclusion. The original
+                    # expected payload/binding remains byte-for-byte independent.
+                    events[rid] = {
+                        **copy.deepcopy(event["expected_resolution_binding"]["resolution"]),
+                        "expected_resolution_binding": copy.deepcopy(event["expected_resolution_binding"]),
+                        "updated_at": datetime.now().isoformat(timespec="seconds"),
+                        "confirmation_revocation_note": "actual 更新後撤銷差異確認；保留原 expected resolution",
+                    }
+                    if "undo_previous_event" in event:
+                        events[rid]["undo_previous_event"] = copy.deepcopy(event["undo_previous_event"])
+                    removed += 1
+                    continue
                 old_note = str(event.get("note") or "").strip()
                 events[rid] = {
                     "action": "解決expected證據",

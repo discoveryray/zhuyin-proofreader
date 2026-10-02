@@ -1435,6 +1435,10 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
             replay = sp._apply_review_event(entry, event)
             if replay.get("review_event_replay_status"):
                 raise ValueError(f"Excel row {number} {label}判定失效：{replay['review_event_replay_status']}")
+        if expected_only and target_manifest.get("expected_asset_fingerprint"):
+            # Full-page/text mapping and both original replay checks above are
+            # still mandatory. Bind the validated transaction to B's own baseline.
+            event = sp.bind_expected_resolution(target_base_by_id[target["review_id"]], event, target_manifest)
         identity = _source_identity(source_manifest, source, source["review_id"],
                                     target_manifest, target, event)
         identity["source_excel_sha256"] = _snapshot_sha
@@ -2267,14 +2271,34 @@ def _source_identity(source_manifest, source, source_id, target_manifest, target
         "prior_duplicate_sources": copy.deepcopy(event.get("portability_duplicate_sources", [])),
         "source_conflict_resolution": copy.deepcopy(event.get("portability_conflict_resolution")),
         "source_manual_expected_decision": copy.deepcopy(event.get("manual_expected_decision")),
+        **({"source_expected_resolution_binding": copy.deepcopy(event["expected_resolution_binding"])}
+           if "expected_resolution_binding" in event else {}),
     }
 
 
-def _transfer_event(event, source, target):
+def _transfer_event(event, source, target, *, source_manifest=None, target_manifest=None,
+                    source_baseline=None, target_baseline=None):
     """Rebind a validated human expected target to the proven local occurrence."""
     from occurrence_ledger import manual_expected_target, valid_manual_expected_decision
 
     transferred = copy.deepcopy(event)
+    if "expected_resolution_binding" in event:
+        import standalone_proofread as sp
+        if source_baseline is None or target_baseline is None:
+            raise ValueError("跨專案 expected binding 缺少已驗證雙方 baseline")
+        resolution = sp._validate_expected_resolution_binding(source_baseline, event, source_manifest)
+        if (resolution is None or target_manifest is None
+                or source_manifest.get("expected_asset_fingerprint") != target_manifest.get("expected_asset_fingerprint")
+                or sp.confirmation_expected_snapshot(source_baseline) != sp.confirmation_expected_snapshot(target_baseline)):
+            raise ValueError("跨專案 expected binding baseline／fingerprint 不同；未轉接")
+        rebound = sp.bind_expected_resolution(target_baseline, resolution, target_manifest,
+            legacy_evidence=event["expected_resolution_binding"]["legacy_evidence"])
+        transferred["expected_resolution_binding"] = rebound["expected_resolution_binding"]
+    previous = event.get("undo_previous_event")
+    if isinstance(previous, dict) and "expected_resolution_binding" in previous:
+        transferred["undo_previous_event"] = _transfer_event(previous, source, target,
+            source_manifest=source_manifest, target_manifest=target_manifest,
+            source_baseline=source_baseline, target_baseline=target_baseline)
     if "manual_expected_decision" in event:
         if not valid_manual_expected_decision({**source, **event}):
             raise ValueError("來源人工 expected 判定位置或語境無法驗證")
@@ -2468,6 +2492,10 @@ def import_project_decisions(source_dir: Path, target_dir: Path, *,
                            if receipt_snapshots[CONFLICT_FILE][0] is not None else [])
         target_current = {entry["review_id"]: entry for entry in
                           sp.materialize_ledger(live_manifest, target_db)}
+        source_baseline = {entry["review_id"]: entry for entry in
+                           sp.prepare_review_ledger(source_manifest, sp.normalize_db({}))[0]}
+        target_baseline = {entry["review_id"]: entry for entry in
+                           sp.prepare_review_ledger(live_manifest, sp.normalize_db({}))[0]}
         candidate = copy.deepcopy(target_db)
         imported, duplicates, provenance_updates, conflicts, conflict_records = 0, 0, 0, [], []
         for source_id, event in source_db["events"].items():
@@ -2488,7 +2516,9 @@ def import_project_decisions(source_dir: Path, target_dir: Path, *,
                     raise ValueError(f"來源判定 {source_id} 目標獨立 context_evidence 詞境不同；未覆寫")
             _validate_project_confirmation_transfer(
                 event, source_current[source_id], target_current[target_id])
-            transferred = _transfer_event(event, source, target)
+            transferred = _transfer_event(event, source, target,
+                source_manifest=source_manifest, target_manifest=live_manifest,
+                source_baseline=source_baseline[source_id], target_baseline=target_baseline[target_id])
             if _historical_import_replay(prior_conflicts, identity, event, transferred,
                                          decision_payload=_event_payload):
                 duplicates += 1
