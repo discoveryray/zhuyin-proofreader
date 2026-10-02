@@ -81,7 +81,7 @@ class LocalHistoryTests(unittest.TestCase):
         archive_bytes = base64.b64decode(value['archive_base64'], validate=True)
         self.assertEqual(hashlib.sha256(archive_bytes).hexdigest(), value['archive_sha256'])
         with zipfile.ZipFile(io.BytesIO(archive_bytes)) as archive:
-            self.assertEqual(archive.namelist(), ['ledger.json'])
+            self.assertEqual(archive.namelist(), ['ledger.json', 'executions/store.json', 'declarations/store.json'])
             self.assertEqual(archive.read('ledger.json'), original)
         imported = self.root / 'imported'
         imported.mkdir()
@@ -161,6 +161,76 @@ class LocalHistoryTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     runner.import_local_handoff(block(changed), destination, TASK)
                 self.assertFalse((self.root / 'outside').exists())
+
+    def test_declared_core_and_one_gui_retry_export_and_import_with_all_raw_files(self):
+        # Reuse only the isolated process injector: the core/GUI child runs tiny
+        # pure-logic cases; the preflight error and success are explicit fixtures.
+        from test_validation_runner import RunnerOrchestrationTests
+        probe = RunnerOrchestrationTests()
+        probe.setUp()
+        self.addCleanup(probe.doCleanups)
+        with patch.object(runner, "git", return_value=str(self.common)):
+            ledger = self.bootstrap()
+        context = runner.read_local_ledger(ledger, TASK)
+        store = ledger / "executions"
+        core = runner._run_group("core", store, mode="validation", local_context=context)
+        core_bytes = core.read_bytes()
+        first = runner._run_group("gui", store, mode="validation", local_context=context)
+        probe.preflight_success = True
+        second = runner._run_group("gui", store, mode="validation", local_context=context)
+        self.assertEqual(runner.read_verified_manifest(second)["retry_of"], first.parent.name)
+        self.assertEqual(core.read_bytes(), core_bytes)
+        self.assertEqual(len(list((ledger / "declarations").glob("*.json"))), 4)
+        with patch.object(runner, "git", return_value=str(self.common)):
+            value = runner.export_local_history(TASK, self.root / "nonempty.json")
+        destination = self.root / "imported-nonempty"
+        destination.mkdir()
+        runner.import_local_handoff(block(value), destination, TASK)
+        self.assertEqual(len(runner.history(destination)), 3)
+        for missing in ("executions/" + core.parent.name, "declarations/" + first.parent.name + ".json", "executions/" + second.parent.name + "/raw.log"):
+            with self.subTest(missing=missing):
+                raw = io.BytesIO()
+                with zipfile.ZipFile(io.BytesIO(base64.b64decode(value['archive_base64']))) as original, zipfile.ZipFile(raw, "w") as changed:
+                    for name in original.namelist():
+                        if name != missing and not name.startswith(missing + "/"):
+                            changed.writestr(name, original.read(name))
+                payload = raw.getvalue()
+                handoff = dict(value, archive_sha256=hashlib.sha256(payload).hexdigest(), archive_base64=base64.b64encode(payload).decode())
+                target = self.root / ("missing-" + str(len(list(self.root.iterdir()))))
+                target.mkdir()
+                with self.assertRaises((ValueError, FileNotFoundError)):
+                    runner.import_local_handoff(block(handoff), target, TASK)
+
+    def test_real_cli_missing_store_declared_execution_and_interruption_cannot_export_empty(self):
+        for defect in ("store", "declarations", "single", "interrupted"):
+            with self.subTest(defect=defect):
+                clone = self.root / defect
+                scripts = clone / "scripts"
+                scripts.mkdir(parents=True)
+                for name in ("validation_runner.py", "test_entrypoint_audit.py"):
+                    shutil.copyfile(ROOT / "scripts" / name, scripts / name)
+                subprocess.run(["git", "init", str(clone)], check=True, capture_output=True)
+                command = [sys.executable, str(scripts / "validation_runner.py")]
+                env = {**os.environ, "GITHUB_ACTIONS": "", "PYTHONUTF8": "1"}
+                first = subprocess.run([*command, "bootstrap-local", "--task-id", TASK, "--source-ref", SOURCE, "--baseline", BASE], cwd=clone, env=env, capture_output=True, timeout=20)
+                self.assertEqual(first.returncode, 0, first.stderr)
+                ledger = clone / "tmp/validation-task-ledgers" / TASK
+                original = json.loads((ledger / "ledger.json").read_text())
+                identity = "1" * 32
+                if defect in ("store", "declarations"):
+                    name = "executions" if defect == "store" else "declarations"
+                    (ledger / name).rename(ledger / ("retained-" + name))
+                else:
+                    runner.write_json(ledger / "declarations" / (identity + ".json"), {"execution_id": identity, "group": "gui", "candidate": {}, "declared_at": runner.utc_now(), "store_id": original["store_id"]})
+                    if defect == "interrupted":
+                        execution = ledger / "executions" / identity
+                        execution.mkdir()
+                        (execution / "started.json").write_text("{}")
+                        (execution / "raw.log").write_text("retained original failure")
+                result = subprocess.run([*command, "export-local-history", "--task-id", TASK, "--output", str(clone / "unexpected.json")], cwd=clone, env=env, capture_output=True, timeout=20)
+                self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                self.assertFalse((clone / "unexpected.json").exists())
+                self.assertFalse((ledger / "sealed.json").exists())
 
     def test_real_cli_bootstrap_export_and_sealed_group_use_isolated_git_repository(self):
         clone = self.root / 'cli-repository'

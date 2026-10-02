@@ -52,6 +52,8 @@ def canonical_digest(value):
 def write_json(path, data):
     with Path(path).open("x", encoding="utf-8") as handle:
         json.dump(data, handle, ensure_ascii=False, indent=2)
+        handle.flush()
+        os.fsync(handle.fileno())
 
 
 def parse_json(text):
@@ -285,6 +287,12 @@ def retry_eligible(folder, result, preflight=None):
 
 
 def history(root):
+    root = Path(root)
+    if not root.is_dir():
+        raise ValueError("execution history store is missing")
+    for ledger in root.rglob("ledger.json"):
+        data = read_json(ledger)
+        read_local_ledger(ledger.parent, data.get("task_id"))
     values = []
     for started in Path(root).rglob("started.json"):
         if not (started.parent / "manifest.json").is_file():
@@ -328,8 +336,8 @@ def collect_inventory(folder, tests=None):
     return audit.validate_groups(read_json(folder / "inventory.json"))
 
 
-LOCAL_SCHEMA = "zhuyin-local-history/1"
-HANDOFF_SCHEMA = "zhuyin-local-history-handoff/1"
+LOCAL_SCHEMA = "zhuyin-local-history/2"
+HANDOFF_SCHEMA = "zhuyin-local-history-handoff/2"
 HANDOFF_LIMIT = 40000
 REPOSITORY = "discoveryray/zhuyin-proofreader"
 
@@ -363,20 +371,55 @@ def bootstrap_local(task_id, source_ref, baseline):
     folder.parent.mkdir(parents=True, exist_ok=True)
     folder.mkdir()  # Once only; an absent/corrupt ledger is never reinitialized.
     with task_lock(folder):
+        store_id = uuid.uuid4().hex
         write_json(folder / "ledger.json", {"schema": LOCAL_SCHEMA, "task_id": task_id,
                    "source_ref": source_ref, "baseline": baseline, "repository": REPOSITORY,
-                   "created_at": utc_now()})
-        (folder / "executions").mkdir()
+                   "created_at": utc_now(), "store_id": store_id})
+        for name in ("executions", "declarations"):
+            store = folder / name
+            store.mkdir()
+            write_json(store / "store.json", {"schema": "zhuyin-local-store/1", "store_id": store_id})
     return folder
 
 
 def read_local_ledger(folder, task_id):
     data = read_json(folder / "ledger.json")
-    if set(data) != {"schema", "task_id", "source_ref", "baseline", "repository", "created_at"} or data["schema"] != LOCAL_SCHEMA or data["task_id"] != task_id or data["repository"] != REPOSITORY or not data["source_ref"]:
+    if set(data) != {"schema", "task_id", "source_ref", "baseline", "repository", "created_at", "store_id"} or data["schema"] != LOCAL_SCHEMA or data["task_id"] != task_id or data["repository"] != REPOSITORY or not data["source_ref"]:
         raise ValueError("invalid original task ledger")
     if not re.fullmatch(r"[0-9a-f]{40}", data["baseline"]) or data["baseline"] == "0" * 40:
         raise ValueError("invalid ledger baseline")
-    history(folder / "executions")
+    if not re.fullmatch(r"[0-9a-f]{32}", data["store_id"]):
+        raise ValueError("invalid local history store identity")
+    for name in ("executions", "declarations"):
+        store = folder / name
+        if not store.is_dir() or not (store / "store.json").is_file():
+            raise ValueError("local history store is missing: " + name)
+        if read_json(store / "store.json") != {"schema": "zhuyin-local-store/1", "store_id": data["store_id"]}:
+            raise ValueError("local history store identity mismatch")
+    declared = {}
+    for path in (folder / "declarations").iterdir():
+        if path.name == "store.json":
+            continue
+        value = read_json(path)
+        if (not re.fullmatch(r"[0-9a-f]{32}\.json", path.name)
+                or set(value) != {"execution_id", "group", "candidate", "declared_at", "store_id"}
+                or value["execution_id"] != path.stem or value["store_id"] != data["store_id"]
+                or value["group"] not in {"core", "gui"}):
+            raise ValueError("invalid durable execution declaration")
+        declared[path.stem] = value
+    executions = {path.name for path in (folder / "executions").iterdir() if path.is_dir()}
+    if executions != set(declared):
+        raise ValueError("declared execution history is missing or undeclared")
+    for identity, declaration in declared.items():
+        path = folder / "executions" / identity / "manifest.json"
+        if not path.is_file():
+            raise ValueError("unfinished declared execution; retain original history")
+        value = read_verified_manifest(path)
+        if any(value[key] != declaration[key] for key in ("execution_id", "group", "candidate")):
+            raise ValueError("execution differs from durable declaration")
+        context = read_json(path.parent / "history-context.json")
+        if context != data:
+            raise ValueError("execution differs from original local ledger")
     return data
 
 
@@ -389,6 +432,9 @@ def export_local_history(task_id, output):
         raw = io.BytesIO()
         with zipfile.ZipFile(raw, "w", zipfile.ZIP_DEFLATED) as archive:
             archive.write(folder / "ledger.json", "ledger.json")
+            archive.write(folder / "executions/store.json", "executions/store.json")
+            for declaration in sorted((folder / "declarations").iterdir()):
+                archive.write(declaration, "declarations/" + declaration.name)
             # Export only explicit evidence artifacts, never basetemp/materials.
             for manifest, value in history(folder / "executions"):
                 paths = [manifest, *(manifest.parent / item["path"] for item in value["artifacts"].values())]
@@ -435,7 +481,10 @@ def import_local_handoff(body, evidence_root, task_id=None):
             path = Path(info.filename)
             if path.is_absolute() or ".." in path.parts or "\\" in info.filename or (info.external_attr >> 16) & 0o170000 == 0o120000:
                 raise ValueError("unsafe local-history archive path")
-            if info.filename != "ledger.json" and (len(path.parts) != 3 or path.parts[0] != "executions" or path.suffix not in {".json", ".jsonl", ".xml", ".log"}):
+            marker = info.filename in {"ledger.json", "executions/store.json", "declarations/store.json"}
+            declaration = len(path.parts) == 2 and path.parts[0] == "declarations" and re.fullmatch(r"[0-9a-f]{32}\.json", path.name)
+            execution = len(path.parts) == 3 and path.parts[0] == "executions" and path.suffix in {".json", ".jsonl", ".xml", ".log"}
+            if not (marker or declaration or execution):
                 raise ValueError("unexpected local-history archive content")
         destination.mkdir()  # Never overlay or overwrite retained history.
         for info in archive.infolist():
@@ -488,10 +537,6 @@ def _run_group(group, evidence_root, *, timeout=None, tests=None, mode=None, cod
         handle.write(str(os.getpid()))
     try:
         previous = history(evidence_root)
-        folder = evidence_root / uuid.uuid4().hex
-        folder.mkdir()
-        inventory = collect_inventory(folder, tests)
-        inventory_hash = digest(folder / "inventory.json")
         key = canonical_digest({"task": context["task_id"], "tree": candidate["tree"]})
         matching = [(path, value) for path, value in previous
                     if value["retry_key"] == key and value["group"] == group]
@@ -500,19 +545,29 @@ def _run_group(group, evidence_root, *, timeout=None, tests=None, mode=None, cod
         elif any(value["outcome"] != "success" for _, value in matching):
             raise ValueError("same-candidate core failure remains unresolved; no automatic core retry")
         if matching and matching[-1][1]["outcome"] == "success" and matching[-1][1]["candidate"] == candidate and ((matching[-1][1]["ci"]["event"] == "local") == (local_context is not None)):
-            # Collection is retained; no second functional execution is started.
-            write_json(folder / "reuse.json", {"manifest": str(matching[-1][0]), "sha256": digest(matching[-1][0])})
+            if matching[-1][1]["environment"] != env:
+                raise ValueError("successful execution environment changed")
             return matching[-1][0]
         retry_of = None
         if group == "gui" and matching:
-            if any(value["environment"] != env or value["inventory_sha256"] != inventory_hash for _, value in matching):
+            if any(value["environment"] != env for _, value in matching):
                 raise ValueError("same-candidate GUI retry settings changed")
             if len(matching) >= 2 or not matching[0][1]["retry_eligible"] or matching[0][1]["code_blockers"] or code_blockers:
                 raise ValueError("GUI retry is not authorized by retained failure evidence or budget")
             retry_of = matching[0][1]["execution_id"]
         if code_blockers:
             raise ValueError("confirmed code blocker prevents execution/retry")
-        execution_id = folder.name
+        execution_id = uuid.uuid4().hex
+        folder = evidence_root / execution_id
+        if local_context is not None:
+            write_json(evidence_root.parent / "declarations" / (execution_id + ".json"),
+                       {"execution_id": execution_id, "group": group, "candidate": candidate,
+                        "declared_at": utc_now(), "store_id": local_context["store_id"]})
+        folder.mkdir()
+        inventory = collect_inventory(folder, tests)
+        inventory_hash = digest(folder / "inventory.json")
+        if group == "gui" and any(value["inventory_sha256"] != inventory_hash for _, value in matching):
+            raise ValueError("same-candidate GUI retry inventory changed")
         temporary = folder / "temp"
         temporary.mkdir()
         child_env = os.environ.copy()

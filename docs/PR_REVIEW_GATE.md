@@ -272,7 +272,7 @@ v4 在原頂層欄位新增：
 每份 v4 review 增加 `coverage_sha256` 與 `finalizes_report_ref`，未使用時 null。
 `CODE_REVIEWED` 是完整差異已審、無 confirmed blocker、等待必要測試的中間 verdict，
 其 `blocker_kind=null`、findings 空、coverage digest null；它不是正式 `PASS`。
-第一輪完整 cumulative code review 後，開發模式回傳 `WAIT_VALIDATION_AUTHORIZATION`。
+第一輪完整 cumulative code review 後，開發模式回傳 `WAIT_VALIDATION_AUTHORIZATION`。 v4 開發模式的 confirmed-code 修正僅要求 implement／delegate／test／commit，回傳 `CORRECT_IMPLEMENTATION` 與 `delivery=local_commit_only`，不要求或授權 push。v3 凍結語意及 v4 驗證模式的既有授權門檻不變。
 只有 validation mode 才能回傳 `ENSURE_DRAFT_PR`，先查找同 repo/base/head 唯一 PR；
 第二輪 `REQUEST_REVIEW_2` 可與 CI 同時進行。任何 confirmed code blocker 仍優先處理，
 不以等待測試遮蔽，也不因此重設 task 或 corrective count。

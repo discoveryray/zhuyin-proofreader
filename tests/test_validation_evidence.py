@@ -159,6 +159,35 @@ class StagedGateTests(unittest.TestCase):
         state["execution"]["validation_authorization_ref"] = None
         self.assertEqual(gate.next_action(state)["action"], "STOP")
 
+    def test_real_cli_development_correction_is_local_only_and_v3_stays_frozen(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "state.json"
+            state = staged_state()
+            state["execution"] = {"mode": "development", "validation_authorization_ref": None}
+            state["authorization"]["operations"] = ["implement", "delegate", "test", "commit"]
+            state["reviews"][0].update(verdict="BLOCKED", blocker_kind="code", findings=["confirmed fixture defect"])
+            write(path, state)
+            result = json.loads(self.cli("next-action", path).stdout)
+            self.assertEqual(result["action"], "CORRECT_IMPLEMENTATION")
+            self.assertEqual(result["delivery"], "local_commit_only")
+            self.assertEqual(result["correction_round"], 1)
+            for missing in ("implement", "delegate", "test", "commit"):
+                changed = deepcopy(state)
+                changed["authorization"]["operations"].remove(missing)
+                write(path, changed)
+                self.assertEqual(json.loads(self.cli("next-action", path).stdout)["action"], "STOP")
+            state["execution"] = {"mode": "validation", "validation_authorization_ref": "fixture://start"}
+            write(path, state)
+            self.assertEqual(json.loads(self.cli("next-action", path).stdout)["action"], "STOP")
+            state["authorization"]["operations"].append("push")
+            write(path, state)
+            self.assertEqual(json.loads(self.cli("next-action", path).stdout)["action"], "CORRECT_IMPLEMENTATION")
+            legacy = evidence_state()
+            legacy["authorization"]["operations"] = ["implement", "delegate", "test", "commit"]
+            legacy["reviews"][0].update(verdict="BLOCKED", blocker_kind="code", findings=["confirmed fixture defect"])
+            write(path, legacy)
+            self.assertEqual(json.loads(self.cli("next-action", path).stdout)["action"], "STOP")
+
     def test_real_cli_requires_both_formal_reviews_bound_to_raw_coverage(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -275,7 +304,7 @@ class RawEvidenceTests(unittest.TestCase):
                 started = evidence.load_json(folder / "started.json")
                 started["ci"] = data["ci"]
                 write(folder / "started.json", started)
-                write(folder / "history-context.json", {"schema": "zhuyin-local-history/1", "task_id": "fixture",
+                write(folder / "history-context.json", {"schema": runner.LOCAL_SCHEMA, "task_id": "fixture",
                       "source_ref": "fixture://explicit-local-validation", "baseline": BASE,
                       "repository": "discoveryray/zhuyin-proofreader", "created_at": "2026-10-01T00:00:00+00:00"})
                 data["artifacts"]["started"] = ref(folder / "started.json")

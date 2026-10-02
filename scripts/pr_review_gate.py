@@ -244,6 +244,10 @@ def _decision(state, action, reason, **details):
         "ENSURE_PR": {"pr"}, "ENSURE_DRAFT_PR": {"pr"}, "MERGE_PROPOSAL": {"merge"},
         "CORRECT_IMPLEMENTATION": {"implement", "test", "commit", "push", "delegate"},
     }.get(action, set())
+    if (action == "CORRECT_IMPLEMENTATION" and state["schema"] == STAGED_SCHEMA
+            and state["execution"]["mode"] == "development"):
+        needed = needed - {"push"}
+        details["delivery"] = "local_commit_only"
     missing = needed - set(state["authorization"]["operations"])
     if missing:
         action, reason, details = "STOP", f"next action is not authorized: {sorted(missing)}", {}

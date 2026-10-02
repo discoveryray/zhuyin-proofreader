@@ -14,6 +14,7 @@ from scripts import test_entrypoint_audit as audit
 from scripts import validation_runner as runner
 
 ROOT = Path(__file__).resolve().parents[1]
+ORIGINAL_RUN_PROCESS = runner.run_process
 
 
 class GroupedCollectionTests(unittest.TestCase):
@@ -95,6 +96,164 @@ class GroupedCollectionTests(unittest.TestCase):
                 provider.__file__ = str(root / "different_source.py")
                 with self.assertRaisesRegex(ValueError, "unresolved local imported helper"):
                     audit.callable_uses_tk(consumer.probe)
+
+    def test_real_collection_cli_tracks_aliases_and_rejects_unknown_callbacks(self):
+        with tempfile.TemporaryDirectory(dir=ROOT / "tmp") as temporary:
+            folder = Path(temporary)
+            source = folder / "test_alias.py"
+            source.write_text("import tkinter as tk\ndef make_window(): return tk.Tk()\ndef pure(): return 3\ndef test_alias():\n    factory = make_window\n    nested_alias = factory\n    return nested_alias()\ndef test_pure():\n    factory = pure\n    return factory()\n")
+            source.write_text(source.read_text() + "from contextlib import contextmanager\n@contextmanager\ndef manager():\n    def callback(): return tk.Tk()\n    yield callback\n@contextmanager\ndef pure_manager():\n    def callback(): return 2\n    yield callback\ndef invoke(callback): return callback()\ndef test_context():\n    with manager() as callback: return callback()\ndef test_pure_context():\n    with pure_manager() as callback: return callback()\ndef test_distinct_callbacks():\n    invoke(pure)\n    invoke(make_window)\n")
+            source.write_text(source.read_text() + "def test_literal_pure():\n    for callback in [lambda: 3, pure]: callback()\ndef test_literal_tk():\n    for callback in (pure, make_window): callback()\n")
+            source.write_text(source.read_text() + "def test_local_class():\n    class Value:\n        result = 3\n    return Value()\n")
+            source.write_text(source.read_text() + "import json\nclass PureFactory:\n    @classmethod\n    def make(cls): return cls()\nclass TkFactory:\n    @classmethod\n    def make(cls): return tk.Tk()\ndef test_classmethod_pure():\n    factory = PureFactory.make\n    return factory()\ndef test_classmethod_tk(): return TkFactory.make()\ndef test_tuple_alias():\n    first, second = pure, make_window\n    first()\n    second()\ndef test_fixed_getattr_tk():\n    factory = getattr(tk, 'Tk')\n    return factory()\ndef test_fixed_getattr_pure():\n    factory = getattr(json, 'dumps')\n    return factory(1)\n")
+            source.write_text(source.read_text() + "def use(callback=None): return callback()\ndef test_kwargs_tk():\n    kwargs = {'callback': make_window}\n    return use(**kwargs)\ndef test_kwargs_pure(): return use(**{'callback': pure})\n")
+            source.write_text(source.read_text() + "def test_kwargs_conditional_tk(): return use(**({'callback': make_window} if globals()['flag'] else {}))\ndef test_kwargs_written_tk():\n    kwargs = {'callback': pure}\n    kwargs['callback'] = make_window\n    return use(**kwargs)\ndef test_kwargs_other_key_pure():\n    kwargs = {'callback': pure}\n    kwargs['unused'] = 1\n    return invoke_options(**kwargs)\ndef invoke_options(callback, **kwargs): return callback()\ndef test_known_prefix_tk(): return use(make_window, **globals()['kwargs'])\ndef test_nested_prefix_pure():\n    def inject(callback, *args, **kwargs): return callback(*args, **kwargs)\n    thunk = lambda *args, **kwargs: inject(pure, *args, **kwargs)\n    return thunk()\ndef test_nested_prefix_tk():\n    def inject(callback, *args, **kwargs): return callback(*args, **kwargs)\n    thunk = lambda *args, **kwargs: inject(make_window, *args, **kwargs)\n    return thunk()\n")
+            source.write_text(source.read_text() + "def test_kwargs_alias_write_tk():\n    kwargs = {'callback': pure}\n    alias = kwargs\n    alias['callback'] = make_window\n    return use(**kwargs)\n")
+            source.write_text(source.read_text() + "def invoke_kw(**kwargs): return kwargs['a']()\ndef invoke_pos(*args): return args[0]()\ndef test_key_order_tk():\n    invoke_kw(a=pure, b=make_window)\n    invoke_kw(a=make_window, b=pure)\ndef test_position_order_tk():\n    invoke_pos(pure, make_window)\n    invoke_pos(make_window, pure)\ndef test_unused_callback_pure():\n    invoke_kw(a=pure, b=make_window)\n    invoke_pos(pure, make_window)\n")
+            output = folder / "inventory.json"
+            command = [sys.executable, str(ROOT / "scripts/test_entrypoint_audit.py"), "collect-groups", str(output), "--tests", str(folder)]
+            result = subprocess.run(command, cwd=ROOT, capture_output=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            inventory = json.loads(output.read_text())
+            self.assertEqual(set(inventory["gui_ids"]), {"test_alias.test_alias", "test_alias.test_context", "test_alias.test_distinct_callbacks", "test_alias.test_literal_tk", "test_alias.test_classmethod_tk", "test_alias.test_tuple_alias", "test_alias.test_fixed_getattr_tk", "test_alias.test_kwargs_tk", "test_alias.test_kwargs_conditional_tk", "test_alias.test_kwargs_written_tk", "test_alias.test_known_prefix_tk", "test_alias.test_nested_prefix_tk", "test_alias.test_kwargs_alias_write_tk", "test_alias.test_key_order_tk", "test_alias.test_position_order_tk"})
+            self.assertEqual(set(inventory["core_ids"]), {"test_alias.test_pure", "test_alias.test_pure_context", "test_alias.test_literal_pure", "test_alias.test_local_class", "test_alias.test_classmethod_pure", "test_alias.test_fixed_getattr_pure", "test_alias.test_kwargs_pure", "test_alias.test_kwargs_other_key_pure", "test_alias.test_nested_prefix_pure", "test_alias.test_unused_callback_pure"})
+            unknowns = ["def invoke(**kwargs): return kwargs['callback']()\ndef test_alias(): return invoke(**globals()['kwargs'])\n",
+                        "def invoke(*args): return args[0]()\ndef test_alias(): return invoke(*globals()['args'])\n",
+                        "def use(callback=None): return callback()\ndef test_alias():\n    kwargs = {'callback': lambda: 1}\n    globals()['mutate'](kwargs)\n    return use(**kwargs)\n",
+                        "def use(callback=None): return callback()\ndef test_alias():\n    kwargs = {'callback': lambda: 1}\n    kwargs[globals()['key']] = lambda: 2\n    return use(**kwargs)\n",
+                        "def test_alias():\n    def inject(callback, *args, **kwargs): return callback(*args, **kwargs)\n    return inject(**globals()['kwargs'])\n",
+                        "def use(callback=None): return callback()\ndef test_alias(): return use(**globals()['kwargs'])\n",
+                        "def use(callback=None): return callback()\ndef test_alias(): return use(**{'callback': globals()['callback']})\n",
+                        "def use(callback=None): return callback()\ndef test_alias():\n    kwargs = {'callback': lambda: 1}\n    kwargs['callback'] = globals()['callback']\n    return use(**kwargs)\n",
+                        "def use(callback=None): return callback()\ndef test_alias(): return use(*globals()['args'])\n",
+                        "def test_alias():\n    factory = globals()['callback']\n    return factory()\n",
+                        "def invoke(callback): return callback()\ndef test_alias(): return invoke(object())\n",
+                        "from contextlib import contextmanager\n@contextmanager\ndef manager(): yield globals()['callback']\ndef test_alias():\n    with manager() as callback: return callback()\n",
+                        "def test_alias():\n    first = second\n    second = first\n    return first()\n",
+                        "def test_alias():\n    for callback in globals()['callbacks']: callback()\n",
+                        "def test_alias():\n    for callback in [lambda: 1, globals()['callback']]: callback()\n",
+                        "def test_alias():\n    callbacks = [lambda: 1]\n    alias = callbacks\n    alias.append(globals()['callback'])\n    for callback in callbacks: callback()\n",
+                        "def test_alias():\n    for name, callback in [('known', lambda: 1), globals()['row']]: callback()\n"]
+            for index, body in enumerate(unknowns):
+                with self.subTest(index=index):
+                    source.write_text(body)
+                    result = subprocess.run(command, cwd=ROOT, capture_output=True, timeout=30)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn(b"unresolved indirect callable", result.stdout + result.stderr)
+
+    def test_callable_binding_union_is_finite_and_keeps_distinct_targets(self):
+        def pure(): return 1
+        def possible_tk(): return 2  # Identity must differ even before source tracing.
+        self.assertEqual(audit._callable_binding_key(pure), audit._callable_binding_key([[[pure]], pure]))
+        self.assertNotEqual(audit._callable_binding_key(pure), audit._callable_binding_key([pure, possible_tk]))
+        self.assertNotEqual(audit._callable_binding_key(pure), audit._callable_binding_key([pure, None]))
+        self.assertNotEqual(audit._callable_binding_key({"a": pure, "b": possible_tk}), audit._callable_binding_key({"a": possible_tk, "b": pure}))
+        self.assertNotEqual(audit._callable_binding_key((pure, possible_tk)), audit._callable_binding_key((possible_tk, pure)))
+        self.assertEqual(audit._callable_binding_key({"a": (pure,)}), audit._callable_binding_key({"a": (pure,)}))
+        self.assertNotEqual(audit._callable_binding_key("Tk"), audit._callable_binding_key("Tcl"))
+        cycle = []; cycle.append(cycle)
+        with self.assertRaisesRegex(ValueError, "cyclic"):
+            audit._callable_binding_key(cycle)
+        deep = (pure,)
+        for _ in range(65):
+            deep = (deep,)
+        with self.assertRaisesRegex(ValueError, "depth"):
+            audit._callable_binding_key(deep)
+        nested = [pure]
+        for _ in range(1200):
+            nested = [nested]
+        self.assertEqual(audit._callable_binding_key(nested), audit._callable_binding_key(pure))
+
+    def test_bounded_alias_adapters_bind_sources_and_still_follow_target(self):
+        import inspect
+        import hashlib
+        import tkinter
+        import test_global_legacy_migration_v580 as native
+        import test_legacy_migration_inspector_v580 as instance
+        import global_exact_glyph_library as library
+        owner = instance.MigrationInspectionTests
+        caller = owner.test_one_plan_and_one_snapshot_with_post_snapshot_source_bracketing
+        self.assertIs(audit._bounded_callable_alias(native.fixture_path_alias, None, "get_short_path"), audit._NATIVE_NON_TK_LEAF)
+        self.assertIs(audit._bounded_callable_alias(caller, owner, "real"), library.GlobalExactGlyphRepository.load_snapshot)
+        self.assertIs(audit._bounded_callable_alias(caller, owner(), "real"), library.GlobalExactGlyphRepository.load_snapshot)
+        with patch.dict(audit.CALLABLE_ALIAS_SOURCE_HASHES, {"native_caller": "0" * 64}), self.assertRaisesRegex(ValueError, "source changed"):
+            audit._bounded_callable_alias(native.fixture_path_alias, None, "get_short_path")
+        with patch.object(library.GlobalExactGlyphRepository, "load_snapshot", tkinter.Tk), self.assertRaises(ValueError):
+            audit._bounded_callable_alias(caller, owner, "real")
+        with patch.object(library, "_load_snapshot_from_path", tkinter.Tk):
+            self.assertTrue(audit.callable_uses_tk(caller, owner))
+        with tempfile.TemporaryDirectory(dir=ROOT / "tmp") as temporary:
+            root = Path(temporary)
+            (root / "tests").mkdir()
+            path = root / "tests/test_global_legacy_migration_v580.py"
+            path.write_text(inspect.getsource(native.fixture_path_alias).replace("GetShortPathNameW", "CreateWindowExW"))
+            spec = importlib.util.spec_from_file_location("isolated_native_alias", path)
+            probe = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(probe)
+            expected = hashlib.sha256(inspect.getsource(probe.fixture_path_alias).encode()).hexdigest()
+            with patch.object(audit, "ROOT", root), patch.dict(audit.CALLABLE_ALIAS_SOURCE_HASHES, {"native_caller": expected}), self.assertRaisesRegex(ValueError, "callsite changed"):
+                audit._bounded_callable_alias(probe.fixture_path_alias, None, "get_short_path")
+            path = root / "tests/test_legacy_migration_inspector_v580.py"
+            path.write_text("class MigrationInspectionTests:\n" + inspect.getsource(caller).replace("self.repo.load_snapshot", "self.repo.load_inspection_snapshot"))
+            spec = importlib.util.spec_from_file_location("isolated_instance_alias", path)
+            probe = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(probe)
+            changed = probe.MigrationInspectionTests.test_one_plan_and_one_snapshot_with_post_snapshot_source_bracketing
+            expected = hashlib.sha256(inspect.getsource(changed).encode()).hexdigest()
+            with patch.object(audit, "ROOT", root), patch.dict(audit.CALLABLE_ALIAS_SOURCE_HASHES, {"instance_caller": expected}), self.assertRaisesRegex(ValueError, "callsite changed"):
+                audit._bounded_callable_alias(changed, owner, "real")
+
+    def test_async_save_adapter_binds_initialization_and_recurses_into_real_service(self):
+        import tkinter
+        import test_review_async_save as fixture
+        import review_save_service as service
+        owner = fixture.AsyncReviewSaveTests
+        caller = owner.test_worker_keeps_ui_unlocked_but_guards_all_mutating_actions_and_debounce
+        target = audit._bounded_callable_alias(caller, owner(), "save")
+        self.assertIs(target.__func__, service.ReviewSaveService.save_event)
+        self.assertIs(target.__self__, service.ReviewSaveService)
+        for key in ("async_caller", "async_setup", "headless", "queued_root", "reload_records", "invalidate_snapshot", "save_service", "save_target"):
+            with self.subTest(key=key), patch.dict(audit.CALLABLE_ALIAS_SOURCE_HASHES, {key: "0" * 64}), self.assertRaisesRegex(ValueError, "source changed"):
+                audit._bounded_callable_alias(caller, owner, "save")
+        with patch.object(service.ReviewSaveService, "save_event", tkinter.Tk), self.assertRaises(ValueError):
+            audit._bounded_callable_alias(caller, owner, "save")
+        with patch.object(service.ReviewSaveService, "_save", tkinter.Tk):
+            self.assertTrue(audit.callable_uses_tk(caller, owner))
+
+    def test_busy_operation_adapter_rejects_guard_caller_and_method_drift(self):
+        import test_review_async_save as fixture
+        import review_gui as gui
+        owner = fixture.AsyncReviewSaveTests
+        caller = owner.test_worker_keeps_ui_unlocked_but_guards_all_mutating_actions_and_debounce
+        self.assertIs(audit._bounded_callable_alias(caller, owner, "operation"), audit._BUSY_GUARDED_LEAF)
+        keys = [key for key in audit.CALLABLE_ALIAS_SOURCE_HASHES if key.startswith("busy_")] + ["async_caller"]
+        for key in keys:
+            with self.subTest(key=key), patch.dict(audit.CALLABLE_ALIAS_SOURCE_HASHES, {key: "0" * 64}), self.assertRaisesRegex(ValueError, "source changed"):
+                audit._bounded_callable_alias(caller, owner, "operation")
+        with patch.object(gui.ReviewApp, "_save_busy", lambda self: False), self.assertRaises(ValueError):
+            audit._bounded_callable_alias(caller, owner, "operation")
+        with patch.object(gui.ReviewApp, "prev", gui.ReviewApp.next), self.assertRaises(ValueError):
+            audit._bounded_callable_alias(caller, owner, "operation")
+
+    def test_exact_mock_forwarding_adapter_preserves_actual_callbacks(self):
+        import ast
+        import tkinter
+        import test_pdf_portability_binding as fixture
+        sp = fixture.sp
+        caller = fixture.test_bundle_actual_late_marker_prevents_commit
+        node = ast.parse("original(*args, **kwargs)", mode="eval").body
+        bindings = audit._bounded_forward_bindings(caller, node, sp.apply_direct_visual_actual_batch)
+        self.assertIs(bindings["prewrite_guard"], sp._validate_actual_import_target)
+        self.assertIs(bindings["apply_function"], sp.apply_verified_actual_group)
+        self.assertIs(bindings["initialize_evidence"], sp.initialize_project_actual_evidence)
+        for key in [key for key in audit.CALLABLE_ALIAS_SOURCE_HASHES if key.startswith("forward_")]:
+            with self.subTest(key=key), patch.dict(audit.CALLABLE_ALIAS_SOURCE_HASHES, {key: "0" * 64}), self.assertRaisesRegex(ValueError, "source changed"):
+                audit._bounded_forward_bindings(caller, node, sp.apply_direct_visual_actual_batch)
+        with patch.object(sp, "initialize_project_actual_evidence", tkinter.Tk), self.assertRaises(ValueError):
+            audit._bounded_forward_bindings(caller, node, sp.apply_direct_visual_actual_batch)
+        with patch.object(sp, "json_load_strict", tkinter.Tk):
+            self.assertTrue(audit.callable_uses_tk(bindings["prewrite_guard"]))
+        self.assertEqual(audit._bounded_forward_bindings(caller, ast.parse("other(*args, **kwargs)", mode="eval").body, sp.apply_direct_visual_actual_batch), {})
 
     def test_local_imports_cannot_silently_become_core(self):
         with tempfile.TemporaryDirectory(dir=ROOT / "tmp") as temporary:
@@ -236,7 +395,7 @@ class RunnerOrchestrationTests(unittest.TestCase):
                           "core_ids": ["test_pair.Case.test_core"], "gui_ids": ["test_pair.Case.test_gui"],
                           "records": [{"identity": "test_pair.Case.test_" + group, "nodeid": relative + "::Case::test_" + group, "group": group} for group in ("core", "gui")]}
         self.candidate = {"head": "a" * 40, "tree": "b" * 40, "parents": ["c" * 40, "d" * 40]}
-        self.real_run = runner.run_process
+        self.real_run = ORIGINAL_RUN_PROCESS
         self.preflight_success = False
         self.calls = []
         self.patches = [patch.dict("os.environ", {"GITHUB_ACTIONS": "true"}),
@@ -302,7 +461,7 @@ class RunnerOrchestrationTests(unittest.TestCase):
         self.assertEqual(self.calls.count("preflight.log"), 2)
 
     def test_core_failure_cannot_be_cleared_by_same_candidate_rerun(self):
-        original = self.real_run
+        original = ORIGINAL_RUN_PROCESS
         def fail(command, folder, name, timeout, env=None):
             if name == "raw.log":
                 (folder / "raw.log").write_text("AssertionError: isolated code failure")
