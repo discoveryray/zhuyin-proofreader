@@ -101,11 +101,12 @@ class GroupedCollectionTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=ROOT / "tmp") as temporary:
             folder = Path(temporary)
             source = folder / "test_alias.py"
+            (folder / "pure_source_helper.py").write_text("def dumps(value): return value\n")
             source.write_text("import tkinter as tk\ndef make_window(): return tk.Tk()\ndef pure(): return 3\ndef test_alias():\n    factory = make_window\n    nested_alias = factory\n    return nested_alias()\ndef test_pure():\n    factory = pure\n    return factory()\n")
             source.write_text(source.read_text() + "from contextlib import contextmanager\n@contextmanager\ndef manager():\n    def callback(): return tk.Tk()\n    yield callback\n@contextmanager\ndef pure_manager():\n    def callback(): return 2\n    yield callback\ndef invoke(callback): return callback()\ndef test_context():\n    with manager() as callback: return callback()\ndef test_pure_context():\n    with pure_manager() as callback: return callback()\ndef test_distinct_callbacks():\n    invoke(pure)\n    invoke(make_window)\n")
             source.write_text(source.read_text() + "def test_literal_pure():\n    for callback in [lambda: 3, pure]: callback()\ndef test_literal_tk():\n    for callback in (pure, make_window): callback()\n")
             source.write_text(source.read_text() + "def test_local_class():\n    class Value:\n        result = 3\n    return Value()\n")
-            source.write_text(source.read_text() + "import json\nclass PureFactory:\n    @classmethod\n    def make(cls): return cls()\nclass TkFactory:\n    @classmethod\n    def make(cls): return tk.Tk()\ndef test_classmethod_pure():\n    factory = PureFactory.make\n    return factory()\ndef test_classmethod_tk(): return TkFactory.make()\ndef test_tuple_alias():\n    first, second = pure, make_window\n    first()\n    second()\ndef test_fixed_getattr_tk():\n    factory = getattr(tk, 'Tk')\n    return factory()\ndef test_fixed_getattr_pure():\n    factory = getattr(json, 'dumps')\n    return factory(1)\n")
+            source.write_text(source.read_text() + "import pure_source_helper as json\nclass PureFactory:\n    @classmethod\n    def make(cls): return cls()\nclass TkFactory:\n    @classmethod\n    def make(cls): return tk.Tk()\ndef test_classmethod_pure():\n    factory = PureFactory.make\n    return factory()\ndef test_classmethod_tk(): return TkFactory.make()\ndef test_tuple_alias():\n    first, second = pure, make_window\n    first()\n    second()\ndef test_fixed_getattr_tk():\n    factory = getattr(tk, 'Tk')\n    return factory()\ndef test_fixed_getattr_pure():\n    factory = getattr(json, 'dumps')\n    return factory(1)\n")
             source.write_text(source.read_text() + "def use(callback=None): return callback()\ndef test_kwargs_tk():\n    kwargs = {'callback': make_window}\n    return use(**kwargs)\ndef test_kwargs_pure(): return use(**{'callback': pure})\n")
             source.write_text(source.read_text() + "def test_kwargs_conditional_tk(): return use(**({'callback': make_window} if globals()['flag'] else {}))\ndef test_kwargs_written_tk():\n    kwargs = {'callback': pure}\n    kwargs['callback'] = make_window\n    return use(**kwargs)\ndef test_kwargs_other_key_pure():\n    kwargs = {'callback': pure}\n    kwargs['unused'] = 1\n    return invoke_options(**kwargs)\ndef invoke_options(callback, **kwargs): return callback()\ndef test_known_prefix_tk(): return use(make_window, **globals()['kwargs'])\ndef test_nested_prefix_pure():\n    def inject(callback, *args, **kwargs): return callback(*args, **kwargs)\n    thunk = lambda *args, **kwargs: inject(pure, *args, **kwargs)\n    return thunk()\ndef test_nested_prefix_tk():\n    def inject(callback, *args, **kwargs): return callback(*args, **kwargs)\n    thunk = lambda *args, **kwargs: inject(make_window, *args, **kwargs)\n    return thunk()\n")
             source.write_text(source.read_text() + "def test_kwargs_alias_write_tk():\n    kwargs = {'callback': pure}\n    alias = kwargs\n    alias['callback'] = make_window\n    return use(**kwargs)\n")
@@ -140,6 +141,57 @@ class GroupedCollectionTests(unittest.TestCase):
                     result = subprocess.run(command, cwd=ROOT, capture_output=True, timeout=30)
                     self.assertNotEqual(result.returncode, 0)
                     self.assertIn(b"unresolved indirect callable", result.stdout + result.stderr)
+
+    def test_real_cli_instance_and_returned_callees_share_source_resolution(self):
+        with tempfile.TemporaryDirectory(dir=ROOT / "tmp") as temporary:
+            folder = Path(temporary)
+            source = folder / "test_receiver.py"
+            source.write_text("import tkinter as tk\nclass Helper:\n    def make_window(self): return tk.Tk()\n    def invoke(self, callback): return callback()\n    def pure(self): return 3\nclass Child(Helper): pass\ndef factory(): return tk.Tk\ndef pure(): return 4\ndef pure_factory(): return pure\ndef receiver_factory(): return Helper()\ndef test_instance():\n    helper = Helper()\n    return helper.make_window()\ndef test_method_alias():\n    helper = Helper()\n    factory = helper.make_window\n    return factory()\ndef test_bound_argument():\n    helper = Helper()\n    method = helper.invoke\n    return method(tk.Tk)\ndef test_returned(): return factory()()\ndef test_returned_alias():\n    callback = factory()\n    return callback()\ndef test_returned_receiver(): return receiver_factory().make_window()\ndef test_inherited(): return Child().make_window()\ndef test_pure_instance(): return Helper().pure()\ndef test_pure_return(): return pure_factory()()\ndef test_plain(): return 2 + 3\n")
+            output = folder / "inventory.json"
+            command = [sys.executable, str(ROOT / "scripts/test_entrypoint_audit.py"), "collect-groups", str(output), "--tests", str(folder)]
+            result = subprocess.run(command, cwd=ROOT, capture_output=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            inventory = json.loads(output.read_text())
+            gui = {"test_instance", "test_method_alias", "test_bound_argument", "test_returned", "test_returned_alias", "test_returned_receiver", "test_inherited"}
+            self.assertEqual(set(inventory["gui_ids"]), {"test_receiver." + name for name in gui})
+            self.assertEqual(set(inventory["core_ids"]), {"test_receiver.test_pure_instance", "test_receiver.test_pure_return", "test_receiver.test_plain"})
+            spec = importlib.util.spec_from_file_location("receiver_sentinel_probe", source)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            class ReachedTk(Exception): pass
+            with patch.object(module.tk, "Tk", side_effect=ReachedTk("reached constructor sentinel")):
+                for name in sorted(gui):
+                    with self.subTest(name=name), self.assertRaises(ReachedTk):
+                        getattr(module, name)()
+
+    def test_real_cli_unknown_callable_shapes_and_protocols_fail_closed(self):
+        bodies = [
+            "def test_unknown(receiver): return receiver.method()\n",
+            "def factory(): return globals()['callback']\ndef test_unknown(): return factory()()\n",
+            "def test_unknown(): return globals()['factory']()()\n",
+            "def test_unknown(): return getattr(globals()['receiver'], globals()['attribute'])()\n",
+            "class Helper:\n    def pure(self): return 1\ndef test_unknown():\n    helper = Helper()\n    helper.pure = globals()['callback']\n    return helper.pure()\n",
+            "class Meta(type):\n    def __call__(cls): return globals()['callback']()\nclass Helper(metaclass=Meta): pass\ndef test_unknown(): return Helper()\n",
+            "class Helper:\n    def __new__(cls): return globals()['receiver']\ndef test_unknown(): return Helper().method()\n",
+            "class Helper:\n    @property\n    def callback(self): return globals()['callback']\ndef test_unknown(): return Helper().callback()\n",
+            "from pathlib import Path\ndef test_unknown(): return Path.cwd()\n",
+            "exec(compile(\"\\n\" * 10000 + \"def generated(): return 3\\n\", __file__, \"exec\"))\ndef factory(): return generated()\ndef test_unknown(): return factory()()\n",
+        ]
+        with tempfile.TemporaryDirectory(dir=ROOT / "tmp") as temporary:
+            folder = Path(temporary)
+            for index, body in enumerate(bodies):
+                with self.subTest(index=index):
+                    source = folder / "test_unknown.py"
+                    source.write_text(body)
+                    output = folder / (str(index) + ".json")
+                    command = [sys.executable, str(ROOT / "scripts/test_entrypoint_audit.py"), "collect-groups", str(output), "--tests", str(folder)]
+                    result = subprocess.run(command, cwd=ROOT, capture_output=True, timeout=30)
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertFalse(output.exists())
+                    self.assertIn(b"unresolved", result.stdout + result.stderr)
+                    self.assertIn(b"UNRESOLVED CLASSIFICATION", result.stdout + result.stderr)
+                    if "def generated" in body:
+                        self.assertIn(b"unresolved return source: test_unknown.generated: OSError", result.stdout + result.stderr)
 
     def test_callable_binding_union_is_finite_and_keeps_distinct_targets(self):
         def pure(): return 1

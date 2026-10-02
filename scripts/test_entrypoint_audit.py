@@ -26,6 +26,7 @@ import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 _MISSING = object()
+_CLASSIFICATION_UNKNOWN_SOURCES = set()
 
 
 class ReviewLoadTestsLoader(unittest.TestLoader):
@@ -464,6 +465,58 @@ def _bounded_forward_bindings(function, node, target):
             "acknowledge": type(None)}
 
 
+@dataclasses.dataclass(frozen=True)
+class _SourceInstance:
+    """A proven receiver class, never an instantiated application object."""
+    cls: type
+
+
+@dataclasses.dataclass(frozen=True)
+class _SourceMethod:
+    function: object
+    receiver: _SourceInstance
+
+
+def _plain_receiver(cls):
+    # Do not guess what a metaclass, __new__, initializer or dynamic lookup
+    # returns/installs. More elaborate producers need their own reviewed proof.
+    if (not inspect.isclass(cls) or type(cls) is not type
+            or inspect.getattr_static(cls, "__new__") is not object.__new__
+            or inspect.getattr_static(cls, "__init__") is not object.__init__
+            or inspect.getattr_static(cls, "__getattribute__") is not object.__getattribute__
+            or inspect.getattr_static(cls, "__getattr__", None) is not None):
+        return None
+    return _SourceInstance(cls)
+
+
+def _source_attribute(base, name):
+    if isinstance(base, _SourceInstance):
+        member = inspect.getattr_static(base.cls, name, _MISSING)
+        if inspect.isfunction(member):
+            return _SourceMethod(member, base)
+        if isinstance(member, staticmethod):
+            return member.__func__
+        if isinstance(member, classmethod):
+            return member.__get__(None, base.cls)
+        return None  # Descriptor/instance state is not a callable identity proof.
+    if base is not None:
+        member = inspect.getattr_static(base, name, _MISSING)
+        if member is not _MISSING and not isinstance(member, property):
+            if isinstance(member, classmethod) and inspect.isclass(base):
+                return member.__get__(None, base)
+            return member.__func__ if isinstance(member, staticmethod) else member
+    return None
+
+
+def _outer_source_nodes(root):
+    pending = list(reversed(root.body))
+    while pending:
+        node = pending.pop()
+        yield node
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)):
+            pending.extend(reversed(list(ast.iter_child_nodes(node))))
+
+
 def _callable_binding_key(value):
     """Finite alternatives; real mappings/tuples preserve keys and positions."""
     def abstract(current, ancestors=frozenset(), depth=0):
@@ -499,6 +552,10 @@ def _callable_binding_key(value):
                     raise ValueError("unproven callable binding mapping key")
                 entries.append(((type(key).__name__, repr(key)), abstract(item, ancestors, depth + 1)))
             return (("mapping", tuple(sorted(entries, key=repr))),)
+        if isinstance(current, _SourceInstance):
+            return (("source_instance", id(current.cls)),)
+        if isinstance(current, _SourceMethod):
+            return (("source_method", id(current.function), id(current.receiver.cls)),)
         if inspect.ismethod(current):
             return (("method", id(current.__func__), id(current.__self__)),)
         if current is None:
@@ -512,17 +569,19 @@ def _callable_binding_key(value):
 def callable_uses_tk(function, owner=None, seen=None, bindings=None):
     """Trace collected functions, inherited setup, fixtures and imported helpers.
 
-    Dynamic tkinter lookup is deliberately rejected. Native/library callables
-    without Python source are leaves; tkinter constructors are recognized first.
+    Unknown callable expressions/providers fail closed regardless of AST shape.
+    Only explicit source proofs or the retained exact adapters admit a leaf.
     This is a conservative classification, never an omission permission.
     """
     seen = set() if seen is None else seen
+    if isinstance(function, _SourceMethod):
+        owner, function = function.receiver, function.function
     function = inspect.unwrap(function)
     if inspect.ismethod(function):
         owner = function.__self__
         function = function.__func__
     bindings = {} if bindings is None else bindings
-    invocation = (id(function), id(owner), tuple(sorted((key, _callable_binding_key(value)) for key, value in bindings.items())))
+    invocation = (id(function), _callable_binding_key(owner), tuple(sorted((key, _callable_binding_key(value)) for key, value in bindings.items())))
     if invocation in seen:
         return False
     seen.add(invocation)
@@ -533,9 +592,11 @@ def callable_uses_tk(function, owner=None, seen=None, bindings=None):
         # Widgets, variables, styles and dialogs can request the default root.
         # Tcl(useTk=False) is the explicit non-window interpreter adapter.
         return getattr(function, "__name__", "") != "Tcl"
-    if module_name.split(".")[0] in sys.stdlib_module_names:
-        return False
+    if function in (object.__init__, object.__new__, type(None)):
+        return False  # Exact object protocol / internal known-None marker.
     if inspect.isclass(function):
+        if type(function) is not type or inspect.getattr_static(function, "__new__") is not object.__new__:
+            raise ValueError("unresolved constructor protocol: " + module_name + "." + function.__qualname__)
         initializer = function.__init__
         if dataclasses.is_dataclass(function) and getattr(getattr(initializer, "__code__", None), "co_filename", None) == "<string>":
             factories = [field.default_factory for field in dataclasses.fields(function)
@@ -545,10 +606,10 @@ def callable_uses_tk(function, owner=None, seen=None, bindings=None):
             return any(callable_uses_tk(factory, function, seen) for factory in factories)
         return callable_uses_tk(initializer, function, seen)
     if not inspect.isfunction(function):
-        return False
+        raise ValueError("unresolved indirect callable provider: " + module_name + "." + getattr(function, "__qualname__", type(function).__name__))
     source_file = inspect.getsourcefile(function)
     if source_file and ("site-packages" in Path(source_file).parts or Path(source_file).is_relative_to(Path(sys.base_prefix))):
-        return False
+        raise ValueError("unresolved external provider: " + module_name + "." + function.__qualname__)
     try:
         tree = ast.parse(textwrap.dedent(inspect.getsource(function)))
     except (OSError, TypeError, IndentationError, SyntaxError) as error:
@@ -694,13 +755,28 @@ def callable_uses_tk(function, owner=None, seen=None, bindings=None):
                 changed_containers.update(aliases | {name})
             if name in escaped_containers or aliases & escaped_containers:
                 escaped_containers.update(aliases | {name})
+    changed_receivers = {node.value.id for node in ast.walk(tree)
+                         if isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Store)
+                         and isinstance(node.value, ast.Name)}
     nested = {node.name for node in ast.walk(tree)
               if ((isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name != function.__name__)
                   or (isinstance(node, ast.ClassDef) and not node.bases and not node.keywords and not node.decorator_list))}
     parameters = dict(inspect.signature(function).parameters)
     context_aliases = {}
 
-    def resolve(node, trail=frozenset()):
+    def resolve(node, trail=frozenset(), frame=None, depth=0):
+        if depth > 24:
+            return None
+        if frame is not None and isinstance(node, ast.Name):
+            frame_namespace, frame_assignments, frame_bindings, frame_owner = frame
+            if node.id in {"self", "cls"}:
+                return frame_owner
+            if node.id in trail:
+                return None
+            if node.id in frame_assignments:
+                values = [resolve(value, trail | {node.id}, frame, depth + 1) for value in frame_assignments[node.id]]
+                return values[0] if len(values) == 1 else values
+            return frame_bindings.get(node.id, frame_namespace.get(node.id))
         if isinstance(node, ast.Name):
             if node.id in {"self", "cls"}:
                 return owner
@@ -717,7 +793,9 @@ def callable_uses_tk(function, owner=None, seen=None, bindings=None):
                         default = parameters[node.id].default
                         return bindings.get(node.id, type(None) if default is None else None)
                     return None
-                values = [resolve(value, trail | {node.id}) for value in assignments[node.id]]
+                values = [resolve(value, trail | {node.id}, depth=depth + 1) for value in assignments[node.id]]
+                if (node.id in changed_receivers or node.id in escaped_containers) and any(isinstance(value, _SourceInstance) for value in values):
+                    return None
                 return values[0] if len(values) == 1 else values
             if node.id in nested:
                 return ast.FunctionDef  # Its body is already traversed below.
@@ -728,30 +806,62 @@ def callable_uses_tk(function, owner=None, seen=None, bindings=None):
                 return (type(None) if default is None else default) if default is not inspect.Parameter.empty else None
             return namespace.get(node.id, getattr(builtins, node.id, None))
         if isinstance(node, ast.Attribute):
-            base = resolve(node.value, trail)
-            if base is not None:
-                try:
-                    member = inspect.getattr_static(base, node.attr)
-                    if isinstance(member, classmethod) and inspect.isclass(base):
-                        return member.__get__(None, base)
-                    return member.__func__ if isinstance(member, staticmethod) else member
-                except AttributeError:
-                    pass
+            return _source_attribute(resolve(node.value, trail, frame, depth + 1), node.attr)
         if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
                 and node.func.id == "getattr" and len(node.args) == 2 and not node.keywords):
-            base, attribute = resolve(node.args[0], trail), resolve(node.args[1], trail)
-            if base is not None and isinstance(attribute, str):
-                try:
-                    return inspect.getattr_static(base, attribute)
-                except AttributeError:
-                    return None
-            return None
+            base = resolve(node.args[0], trail, frame, depth + 1)
+            attribute = resolve(node.args[1], trail, frame, depth + 1)
+            return _source_attribute(base, attribute) if isinstance(attribute, str) else None
+        if isinstance(node, ast.Call):
+            target = resolve(node.func, trail, frame, depth + 1)
+            if inspect.isclass(target):
+                return _plain_receiver(target)
+            receiver = None
+            if isinstance(target, _SourceMethod):
+                receiver, target = target.receiver, target.function
+            elif inspect.ismethod(target):
+                receiver, target = target.__self__, target.__func__
+            if not inspect.isfunction(target):
+                return None
+            source = inspect.getsourcefile(target)
+            if not source or "site-packages" in Path(source).parts or Path(source).is_relative_to(Path(sys.base_prefix)):
+                return None
+            try:
+                result_tree = ast.parse(textwrap.dedent(inspect.getsource(target))).body[0]
+            except (OSError, TypeError, IndentationError, SyntaxError) as error:
+                raise ValueError("unresolved return source: " + target.__module__ + "." + target.__qualname__ + ": " + type(error).__name__) from error
+            if not isinstance(result_tree, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                raise ValueError("unresolved return source shape: " + target.__module__ + "." + target.__qualname__)
+            nodes = list(_outer_source_nodes(result_tree))
+            returns = [item.value for item in nodes if isinstance(item, ast.Return)]
+            if not returns or any(isinstance(arg, ast.Starred) for arg in node.args) or any(not kw.arg for kw in node.keywords):
+                return None
+            arguments = [resolve(arg, trail, frame, depth + 1) for arg in node.args]
+            if receiver is not None:
+                arguments.insert(0, receiver)
+            keywords = {kw.arg: resolve(kw.value, trail, frame, depth + 1) for kw in node.keywords}
+            try:
+                supplied = inspect.signature(target).bind(*arguments, **keywords)
+                supplied.apply_defaults()
+            except TypeError:
+                return None
+            local_assignments = {}
+            for item in nodes:
+                if isinstance(item, (ast.Assign, ast.AnnAssign)):
+                    for name in item.targets if isinstance(item, ast.Assign) else [item.target]:
+                        if isinstance(name, ast.Name):
+                            local_assignments.setdefault(name.id, []).append(item.value)
+            local_namespace = dict(target.__globals__)
+            local_namespace.update(inspect.getclosurevars(target).nonlocals)
+            result_frame = (local_namespace, local_assignments, dict(supplied.arguments), receiver)
+            values = [resolve(value, frozenset(), result_frame, depth + 1) for value in returns]
+            return values[0] if len(values) == 1 else values
         if isinstance(node, ast.Dict):
             if all(isinstance(key, ast.Constant) and isinstance(key.value, (str, int, float, bool, bytes, type(None))) for key in node.keys):
-                return {key.value: resolve(value, trail) for key, value in zip(node.keys, node.values)}
+                return {key.value: resolve(value, trail, frame, depth + 1) for key, value in zip(node.keys, node.values)}
             return None
         if isinstance(node, ast.Subscript) and isinstance(node.slice, ast.Constant):
-            base, key = resolve(node.value, trail), node.slice.value
+            base, key = resolve(node.value, trail, frame, depth + 1), node.slice.value
             if isinstance(base, dict) and isinstance(key, (str, int, float, bool, bytes, type(None))):
                 return base.get(key)
             if isinstance(base, tuple) and isinstance(key, int) and -len(base) <= key < len(base):
@@ -762,11 +872,11 @@ def callable_uses_tk(function, owner=None, seen=None, bindings=None):
         if isinstance(node, ast.Lambda):
             return ast.Lambda  # Its body is already traversed below.
         if isinstance(node, (ast.List, ast.Tuple)):
-            return [resolve(value, trail) for value in node.elts]
+            return [resolve(value, trail, frame, depth + 1) for value in node.elts]
         if isinstance(node, ast.BoolOp):
-            return [resolve(value, trail) for value in node.values]
+            return [resolve(value, trail, frame, depth + 1) for value in node.values]
         if isinstance(node, ast.IfExp):
-            return [resolve(node.body, trail), resolve(node.orelse, trail)]
+            return [resolve(node.body, trail, frame, depth + 1), resolve(node.orelse, trail, frame, depth + 1)]
         return None
 
     def literal_keywords(node, trail=frozenset()):
@@ -822,6 +932,7 @@ def callable_uses_tk(function, owner=None, seen=None, bindings=None):
                 # purity merely because a callable came from a with statement.
                 context_aliases[item.optional_vars.id] = provider
 
+    unresolved = []
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -841,16 +952,24 @@ def callable_uses_tk(function, owner=None, seen=None, bindings=None):
             if isinstance(target, list):
                 pending.extend(target)
                 continue
-            if target is None and isinstance(node.func, (ast.Name, ast.Subscript)):
-                raise ValueError("unresolved indirect callable requires inventory review: " + function.__qualname__ + ":" + ast.unparse(node.func))
+            if target is None:
+                unresolved.append("unresolved indirect callable requires inventory review: " + Path(source_file).name + ":" + function.__qualname__ + ":" + ast.unparse(node.func) + " [" + type(node.func).__name__ + "]")
+                continue
             if target in (_NATIVE_NON_TK_LEAF, _BUSY_GUARDED_LEAF, ast.FunctionDef, ast.Lambda):
                 continue
             if isinstance(target, (staticmethod, classmethod)):
                 target = target.__func__
-            # Follow application/test helpers, not pytest/unittest internals.
-            module = getattr(target, "__module__", "") or ""
-            if target is not None and not module.startswith(("unittest", "pytest", "_pytest")):
+            # A resolved expression is not automatically a proven callable.
+            # Literal getattr on a statically known member has no dynamic lookup.
+            if target is getattr and resolve(node) is not None:
+                continue
+            if target is not None:
                 call_bindings = {}
+                source_method = isinstance(target, _SourceMethod)
+                if source_method:
+                    call_owner, target = target.receiver, target.function
+                else:
+                    call_owner = owner
                 if inspect.isfunction(target) or inspect.ismethod(target):
                     signature = inspect.signature(target)
                     arguments = []
@@ -860,9 +979,9 @@ def callable_uses_tk(function, owner=None, seen=None, bindings=None):
                             opaque_unpacking = True
                             break
                         arguments.append(resolve(arg))
-                    if (isinstance(node.func, ast.Attribute) and signature.parameters
+                    if ((source_method or isinstance(node.func, ast.Attribute)) and signature.parameters
                             and next(iter(signature.parameters)) in {"self", "cls"}):
-                        arguments.insert(0, owner)
+                        arguments.insert(0, call_owner)
                     keywords = {}
                     for keyword in node.keywords:
                         choices = [{keyword.arg: resolve(keyword.value)}] if keyword.arg else literal_keywords(keyword.value)
@@ -895,8 +1014,14 @@ def callable_uses_tk(function, owner=None, seen=None, bindings=None):
                     except TypeError:
                         call_bindings = {name: None for name in signature.parameters}
                 call_bindings.update(_bounded_forward_bindings(function, node, target))
-                if callable_uses_tk(target, owner, seen, call_bindings):
-                    return True
+                try:
+                    if callable_uses_tk(target, call_owner, seen, call_bindings):
+                        return True
+                except ValueError as error:
+                    unresolved.append(str(error))
+    if unresolved:
+        _CLASSIFICATION_UNKNOWN_SOURCES.update(unresolved)
+        raise ValueError(unresolved[0])
     return False
 
 
@@ -939,6 +1064,7 @@ def classify_item(item):
 
 
 def grouped_collection(output, tests=None):
+    _CLASSIFICATION_UNKNOWN_SOURCES.clear()
     sys.path.insert(0, str(ROOT))
     import pytest
     tests = Path(tests or ROOT / "tests").resolve()
@@ -960,6 +1086,7 @@ def grouped_collection(output, tests=None):
                 self.records.append({"identity": ".".join([Path(parts[0]).stem, *parts[1:]]),
                                      "nodeid": item.nodeid, "group": group})
             if failures:
+                print("CLASSIFICATION UNKNOWN SOURCES " + json.dumps(sorted(_CLASSIFICATION_UNKNOWN_SOURCES), ensure_ascii=False), flush=True)
                 raise ValueError("unresolved classification: " + str(len(failures)) + " identities; see retained diagnostics")
 
     with tempfile.TemporaryDirectory() as temporary:
