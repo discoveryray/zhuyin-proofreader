@@ -11,12 +11,74 @@ import json
 from pathlib import Path
 import re
 import sys
+import zipfile
 
 
 SCHEMA = "zhuyin-pr-review-gate/3"
+STAGED_SCHEMA = "zhuyin-pr-review-gate/4"
 REPOSITORY = "discoveryray/zhuyin-proofreader"
 WORKFLOW = ".github/workflows/ci.yml"
 PYTHONS = ("3.13",)
+CORRECTION4_EXCEPTION = {
+    "schema": "validation-flow-correction-exception/1",
+    "task_id": "validation-flow-reduction",
+    "baseline": "457707b4c4109c1b10a0da76d8f8a884aca10341",
+    "starting_head": "a0e647952ae5d973ea30130264294eee4e6982fa",
+    "head_branch": "chore/validation-flow-reduction",
+    "pr_number": 41, "extra_rounds": 1, "limit": 4,
+    "authorization_sha256": "29b2869d5e6584bab8efbf022f697c8ee7331b7e1241ef0c18df7f4a647ec7fc",
+    "scope": "same-installation Tcl/Tk wiring, early hosted fd preflight, directly related tests/policy and task-bound gate exception",
+}
+CORRECTION5_EXCEPTION = {
+    "schema": "validation-flow-correction-exception/2",
+    "task_id": "validation-flow-reduction",
+    "baseline": "457707b4c4109c1b10a0da76d8f8a884aca10341",
+    "starting_head": "90b408794415509dd919a6d7a91c911f3724fd1f",
+    "head_branch": "chore/validation-flow-reduction",
+    "pr_number": 41, "extra_rounds": 1, "limit": 5,
+    "authorization_sha256": "46b2855d3fe7cd873ce1c4aaf9a93a8afa320b4f67e17aa14405f74d06f296d0",
+    "previous_authorization_sha256": "29b2869d5e6584bab8efbf022f697c8ee7331b7e1241ef0c18df7f4a647ec7fc",
+    "scope": "independent early-preflight records, genuine small CLI regressions, directly related policy and task-bound fifth-round gate exception",
+}
+CORRECTION6_EXCEPTION = {
+    "schema": "validation-flow-correction-exception/3",
+    "task_id": "validation-flow-reduction",
+    "baseline": "457707b4c4109c1b10a0da76d8f8a884aca10341",
+    "starting_head": "811ff56f256370eb19cb5de0d76ce6a8c12d61be",
+    "head_branch": "chore/validation-flow-reduction",
+    "pr_number": 41, "extra_rounds": 1, "limit": 6,
+    "authorization_sha256": "01df9c9193d00f675add80287feadc9f657b27b6c81fc9114d59448d3c9d9d4d",
+    "previous_authorization_sha256": "46b2855d3fe7cd873ce1c4aaf9a93a8afa320b4f67e17aa14405f74d06f296d0",
+    "fourth_authorization_sha256": "29b2869d5e6584bab8efbf022f697c8ee7331b7e1241ef0c18df7f4a647ec7fc",
+    "scope": "ExpectedResolutionGuiTests owner-thread object retirement, directly necessary regressions/registration and task-bound sixth-round exception",
+}
+CORRECTION7_EXCEPTION = {
+    "schema": "validation-flow-correction-exception/4",
+    "task_id": "validation-flow-reduction",
+    "baseline": "457707b4c4109c1b10a0da76d8f8a884aca10341",
+    "starting_head": "adcee81cf844fcee51c16b94099fe8916458c4dc",
+    "head_branch": "chore/validation-flow-reduction",
+    "pr_number": 41, "extra_rounds": 1, "limit": 7,
+    "authorization_sha256": "5f581ffa18d57db0114f23ed26f30fd7d09ba1d8b0cf5a97499b1392d341655a",
+    "previous_authorization_sha256": "01df9c9193d00f675add80287feadc9f657b27b6c81fc9114d59448d3c9d9d4d",
+    "fifth_authorization_sha256": "46b2855d3fe7cd873ce1c4aaf9a93a8afa320b4f67e17aa14405f74d06f296d0",
+    "fourth_authorization_sha256": "29b2869d5e6584bab8efbf022f697c8ee7331b7e1241ef0c18df7f4a647ec7fc",
+    "scope": "main push baseline full-validation routing and required summary, direct regressions/registration/policy and task-bound seventh-round exception",
+}
+CORRECTION8_EXCEPTION = {
+    "schema": "validation-flow-correction-exception/5",
+    "task_id": "validation-flow-reduction",
+    "baseline": "457707b4c4109c1b10a0da76d8f8a884aca10341",
+    "starting_head": "d974ec5c420feabaa64b449bd25d78aed10c02f0",
+    "head_branch": "chore/validation-flow-reduction",
+    "pr_number": 41, "extra_rounds": 1, "limit": 8,
+    "authorization_sha256": "c156319030dc54f549e6479b369ef718fecdd494aee1817fee515e683032e05a",
+    "previous_authorization_sha256": "5f581ffa18d57db0114f23ed26f30fd7d09ba1d8b0cf5a97499b1392d341655a",
+    "sixth_authorization_sha256": "01df9c9193d00f675add80287feadc9f657b27b6c81fc9114d59448d3c9d9d4d",
+    "fifth_authorization_sha256": "46b2855d3fe7cd873ce1c4aaf9a93a8afa320b4f67e17aa14405f74d06f296d0",
+    "fourth_authorization_sha256": "29b2869d5e6584bab8efbf022f697c8ee7331b7e1241ef0c18df7f4a647ec7fc",
+    "scope": "unittest step metadata ordering, unchanged historical workflow reader validation, exact source registration and task-bound eighth-round exception",
+}
 OPERATIONS = {"implement", "delegate", "test", "commit", "push", "pr", "merge"}
 COMMON_STEPS = (
     "Check out repository", "Set up Python", "Show Python version",
@@ -104,11 +166,241 @@ def _ci_schema(ci, where):
     _require(len(names) == len(set(names)), f"{where}: duplicate jobs")
 
 
+def _correction5_limit(state):
+    exception = state["correction_exception"]
+    _fields(exception, " ".join((*CORRECTION5_EXCEPTION, "authorization_ref", "previous_authorization_ref")), "correction_exception")
+    for name, expected in CORRECTION5_EXCEPTION.items():
+        _require(type(exception[name]) is type(expected) and exception[name] == expected,
+                 "invalid fifth-round task-bound exception: " + name)
+    task, pr, corrections = state["task"], state["pr"], state["corrections"]
+    _require((task["id"], task["baseline"], task["head_branch"]) ==
+             (exception["task_id"], exception["baseline"], exception["head_branch"]),
+             "fifth-round exception belongs to another task/baseline/branch")
+    _require(type(pr) is dict and (pr.get("number"), pr.get("base_sha"), pr.get("head_branch")) ==
+             (41, exception["baseline"], exception["head_branch"]),
+             "fifth-round exception requires original PR41/base/branch")
+    _require(pr.get("state") == "merged" or state["current"]["base"] == exception["baseline"],
+             "fifth-round exception base changed")
+    _require(type(corrections) is list and len(corrections) in (4, 5),
+             "fifth-round exception must retain the first four rounds")
+    _require(type(corrections[2]) is dict and corrections[2].get("to_head") == CORRECTION4_EXCEPTION["starting_head"]
+             and type(corrections[3]) is dict
+             and corrections[3].get("from_head") == CORRECTION4_EXCEPTION["starting_head"]
+             and corrections[3].get("to_head") == exception["starting_head"],
+             "fifth-round exception differs from retained third/fourth history")
+    if len(corrections) == 5:
+        _require(type(corrections[4]) is dict and corrections[4].get("from_head") == exception["starting_head"],
+                 "fifth round must start at the authorized HEAD")
+        _require(state["current"]["head"] == corrections[4].get("to_head"),
+                 "current HEAD differs from retained fifth correction")
+    else:
+        _require(state["current"]["head"] == exception["starting_head"],
+                 "fifth-round authorization must start at exact current HEAD")
+    for ref, digest in (("authorization_ref", "authorization_sha256"),
+                        ("previous_authorization_ref", "previous_authorization_sha256")):
+        _text(exception[ref], "correction_exception." + ref)
+        try:
+            actual = hashlib.sha256(Path(exception[ref]).read_bytes()).hexdigest()
+        except OSError as error:
+            raise EvidenceError("saved fifth/fourth correction authorization unavailable") from error
+        _require(actual == exception[digest], "saved fifth/fourth correction authorization hash differs")
+    return 5
+
+
+def _correction6_limit(state):
+    exception = state["correction_exception"]
+    _fields(exception, " ".join((*CORRECTION6_EXCEPTION, "authorization_ref",
+                                "previous_authorization_ref", "fourth_authorization_ref")),
+            "correction_exception")
+    for name, expected in CORRECTION6_EXCEPTION.items():
+        _require(type(exception[name]) is type(expected) and exception[name] == expected,
+                 "invalid sixth-round task-bound exception: " + name)
+    corrections = state["corrections"]
+    _require(type(corrections) is list and len(corrections) in (5, 6),
+             "sixth-round exception must retain the first five rounds")
+    # Revalidate the original fourth/fifth contract and saved raw authorizations;
+    # extending this one task must not rewrite either historical adapter.
+    retained = {**state, "corrections": corrections[:5],
+                "current": {**state["current"], "head": exception["starting_head"]},
+                "correction_exception": {
+                    **CORRECTION5_EXCEPTION,
+                    "authorization_ref": exception["previous_authorization_ref"],
+                    "previous_authorization_ref": exception["fourth_authorization_ref"],
+                }}
+    _correction5_limit(retained)
+    _require(corrections[4].get("to_head") == exception["starting_head"],
+             "sixth-round starting HEAD differs from retained fifth correction")
+    if len(corrections) == 6:
+        _require(type(corrections[5]) is dict and
+                 corrections[5].get("from_head") == exception["starting_head"],
+                 "sixth round must start at the authorized HEAD")
+        _require(state["current"]["head"] == corrections[5].get("to_head"),
+                 "current HEAD differs from retained sixth correction")
+    else:
+        _require(state["current"]["head"] == exception["starting_head"],
+                 "sixth-round authorization must start at exact current HEAD")
+    _text(exception["authorization_ref"], "correction_exception.authorization_ref")
+    try:
+        digest = hashlib.sha256(Path(exception["authorization_ref"]).read_bytes()).hexdigest()
+    except OSError as error:
+        raise EvidenceError("saved sixth correction authorization unavailable") from error
+    _require(digest == exception["authorization_sha256"],
+             "saved sixth correction authorization hash differs")
+    return 6
+
+
+def _correction7_limit(state):
+    exception = state["correction_exception"]
+    _fields(exception, " ".join((*CORRECTION7_EXCEPTION, "authorization_ref",
+                                "previous_authorization_ref", "fifth_authorization_ref", "fourth_authorization_ref")),
+            "correction_exception")
+    for name, expected in CORRECTION7_EXCEPTION.items():
+        _require(type(exception[name]) is type(expected) and exception[name] == expected,
+                 "invalid seventh-round task-bound exception: " + name)
+    corrections = state["corrections"]
+    _require(type(corrections) is list and len(corrections) in (6, 7),
+             "seventh-round exception must retain the first six rounds")
+    retained = {**state, "corrections": corrections[:6],
+                "current": {**state["current"], "head": exception["starting_head"]},
+                "correction_exception": {
+                    **CORRECTION6_EXCEPTION,
+                    "authorization_ref": exception["previous_authorization_ref"],
+                    "previous_authorization_ref": exception["fifth_authorization_ref"],
+                    "fourth_authorization_ref": exception["fourth_authorization_ref"],
+                }}
+    _correction6_limit(retained)
+    _require(corrections[5].get("to_head") == exception["starting_head"],
+             "seventh-round starting HEAD differs from retained sixth correction")
+    if len(corrections) == 7:
+        _require(type(corrections[6]) is dict and
+                 corrections[6].get("from_head") == exception["starting_head"],
+                 "seventh round must start at the authorized HEAD")
+        _require(state["current"]["head"] == corrections[6].get("to_head"),
+                 "current HEAD differs from retained seventh correction")
+    else:
+        _require(state["current"]["head"] == exception["starting_head"],
+                 "seventh-round authorization must start at exact current HEAD")
+    _text(exception["authorization_ref"], "correction_exception.authorization_ref")
+    try:
+        digest = hashlib.sha256(Path(exception["authorization_ref"]).read_bytes()).hexdigest()
+    except OSError as error:
+        raise EvidenceError("saved seventh correction authorization unavailable") from error
+    _require(digest == exception["authorization_sha256"],
+             "saved seventh correction authorization hash differs")
+    return 7
+
+
+def _correction8_limit(state):
+    exception = state["correction_exception"]
+    _fields(exception, " ".join((*CORRECTION8_EXCEPTION, "authorization_ref", "previous_authorization_ref",
+                                "sixth_authorization_ref", "fifth_authorization_ref", "fourth_authorization_ref")),
+            "correction_exception")
+    for name, expected in CORRECTION8_EXCEPTION.items():
+        _require(type(exception[name]) is type(expected) and exception[name] == expected,
+                 "invalid eighth-round task-bound exception: " + name)
+    corrections = state["corrections"]
+    _require(type(corrections) is list and len(corrections) in (7, 8),
+             "eighth-round exception must retain the first seven rounds")
+    retained = {**state, "corrections": corrections[:7],
+                "current": {**state["current"], "head": exception["starting_head"]},
+                "correction_exception": {
+                    **CORRECTION7_EXCEPTION,
+                    "authorization_ref": exception["previous_authorization_ref"],
+                    "previous_authorization_ref": exception["sixth_authorization_ref"],
+                    "fifth_authorization_ref": exception["fifth_authorization_ref"],
+                    "fourth_authorization_ref": exception["fourth_authorization_ref"],
+                }}
+    _correction7_limit(retained)
+    _require(corrections[6].get("to_head") == exception["starting_head"],
+             "eighth-round starting HEAD differs from retained seventh correction")
+    if len(corrections) == 8:
+        _require(type(corrections[7]) is dict and
+                 corrections[7].get("from_head") == exception["starting_head"],
+                 "eighth round must start at the authorized HEAD")
+        _require(state["current"]["head"] == corrections[7].get("to_head"),
+                 "current HEAD differs from retained eighth correction")
+    else:
+        _require(state["current"]["head"] == exception["starting_head"],
+                 "eighth-round authorization must start at exact current HEAD")
+    _text(exception["authorization_ref"], "correction_exception.authorization_ref")
+    try:
+        digest = hashlib.sha256(Path(exception["authorization_ref"]).read_bytes()).hexdigest()
+    except OSError as error:
+        raise EvidenceError("saved eighth correction authorization unavailable") from error
+    _require(digest == exception["authorization_sha256"],
+             "saved eighth correction authorization hash differs")
+    return 8
+
+
+def _correction_limit(state):
+    if "correction_exception" not in state:
+        return 3
+    exception = state["correction_exception"]
+    if type(exception) is dict and exception.get("schema") == CORRECTION8_EXCEPTION["schema"]:
+        return _correction8_limit(state)
+    if type(exception) is dict and exception.get("schema") == CORRECTION7_EXCEPTION["schema"]:
+        return _correction7_limit(state)
+    if type(exception) is dict and exception.get("schema") == CORRECTION6_EXCEPTION["schema"]:
+        return _correction6_limit(state)
+    if type(exception) is dict and exception.get("schema") == CORRECTION5_EXCEPTION["schema"]:
+        return _correction5_limit(state)
+    _fields(exception, " ".join((*CORRECTION4_EXCEPTION, "authorization_ref")), "correction_exception")
+    for name, expected in CORRECTION4_EXCEPTION.items():
+        _require(type(exception[name]) is type(expected) and exception[name] == expected,
+                 "invalid task-bound correction exception: " + name)
+    task = state["task"]
+    _require((task["id"], task["baseline"], task["head_branch"]) ==
+             (exception["task_id"], exception["baseline"], exception["head_branch"]),
+             "correction exception belongs to another task/baseline/branch")
+    pr = state["pr"]
+    _require(type(pr) is dict and (pr.get("number"), pr.get("base_sha"), pr.get("head_branch")) ==
+             (41, exception["baseline"], exception["head_branch"]),
+             "correction exception requires the original PR41/base/branch")
+    _require(pr.get("state") == "merged" or state["current"]["base"] == exception["baseline"],
+             "correction exception base changed")
+    corrections = state["corrections"]
+    _require(type(corrections) is list and len(corrections) in (3, 4),
+             "correction exception must retain the first three rounds")
+    _require(type(corrections[2]) is dict and corrections[2].get("to_head") == exception["starting_head"],
+             "correction exception starting HEAD differs from retained round 3")
+    if len(corrections) == 4:
+        _require(type(corrections[3]) is dict and corrections[3].get("from_head") == exception["starting_head"],
+                 "fourth round must start at the authorized HEAD")
+        _require(state["current"]["head"] == corrections[3].get("to_head"),
+                 "current HEAD differs from the retained fourth correction")
+    else:
+        _require(state["current"]["head"] == exception["starting_head"],
+                 "fourth-round authorization must start at the exact current HEAD")
+    _text(exception["authorization_ref"], "correction_exception.authorization_ref")
+    try:
+        digest = hashlib.sha256(Path(exception["authorization_ref"]).read_bytes()).hexdigest()
+    except OSError as error:
+        raise EvidenceError("saved correction authorization unavailable") from error
+    _require(digest == exception["authorization_sha256"], "saved correction authorization hash differs")
+    return 4
+
+
+def _correction_exhausted(state):
+    return {3: "three", 4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight"}[_correction_limit(state)] + " corrective rounds exhausted"
+
+
 def validate_state(state):
     """Validate the closed input schema. This does not grant permission."""
-    _fields(state, "schema task authorization current implementers corrections reviews "
-            "unavailable_review_rounds pr pr_ci merge push_ci handoffs", "state")
-    _require(state["schema"] == SCHEMA, "unsupported schema")
+    staged = type(state) is dict and state.get("schema") == STAGED_SCHEMA
+    fields = "schema task authorization current implementers corrections reviews unavailable_review_rounds pr pr_ci merge push_ci handoffs"
+    _fields(state, fields + (" execution coverage short_validation" if staged else "")
+            + (" correction_exception" if type(state) is dict and "correction_exception" in state else ""), "state")
+    _require(state["schema"] in (SCHEMA, STAGED_SCHEMA), "unsupported schema")
+    if staged:
+        _fields(state["execution"], "mode validation_authorization_ref", "execution")
+        _require(state["execution"]["mode"] in ("development", "validation"), "unknown execution mode")
+        if state["execution"]["mode"] == "validation":
+            _text(state["execution"]["validation_authorization_ref"], "explicit start-validation authorization")
+        else:
+            _require(state["execution"]["validation_authorization_ref"] is None, "development cannot claim validation authorization")
+        for field in ("coverage", "short_validation"):
+            if state[field] is not None:
+                _text(state[field], field)
     task = state["task"]
     _fields(task, "id repository baseline base_branch head_branch", "task")
     for field in ("id", "repository", "base_branch", "head_branch"):
@@ -137,8 +429,8 @@ def validate_state(state):
     _require(type(state["unavailable_review_rounds"]) is list and
              all(type(n) is int and n in (1, 2) for n in state["unavailable_review_rounds"]),
              "invalid unavailable review rounds")
-    _require(type(state["corrections"]) is list and len(state["corrections"]) <= 3,
-             "at most three correction rounds")
+    _require(type(state["corrections"]) is list and len(state["corrections"]) <= _correction_limit(state),
+             "correction rounds exceed the applicable task limit")
     previous = None
     for number, correction in enumerate(state["corrections"], 1):
         _fields(correction, "number from_head to_head evidence_ref", "correction")
@@ -155,7 +447,7 @@ def validate_state(state):
     for review in state["reviews"]:
         _fields(review, "round reviewer baseline base head scope verdict independent "
                 "full_diff_reviewed findings report_ref ci blocker_kind "
-                "supersedes_report_ref resolution_evidence_ref review_mode", "review")
+                "supersedes_report_ref resolution_evidence_ref review_mode" + (" coverage_sha256 finalizes_report_ref" if staged else ""), "review")
         _require(review["review_mode"] in ("full_diff", "evidence_gap"), "unknown review mode")
         _require(review["full_diff_reviewed"] == (review["review_mode"] == "full_diff"),
                  "review mode must accurately describe the work performed")
@@ -167,14 +459,18 @@ def validate_state(state):
         for field in ("independent", "full_diff_reviewed"):
             _boolean(review[field], f"review.{field}")
         _texts(review["findings"], "review.findings")
-        _require(review["verdict"] in ("PASS", "BLOCKED"), "unknown review verdict")
-        if review["verdict"] == "PASS":
+        _require(review["verdict"] in (("PASS", "BLOCKED", "CODE_REVIEWED") if staged else ("PASS", "BLOCKED")), "unknown review verdict")
+        if staged:
+            digest = review["coverage_sha256"]
+            _require(digest is None or (type(digest) is str and re.fullmatch(r"[0-9a-f]{64}", digest)), "invalid review coverage digest")
+            _require((review["verdict"] == "PASS") == (digest is not None), "only formal PASS binds verified functional coverage")
+        if review["verdict"] in ("PASS", "CODE_REVIEWED"):
             _require(review["blocker_kind"] is None and not review["findings"],
                      "PASS cannot contain a blocker")
         else:
             _require(review["blocker_kind"] in ("code", "evidence", "capability", "contract")
                      and bool(review["findings"]), "BLOCKED needs an explicit kind and findings")
-        for field in ("supersedes_report_ref", "resolution_evidence_ref"):
+        for field in (("supersedes_report_ref", "resolution_evidence_ref", "finalizes_report_ref") if staged else ("supersedes_report_ref", "resolution_evidence_ref")):
             if review[field] is not None:
                 _text(review[field], f"review.{field}")
         if review["round"] == 1:
@@ -185,7 +481,7 @@ def validate_state(state):
             _integer(review["ci"]["attempt"], "review.ci.attempt")
             _sha(review["ci"]["tested_sha"], "review.ci.tested_sha")
         else:
-            _require(review["verdict"] == "BLOCKED" and review["blocker_kind"] != "code",
+            _require((staged and review["verdict"] == "CODE_REVIEWED") or (review["verdict"] == "BLOCKED" and review["blocker_kind"] != "code"),
                      "round 2 without CI metadata must remain a non-code BLOCKED")
     _validate_review_history(state)
     pr = state["pr"]
@@ -224,9 +520,13 @@ def validate_state(state):
 def _decision(state, action, reason, **details):
     needed = {
         "REQUEST_REVIEW_1": {"delegate"}, "REQUEST_REVIEW_2": {"delegate"},
-        "ENSURE_PR": {"pr"}, "MERGE_PROPOSAL": {"merge"},
+        "ENSURE_PR": {"pr"}, "ENSURE_DRAFT_PR": {"pr"}, "MERGE_PROPOSAL": {"merge"},
         "CORRECT_IMPLEMENTATION": {"implement", "test", "commit", "push", "delegate"},
     }.get(action, set())
+    if (action == "CORRECT_IMPLEMENTATION" and state["schema"] == STAGED_SCHEMA
+            and state["execution"]["mode"] == "development"):
+        needed = needed - {"push"}
+        details["delivery"] = "local_commit_only"
     missing = needed - set(state["authorization"]["operations"])
     if missing:
         action, reason, details = "STOP", f"next action is not authorized: {sorted(missing)}", {}
@@ -238,21 +538,21 @@ def _decision(state, action, reason, **details):
 
 def _correct(state, reason):
     count = len(state["corrections"])
-    if count >= 3:
-        return _decision(state, "STOP", "three corrective rounds exhausted: " + reason)
+    if count >= _correction_limit(state):
+        return _decision(state, "STOP", _correction_exhausted(state) + ": " + reason)
     return _decision(state, "CORRECT_IMPLEMENTATION", reason, correction_round=count + 1)
 
 
 def _post_merge_blocked(state, reason, *, code=True):
-    if code and len(state["corrections"]) >= 3:
-        reason += "; three corrective rounds exhausted"
+    if code and len(state["corrections"]) >= _correction_limit(state):
+        reason += "; " + _correction_exhausted(state)
     return _decision(
         state, "STOP", "post-merge blocker: " + reason,
         handoff="retain this task ledger and correction limit; do not reset the task; "
                 "do not re-merge, push develop, or revert",
         task_id=state["task"]["id"], baseline=state["task"]["baseline"],
         merge_sha=state["merge"]["sha"] if state["merge"] is not None else None,
-        corrections_used=len(state["corrections"]), correction_limit=3,
+        corrections_used=len(state["corrections"]), correction_limit=_correction_limit(state),
     )
 
 
@@ -265,6 +565,9 @@ def _validate_review_history(state):
     reports, superseded = {}, set()
     for review in state["reviews"]:
         ref, prior = review["report_ref"], review["supersedes_report_ref"]
+        finalizes = review.get("finalizes_report_ref")
+        _require(not (prior and finalizes), "finalization and supersession are distinct relations")
+        prior = prior or finalizes
         _require(ref not in reports, "report_ref must uniquely identify an original report")
         if prior is None:
             _require(review["resolution_evidence_ref"] is None, "resolution needs a supersession target")
@@ -273,8 +576,11 @@ def _validate_review_history(state):
             _require(prior in reports and prior not in superseded,
                      "supersession target must be earlier, retained, and not already superseded")
             old = reports[prior]
-            _require(old["verdict"] == "BLOCKED" and old["blocker_kind"] != "code",
-                     "only non-code BLOCKED reports may be supplemented at unchanged HEAD")
+            if finalizes:
+                _require(old["verdict"] == "CODE_REVIEWED", "finalization must target a code-review intermediate report")
+            else:
+                _require(old["verdict"] == "BLOCKED" and old["blocker_kind"] != "code",
+                         "only non-code BLOCKED reports may be supplemented at unchanged HEAD")
             _require(_review_scope(review) == _review_scope(old), "supersession must retain the exact code scope")
             _text(review["resolution_evidence_ref"], "supersession resolution evidence")
             if review["review_mode"] == "evidence_gap":
@@ -289,19 +595,29 @@ def _validate_review_history(state):
     for ref, review in reports.items():
         if ref not in superseded:
             key = (*_review_scope(review), json.dumps(review["ci"], sort_keys=True))
+            if state["schema"] == STAGED_SCHEMA:
+                key += (review["coverage_sha256"],)
             _require(key not in seen, "ambiguous unlinked review for the same scope")
             seen.add(key)
 
 
 def _review(state, number, base, head):
-    superseded = {r["supersedes_report_ref"] for r in state["reviews"]}
+    superseded = {r["supersedes_report_ref"] or r.get("finalizes_report_ref") for r in state["reviews"]}
     matches = [r for r in state["reviews"] if r["report_ref"] not in superseded and r["round"] == number and
                (r["baseline"], r["base"], r["head"]) == (state["task"]["baseline"], base, head)]
     # Unresolved blockers survive CI reruns and unrelated PASS records.
     blockers = [r for r in matches if r["verdict"] == "BLOCKED"]
     if blockers:
         return min(blockers, key=lambda r: r["blocker_kind"] != "code")
-    if number == 2 and state["pr_ci"] is not None:
+    if state["schema"] == STAGED_SCHEMA and state["coverage"] is not None:
+        try:
+            digest = hashlib.sha256(Path(state["coverage"]).read_bytes()).hexdigest()
+        except OSError:
+            digest = None
+        applicable = [r for r in matches if r["coverage_sha256"] == digest]
+        if applicable:
+            matches = applicable
+    if number == 2 and state["pr_ci"] is not None and state["schema"] == SCHEMA:
         ci = state["pr_ci"]
         expected = {field: ci[field] for field in ("run_id", "attempt", "tested_sha")}
         matches = [r for r in matches if r["ci"] == expected]
@@ -370,6 +686,8 @@ def next_action(state):
         validate_state(state)
     except (EvidenceError, TypeError, KeyError) as exc:
         return {"action": "STOP", "reason": f"invalid evidence: {exc}"}
+    if state["schema"] == STAGED_SCHEMA:
+        return _next_action_staged(state)
     if not state["authorization"]["active"]:
         return _decision(state, "STOP", "task authorization is absent or revoked")
     if not state["current"]["working_tree_clean"]:
@@ -450,6 +768,146 @@ def next_action(state):
     return _decision(state, "MERGE_PROPOSAL", "recheck remote base/head and protection immediately before write",
                      pr_number=pr["number"], merge_method="merge", expected_head_sha=head,
                      expected_base_sha=base)
+
+
+def _staged_ci_problem(ci, event, branch, head, parents):
+    """v4 checks the required summary plus file-backed group/short evidence."""
+    if ci["workflow"] != WORKFLOW or ci["event"] != event or ci["branch"] != branch:
+        return "wrong CI workflow, event, or branch"
+    if ci["head_sha"] != head or ci["parents"] != parents or ci["tested_sha"] in parents:
+        return "CI checkout or ordered parents differ from the reviewed scope"
+    if event == "push" and ci["tested_sha"] != head:
+        return "push CI must check out the actual merge SHA"
+    if (ci["run_id"], ci["attempt"]) != (ci["latest_run_id"], ci["latest_attempt"]):
+        return "a newer applicable CI attempt is unresolved"
+    if ci["status"] != "completed" or ci["conclusion"] != "success":
+        return "required CI is not successful"
+    jobs = {job["name"]: job for job in ci["jobs"]}
+    summary = jobs.get("Python 3.13")
+    if summary is None:
+        return "missing Python 3.13 required check"
+    required_name = "Grouped validation" if event == "pull_request" else "Merge short validation"
+    if required_name not in jobs:
+        return "missing applicable validation job"
+    for job in jobs.values():
+        if job["name"] in {"Grouped validation", "Merge short validation"} - {required_name} and job["conclusion"] == "skipped":
+            continue
+        if job["conclusion"] != "success":
+            return "a required CI job is unsuccessful"
+        if (job["run_id"], job["attempt"], job["tested_sha"]) != (ci["run_id"], ci["attempt"], ci["tested_sha"]):
+            return "job metadata belongs to a different run/attempt/checkout"
+    if not summary["runner"].startswith("windows-") or summary["python_version"] != "3.13.0":
+        return "summary lacks the supported Windows Python environment"
+    required_steps = ["Configure same-installation Tcl/Tk"]
+    if event == "pull_request":
+        required_steps.append("Early hosted Tk preflight")
+    for required_step in required_steps:
+        if jobs[required_name]["steps"].get(required_step) != "success":
+            return "same-installation wiring or early preflight is missing or unsuccessful"
+    step = "Verify required validation results"
+    if summary["steps"].get(step) != "success":
+        return "required evidence verifier step is missing or unsuccessful"
+    return None
+
+
+def _next_action_staged(state):
+    if not state["authorization"]["active"] or not state["current"]["working_tree_clean"]:
+        return _decision(state, "STOP", "active authorization and clean working tree required")
+    pr, merge = state["pr"], state["merge"]
+    merged = pr is not None and pr["state"] == "merged"
+    if merge is not None and not merged:
+        return _decision(state, "STOP", "merge contradicts PR state")
+    base, head = (pr["base_sha"], pr["head_sha"]) if merged else (state["current"]["base"], state["current"]["head"])
+    if pr is not None:
+        if (pr["base_branch"], pr["head_branch"]) != (state["task"]["base_branch"], state["task"]["head_branch"]):
+            return _decision(state, "STOP", "PR branch pair differs from task")
+        if pr["state"] == "closed":
+            return _decision(state, "STOP", "closed unmerged PR must not be duplicated")
+        if not merged and (pr["base_sha"], pr["head_sha"]) != (base, head):
+            return _decision(state, "REFRESH_EVIDENCE", "PR scope changed")
+        if not pr["findings_checked"]:
+            return _decision(state, "REFRESH_EVIDENCE", "latest findings have not been checked")
+        if pr["new_blockers"]:
+            return _post_merge_blocked(state, "confirmed PR finding") if merged else _correct(state, "confirmed PR finding")
+    reviews = [_review(state, number, base, head) for number in (1, 2)]
+    # Confirmed blockers are handled before any wait or test requirement.
+    for number, review in enumerate(reviews, 1):
+        if review is None:
+            continue
+        problem = _review_problem(state, review, number)
+        if problem:
+            return _decision(state, "STOP", problem)
+        if review["verdict"] == "BLOCKED":
+            kind = review["blocker_kind"]
+            if kind == "code":
+                return _post_merge_blocked(state, "confirmed review finding") if merged else _correct(state, "confirmed review finding; both full scopes need review at new HEAD")
+            return _decision(state, "REFRESH_EVIDENCE" if kind == "evidence" else "STOP",
+                             f"round {number} BLOCKED ({kind}); retain original report",
+                             blocked_report_ref=review["report_ref"])
+    if reviews[0] is None:
+        return _decision(state, "STOP" if merged or 1 in state["unavailable_review_rounds"] else "REQUEST_REVIEW_1", "full cumulative code review required")
+    if state["execution"]["mode"] == "development":
+        return _decision(state, "WAIT_VALIDATION_AUTHORIZATION", "code review is intermediate; wait for explicit start-validation instruction")
+    if pr is None:
+        return _decision(state, "ENSURE_DRAFT_PR", "code reviewed without a confirmed blocker; find unique PR before draft creation",
+                         base_branch="develop", head_branch=state["task"]["head_branch"])
+    if reviews[1] is None:
+        return _decision(state, "STOP" if merged or 2 in state["unavailable_review_rounds"] else "REQUEST_REVIEW_2", "full PR code review may overlap CI")
+    ci = state["pr_ci"]
+    if ci is None or ci["status"] in ("queued", "in_progress"):
+        return _decision(state, "WAIT_PR_CI", "formal functional coverage is pending")
+    problem = _staged_ci_problem(ci, "pull_request", state["task"]["head_branch"], head, [base, head])
+    if problem:
+        return _decision(state, "STOP" if merged else "REFRESH_EVIDENCE", problem)
+    try:
+        try:
+            from scripts.validation_evidence import verify_coverage, verify_reuse, sha256_file
+        except ModuleNotFoundError:
+            from validation_evidence import verify_coverage, verify_reuse, sha256_file
+        if state["coverage"] is None:
+            raise ValueError("missing PR coverage bundle")
+        coverage = verify_coverage(Path(state["coverage"]))
+        if coverage["candidate"] != {"head": ci["tested_sha"], "tree": ci["tree"], "parents": [base, head]}:
+            raise ValueError("coverage candidate differs from current PR integration")
+        coverage_ci = coverage["ci"]
+        if any(coverage_ci[k] != ci[k] for k in ("run_id", "attempt")) or coverage_ci["event"] != "pull_request":
+            raise ValueError("coverage is not bound to this PR run/attempt")
+        digest = sha256_file(Path(state["coverage"]))
+    except (OSError, ValueError, TypeError, KeyError, zipfile.BadZipFile) as exc:
+        return _decision(state, "STOP" if merged else "REFRESH_EVIDENCE", f"functional evidence invalid: {exc}")
+    for number, review in enumerate(reviews, 1):
+        if review["verdict"] != "PASS" or review["coverage_sha256"] != digest:
+            return _decision(state, "REFRESH_EVIDENCE", f"round {number} must append formal evidence supplement",
+                             blocked_report_ref=review["report_ref"])
+    if reviews[1]["ci"] != {key: ci[key] for key in ("run_id", "attempt", "tested_sha")}:
+        return _decision(state, "REFRESH_EVIDENCE", "round two formal attestation must bind latest PR CI")
+    if merged:
+        if merge is None:
+            return _decision(state, "VERIFY_MERGE", "retrieve actual merge; never repeat merge")
+        if merge["parents"] != [base, head] or merge["tree"] != ci["tree"]:
+            return _post_merge_blocked(state, "actual merge ordered parents/tree differ", code=False)
+        if merge["develop_head"] != state["current"]["base"] or not merge["develop_contains_merge"]:
+            return _post_merge_blocked(state, "develop ancestry has not been established", code=False)
+        push = state["push_ci"]
+        if push is None or push["status"] in ("queued", "in_progress"):
+            return _decision(state, "WAIT_PUSH_CI", "actual merge requires its own short push validation")
+        problem = _staged_ci_problem(push, "push", "develop", merge["sha"], [base, head])
+        if problem or push["tree"] != merge["tree"]:
+            return _post_merge_blocked(state, problem or "push tree mismatch", code=False)
+        try:
+            short = verify_reuse(Path(state["coverage"]), Path(state["short_validation"]))
+            if short["candidate"] != {"head": merge["sha"], "parents": [base, head], "tree": merge["tree"]}:
+                raise ValueError("short evidence is not for the actual merge")
+            if any(short["ci"][key] != push[key] for key in ("run_id", "attempt")):
+                raise ValueError("short evidence belongs to another push attempt")
+        except (OSError, ValueError, TypeError, KeyError, zipfile.BadZipFile) as exc:
+            return _post_merge_blocked(state, f"short validation cannot reuse PR coverage: {exc}", code=False)
+        return _decision(state, "COMPLETE", "formal independent reviews, PR functional coverage and actual merge short checks verified",
+                         merge_sha=merge["sha"], develop_head=merge["develop_head"])
+    if not pr["mergeable"] or not pr["protection_satisfied"]:
+        return _decision(state, "STOP", "mergeability or protection requirements are unsatisfied")
+    return _decision(state, "MERGE_PROPOSAL", "recheck remote scope/findings/protection immediately before merge",
+                     pr_number=pr["number"], merge_method="merge", expected_head_sha=head, expected_base_sha=base)
 
 
 def _unique_object(pairs):

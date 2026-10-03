@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import copy
+import gc
+import threading
+import weakref
 import os
 import tempfile
 import tkinter as tk
@@ -423,66 +426,212 @@ class ExpectedResolutionMaterializationTests(_ResolutionFixture, unittest.TestCa
                 operation()
 
 
+class _ExpectedResolutionGuiOwner:
+    """This fixture's Tk objects retire before the next case starts workers."""
+    def __init__(self):
+        self.thread = threading.get_native_id()
+        self.root = tk.Tk()  # Required capability; never skip missing Tk.
+        self.apps = []
+        self.windows = []
+        self.references = []
+        self.retired = []
+        self.closed = False
+        self._observe(self.root, "root")
+
+    def _observe(self, obj, label):
+        retired = self.retired
+        self.references.append((label, weakref.ref(
+            obj, lambda _ref: retired.append((label, threading.get_native_id())))))
+
+    def new_app(self, output):
+        if threading.get_native_id() != self.thread:
+            raise AssertionError("ExpectedResolution Tk creation must stay on owner thread")
+        window = tk.Toplevel(self.root)
+        self.windows.append(window)  # Registered before app construction can fail.
+        self._observe(window, "window")
+        app = gui.ReviewApp(window, output)
+        self.apps.append(app)
+        self._observe(app, "app")
+        # Observe real widgets/variables, rather than only a cleanup invocation.
+        children = list(window.winfo_children())
+        while children:
+            widget = children.pop()
+            self._observe(widget, "widget")
+            children.extend(widget.winfo_children())
+        for value in vars(app).values():
+            if isinstance(value, tk.Variable):
+                self._observe(value, "variable")
+        return window, app
+
+    def close(self):
+        if self.closed:
+            return
+        if threading.get_native_id() != self.thread:
+            raise AssertionError("ExpectedResolution Tk cleanup must stay on owner thread")
+        # A durable save may still be running after a body exception. Keep every
+        # Tk owner anchored until it finishes; never remove its project mid-write.
+        for app in self.apps:
+            worker = getattr(app, "_save_worker", None)
+            if worker is not None and worker.ident is not None:
+                worker.join(15)
+                if worker.is_alive():
+                    raise AssertionError("ExpectedResolution save worker did not finish")
+        app = worker = None
+        for window in self.windows:
+            if window.winfo_exists():
+                window.destroy()  # Also cancels ReviewApp's pending async polls.
+        window = None
+        self.apps.clear()
+        self.windows.clear()
+        # Body locals have been released in finally, even when their traceback
+        # survives. Retire widget/app cycles with the root still anchoring Tcl.
+        gc.collect()
+        self.root.destroy()
+        self.root = None
+        gc.collect()
+        alive = [label for label, reference in self.references if reference() is not None]
+        if alive:
+            raise AssertionError(f"ExpectedResolution Tk objects still retained: {alive}")
+        if any(thread != self.thread for _label, thread in self.retired):
+            raise AssertionError("ExpectedResolution Tk object retired on another thread")
+        self.closed = True
+
+
 class ExpectedResolutionGuiTests(_ResolutionFixture, unittest.TestCase):
     def test_real_tk_invalid_unbound_confirmation_reports_failure_and_keeps_current_row(self):
-        db, source, reviewed = self.legacy_resolution(with_fingerprint=False)
-        root = tk.Tk()
-        self.addCleanup(root.destroy)
-        root.withdraw()
-        window = tk.Toplevel(root)
-        app = gui.ReviewApp(window, self.output)
-        target = next(row for row in app.records if row["review_id"] == self.base["review_id"])
-        app.index = app.records.index(target)
-        app.show()
-        before_index, before_row = app.index, copy.deepcopy(app.current())
-        before = (self.output / "人工判定資料庫.json").read_bytes()
-        with patch.object(gui.messagebox, "showerror") as error, \
-                patch.object(gui.messagebox, "showinfo") as success:
-            app.primary.invoke()
-            wait_for_save(app)
-        error.assert_called_once()
-        self.assertIn("失效", error.call_args.args[1])
-        success.assert_not_called()
-        self.assertFalse(app._last_event_saved)
-        self.assertEqual(app.index, before_index)
-        self.assertEqual(app.current(), before_row)
-        self.assertEqual(app.db, db)
-        self.assertEqual((self.output / "人工判定資料庫.json").read_bytes(), before)
-        window.destroy()
-        reopened_window = tk.Toplevel(root)
-        reopened = gui.ReviewApp(reopened_window, self.output)
-        reopened_row = next(row for row in reopened.records if row["review_id"] == self.base["review_id"])
-        self.assertEqual(reopened_row, reviewed)
-        self.assertEqual(reopened.db["events"][self.base["review_id"]], source)
-        reopened_window.destroy()
+        owner = _ExpectedResolutionGuiOwner()
+        self.addCleanup(owner.close)
+        root = owner.root
+        window = app = reopened_window = reopened = None
+        try:
+            db, source, reviewed = self.legacy_resolution(with_fingerprint=False)
+            root.withdraw()
+            window, app = owner.new_app(self.output)
+            target = next(row for row in app.records if row["review_id"] == self.base["review_id"])
+            app.index = app.records.index(target)
+            app.show()
+            before_index, before_row = app.index, copy.deepcopy(app.current())
+            before = (self.output / "人工判定資料庫.json").read_bytes()
+            with patch.object(gui.messagebox, "showerror") as error, \
+                    patch.object(gui.messagebox, "showinfo") as success:
+                app.primary.invoke()
+                wait_for_save(app)
+            error.assert_called_once()
+            self.assertIn("失效", error.call_args.args[1])
+            success.assert_not_called()
+            self.assertFalse(app._last_event_saved)
+            self.assertEqual(app.index, before_index)
+            self.assertEqual(app.current(), before_row)
+            self.assertEqual(app.db, db)
+            self.assertEqual((self.output / "人工判定資料庫.json").read_bytes(), before)
+            window.destroy()
+            reopened_window, reopened = owner.new_app(self.output)
+            reopened_row = next(row for row in reopened.records if row["review_id"] == self.base["review_id"])
+            self.assertEqual(reopened_row, reviewed)
+            self.assertEqual(reopened.db["events"][self.base["review_id"]], source)
+            reopened_window.destroy()
+        finally:
+            root = window = app = reopened_window = reopened = None
 
     def test_real_tk_imported_expected_confirm_saves_reopens_and_advances(self):
-        _, imported = self.import_resolution()
-        root = tk.Tk()  # Required Windows capability; do not skip missing Tk.
-        self.addCleanup(root.destroy)
-        window = tk.Toplevel(root)
-        app = gui.ReviewApp(window, self.output)
-        root.withdraw()
-        target = next(row for row in app.records if row["review_id"] == self.base["review_id"])
-        self.assertEqual(target["expected_set"], self.base["expected_set"])
-        self.assertNotEqual(target["expected_evidence"], self.base["expected_evidence"])
-        app.index = app.records.index(target)
-        app.show()
-        self.assertEqual(app.primary.cget("text"), "確認教材錯誤")
-        with patch.object(gui.messagebox, "showinfo"), patch.object(gui.messagebox, "showerror") as error:
-            app.primary.invoke()
-            wait_for_save(app)
-        error.assert_not_called()
-        self.assertTrue(app._last_event_saved)
-        self.assertNotEqual(app.current()["review_id"], self.base["review_id"])
+        owner = _ExpectedResolutionGuiOwner()
+        self.addCleanup(owner.close)
+        root = owner.root
+        window = app = reopened_window = reopened = None
+        try:
+            _, imported = self.import_resolution()
+            window, app = owner.new_app(self.output)
+            root.withdraw()
+            target = next(row for row in app.records if row["review_id"] == self.base["review_id"])
+            self.assertEqual(target["expected_set"], self.base["expected_set"])
+            self.assertNotEqual(target["expected_evidence"], self.base["expected_evidence"])
+            app.index = app.records.index(target)
+            app.show()
+            self.assertEqual(app.primary.cget("text"), "確認教材錯誤")
+            with patch.object(gui.messagebox, "showinfo"), patch.object(gui.messagebox, "showerror") as error:
+                app.primary.invoke()
+                wait_for_save(app)
+            error.assert_not_called()
+            self.assertTrue(app._last_event_saved)
+            self.assertNotEqual(app.current()["review_id"], self.base["review_id"])
+            durable = sp.load_or_initialize_db(self.output)
+            event = durable["events"][self.base["review_id"]]
+            self.assertEqual(event["expected_resolution_binding"], imported["events"][self.base["review_id"]]["expected_resolution_binding"])
+            ledger = sp.materialize_ledger(self.manifest, durable)
+            self.assertEqual(next(r for r in ledger if r["review_id"] == self.base["review_id"])["state"], "TEXTBOOK_ERROR_CONFIRMED")
+            window.destroy()
+            reopened_window, reopened = owner.new_app(self.output)
+            self.assertEqual(reopened.db["events"][self.base["review_id"]], event)
+            self.assertNotIn(self.base["review_id"], [row["review_id"] for row in reopened.records])
+            reopened_window.destroy()
+        finally:
+            root = window = app = reopened_window = reopened = None
+
+    def test_real_tk_owner_cleanup_retires_objects_and_pending_poll(self):
+        owner = _ExpectedResolutionGuiOwner()
+        self.addCleanup(owner.close)
+        window = app = None
+        try:
+            window, app = owner.new_app(self.output)
+            app._ensure_async_lifecycle()
+            app._schedule_async_poll(lambda: self.fail("disposed poll ran"))
+            self.assertTrue(app._async_after_ids)
+        finally:
+            window = app = None
+        owner.close()
+        self.assertTrue(owner.closed)
+        self.assertTrue(owner.retired)
+        self.assertTrue(all(reference() is None for _label, reference in owner.references))
+        self.assertEqual({thread for _label, thread in owner.retired}, {owner.thread})
+
+    def test_real_tk_mid_body_failure_retires_objects_and_finishes_save(self):
+        _, _imported = self.import_resolution()
+        owner = _ExpectedResolutionGuiOwner()
+        self.addCleanup(owner.close)
+        failure = RuntimeError("representative original body failure")
+        started = threading.Event()
+        release = threading.Event()
+        workers = []
+        original_save = ReviewSaveService.save_event
+
+        def paused_save(service, *args, **kwargs):
+            started.set()
+            if not release.wait(10):
+                raise AssertionError("regression save release timed out")
+            return original_save(service, *args, **kwargs)
+
+        def failing_body():
+            window = app = None
+            try:
+                window, app = owner.new_app(self.output)
+                target = next(row for row in app.records if row["review_id"] == self.base["review_id"])
+                app.index = app.records.index(target)
+                app.show()
+                app.primary.invoke()
+                self.assertTrue(started.wait(5))
+                workers.append(app._save_worker)
+                self.assertTrue(workers[0].is_alive())
+                raise failure
+            finally:
+                # The saved exception deliberately retains this frame. Clearing
+                # its locals is required, rather than hoping a GC call is enough.
+                window = app = None
+                release.set()
+                owner.close()
+
+        with patch.object(ReviewSaveService, "save_event", paused_save):
+            try:
+                failing_body()
+            except RuntimeError as actual:
+                self.assertIs(actual, failure)  # Original error must propagate.
+            else:
+                self.fail("body failure was swallowed")
+        self.assertIsNotNone(failure.__traceback__)
+        self.assertTrue(owner.closed)
+        self.assertFalse(workers[0].is_alive())
+        self.assertTrue(all(reference() is None for _label, reference in owner.references))
+        self.assertEqual({thread for _label, thread in owner.retired}, {owner.thread})
         durable = sp.load_or_initialize_db(self.output)
-        event = durable["events"][self.base["review_id"]]
-        self.assertEqual(event["expected_resolution_binding"], imported["events"][self.base["review_id"]]["expected_resolution_binding"])
-        ledger = sp.materialize_ledger(self.manifest, durable)
-        self.assertEqual(next(r for r in ledger if r["review_id"] == self.base["review_id"])["state"], "TEXTBOOK_ERROR_CONFIRMED")
-        window.destroy()
-        reopened_window = tk.Toplevel(root)
-        reopened = gui.ReviewApp(reopened_window, self.output)
-        self.assertEqual(reopened.db["events"][self.base["review_id"]], event)
-        self.assertNotIn(self.base["review_id"], [row["review_id"] for row in reopened.records])
-        reopened_window.destroy()
+        reopened = next(row for row in sp.materialize_ledger(self.manifest, durable)
+                        if row["review_id"] == self.base["review_id"])
+        self.assertEqual(reopened["state"], "TEXTBOOK_ERROR_CONFIRMED")

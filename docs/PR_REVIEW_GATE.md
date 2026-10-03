@@ -252,3 +252,123 @@ Actual merge record 欄位：`sha`、`parents`、`tree`、`develop_head`、
 不可假設 actual merge SHA 等於 synthetic SHA。`push_ci` 必須另行取證；PR CI 不能代替。
 Develop 後續前進時，可在已證明保留此 merge 的條件下完成該 merge 的驗證，
 但必須分別回報 actual merge SHA 與新的 develop HEAD，不宣稱新 HEAD 也受本次驗證。
+
+## Gate v4：分階段驗證（明確採用的新任務）
+
+`zhuyin-pr-review-gate/4` 明確區分開發、驗證及實際 merge 的短檢查。
+本節只適用明確採用 [VALIDATION_POLICY.md](VALIDATION_POLICY.md) 新流程的任務，
+及使用者事前指定的 `validation-flow-reduction` transition。原 v3 snapshot、
+PR29 限定條件與未完成舊 task 維持原義；工具不自動升級 schema、不追認 PASS。
+前述 v3 的正式 PASS 前開 PR／完整 push CI 規則，對 v4 改依本節；其餘
+獨立性、code blocker、三輪 correction、原始歷史及授權規則全部保留。
+
+v4 在原頂層欄位新增：
+
+- `execution: {mode, validation_authorization_ref}`：`mode=development` 為預設工作方式，
+  authorization reference 必須 null；`validation` 必須指向使用者明確「開始驗證」原文。
+- `coverage`：可讀取的 `coverage.json` 路徑，尚未完成時 null。
+- `short_validation`：實際 merge push 的 `short.json` 路徑，尚未執行時 null。
+
+每份 v4 review 增加 `coverage_sha256` 與 `finalizes_report_ref`，未使用時 null。
+`CODE_REVIEWED` 是完整差異已審、無 confirmed blocker、等待必要測試的中間 verdict，
+其 `blocker_kind=null`、findings 空、coverage digest null；它不是正式 `PASS`。
+第一輪完整 cumulative code review 後，開發模式回傳 `WAIT_VALIDATION_AUTHORIZATION`。 v4 開發模式的 confirmed-code 修正僅要求 implement／delegate／test／commit，回傳 `CORRECT_IMPLEMENTATION` 與 `delivery=local_commit_only`，不要求或授權 push。v3 凍結語意及 v4 驗證模式的既有授權門檻不變。
+只有 validation mode 才能回傳 `ENSURE_DRAFT_PR`，先查找同 repo/base/head 唯一 PR；
+第二輪 `REQUEST_REVIEW_2` 可與 CI 同時進行。任何 confirmed code blocker 仍優先處理，
+不以等待測試遮蔽，也不因此重設 task 或 corrective count。
+
+正式 PASS 必須由原独立 reviewer 補核或新獨立 reviewer 完整審查，並綁定實際驗證過的
+coverage file SHA-256。中間報告不改寫；append 的報告以 `finalizes_report_ref`
+指向較早、未 finalized、相同 round/baseline/base/head/scope 的 `CODE_REVIEWED`，
+並以 `resolution_evidence_ref` 保存原始證據。這是 v4 專用 finalization，
+不假稱中間報告原本是 BLOCKED；`supersedes_report_ref` 仍專供 non-code BLOCKED，
+兩種 relation 不可同時使用。相同 reviewer 的 `evidence_gap` 必須連到原完整 review；
+換 reviewer 必須 `full_diff`。Code BLOCKED 不可在同 HEAD 被任一 relation 清除。
+兩正式 PASS 必須綁同 coverage digest，第二輪另綁最新 PR run/attempt/tested SHA。
+
+### 原始功能證據與短驗證
+
+`scripts/validation_runner.py` 產生 `zhuyin-validation-run/1` execution 與
+`zhuyin-validation-coverage/1` bundle。Gate 透過 `scripts/validation_evidence.py`
+重新讀取所有 retained manifests、SHA-256 核對的 raw log／inventory／JUnit／events，
+重新計算 group identity coverage、環境一致性與 GUI retry history，不接受一個
+`status: success` 或上傳成功就代替實際執行。每組原 run/attempt/job/tested SHA
+保留在各自 manifest；不得把沿用 core 宣稱在後續 GUI 或 merge SHA 重跑。
+
+coverage 的 exact candidate、ordered parents、tree、原 run/attempt 必須符合當前 PR CI。
+Windows Python 3.13.0、完整實際 installed dependencies、default fd capture、必要
+環境與 test inventory 必須可核對。必要 job `Grouped validation`、required summary
+`Python 3.13` 及 `Verify required validation results` 必須成功；summary 只彙總真實
+必要結果。失敗／skip／cancel／缺失不變成功。非本 event 的精確 conditional job
+可 skip，不能把適用的核心或 GUI 作為 skip 例外。
+
+`post-merge` 是真正 push CI 入口，從實際 merge SHA 找唯一已 merge PR、精確 feature
+head 最新 PR run/attempt 與未過期 `validation-evidence-<run>-<attempt>` artifact，
+保存原始 PR／run 清單／commit／artifact metadata、下載 archive 與 digest。
+Zip 路徑不得逃出獨立 evidence 目錄、不得重複或覆寫。缺失、過期、損壞、最新 run
+未完成或失敗時停止沿用。它核對 actual merge ordered parents/tree、實際 Python／
+依賴／capture／環境與 PR，並執行 runtime integrity、非視窗 import／CLI smoke、
+compile、push diff、clean-tree；不跑 full pytest 或真實 Tk。
+
+短驗證每次使用新 UUID 目錄，保存開始紀錄、每條實際命令／退出碼／raw log，
+最終結果先完整驗證後才能寫 success；失敗與中止資料保留，不覆寫旧結果。
+任何 merge／依賴／資產／raw artifact 不等價時不能產生 COMPLETE，需具體列缺口。
+Gate 還要求兩正式獨立 PASS、PR 功能證據、實際 merge 與 develop ancestry、該 merge
+自己的 push CI 和 `Merge short validation` 全部成立。PR CI 不代替 push CI，
+post-merge BLOCKED 保留已發生 merge/task/count，不重 merge、不直接 push develop。
+
+```powershell
+# 以下是工具入口；昂貴正式分組僅在使用者開始驗證後執行。
+python scripts/validation_evidence.py verify-coverage tmp/validation-evidence/coverage.json
+python scripts/validation_evidence.py verify-reuse <coverage.json> <short.json>
+# GitHub actual develop push CI 使用，要求有效只讀 GITHUB_TOKEN／完整run環境。
+python scripts/validation_evidence.py post-merge --evidence-root tmp/merge-evidence
+# 隔離小型工具回歸，不建立真實 Tk、不呼叫 GitHub。
+python -m pytest tests/test_pr_review_gate.py tests/test_validation_evidence.py -q
+```
+
+JSON / artifact hash 仍不是授權或 reviewer 身分簽章。協調者須核對原始遠端資料、
+獨立報告、最新 findings 與保護規則；`validate` 成功僅代表 schema 有效。
+此版本不提供任意環境等價 adapter；環境不一致即停止並交回具體補驗條件。
+
+Windows 的 `runtime_asset_manifest.json` 可能依既有 Git checkout policy 呈 CRLF，
+Git tree 的 text blob 則為 LF。短入口以 `git cat-file --filters <tree>:runtime_asset_manifest.json`
+取得該已驗證 tree 的正式 checkout 表示，再和實體 manifest bytes 比較並保留兩份 raw
+metadata；不對 runtime assets 自行 normalize、不重算 truth、不修改 manifest。
+所有短命令完成後另重新核對 SHA/tree/parents 與實際環境，執行期漂移會保留 failure，
+不能產生 success。
+
+## PR41 task-bound 第 4 輪例外
+
+一般上限仍為三輪；僅 [限定授權摘要](VALIDATION_FLOW_CORRECTION4.md) 的原 task 可在 v3／v4 加入 optional `correction_exception`，沒有此欄位的舊 snapshots 保持原義。欄位存在時不可為 null，closed object 恰含 `schema`、`task_id`、`baseline`、`starting_head`、`head_branch`、`pr_number`、`extra_rounds`、`limit`、`scope`、`authorization_ref`、`authorization_sha256`。
+
+除 `authorization_ref` 是可讀 saved raw authorization 路徑外，值必須逐一等於 `scripts/pr_review_gate.py` 的有限 `CORRECTION4_EXCEPTION`：schema `validation-flow-correction-exception/1`、task `validation-flow-reduction`、baseline `457707b4c4109c1b10a0da76d8f8a884aca10341`、starting HEAD `a0e647952ae5d973ea30130264294eee4e6982fa`、branch `chore/validation-flow-reduction`、PR `41`、extra `1`、limit `4`、授權 hash `29b2869d5e6584bab8efbf022f697c8ee7331b7e1241ef0c18df7f4a647ec7fc`，scope 必須為 `same-installation Tcl/Tk wiring, early hosted fd preflight, directly related tests/policy and task-bound gate exception`。Gate 實際讀取 ref bytes 核對 hash，要求原 PR41/base/branch 與完整連續前三輪，其第 3 輪 to HEAD 等於 starting HEAD；第 4 輪 from HEAD 亦必須相同。未知欄位、改 task／base／branch／PR／起點／hash、ref 缺失、任意 limit 5／extra 2 或 history 清空均拒絕。
+
+例外只將該 task 的 correction schema／decision／post-merge handoff 上限一致改為四；不允許第五輪，不授權更改來源 scope，不清除歷史 code findings，不代替兩輪新 HEAD 完整審查。原 code／evidence／capability／contract 分類與 append-only 補審規則不變。協調者仍須核對原人類授權及所有操作 allowlist，gate 不創造 scope、測試、push 或 merge 授權。
+
+v4 新接線的適用 PR job 必須有成功的 `Configure same-installation Tcl/Tk` 與 `Early hosted Tk preflight`；適用 push job 必須有成功的 configure。Missing／failed／skipped／cancelled 不能由 summary success 蓋掉。Hosted preflight 的 raw command／fd／60 秒／root／Combobox／Spinbox／實際資源路徑版本由 reviewer 核對，gate 的 step 字串不證明真實執行。
+
+## PR41 task-bound 第 5 輪新授權
+
+[第 5 輪限定摘要](VALIDATION_FLOW_CORRECTION5.md) 與原第四輪 snapshot/history 分開保留；schema `validation-flow-correction-exception/1` 仍維持第四輪原精確契約。只有新 saved 人類授權可在相同 optional `correction_exception` 選擇 `validation-flow-correction-exception/2`，closed fields 恰為 `CORRECTION5_EXCEPTION` 的所有欄位，加 `authorization_ref`、`previous_authorization_ref`。
+
+Fixed 值為 task `validation-flow-reduction`、原 baseline/base `457707b4c4109c1b10a0da76d8f8a884aca10341`、starting HEAD `90b408794415509dd919a6d7a91c911f3724fd1f`、branch `chore/validation-flow-reduction`、PR41、extra `1`、limit `5`、authorization hash `46b2855d3fe7cd873ce1c4aaf9a93a8afa320b4f67e17aa14405f74d06f296d0`、previous authorization hash `29b2869d5e6584bab8efbf022f697c8ee7331b7e1241ef0c18df7f4a647ec7fc`、scope `independent early-preflight records, genuine small CLI regressions, directly related policy and task-bound fifth-round gate exception`。兩 ref 都實際讀原 bytes 核 hash，不能缺／改原第四輪授權。
+
+保留連續第 1～4 輪，第三輪 to HEAD／第四輪 from HEAD 須為原 `a0e647952ae5d973ea30130264294eee4e6982fa`，第四輪 to HEAD 等於新 starting HEAD。Len4 時 current HEAD 必須精確90b40879，才可安排第5輪；len5 時第五輪 from HEAD 須90b40879，current HEAD 須等於其 to HEAD。其餘原 contiguous/new-commit schema檢查全部保留。未知 fields/schema、錯 task/base/branch/PR/current/start/scope/hash/ref、遺失history、limit6／extra2／boolean 均拒絕。5輪用完的 corrective／post-merge handoff 一律STOP，保留實際merge／count；不產生第6輪、不重設task。无 exception 的舊 v3/v4 schema仍一般三輪。
+
+此adapter不清除原90b40879的codeBLOCKED；新HEAD兩輪均完整scope審查，原報告不能同HEAD supersede。合法 non-code supplements與原append-only關係保留。未使用的一次正式CI額度不增加，任何正式測試失敗保存並STOP；gate不創造新的scope/測試/push/merge授權。
+
+
+## validation-flow-reduction 第六輪精確例外
+
+[第 6 輪限定摘要](VALIDATION_FLOW_CORRECTION6.md) 保存這一次人類授權邊界。Optional `correction_exception` 可選 schema `validation-flow-correction-exception/3`，closed fields 恰為 `CORRECTION6_EXCEPTION` 加 `authorization_ref`、`previous_authorization_ref`、`fourth_authorization_ref`；fixed task/baseline/branch/PR/starting HEAD/scope/hashes/extra1/limit6 全部精確核對。三份原文實讀 bytes/hash；原第五輪 validator 重驗連續前五輪與第四／第五原授權。Len5 current 須起始811ff56f；len6 第六輪 from 須同起始、current 須該 to HEAD。原 contiguous/new-commit schema 不變。未知／跨 task／遺失歷史／改 hash/ref/scope／limit7 一律拒絕；用完6輪的 correction 及 post-merge handoff STOP、保留 merge/history/count，不產生第七輪。原第四／第五 adapter 仍保留當時上限；無 exception 仍一般三輪。Gate 不認證證據真實性、不創造操作授權，協調者仍須核對原授權與兩轮新 HEAD 完整審查。
+
+
+## validation-flow-reduction 第七輪精確例外
+
+[第7輪限定摘要](VALIDATION_FLOW_CORRECTION7.md) 保留本次人類授權。Optional `correction_exception` schema `validation-flow-correction-exception/4` closed fields 恰為 `CORRECTION7_EXCEPTION` 加 `authorization_ref`、`previous_authorization_ref`、`fifth_authorization_ref`、`fourth_authorization_ref`；固定task/baseline/branch/PR41/starting adcee81c/scope/hashes/extra1/limit7全核對。實讀新第7及第6/5/4原文bytes/hash，nested原第6validator重驗連續前六輪，不改任何舊adapter或通用3。Len6 current須精確起始；len7第7from須起始、current等於其to。原contiguous/newcommit檢查不變。未知fields、錯identity/ref/hash/scope/history/limit8均拒絕；7用完correction/postmerge code handoff STOP，保留merge/history/count，不产生第8。Gate不創造操作授權、來源scope或獨立審查證據。
+
+
+## validation-flow-reduction 第八輪精確例外
+
+[第8輪限定摘要](VALIDATION_FLOW_CORRECTION8.md) 保留新原人類授權及原第7 formal code BLOCKED。Optional `correction_exception` schema `validation-flow-correction-exception/5` closed fields 恰為 `CORRECTION8_EXCEPTION` 加 `authorization_ref`、`previous_authorization_ref`、`sixth_authorization_ref`、`fifth_authorization_ref`、`fourth_authorization_ref`；固定task/B/branch/PR41/starting d974ec5c/scope/hashes/extra1/limit8全核對。實讀第8原文hash `c156319030dc54f549e6479b369ef718fecdd494aee1817fee515e683032e05a` 及原7/6/5/4字節，nested原7validator重驗連續前七輪；原所有舊adapter与general3不改。Len7 current須起始；len8第8from须起始/current等於to。原contiguous/newcommit／未知closedfields检查不變；錯identity/ref/hash/history/scope或limit9拒絕；8用完correction与postmergecode handoff STOP，保留actualmerge/history/count，不产生9。Gate不創造來源scope、操作權限、審查PASS或同HEAD清code finding。

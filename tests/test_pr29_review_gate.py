@@ -406,9 +406,10 @@ class PR29GateTests(unittest.TestCase):
         expression = re.search(r"- name: Run full unittest suite\s+if: \$\{\{ (.+?) \}\}", text)[1]
         matrix_choice = re.search(r"python-version: \$\{\{ fromJSON\((.+)\) \}\}", text)[1]
         self.assertIn(expression, matrix_choice)
-        job_env = re.search(r"    env:\n(.*?)    strategy:", text, re.S)[1]
+        legacy_job = text.split("\n  test:\n", 1)[1]
+        job_env = re.search(r"    env:\n(.*?)    strategy:", legacy_job, re.S)[1]
         capture_expression = re.search(r"PYTEST_ADDOPTS: \$\{\{ (.+?) \}\}", job_env)[1]
-        self.assertEqual(text.count("PYTEST_ADDOPTS:"), 1)
+        self.assertEqual(legacy_job.count("PYTEST_ADDOPTS:"), 1)
         capture_condition, capture_choice = capture_expression.rsplit(" && ", 1)
         self.assertEqual(capture_choice, "'--capture=sys' || ''")
         self.assertIn("github.event.before == '" + gate.DEVELOP + "'", capture_condition)

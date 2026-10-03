@@ -1,8 +1,8 @@
 # zhuyin-proofreader v5.8 Master Development & Independent Review Plan
 
-文件版本：1.3（保留既有檔名以維持引用）
+文件版本：1.4（保留既有檔名以維持引用）
 
-修訂日期：2026-09-22
+修訂日期：2026-10-02
 
 Repository：`discoveryray/zhuyin-proofreader`
 
@@ -26,6 +26,8 @@ Reviewer 均不得參與本任務實作，或修改受審檔案；可以讀取�
 使用者明確交付的開發任務，預設授權該任務 repository、scope 與階段內的檔案修改、代理委派、測試、commit、push、建立／更新 PR，以及通過兩輪適用 PASS 與必要 CI 後，以 Create a merge commit 合併至 develop 並執行 post-merge 驗證。不必逐項重問或要求使用者轉貼。使用者可隨時收窄、暫停或撤銷；較窄的當次指示優先。純討論、唯讀審查及規劃不等於交付開發任務。
 
 持續授權不延伸到其他任務、未交付階段、直接 push develop、修改 main、squash／rebase merge、force push、降低保護規則、tag／release 或 live DB mutation。Review PASS、流程規劃及交接紀錄本身不創造或擴大 write authorization。必要安全門檻不因持續授權而省略。
+
+新任務依 [驗證政策](VALIDATION_POLICY.md) 預設開發模式，先短定向驗證與本機 commit；只有明確「開始驗證」後才 PR 一次核心全集＋全部必要 GUI，並在 merge 後執行短檢查。第一輪程式審查與正式 PASS 分開，第二輪可與 CI 重疊。舊任務不自動套用；明確過渡驗收保留原始使用者採納依據。
 
 下一步確實超出有效授權時，先完成可安全執行的準備，交付具體結果並說明缺口；不得重新詢問已授權範圍。
 
@@ -299,14 +301,14 @@ GUI 只能呼叫既有安全 service / API，不能另造 approval、quorum、id
 每個 major objective 使用獨立 feature branch；既有任務分支不能挪用。Codex 執行期間由協調者自動接續：
 
 1. 讀取規範及實際 Codex 設定，fetch，確認 working tree、最新 develop、task baseline、範圍與有效授權。既有未知修改先停止；新 branch 從已核對的基礎建立。
-2. 委派實作代理完成範圍內變更、必要測試及 commit。協調者本身有修改時也列入實作者名單。
-3. 第一輪 reviewer 對固定 baseline → feature HEAD 進行完整 cumulative review，回傳 exact SHA、scope、verdict 及原始證據。`READY FOR REVIEW` 是中間交接狀態，不是要求使用者接力的停點。
-4. 第一輪 PASS 後，先查詢同 repository / base / compare 的 PR；無 PR 才建立，已有唯一 PR 就更新。已合併則驗證原 merge；closed-unmerged 或多個不明匹配先停止，不另建重複 PR。
-5. 等待必要 PR CI，第二輪 reviewer 獨立核對 PR 全部差異、整合情境及 CI。CI event、run attempt、tested SHA、全部必要 jobs / steps 均須匹配；synthetic merge 必須核對 base / head parents 及檔案樹。
+2. 委派實作代理完成範圍內變更、開發模式短定向測試及本機 commit。協調者本身有修改時也列入實作者名單。
+3. 第一輪 reviewer 對固定 baseline → feature HEAD 進行完整 cumulative review，回傳 exact SHA、scope、verdict 及原始證據；功能證據未齊時 `CODE_REVIEWED` 只是中間狀態。開發模式回報「已修改、待正式驗證」並等待口令，不為取得 PASS 執行昂貴驗證。`READY FOR REVIEW` 是中間交接狀態，不是要求使用者接力的停點。
+4. 收到「開始驗證」後固定候選，第一輪完整程式審查無 confirmed code blocker 才查詢同 repository / base / compare 的 PR；無 PR 才建立 draft PR，已有唯一 PR 就更新。已合併則驗證原 merge；closed-unmerged 或多個不明匹配先停止，不另建重複 PR。
+5. PR 執行一次核心全集＋全部必要 GUI；第二輪 reviewer 可同時獨立核對 PR 全部差異與整合情境。CI 完成後兩位各自補核必要原始 coverage／CI 證據才給正式 PASS。CI event、run attempt、tested SHA、全部必要 jobs / steps 均須匹配；synthetic merge 必須核對 base / head parents 及檔案樹。
 6. 任一輪 BLOCKED 先依第 8 節核對 `blocker_kind`：只有 confirmed `code` finding 交回實作代理新增 corrective commit、重跑必要測試並使用一輪 corrective implementation；新 HEAD 必須重新取得兩輪完整適用 PASS。`evidence` 先補證據，`capability`／`contract` 先 STOP；解決後保留原 HEAD 與計數，以 append-only 完整補審接續，不能新增空 commit。所有舊報告都保留。每個 task 最多三輪自動程式修正，第三輪後仍需程式修正則停止回報，不藉另開 session／task 重設；合法 non-code 補證據不消耗此上限。
 7. 代理不可用、report 缺失／不完整、CI pending／failed／cancelled／必要 job 被 skip 時，不得合併。可自動補證據或調查故障，但不能偽裝 PASS 或改驗證規則。
 8. 兩輪適用 PASS、必要 CI 全通過且授權有效後，立即重讀 PR、base、head、findings、GitHub 保護規則及最新 CI。以 merge API 的 expected head SHA 綁定 reviewed HEAD，只使用 Create a merge commit；不用 squash、rebase、auto-merge，不降低保護規則。不代 reviewer approve、不自行 resolve discussions 或刪除 branch。
-9. 不確定 API 是否成功時先讀遠端狀態，不盲目重送副作用。核對實際 merge SHA、兩個 parents、預期檔案樹；不能假設它等於 synthetic SHA。Fetch 並核對 develop，再驗證實際 merge SHA 觸發的 develop push CI（Windows Python 3.13.0 及當次必要 gates），不得拿 PR CI 代替。
+9. 不確定 API 是否成功時先讀遠端狀態，不盲目重送副作用。核對實際 merge SHA、兩個 parents、預期檔案樹；不能假設它等於 synthetic SHA。Fetch 並核對 develop，再驗證實際 merge SHA 觸發的 develop push 短 CI（Windows Python 3.13.0、PR artifacts適用性、依賴／資產、runtime、非視窗 smoke、compile／diff／clean-tree）。PR 功能結果只依 VALIDATION_POLICY 完整等價核對後沿用，不能改稱在 merge SHA 重跑；不例行重跑 full／GUI，也不得拿 PR CI 代替短 CI。
 10. 所有門檻均通過才回報該任務 COMPLETE。Develop 後續前進時分開報告已驗證 merge SHA 與目前 HEAD。Phase N 全部完成也不授權自行開始未交付的下一 Phase。
 
 Phase N 只有 implementation、兩輪 independent review、必要 PR CI、merge commit、develop post-merge CI 全部完成，才算通過階段門檻。此流程建置任務不等於 Phase 6，也不重新宣告歷史 Phase 狀態。
@@ -340,7 +342,7 @@ PR base / integration context 改變時，評估並重做受影響的整合檢�
 
 ## 7. Independent review 與測試標準
 
-驗證入口、Windows Python 3.13.0 與依賴、證據沿用和制度過渡以 [驗證政策](VALIDATION_POLICY.md) 為準。修正期間先執行受影響測試；固定版本後完成必要 full pytest。每次重跑須對應修改影響、具體失敗線索或明確門檻。等待 CI、重開 session、整理報告不構成重跑理由。效能量測僅在效能影響或明確驗收要求時執行。新制度不自動套用尚未收尾的任務，本次變更仍按凍結舊 gate／審查契約驗收。
+驗證策略以 [驗證政策](VALIDATION_POLICY.md) 為主要來源。新任務預設開發模式短定向測試／compile／diff；收到「開始驗證」才固定候選，PR 一次核心全集＋全部必要 GUI，merge 後短驗證。Windows Python 3.13.0、實際依賴、GUI preflight/default capture/一次受限重試、原始證據和受控沿用依該政策。每次重跑須對應修改影響、具體失敗線索或明確門檻。等待 CI、重開 session、整理報告不構成重跑理由。效能量測僅在效能影響或明確驗收要求時執行。新制度不自動套用尚未收尾的任務，制度變更本身按使用者事前採納的明確 transition 驗收；保留舊 gate 原判定，不以受審新 gate 自行放行。
 
 必須實際核對 GitHub metadata、parents、cumulative diff、全部 changed production code 與 tests，並交叉追蹤適用的前階段架構和呼叫路徑。
 
@@ -348,7 +350,7 @@ PR base / integration context 改變時，評估並重做受影響的整合檢�
 
 檢查 tests 是否用獨立 expected value / invariant，避免只照 production code 重算同一錯誤。Test 數量與綠燈不能單獨證明 correctness。B1 / B2 / B3 這類會改變安全狀態的修正，必須有可重現失敗情境及有效 regression coverage。
 
-依當次要求執行 targeted tests、必要的 full pytest、runtime integrity、compile 與 diff check；已充分驗證後不任意擴張測試。數量以當次 discovery 和輸出為準，不沿用歷史數字。
+依當次階段執行 targeted tests、驗證模式必要分組 pytest、runtime integrity、compile 與 diff check；已充分驗證後不任意擴張測試。數量以當次 discovery 和輸出為準，不沿用歷史數字。
 
 明確區分本次實際執行、已閱讀 repository tests、已核對 GitHub CI、實作者回報，以及未驗證事項。
 
@@ -362,7 +364,7 @@ Post-merge 必須核對 merge commit 與 develop push CI 的對應版本。Devel
 
 ## 8. Verdict、紀錄與自動交接
 
-正式 code review verdict 只能是：`REVIEW: PASS` 或 `REVIEW: BLOCKED`，並列出 reviewed SHA / baseline / scope。
+正式 review verdict 只能是：`REVIEW: PASS` 或 `REVIEW: BLOCKED`，並列出 reviewed SHA / baseline / scope。新 v4 額外允許 `CODE_REVIEWED` 表示完整程式差異已審、正式功能證據待補；它是中間狀態，不是正式 PASS，也不允許 merge。
 
 PASS：沒有 blocker / high correctness issue，且當次必需的安全驗證門檻已具備證據。不得將 PASS 描述成新 write authorization 或整個 Phase 已完成。
 
@@ -386,6 +388,8 @@ Code blocker 必須包含 exact file / function / code region、具體 failure s
 交接 prompt 必須自足：repository、phase、branch、baseline / reviewed SHA、任務、authorization scope、禁止事項、必要測試、停止條件與交回資料。尚未獲授權的 write 必須清楚標為待授權，不能在 prompt 中偽造已授權。
 
 當新 commit 已存在時，先依當次 scope 核對其狀態，不得盲目要求重做舊修正。對規範文字的討論不冒充正式 code review，也不捏造 reviewed SHA。
+
+新 v4 的 `CODE_REVIEWED` 原文持續保留；正式 PASS 以 `finalizes_report_ref` 連到相同 round/baseline/base/head/scope 的中間報告，附 `resolution_evidence_ref` 與 `coverage_sha256`。這與 non-code BLOCKED 的 `supersedes_report_ref` 補審鏈分開，不將中間狀態偽裝成 BLOCKED 或 PASS。同 reviewer 可核對證據缺口，替代 reviewer 仍須完整 scope review。
 
 ### 證據保存與恢復
 
