@@ -914,5 +914,91 @@ class Correction4ExceptionTests(unittest.TestCase):
         self.assertEqual((decision["action"], decision["corrections_used"], decision["correction_limit"], decision["merge_sha"]), ("STOP", 4, 4, MERGE))
 
 
+class Correction5ExceptionTests(unittest.TestCase):
+    """Synthetic raw authorizations test the fixed fifth-round adapter only."""
+    def setUp(self):
+        import hashlib
+        from unittest.mock import patch
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.auth = Path(self.temp.name) / "fifth-authorization.txt"
+        self.previous = Path(self.temp.name) / "retained-fourth-authorization.txt"
+        self.auth.write_bytes(b"isolated fifth-round raw authorization fixture")
+        self.previous.write_bytes(b"isolated retained fourth-round raw authorization fixture")
+        patcher = patch.dict(gate.CORRECTION5_EXCEPTION,
+                             authorization_sha256=hashlib.sha256(self.auth.read_bytes()).hexdigest(),
+                             previous_authorization_sha256=hashlib.sha256(self.previous.read_bytes()).hexdigest())
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def state(self):
+        state = evidence_state()
+        exception = {**gate.CORRECTION5_EXCEPTION, "authorization_ref": str(self.auth),
+                     "previous_authorization_ref": str(self.previous)}
+        baseline, starting, fourth_start = exception["baseline"], exception["starting_head"], gate.CORRECTION4_EXCEPTION["starting_head"]
+        state["task"].update(id=exception["task_id"], baseline=baseline, head_branch=exception["head_branch"])
+        state["authorization"]["task_id"] = exception["task_id"]
+        state["current"].update(base=baseline, head=starting)
+        state["pr"].update(number=41, base_sha=baseline, head_sha=starting, head_branch=exception["head_branch"])
+        state["reviews"] = []
+        pairs = [(HEAD, SYNTHETIC), (SYNTHETIC, TREE), (TREE, fourth_start), (fourth_start, starting)]
+        state["corrections"] = [{"number": n, "from_head": before, "to_head": after, "evidence_ref": "fixture://retained-round/" + str(n)}
+                                for n, (before, after) in enumerate(pairs, 1)]
+        state["correction_exception"] = exception
+        return state
+
+    def test_fifth_only_with_retained_four_rounds_and_sixth_stops(self):
+        state = self.state()
+        gate.validate_state(state)
+        self.assertEqual(gate._correct(state, "fixture code finding")["correction_round"], 5)
+        state["corrections"].append({"number": 5, "from_head": state["current"]["head"], "to_head": NEW, "evidence_ref": "fixture://round5"})
+        state["current"]["head"] = NEW
+        gate.validate_state(state)
+        self.assertEqual(gate._correct(state, "still blocked")["action"], "STOP")
+        state["corrections"].append({"number": 6, "from_head": NEW, "to_head": MERGE, "evidence_ref": "fixture://forbidden6"})
+        with self.assertRaises(gate.EvidenceError): gate.validate_state(state)
+
+    def test_wrong_identity_hash_ref_limit_scope_and_lost_history_fail_closed(self):
+        mutations = ("task", "baseline", "base", "branch", "pr", "current", "third", "fourth", "history", "hash", "previous_hash", "ref", "previous_ref", "scope", "limit", "extra", "unknown")
+        for mutation in mutations:
+            state = self.state()
+            with self.subTest(mutation=mutation):
+                if mutation == "task": state["task"]["id"] = state["authorization"]["task_id"] = "other-task"
+                elif mutation == "baseline": state["task"]["baseline"] = BASE
+                elif mutation == "base": state["current"]["base"] = BASE
+                elif mutation == "branch": state["task"]["head_branch"] = "feat/other"
+                elif mutation == "pr": state["pr"]["number"] = 42
+                elif mutation == "current": state["current"]["head"] = NEW
+                elif mutation == "third": state["corrections"][2]["to_head"] = NEW
+                elif mutation == "fourth": state["corrections"][3]["to_head"] = NEW
+                elif mutation == "history": state["corrections"].pop(0)
+                elif mutation == "hash": state["correction_exception"]["authorization_sha256"] = "0" * 64
+                elif mutation == "previous_hash": state["correction_exception"]["previous_authorization_sha256"] = "0" * 64
+                elif mutation == "ref": state["correction_exception"]["authorization_ref"] += ".absent"
+                elif mutation == "previous_ref": state["correction_exception"]["previous_authorization_ref"] += ".absent"
+                elif mutation == "scope": state["correction_exception"]["scope"] = "unbounded changes"
+                elif mutation == "limit": state["correction_exception"]["limit"] = 6
+                elif mutation == "extra": state["correction_exception"]["extra_rounds"] = True
+                else: state["correction_exception"]["override_limit"] = 6
+                with self.assertRaises(gate.EvidenceError): gate.validate_state(state)
+
+    def test_changed_fifth_or_retained_fourth_raw_bytes_are_rejected(self):
+        for file in (self.auth, self.previous):
+            original = file.read_bytes()
+            file.write_bytes(b"changed after saved authorization")
+            with self.assertRaisesRegex(gate.EvidenceError, "hash differs"):
+                gate.validate_state(self.state())
+            file.write_bytes(original)
+
+    def test_post_merge_handoff_preserves_actual_merge_and_five_used_rounds(self):
+        state = self.state()
+        state["corrections"].append({"number": 5, "from_head": state["current"]["head"], "to_head": NEW, "evidence_ref": "fixture://round5"})
+        state["current"].update(head=NEW, base=MERGE)
+        state["pr"]["state"] = "merged"
+        state["merge"] = {"sha": MERGE}
+        result = gate._post_merge_blocked(state, "fixture blocker")
+        self.assertEqual((result["action"], result["corrections_used"], result["correction_limit"], result["merge_sha"]), ("STOP", 5, 5, MERGE))
+
+
 if __name__ == "__main__":
     unittest.main()

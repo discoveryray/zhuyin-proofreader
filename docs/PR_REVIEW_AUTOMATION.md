@@ -87,3 +87,7 @@ Evidence 至少包含：
 ## PR41 第 4 輪接續
 
 [原 task 的限定授權](VALIDATION_FLOW_CORRECTION4.md) 明確追加一輪至 `4/4`，其餘 task 仍三輪。協調者保留全部 ledger／review／CI 原文，以 gate closed `correction_exception` 核對 saved 授權 hash、固定 task/baseline/starting HEAD/branch/PR41 與連續 1～4；不重設 count、不 amend。新 HEAD 第一位完整 reviewer 無 confirmed code blocker 才更新原 PR41，執行新候選一 core＋一 GUI；不採納舊 HEAD core，不自動重開 CI，preflight／正式測試失敗或第 4 輪後需改受審來源即 STOP。兩輪正式 PASS、完整必要 coverage／CI、保護規則與原 merge 授權仍全部必要；實際 merge 及原短 push 驗證保留。
+
+## PR41 第 5 輪紀錄接續
+
+[第五輪人類限定授權](VALIDATION_FLOW_CORRECTION5.md) 只追加同task一輪至5/5，原第四輪closed例外與所有review/CI/授權原件保持歷史效力。Producer改用typed `preflight-start.json`／`preflight-result.json`，不更動真正group started/manifest拒絕規則；極小真CLI producer→history→core marker/events/JUnit/manifest與failed/incomplete序列先通過才交原第一位完整累積review。Synthetic Git/CIcontext与stub Tk不能宣稱hostedcoverage。原finding與原exit2證據保留，新HEAD仍兩完整scope PASS；未使用的正式hosted一次額度不追加，第5輪後codeblocker或正式CI失敗就STOP5/5，无sixth/amend/reset。

@@ -81,11 +81,11 @@ def early_preflight(folder):
     command = [sys.executable, "-m", "pytest", str(runner.ROOT / "scripts/gui_preflight.py"),
                "-q", "-rs", "--capture=fd", f"--junitxml={folder / 'preflight.xml'}",
                f"--basetemp={temporary / 'preflight'}"]
-    record = {"ci": {name: os.environ.get(name) for name in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_JOB", "GITHUB_EVENT_NAME")},
+    record = {"schema": "zhuyin-early-preflight/1", "kind": "early_preflight", "started_at": runner.utc_now(), "ci": {name: os.environ.get(name) for name in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_JOB", "GITHUB_EVENT_NAME")},
               "source_sha256": {str(path.relative_to(runner.ROOT)): runner.digest(path) for path in (Path(__file__).resolve(), runner.ROOT / "scripts/gui_preflight.py")},
               "candidate": runner.snapshot(), "environment": env, "command": command,
               "timeout_seconds": 60}
-    (folder / "started.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
+    (folder / "preflight-start.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
     result = runner.run_process(command, folder, "preflight.log", 60, child_env)
     record.update(result)
     if result["outcome"] == "success":
@@ -93,7 +93,7 @@ def early_preflight(folder):
         if probe.get("stage") != "complete":
             record.update(outcome="failed", error="preflight did not complete")
     record["artifacts"] = {name: runner.digest(folder / name) for name in ("preflight.log", "preflight.json", "preflight.xml") if (folder / name).is_file()}
-    (folder / "result.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
+    (folder / "preflight-result.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
     return record["outcome"] == "success"
 
 

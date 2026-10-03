@@ -29,6 +29,17 @@ CORRECTION4_EXCEPTION = {
     "authorization_sha256": "29b2869d5e6584bab8efbf022f697c8ee7331b7e1241ef0c18df7f4a647ec7fc",
     "scope": "same-installation Tcl/Tk wiring, early hosted fd preflight, directly related tests/policy and task-bound gate exception",
 }
+CORRECTION5_EXCEPTION = {
+    "schema": "validation-flow-correction-exception/2",
+    "task_id": "validation-flow-reduction",
+    "baseline": "457707b4c4109c1b10a0da76d8f8a884aca10341",
+    "starting_head": "90b408794415509dd919a6d7a91c911f3724fd1f",
+    "head_branch": "chore/validation-flow-reduction",
+    "pr_number": 41, "extra_rounds": 1, "limit": 5,
+    "authorization_sha256": "46b2855d3fe7cd873ce1c4aaf9a93a8afa320b4f67e17aa14405f74d06f296d0",
+    "previous_authorization_sha256": "29b2869d5e6584bab8efbf022f697c8ee7331b7e1241ef0c18df7f4a647ec7fc",
+    "scope": "independent early-preflight records, genuine small CLI regressions, directly related policy and task-bound fifth-round gate exception",
+}
 OPERATIONS = {"implement", "delegate", "test", "commit", "push", "pr", "merge"}
 COMMON_STEPS = (
     "Check out repository", "Set up Python", "Show Python version",
@@ -116,10 +127,53 @@ def _ci_schema(ci, where):
     _require(len(names) == len(set(names)), f"{where}: duplicate jobs")
 
 
+def _correction5_limit(state):
+    exception = state["correction_exception"]
+    _fields(exception, " ".join((*CORRECTION5_EXCEPTION, "authorization_ref", "previous_authorization_ref")), "correction_exception")
+    for name, expected in CORRECTION5_EXCEPTION.items():
+        _require(type(exception[name]) is type(expected) and exception[name] == expected,
+                 "invalid fifth-round task-bound exception: " + name)
+    task, pr, corrections = state["task"], state["pr"], state["corrections"]
+    _require((task["id"], task["baseline"], task["head_branch"]) ==
+             (exception["task_id"], exception["baseline"], exception["head_branch"]),
+             "fifth-round exception belongs to another task/baseline/branch")
+    _require(type(pr) is dict and (pr.get("number"), pr.get("base_sha"), pr.get("head_branch")) ==
+             (41, exception["baseline"], exception["head_branch"]),
+             "fifth-round exception requires original PR41/base/branch")
+    _require(pr.get("state") == "merged" or state["current"]["base"] == exception["baseline"],
+             "fifth-round exception base changed")
+    _require(type(corrections) is list and len(corrections) in (4, 5),
+             "fifth-round exception must retain the first four rounds")
+    _require(type(corrections[2]) is dict and corrections[2].get("to_head") == CORRECTION4_EXCEPTION["starting_head"]
+             and type(corrections[3]) is dict
+             and corrections[3].get("from_head") == CORRECTION4_EXCEPTION["starting_head"]
+             and corrections[3].get("to_head") == exception["starting_head"],
+             "fifth-round exception differs from retained third/fourth history")
+    if len(corrections) == 5:
+        _require(type(corrections[4]) is dict and corrections[4].get("from_head") == exception["starting_head"],
+                 "fifth round must start at the authorized HEAD")
+        _require(state["current"]["head"] == corrections[4].get("to_head"),
+                 "current HEAD differs from retained fifth correction")
+    else:
+        _require(state["current"]["head"] == exception["starting_head"],
+                 "fifth-round authorization must start at exact current HEAD")
+    for ref, digest in (("authorization_ref", "authorization_sha256"),
+                        ("previous_authorization_ref", "previous_authorization_sha256")):
+        _text(exception[ref], "correction_exception." + ref)
+        try:
+            actual = hashlib.sha256(Path(exception[ref]).read_bytes()).hexdigest()
+        except OSError as error:
+            raise EvidenceError("saved fifth/fourth correction authorization unavailable") from error
+        _require(actual == exception[digest], "saved fifth/fourth correction authorization hash differs")
+    return 5
+
+
 def _correction_limit(state):
     if "correction_exception" not in state:
         return 3
     exception = state["correction_exception"]
+    if type(exception) is dict and exception.get("schema") == CORRECTION5_EXCEPTION["schema"]:
+        return _correction5_limit(state)
     _fields(exception, " ".join((*CORRECTION4_EXCEPTION, "authorization_ref")), "correction_exception")
     for name, expected in CORRECTION4_EXCEPTION.items():
         _require(type(exception[name]) is type(expected) and exception[name] == expected,
@@ -157,7 +211,7 @@ def _correction_limit(state):
 
 
 def _correction_exhausted(state):
-    return ("three" if _correction_limit(state) == 3 else "four") + " corrective rounds exhausted"
+    return {3: "three", 4: "four", 5: "five"}[_correction_limit(state)] + " corrective rounds exhausted"
 
 
 def validate_state(state):

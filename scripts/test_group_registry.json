@@ -2,7 +2,7 @@
   "schema": "zhuyin-test-group-registry/1",
   "source_scope": "repository",
   "source_review": {
-    "basis": "Correction 3: retain correction1 independently reviewed GUI classification basis, explicitly source-review original cases and nine added non-window classifier regressions. Products and existing test expectations are unchanged. Finite registration is authoritative; positive bounded Tk guard rejects proven core conflicts. Correction 4: source-reviewed only same-installation Tcl/Tk helper/preflight and task-bound gate wiring with 13 explicit non-window regressions (mocked probe, exact paths/resources, pure gate fixtures, tiny synthetic runner groups); existing classification and classifier code unchanged.",
+    "basis": "Correction 3: retain correction1 independently reviewed GUI classification basis, explicitly source-review original cases and nine added non-window classifier regressions. Products and existing test expectations are unchanged. Finite registration is authoritative; positive bounded Tk guard rejects proven core conflicts. Correction 4: source-reviewed only same-installation Tcl/Tk helper/preflight and task-bound gate wiring with 13 explicit non-window regressions (mocked probe, exact paths/resources, pure gate fixtures, tiny synthetic runner groups); existing classification and classifier code unchanged. Correction 5: source-reviewed four changed helper/gate/test files and seven explicitly enumerated non-window regressions. Real isolated CLI/history/core execution uses one marker testcase, synthetic Git/CI context and only a stub Tk child; task-bound fifth exception retains original fourth contract. Existing registrations, product logic, classifier, runner and auditor unchanged.",
     "prior_classification_ref": "correction1-fa6d3b724cfb46f982bddbd7b9131141/inventory.json",
     "prior_classification_head": "16cac994bf44fb4f9a278ce851d6f0848416987e",
     "prior_classification_tree": "8495c003e66f39561cda42016e09a58b7ce48b8a",
@@ -42,10 +42,11 @@
       "scripts/benchmark_review_confirm.py": "c8e2b5e92c50f3e3a890ff9d1760a054e2e6992b30340795202ed5d7ccb92b0d",
       "scripts/gui_preflight.py": "cf47709e2512c22c9fbf6cfe1621b561a8d1db312355309a4467f57561c9951f",
       "scripts/pr29_review_gate.py": "63ddb7ce48dbc3a8a9ddd121742efab8831b1976041c2e85594996879b79b7cd",
-      "scripts/pr_review_gate.py": "b30445a8f41d147b99fffd58c55a6a9e485b752aa12a6947310435bce96401e3",
+      "scripts/pr_review_gate.py": "89e27d56ae9ff50aa8a7c055300de1ac05c004b144d0b2c77a330476ff3fd88b",
       "scripts/test_entrypoint_audit.py": "38d62ac9e3c0f32266cb68cc7ca60a3ba9c6dea45693f951901ce00ba27d0054",
       "scripts/validation_evidence.py": "ac6d497338a9e99fdac68e0cf187c195f9e78d928cc0e13210e4a98c7b56a3e0",
       "scripts/validation_runner.py": "30452368f477dfafb093b0c8d93f3b340ce57a3b80a785ae75f4caa53bab75e5",
+      "scripts/validation_tk_environment.py": "bb170657551942c7e70c59fc29d8e08a562f671c20a9066f67311916feab658e",
       "standalone_gui.py": "99dd840ca050478763e75b0444ca241c9a109a2e0ab2fc7af907e34c48c9bc63",
       "standalone_proofread.py": "9a0eff7ffaee0aa6c7182925a3feabe19b584cfa9c0e960b2a9ea2a4b1c55993",
       "tests/review_save_test_support.py": "7d39422c637eda60506103c8c087a2fcb872be31c779472a7e1378f3961ea357",
@@ -92,7 +93,7 @@
       "tests/test_pdf_portability_prewrite.py": "510a342b0ae0a0fa5bf0cfcca5c356831b7df14b98e458dd1f7899699f80d1e5",
       "tests/test_pdf_portability_replay.py": "7926253b9ac063131318fbb101bb159d1bdd5c48dbdc4d3a3eefd0f6c8ad2949",
       "tests/test_pr29_review_gate.py": "41ec6a934f220e2dbec0e2a898fdab679f9a11d0fc8658be6e87824d47c05206",
-      "tests/test_pr_review_gate.py": "21a0fd175631bf7e07970b05a96022622d9a9333a73365529cf7b703172bf2cf",
+      "tests/test_pr_review_gate.py": "64f9d4c47d613b88345f0d01bc2b327ca3d9757b90dabf2ebc1539c04ad9d5a7",
       "tests/test_project_path_recovery_v541.py": "3c9519b4bfe328a0a9e09f51fd979ef98459766d7373d547daa363dd9248ea6e",
       "tests/test_project_repair_integration_v562.py": "d41fd27cabcf3673bd2f7c42da99b95ef6e75d1108ab48dbcfb5b847b15fdd69",
       "tests/test_regression_applicability_v562.py": "16076b803604f6009a319b51a9f528950213809c77d3c8f3865d02aa336432e7",
@@ -114,13 +115,12 @@
       "tests/test_validation_evidence.py": "38ae2e499ceecda1ff5768b136a37cb5ccc935f7e806f190045b012692b8786e",
       "tests/test_validation_local_history.py": "1e79b1ed7bb5f5eb92ac8c73948850511e73d17059bf87c5231fd0091eda5d9c",
       "tests/test_validation_runner.py": "3abe5916060d4500a7713bc49895da634b1b3a3b7caa415982cf55dbb2931c17",
+      "tests/test_validation_tk_environment.py": "06dcd6f712bf16a9d49e5e15042a1e4d6ba0ed940a59fb45b30ff27fb1669bec",
       "tests/test_visual_context_repairs_v521.py": "53c869e48900c2fa24616a9afad6c12b4f831c4ea054d6d8c4a6af7baa9b9741",
       "tests/test_zero_occurrence_pdf_v541.py": "ac5c123a1e57a56e574b23bc12be7a270346c5cd05af13f5a3ceda3953505666",
       "tests/test_zero_summary_and_project_status_v541.py": "90ee2ac9a16db64ea2379eb12286b25da24883fee93b7a33cae5402c80517dd1",
       "ttf_symbol_recombination.py": "58f4156cab507c81690775e1b8c94449b808b63f74fc0637f0fc72ce061fc091",
-      "ttf_zhuyin_shape_decoder.py": "612dfb13c2be1ffa2ba32ae5d47136ef207180361c7785c2e6dc205cb45f07c5",
-      "scripts/validation_tk_environment.py": "d35e099c849dd5baad43ba1edde5cf84e37bb68e13773eba7ba8841269546e33",
-      "tests/test_validation_tk_environment.py": "53fefe69920b29ba819b4c09f495b78e7d487456e5c5e12a7239acccf5a7fa43"
+      "ttf_zhuyin_shape_decoder.py": "612dfb13c2be1ffa2ba32ae5d47136ef207180361c7785c2e6dc205cb45f07c5"
     }
   },
   "entries": [
@@ -2100,6 +2100,25 @@
         "test_fifth_round_missing_history_and_cross_head_are_rejected",
         "test_post_merge_handoff_retains_four_used_rounds_and_actual_merge",
         "test_wrong_task_baseline_branch_pr_start_hash_limit_and_reference_fail_closed"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_validation_tk_environment.EarlyPreflightCliTests",
+      "core": [
+        "test_successful_producer_real_history_and_core_create_marker_events_junit_manifest",
+        "test_failed_incomplete_and_abrupt_child_cli_stop_sequence_before_core_marker",
+        "test_genuine_group_start_without_manifest_still_blocks_next_core_and_marker"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_pr_review_gate.Correction5ExceptionTests",
+      "core": [
+        "test_fifth_only_with_retained_four_rounds_and_sixth_stops",
+        "test_wrong_identity_hash_ref_limit_scope_and_lost_history_fail_closed",
+        "test_changed_fifth_or_retained_fourth_raw_bytes_are_rejected",
+        "test_post_merge_handoff_preserves_actual_merge_and_five_used_rounds"
       ],
       "gui": []
     }

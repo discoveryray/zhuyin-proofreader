@@ -40,7 +40,7 @@ pytest 仍是唯一例行完整功能測試入口，正式覆蓋改成 **一次�
 
 ## GUI 預檢、重試與停止
 
-新 hosted PR CI 在核心全集前，以正式測試的相同 interpreter／job 環境／fd capture 執行一次 60 秒 early preflight；失敗時不啟動 core／GUI。`scripts/validation_tk_environment.py configure` 僅核對 `sys.base_prefix` 下 `tcl/tcl<compiled version>`、`tcl/tk<compiled version>` 與 `DLLs` 的有限確定路徑，確認 `_tkinter`／實際載入 DLL 同安裝、資源存在與 exact patchlevel，僅寫當前 job 的 `GITHUB_ENV`；不掃磁碟、不下載／改裝系統或混搭資源。Early preflight 與正式 GUI 自身 preflight 共用原 `scripts/gui_preflight.py`，保存 UUID 目錄、命令／SHA／環境／時間／退出碼、root／Combobox／Spinbox 結果及實際 Tcl/Tk 版本／路徑；沒有 core／GUI manifest 的 early failure 是失敗證據，不製造成功 coverage。Post-merge job 使用相同 configure 接線，仍只跑原非視窗短驗證。
+新 hosted PR CI 在核心全集前，以正式測試的相同 interpreter／job 環境／fd capture 執行一次 60 秒 early preflight；失敗時不啟動 core／GUI。`scripts/validation_tk_environment.py configure` 僅核對 `sys.base_prefix` 下 `tcl/tcl<compiled version>`、`tcl/tk<compiled version>` 與 `DLLs` 的有限確定路徑，確認 `_tkinter`／實際載入 DLL 同安裝、資源存在與 exact patchlevel，僅寫當前 job 的 `GITHUB_ENV`；不掃磁碟、不下載／改裝系統或混搭資源。Early preflight 使用非 group 的 `preflight-start.json`／`preflight-result.json`（schema `zhuyin-early-preflight/1`、kind `early_preflight`），不得使用正式 group 的 `started.json`；既有 JSON／XML／log artifact globs 保存原件，真正 grouped start 缺 manifest 的 history 拒絕不變。Early preflight 與正式 GUI 自身 preflight 共用原 `scripts/gui_preflight.py`，保存 UUID 目錄、命令／SHA／環境／時間／退出碼、root／Combobox／Spinbox 結果及實際 Tcl/Tk 版本／路徑；沒有 core／GUI manifest 的 early failure 是失敗證據，不製造成功 coverage。Post-merge job 使用相同 configure 接線，仍只跑原非視窗短驗證。
 
 正式 GUI 前以相同 interpreter、權限、cwd、必要環境與 default capture 執行預檢，核對 Python／實際依賴版本、evidence/temp 自建探測檔的建立寫讀刪除，以及 Tk root、ttk Combobox／Spinbox 建立更新銷毀。保存 Tcl/Tk 版本與實際載入路徑。GUI 自身預檢失敗便不啟動 GUI 套件，已取得的核心證據繼續保存；這不繞過更早的 hosted preflight。預檢成功不等於 GUI 通過。
 
@@ -152,3 +152,7 @@ CI 僅在 `pull_request`、上述精確 head branch 且 base SHA 恰等於固定
 ## PR41 第 4 輪限定接續
 
 [限定授權摘要](VALIDATION_FLOW_CORRECTION4.md) 只適用原 task／baseline／starting HEAD／branch／PR41 及原始授權 hash，保留前三輪，以一次追加至 `4/4`。此次新候選一 core＋一 GUI；early preflight 或正式 CI 失敗即 STOP，不自動重試。一般三輪與既有 retry allowlist 不變，不沿用舊 HEAD core。
+
+## PR41 第 5 輪限定接續
+
+[第 5 輪原 task 授權摘要](VALIDATION_FLOW_CORRECTION5.md) 追加一輪至 `5/5`，保留第 4 輪原文與全部歷史。只修正成功 early preflight 與 group start 紀錄混用的 F1，先取得極小真 CLI producer／history／core 串接及 fail-closed 回歸；未使用的一次 hosted core＋GUI 額度不增加，其他 task 仍三輪，沒有 sixth round／自動 CI retry。

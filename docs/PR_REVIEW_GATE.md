@@ -347,3 +347,13 @@ metadata；不對 runtime assets 自行 normalize、不重算 truth、不修改 
 例外只將該 task 的 correction schema／decision／post-merge handoff 上限一致改為四；不允許第五輪，不授權更改來源 scope，不清除歷史 code findings，不代替兩輪新 HEAD 完整審查。原 code／evidence／capability／contract 分類與 append-only 補審規則不變。協調者仍須核對原人類授權及所有操作 allowlist，gate 不創造 scope、測試、push 或 merge 授權。
 
 v4 新接線的適用 PR job 必須有成功的 `Configure same-installation Tcl/Tk` 與 `Early hosted Tk preflight`；適用 push job 必須有成功的 configure。Missing／failed／skipped／cancelled 不能由 summary success 蓋掉。Hosted preflight 的 raw command／fd／60 秒／root／Combobox／Spinbox／實際資源路徑版本由 reviewer 核對，gate 的 step 字串不證明真實執行。
+
+## PR41 task-bound 第 5 輪新授權
+
+[第 5 輪限定摘要](VALIDATION_FLOW_CORRECTION5.md) 與原第四輪 snapshot/history 分開保留；schema `validation-flow-correction-exception/1` 仍維持第四輪原精確契約。只有新 saved 人類授權可在相同 optional `correction_exception` 選擇 `validation-flow-correction-exception/2`，closed fields 恰為 `CORRECTION5_EXCEPTION` 的所有欄位，加 `authorization_ref`、`previous_authorization_ref`。
+
+Fixed 值為 task `validation-flow-reduction`、原 baseline/base `457707b4c4109c1b10a0da76d8f8a884aca10341`、starting HEAD `90b408794415509dd919a6d7a91c911f3724fd1f`、branch `chore/validation-flow-reduction`、PR41、extra `1`、limit `5`、authorization hash `46b2855d3fe7cd873ce1c4aaf9a93a8afa320b4f67e17aa14405f74d06f296d0`、previous authorization hash `29b2869d5e6584bab8efbf022f697c8ee7331b7e1241ef0c18df7f4a647ec7fc`、scope `independent early-preflight records, genuine small CLI regressions, directly related policy and task-bound fifth-round gate exception`。兩 ref 都實際讀原 bytes 核 hash，不能缺／改原第四輪授權。
+
+保留連續第 1～4 輪，第三輪 to HEAD／第四輪 from HEAD 須為原 `a0e647952ae5d973ea30130264294eee4e6982fa`，第四輪 to HEAD 等於新 starting HEAD。Len4 時 current HEAD 必須精確90b40879，才可安排第5輪；len5 時第五輪 from HEAD 須90b40879，current HEAD 須等於其 to HEAD。其餘原 contiguous/new-commit schema檢查全部保留。未知 fields/schema、錯 task/base/branch/PR/current/start/scope/hash/ref、遺失history、limit6／extra2／boolean 均拒絕。5輪用完的 corrective／post-merge handoff 一律STOP，保留實際merge／count；不產生第6輪、不重設task。无 exception 的舊 v3/v4 schema仍一般三輪。
+
+此adapter不清除原90b40879的codeBLOCKED；新HEAD兩輪均完整scope審查，原報告不能同HEAD supersede。合法 non-code supplements與原append-only關係保留。未使用的一次正式CI額度不增加，任何正式測試失敗保存並STOP；gate不創造新的scope/測試/push/merge授權。
