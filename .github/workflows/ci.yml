@@ -102,7 +102,7 @@ jobs:
   short:
     name: Merge short validation
     timeout-minutes: 20
-    if: ${{ github.event_name == 'push' && !((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) }}
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' && !((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) }}
     runs-on: windows-latest
     env:
       PYTHONUTF8: "1"
@@ -166,52 +166,70 @@ jobs:
 
     steps:
       - name: Check out repository
+        id: checkout
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
       - name: Set up Python
+        id: python
         uses: actions/setup-python@v7
         with:
           python-version: ${{ matrix.python-version == '3.13' && '3.13.0' || matrix.python-version }}
 
       - name: Show Python version
+        id: version
         run: python --version
 
       - name: Upgrade pip
-        if: ${{ ((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) }}
+        id: pip
+        if: ${{ (((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) }}
         run: python -m pip install --upgrade pip
 
       - name: Install development dependencies
-        if: ${{ ((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) }}
+        id: dependencies
+        if: ${{ (((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) }}
         run: python -m pip install -r requirements-ci.txt
 
+      - name: Configure same-installation Tcl/Tk
+        id: tk_environment
+        if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        shell: pwsh
+        run: python scripts/validation_tk_environment.py configure --evidence-root tmp/validation-evidence --github-env "$env:GITHUB_ENV"
+
       - name: Validate runtime asset integrity
-        if: ${{ ((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) }}
+        id: runtime
+        if: ${{ (((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) }}
         run: python -m pytest tests/test_runtime_asset_manifest_integrity_v562.py -q
 
       - name: Audit test entrypoint coverage
-        if: ${{ ((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) }}
+        id: inventory
+        if: ${{ (((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) }}
         run: python scripts/test_entrypoint_audit.py collect tmp/ci-test-inventory.json
 
       - name: Run full unittest suite
+        id: unittest
         if: ${{ ((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) }}
         run: python -m unittest discover -s tests -p "test_*.py"
 
       - name: Run full pytest suite
-        if: ${{ ((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) && (!cancelled()) }}
+        id: pytest
+        if: ${{ (((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && (!cancelled()) }}
         run: python -m pytest tests/ -q -rs --junitxml=tmp/ci-pytest.xml
 
       - name: Verify GUI test execution
-        if: ${{ ((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) && (!cancelled()) }}
+        id: gui
+        if: ${{ (((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && (!cancelled()) }}
         run: python scripts/test_entrypoint_audit.py verify-gui tmp/ci-test-inventory.json --junit tmp/ci-pytest.xml
 
       - name: Compile Python sources
-        if: ${{ ((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) && (!cancelled()) }}
+        id: compile
+        if: ${{ (((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && (!cancelled()) }}
         run: python -m compileall -q -x "(^|[\\/])(\.venv|tmp)([\\/]|$)" .
 
       - name: Check committed whitespace (pull request)
-        if: ${{ ((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) && (!cancelled() && github.event_name == 'pull_request') }}
+        id: diff_pr
+        if: ${{ (((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && (!cancelled() && github.event_name == 'pull_request') }}
         shell: pwsh
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -230,7 +248,8 @@ jobs:
           }
 
       - name: Check committed whitespace (push)
-        if: ${{ ((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) && (!cancelled() && github.event_name == 'push') }}
+        id: diff_push
+        if: ${{ (((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && (!cancelled() && github.event_name == 'push') }}
         shell: pwsh
         env:
           BEFORE_SHA: ${{ github.event.before }}
@@ -273,7 +292,8 @@ jobs:
           }
 
       - name: Check repository working tree
-        if: ${{ ((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) && (always()) }}
+        id: clean
+        if: ${{ (((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && (always()) }}
         shell: pwsh
         run: |
           $status = @(git status --short)
@@ -286,17 +306,42 @@ jobs:
             exit 1
           }
       - name: Verify required validation results
-        if: ${{ !((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) }}
+        if: always()
         shell: pwsh
         env:
           GROUPED_RESULT: ${{ needs.grouped.result }}
           SHORT_RESULT: ${{ needs.short.result }}
           EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          LEGACY_VALIDATION: ${{ ((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) }}
+          CHECKOUT_RESULT: ${{ steps.checkout.outcome }}
+          PYTHON_RESULT: ${{ steps.python.outcome }}
+          VERSION_RESULT: ${{ steps.version.outcome }}
+          PIP_RESULT: ${{ steps.pip.outcome }}
+          DEPENDENCIES_RESULT: ${{ steps.dependencies.outcome }}
+          RUNTIME_RESULT: ${{ steps.runtime.outcome }}
+          INVENTORY_RESULT: ${{ steps.inventory.outcome }}
+          UNITTEST_RESULT: ${{ steps.unittest.outcome }}
+          PYTEST_RESULT: ${{ steps.pytest.outcome }}
+          GUI_RESULT: ${{ steps.gui.outcome }}
+          COMPILE_RESULT: ${{ steps.compile.outcome }}
+          DIFF_PR_RESULT: ${{ steps.diff_pr.outcome }}
+          DIFF_PUSH_RESULT: ${{ steps.diff_push.outcome }}
+          CLEAN_RESULT: ${{ steps.clean.outcome }}
+          TK_ENVIRONMENT_RESULT: ${{ steps.tk_environment.outcome }}
         run: |
-          if ($env:EVENT_NAME -eq 'pull_request') {
+          if ($env:LEGACY_VALIDATION -eq 'true' -or ($env:EVENT_NAME -eq 'push' -and $env:EVENT_REF -eq 'refs/heads/main')) {
+            if ($env:GROUPED_RESULT -ne 'skipped' -or $env:SHORT_RESULT -ne 'skipped') { throw 'Full validation must not schedule grouped or develop short jobs' }
+            $required = @('CHECKOUT_RESULT', 'PYTHON_RESULT', 'VERSION_RESULT', 'PIP_RESULT', 'DEPENDENCIES_RESULT', 'RUNTIME_RESULT', 'INVENTORY_RESULT', 'PYTEST_RESULT', 'GUI_RESULT', 'COMPILE_RESULT', 'CLEAN_RESULT')
+            if ($env:LEGACY_VALIDATION -eq 'true') { $required += 'UNITTEST_RESULT' } else { $required += 'TK_ENVIRONMENT_RESULT' }
+            if ($env:EVENT_NAME -eq 'push') { $required += 'DIFF_PUSH_RESULT' } else { $required += 'DIFF_PR_RESULT' }
+            foreach ($name in $required) {
+              if ([Environment]::GetEnvironmentVariable($name) -ne 'success') { throw "Required full-validation step did not succeed: $name" }
+            }
+          } elseif ($env:EVENT_NAME -eq 'pull_request') {
             if ($env:GROUPED_RESULT -ne 'success' -or $env:SHORT_RESULT -ne 'skipped') { throw 'Required functional evidence did not succeed' }
-          } elseif ($env:EVENT_NAME -eq 'push') {
+          } elseif ($env:EVENT_NAME -eq 'push' -and $env:EVENT_REF -eq 'refs/heads/develop') {
             if ($env:SHORT_RESULT -ne 'success' -or $env:GROUPED_RESULT -ne 'skipped') { throw 'Required actual merge short verification did not succeed' }
           } else {
-            throw 'Grouped validation requires a PR; post-merge short verification requires its push event'
+            throw 'Grouped validation requires a PR; short verification requires develop push; full push validation requires main'
           }

@@ -50,6 +50,8 @@ pytest 仍是唯一例行完整功能測試入口，正式覆蓋改成 **一次�
 
 ## CI、證據與受控沿用
 
+一般 PR 使用 grouped 核心／GUI；一般 `refs/heads/develop` push 使用嚴格實際 merge 短驗證。`refs/heads/main` push 保留 baseline 的 Windows Python3.13.0 完整 pytest、GUI execution verifier、runtime、compile、push diff 與 clean，於原 required Python job執行，不走 develop-only short、不追加 full unittest。Main-only原樣重用 same-installation Tcl/Tk configure接線；不改資源或建立 main證據沿用制度。PR29／simplify精確歷史條件保持各自原版本／入口／capture。Required summary按真event/ref核對適用jobs，以及main／legacy每個必要step outcome；missing／skip／cancel／failure拒絕，unsupported workflow_dispatch仍失敗。
+
 CI 保留 Windows Python **3.13.0** 及 required check **Python 3.13**。該 check 必須彙總真實必要 group／runtime／compile／diff／clean-tree 結果；缺 job、skip、cancel、timeout、缺 artifact 都不能成功。GUI 必須以 preflight 成功為前提，不能用 `!cancelled()` 繞過。上傳與 summary 成功不能蓋掉 pytest／verifier 的退出狀態。成功／失敗都上傳實際存在的驗證紀錄，排除教材、live DB、整個 tmp 與秘密。
 
 每 execution 使用拒絕覆寫的唯一目錄，保存 SHA／tree、命令、實際 Python／完整安裝依賴、必要環境與 capture、起訖時間、退出碼、清冊、JUnit、raw log 與失敗事件。各組明列原 run／attempt／job／tested SHA；不得混版拼接。中止後保留已寫事件與失敗，不得以新執行遮掉較新的未解失敗。相同 dependency resolution 須可核對，單看 requirements 檔未變不足以证明。沒有適用成功證據即不得 merge。
@@ -156,3 +158,7 @@ CI 僅在 `pull_request`、上述精確 head branch 且 base SHA 恰等於固定
 ## PR41 第 5 輪限定接續
 
 [第 5 輪原 task 授權摘要](VALIDATION_FLOW_CORRECTION5.md) 追加一輪至 `5/5`，保留第 4 輪原文與全部歷史。只修正成功 early preflight 與 group start 紀錄混用的 F1，先取得極小真 CLI producer／history／core 串接及 fail-closed 回歸；未使用的一次 hosted core＋GUI 額度不增加，其他 task 仍三輪，沒有 sixth round／自動 CI retry。
+
+## PR41 第 7 輪限定接續
+
+[第7輪原task授權摘要](VALIDATION_FLOW_CORRECTION7.md) 只限main push routing及實際summary直接回歸，保留前六輪，追加至7/7。先有限定向workflow事件資料／真PowerShell summary，不啟本機全套／GUI或真mainpush；原first完整累積review後新候選一次正式CI。舊成功不冒充新HEAD、CI失敗STOP不retry、仍需兩輪完整適用PASS才能merge/actual短驗證。其他task一般3輪及所有歷史adapter不變。

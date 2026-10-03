@@ -1084,5 +1084,90 @@ class Correction6ExceptionTests(unittest.TestCase):
             file.write_bytes(original)
 
 
+class Correction7ExceptionTests(unittest.TestCase):
+    """Only this task's saved seventh authorization extends retained history."""
+    def setUp(self):
+        import hashlib
+        from unittest.mock import patch
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.auths = []
+        for name in ("seventh", "sixth", "fifth", "fourth"):
+            file = Path(self.temp.name) / (name + ".txt")
+            file.write_bytes(("synthetic " + name + " authorization, never real approval").encode())
+            self.auths.append(file)
+        digests = [hashlib.sha256(file.read_bytes()).hexdigest() for file in self.auths]
+        for constant, values in (
+            (gate.CORRECTION7_EXCEPTION, dict(zip(("authorization_sha256", "previous_authorization_sha256", "fifth_authorization_sha256", "fourth_authorization_sha256"), digests))),
+            (gate.CORRECTION6_EXCEPTION, dict(zip(("authorization_sha256", "previous_authorization_sha256", "fourth_authorization_sha256"), digests[1:]))),
+            (gate.CORRECTION5_EXCEPTION, dict(zip(("authorization_sha256", "previous_authorization_sha256"), digests[2:]))),
+        ):
+            patcher = patch.dict(constant, values)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def state(self):
+        state = evidence_state()
+        exception = {**gate.CORRECTION7_EXCEPTION, **dict(zip(
+            ("authorization_ref", "previous_authorization_ref", "fifth_authorization_ref", "fourth_authorization_ref"),
+            map(str, self.auths)))}
+        baseline, starting = exception["baseline"], exception["starting_head"]
+        state["task"].update(id=exception["task_id"], baseline=baseline, head_branch=exception["head_branch"])
+        state["authorization"]["task_id"] = exception["task_id"]
+        state["current"].update(base=baseline, head=starting)
+        state["pr"].update(number=41, base_sha=baseline, head_sha=starting, head_branch=exception["head_branch"])
+        state["reviews"] = []
+        heads = (HEAD, SYNTHETIC, TREE, gate.CORRECTION4_EXCEPTION["starting_head"], gate.CORRECTION5_EXCEPTION["starting_head"], gate.CORRECTION6_EXCEPTION["starting_head"], starting)
+        state["corrections"] = [dict(number=n, from_head=before, to_head=after, evidence_ref="fixture://retained/" + str(n))
+                                for n, (before, after) in enumerate(zip(heads, heads[1:]), 1)]
+        state["correction_exception"] = exception
+        return state
+
+    def test_exact_seventh_exception_retains_six_and_stops_eighth(self):
+        state = self.state()
+        gate.validate_state(state)
+        self.assertEqual(gate._correct(state, "fixture finding")["correction_round"], 7)
+        state["corrections"].append(dict(number=7, from_head=state["current"]["head"], to_head=NEW, evidence_ref="fixture://seventh"))
+        state["current"]["head"] = NEW
+        gate.validate_state(state)
+        self.assertEqual(gate._correct(state, "still blocked")["action"], "STOP")
+        state["pr"]["state"] = "merged"
+        state["current"]["base"] = MERGE
+        state["merge"] = {"sha": MERGE}
+        result = gate._post_merge_blocked(state, "fixture blocker")
+        self.assertEqual((result["corrections_used"], result["correction_limit"], result["merge_sha"]), (7, 7, MERGE))
+        state["corrections"].append(dict(number=8, from_head=NEW, to_head=MERGE, evidence_ref="fixture://forbidden"))
+        with self.assertRaises(gate.EvidenceError):
+            gate.validate_state(state)
+
+    def test_wrong_identity_history_authorization_and_scope_fail_closed(self):
+        for name in ("task", "baseline", "branch", "pr", "base", "head", "history", "fifth", "seventh_start", "limit", "extra", "scope", "unknown"):
+            state = self.state()
+            with self.subTest(name=name):
+                if name == "task": state["task"]["id"] = state["authorization"]["task_id"] = "another-task"
+                elif name == "baseline": state["task"]["baseline"] = BASE
+                elif name == "branch": state["task"]["head_branch"] = "feat/other"
+                elif name == "pr": state["pr"]["number"] = 42
+                elif name == "base": state["current"]["base"] = BASE
+                elif name == "head": state["current"]["head"] = NEW
+                elif name == "history": state["corrections"].pop(0)
+                elif name == "fifth": state["corrections"][4]["from_head"] = BASE
+                elif name == "seventh_start": state["correction_exception"]["starting_head"] = NEW
+                elif name == "limit": state["correction_exception"]["limit"] = 8
+                elif name == "extra": state["correction_exception"]["extra_rounds"] = True
+                elif name == "scope": state["correction_exception"]["scope"] = "unbounded"
+                else: state["correction_exception"]["override_limit"] = 8
+                with self.assertRaises(gate.EvidenceError): gate.validate_state(state)
+        for name in ("authorization_ref", "previous_authorization_ref", "fifth_authorization_ref", "fourth_authorization_ref"):
+            state = self.state()
+            state["correction_exception"][name] += ".absent"
+            with self.subTest(ref=name), self.assertRaises(gate.EvidenceError): gate.validate_state(state)
+        for file in self.auths:
+            original = file.read_bytes()
+            file.write_bytes(b"altered saved bytes")
+            with self.subTest(file=file.name), self.assertRaises(gate.EvidenceError): gate.validate_state(self.state())
+            file.write_bytes(original)
+
+
 if __name__ == "__main__":
     unittest.main()
