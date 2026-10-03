@@ -2,7 +2,7 @@
   "schema": "zhuyin-test-group-registry/1",
   "source_scope": "repository",
   "source_review": {
-    "basis": "Correction 3: retain correction1 independently reviewed GUI classification basis, explicitly source-review original cases and nine added non-window classifier regressions. Products and existing test expectations are unchanged. Finite registration is authoritative; positive bounded Tk guard rejects proven core conflicts. Correction 4: source-reviewed only same-installation Tcl/Tk helper/preflight and task-bound gate wiring with 13 explicit non-window regressions (mocked probe, exact paths/resources, pure gate fixtures, tiny synthetic runner groups); existing classification and classifier code unchanged. Correction 5: source-reviewed four changed helper/gate/test files and seven explicitly enumerated non-window regressions. Real isolated CLI/history/core execution uses one marker testcase, synthetic Git/CI context and only a stub Tk child; task-bound fifth exception retains original fourth contract. Existing registrations, product logic, classifier, runner and auditor unchanged. Correction 6: source-reviewed ExpectedResolutionGuiTests scoped owner-thread cleanup; two new real-Tk object-retirement/error-cleanup regressions explicitly GUI, two exact sixth-round gate regressions pure core. No product/classifier/other GUI class changes; historical identities unchanged. Correction 7: reviewed actual workflow routing/PowerShell summary regression sources and exact seventh task-bound adapter; four new non-window identities explicit core. The regression evaluator consumes real job/step expressions, real run/uses and summary body on isolated event/outcome fixtures. No GUI tests/product/classifier/provenance helper changes.",
+    "basis": "Correction 3: retain correction1 independently reviewed GUI classification basis, explicitly source-review original cases and nine added non-window classifier regressions. Products and existing test expectations are unchanged. Finite registration is authoritative; positive bounded Tk guard rejects proven core conflicts. Correction 4: source-reviewed only same-installation Tcl/Tk helper/preflight and task-bound gate wiring with 13 explicit non-window regressions (mocked probe, exact paths/resources, pure gate fixtures, tiny synthetic runner groups); existing classification and classifier code unchanged. Correction 5: source-reviewed four changed helper/gate/test files and seven explicitly enumerated non-window regressions. Real isolated CLI/history/core execution uses one marker testcase, synthetic Git/CI context and only a stub Tk child; task-bound fifth exception retains original fourth contract. Existing registrations, product logic, classifier, runner and auditor unchanged. Correction 6: source-reviewed ExpectedResolutionGuiTests scoped owner-thread cleanup; two new real-Tk object-retirement/error-cleanup regressions explicitly GUI, two exact sixth-round gate regressions pure core. No product/classifier/other GUI class changes; historical identities unchanged. Correction 7: reviewed actual workflow routing/PowerShell summary regression sources and exact seventh task-bound adapter; four new non-window identities explicit core. The regression evaluator consumes real job/step expressions, real run/uses and summary body on isolated event/outcome fixtures. No GUI tests/product/classifier/provenance helper changes. Correction 8: only unittest step metadata order changed (if then same id); unchanged PR29 predicate assertions and actual workflow readers remain authoritative. Exact eighth task-bound adapter introduces two pure authorization/history core regressions; source registration updated only changed gate/test hashes. No product/GUI/classifier/dependency/capture changes or order-mirror tests.",
     "prior_classification_ref": "correction1-fa6d3b724cfb46f982bddbd7b9131141/inventory.json",
     "prior_classification_head": "16cac994bf44fb4f9a278ce851d6f0848416987e",
     "prior_classification_tree": "8495c003e66f39561cda42016e09a58b7ce48b8a",
@@ -42,7 +42,7 @@
       "scripts/benchmark_review_confirm.py": "c8e2b5e92c50f3e3a890ff9d1760a054e2e6992b30340795202ed5d7ccb92b0d",
       "scripts/gui_preflight.py": "cf47709e2512c22c9fbf6cfe1621b561a8d1db312355309a4467f57561c9951f",
       "scripts/pr29_review_gate.py": "63ddb7ce48dbc3a8a9ddd121742efab8831b1976041c2e85594996879b79b7cd",
-      "scripts/pr_review_gate.py": "3e401cef69278fc0a0bb8876e0be9cae98551dc9e45b28f71333b9e9bf64af88",
+      "scripts/pr_review_gate.py": "83c73aa9c72fd0090ebab36f8afc7a4913bcffcea7dff84b63d898fcee0961bc",
       "scripts/test_entrypoint_audit.py": "38d62ac9e3c0f32266cb68cc7ca60a3ba9c6dea45693f951901ce00ba27d0054",
       "scripts/validation_evidence.py": "ac6d497338a9e99fdac68e0cf187c195f9e78d928cc0e13210e4a98c7b56a3e0",
       "scripts/validation_runner.py": "30452368f477dfafb093b0c8d93f3b340ce57a3b80a785ae75f4caa53bab75e5",
@@ -93,7 +93,7 @@
       "tests/test_pdf_portability_prewrite.py": "510a342b0ae0a0fa5bf0cfcca5c356831b7df14b98e458dd1f7899699f80d1e5",
       "tests/test_pdf_portability_replay.py": "7926253b9ac063131318fbb101bb159d1bdd5c48dbdc4d3a3eefd0f6c8ad2949",
       "tests/test_pr29_review_gate.py": "41ec6a934f220e2dbec0e2a898fdab679f9a11d0fc8658be6e87824d47c05206",
-      "tests/test_pr_review_gate.py": "0c557ec6e09a6cd45a1117d5a67d6cd46fea25ade22c47e3fc5a022eb0e1cb61",
+      "tests/test_pr_review_gate.py": "f5cb3117482596ae7cea6748df4b672712128494fd1db6b39a96b47a44b3569e",
       "tests/test_project_path_recovery_v541.py": "3c9519b4bfe328a0a9e09f51fd979ef98459766d7373d547daa363dd9248ea6e",
       "tests/test_project_repair_integration_v562.py": "d41fd27cabcf3673bd2f7c42da99b95ef6e75d1108ab48dbcfb5b847b15fdd69",
       "tests/test_regression_applicability_v562.py": "16076b803604f6009a319b51a9f528950213809c77d3c8f3865d02aa336432e7",
@@ -2138,6 +2138,14 @@
       "prefix": "test_pr_review_gate.Correction7ExceptionTests",
       "core": [
         "test_exact_seventh_exception_retains_six_and_stops_eighth",
+        "test_wrong_identity_history_authorization_and_scope_fail_closed"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_pr_review_gate.Correction8ExceptionTests",
+      "core": [
+        "test_exact_eighth_exception_retains_seven_and_stops_ninth",
         "test_wrong_identity_history_authorization_and_scope_fail_closed"
       ],
       "gui": []

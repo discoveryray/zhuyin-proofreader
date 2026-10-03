@@ -367,3 +367,8 @@ Fixed 值為 task `validation-flow-reduction`、原 baseline/base `457707b4c4109
 ## validation-flow-reduction 第七輪精確例外
 
 [第7輪限定摘要](VALIDATION_FLOW_CORRECTION7.md) 保留本次人類授權。Optional `correction_exception` schema `validation-flow-correction-exception/4` closed fields 恰為 `CORRECTION7_EXCEPTION` 加 `authorization_ref`、`previous_authorization_ref`、`fifth_authorization_ref`、`fourth_authorization_ref`；固定task/baseline/branch/PR41/starting adcee81c/scope/hashes/extra1/limit7全核對。實讀新第7及第6/5/4原文bytes/hash，nested原第6validator重驗連續前六輪，不改任何舊adapter或通用3。Len6 current須精確起始；len7第7from須起始、current等於其to。原contiguous/newcommit檢查不變。未知fields、錯identity/ref/hash/scope/history/limit8均拒絕；7用完correction/postmerge code handoff STOP，保留merge/history/count，不产生第8。Gate不創造操作授權、來源scope或獨立審查證據。
+
+
+## validation-flow-reduction 第八輪精確例外
+
+[第8輪限定摘要](VALIDATION_FLOW_CORRECTION8.md) 保留新原人類授權及原第7 formal code BLOCKED。Optional `correction_exception` schema `validation-flow-correction-exception/5` closed fields 恰為 `CORRECTION8_EXCEPTION` 加 `authorization_ref`、`previous_authorization_ref`、`sixth_authorization_ref`、`fifth_authorization_ref`、`fourth_authorization_ref`；固定task/B/branch/PR41/starting d974ec5c/scope/hashes/extra1/limit8全核對。實讀第8原文hash `c156319030dc54f549e6479b369ef718fecdd494aee1817fee515e683032e05a` 及原7/6/5/4字節，nested原7validator重驗連續前七輪；原所有舊adapter与general3不改。Len7 current須起始；len8第8from须起始/current等於to。原contiguous/newcommit／未知closedfields检查不變；錯identity/ref/hash/history/scope或limit9拒絕；8用完correction与postmergecode handoff STOP，保留actualmerge/history/count，不产生9。Gate不創造來源scope、操作權限、審查PASS或同HEAD清code finding。

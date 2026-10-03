@@ -65,6 +65,20 @@ CORRECTION7_EXCEPTION = {
     "fourth_authorization_sha256": "29b2869d5e6584bab8efbf022f697c8ee7331b7e1241ef0c18df7f4a647ec7fc",
     "scope": "main push baseline full-validation routing and required summary, direct regressions/registration/policy and task-bound seventh-round exception",
 }
+CORRECTION8_EXCEPTION = {
+    "schema": "validation-flow-correction-exception/5",
+    "task_id": "validation-flow-reduction",
+    "baseline": "457707b4c4109c1b10a0da76d8f8a884aca10341",
+    "starting_head": "d974ec5c420feabaa64b449bd25d78aed10c02f0",
+    "head_branch": "chore/validation-flow-reduction",
+    "pr_number": 41, "extra_rounds": 1, "limit": 8,
+    "authorization_sha256": "c156319030dc54f549e6479b369ef718fecdd494aee1817fee515e683032e05a",
+    "previous_authorization_sha256": "5f581ffa18d57db0114f23ed26f30fd7d09ba1d8b0cf5a97499b1392d341655a",
+    "sixth_authorization_sha256": "01df9c9193d00f675add80287feadc9f657b27b6c81fc9114d59448d3c9d9d4d",
+    "fifth_authorization_sha256": "46b2855d3fe7cd873ce1c4aaf9a93a8afa320b4f67e17aa14405f74d06f296d0",
+    "fourth_authorization_sha256": "29b2869d5e6584bab8efbf022f697c8ee7331b7e1241ef0c18df7f4a647ec7fc",
+    "scope": "unittest step metadata ordering, unchanged historical workflow reader validation, exact source registration and task-bound eighth-round exception",
+}
 OPERATIONS = {"implement", "delegate", "test", "commit", "push", "pr", "merge"}
 COMMON_STEPS = (
     "Check out repository", "Set up Python", "Show Python version",
@@ -276,10 +290,54 @@ def _correction7_limit(state):
     return 7
 
 
+def _correction8_limit(state):
+    exception = state["correction_exception"]
+    _fields(exception, " ".join((*CORRECTION8_EXCEPTION, "authorization_ref", "previous_authorization_ref",
+                                "sixth_authorization_ref", "fifth_authorization_ref", "fourth_authorization_ref")),
+            "correction_exception")
+    for name, expected in CORRECTION8_EXCEPTION.items():
+        _require(type(exception[name]) is type(expected) and exception[name] == expected,
+                 "invalid eighth-round task-bound exception: " + name)
+    corrections = state["corrections"]
+    _require(type(corrections) is list and len(corrections) in (7, 8),
+             "eighth-round exception must retain the first seven rounds")
+    retained = {**state, "corrections": corrections[:7],
+                "current": {**state["current"], "head": exception["starting_head"]},
+                "correction_exception": {
+                    **CORRECTION7_EXCEPTION,
+                    "authorization_ref": exception["previous_authorization_ref"],
+                    "previous_authorization_ref": exception["sixth_authorization_ref"],
+                    "fifth_authorization_ref": exception["fifth_authorization_ref"],
+                    "fourth_authorization_ref": exception["fourth_authorization_ref"],
+                }}
+    _correction7_limit(retained)
+    _require(corrections[6].get("to_head") == exception["starting_head"],
+             "eighth-round starting HEAD differs from retained seventh correction")
+    if len(corrections) == 8:
+        _require(type(corrections[7]) is dict and
+                 corrections[7].get("from_head") == exception["starting_head"],
+                 "eighth round must start at the authorized HEAD")
+        _require(state["current"]["head"] == corrections[7].get("to_head"),
+                 "current HEAD differs from retained eighth correction")
+    else:
+        _require(state["current"]["head"] == exception["starting_head"],
+                 "eighth-round authorization must start at exact current HEAD")
+    _text(exception["authorization_ref"], "correction_exception.authorization_ref")
+    try:
+        digest = hashlib.sha256(Path(exception["authorization_ref"]).read_bytes()).hexdigest()
+    except OSError as error:
+        raise EvidenceError("saved eighth correction authorization unavailable") from error
+    _require(digest == exception["authorization_sha256"],
+             "saved eighth correction authorization hash differs")
+    return 8
+
+
 def _correction_limit(state):
     if "correction_exception" not in state:
         return 3
     exception = state["correction_exception"]
+    if type(exception) is dict and exception.get("schema") == CORRECTION8_EXCEPTION["schema"]:
+        return _correction8_limit(state)
     if type(exception) is dict and exception.get("schema") == CORRECTION7_EXCEPTION["schema"]:
         return _correction7_limit(state)
     if type(exception) is dict and exception.get("schema") == CORRECTION6_EXCEPTION["schema"]:
@@ -323,7 +381,7 @@ def _correction_limit(state):
 
 
 def _correction_exhausted(state):
-    return {3: "three", 4: "four", 5: "five", 6: "six", 7: "seven"}[_correction_limit(state)] + " corrective rounds exhausted"
+    return {3: "three", 4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight"}[_correction_limit(state)] + " corrective rounds exhausted"
 
 
 def validate_state(state):
