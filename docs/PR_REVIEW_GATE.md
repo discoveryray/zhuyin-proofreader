@@ -357,3 +357,8 @@ Fixed 值為 task `validation-flow-reduction`、原 baseline/base `457707b4c4109
 保留連續第 1～4 輪，第三輪 to HEAD／第四輪 from HEAD 須為原 `a0e647952ae5d973ea30130264294eee4e6982fa`，第四輪 to HEAD 等於新 starting HEAD。Len4 時 current HEAD 必須精確90b40879，才可安排第5輪；len5 時第五輪 from HEAD 須90b40879，current HEAD 須等於其 to HEAD。其餘原 contiguous/new-commit schema檢查全部保留。未知 fields/schema、錯 task/base/branch/PR/current/start/scope/hash/ref、遺失history、limit6／extra2／boolean 均拒絕。5輪用完的 corrective／post-merge handoff 一律STOP，保留實際merge／count；不產生第6輪、不重設task。无 exception 的舊 v3/v4 schema仍一般三輪。
 
 此adapter不清除原90b40879的codeBLOCKED；新HEAD兩輪均完整scope審查，原報告不能同HEAD supersede。合法 non-code supplements與原append-only關係保留。未使用的一次正式CI額度不增加，任何正式測試失敗保存並STOP；gate不創造新的scope/測試/push/merge授權。
+
+
+## validation-flow-reduction 第六輪精確例外
+
+[第 6 輪限定摘要](VALIDATION_FLOW_CORRECTION6.md) 保存這一次人類授權邊界。Optional `correction_exception` 可選 schema `validation-flow-correction-exception/3`，closed fields 恰為 `CORRECTION6_EXCEPTION` 加 `authorization_ref`、`previous_authorization_ref`、`fourth_authorization_ref`；fixed task/baseline/branch/PR/starting HEAD/scope/hashes/extra1/limit6 全部精確核對。三份原文實讀 bytes/hash；原第五輪 validator 重驗連續前五輪與第四／第五原授權。Len5 current 須起始811ff56f；len6 第六輪 from 須同起始、current 須該 to HEAD。原 contiguous/new-commit schema 不變。未知／跨 task／遺失歷史／改 hash/ref/scope／limit7 一律拒絕；用完6輪的 correction 及 post-merge handoff STOP、保留 merge/history/count，不產生第七輪。原第四／第五 adapter 仍保留當時上限；無 exception 仍一般三輪。Gate 不認證證據真實性、不創造操作授權，協調者仍須核對原授權與兩轮新 HEAD 完整審查。

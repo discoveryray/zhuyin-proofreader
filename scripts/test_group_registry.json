@@ -2,7 +2,7 @@
   "schema": "zhuyin-test-group-registry/1",
   "source_scope": "repository",
   "source_review": {
-    "basis": "Correction 3: retain correction1 independently reviewed GUI classification basis, explicitly source-review original cases and nine added non-window classifier regressions. Products and existing test expectations are unchanged. Finite registration is authoritative; positive bounded Tk guard rejects proven core conflicts. Correction 4: source-reviewed only same-installation Tcl/Tk helper/preflight and task-bound gate wiring with 13 explicit non-window regressions (mocked probe, exact paths/resources, pure gate fixtures, tiny synthetic runner groups); existing classification and classifier code unchanged. Correction 5: source-reviewed four changed helper/gate/test files and seven explicitly enumerated non-window regressions. Real isolated CLI/history/core execution uses one marker testcase, synthetic Git/CI context and only a stub Tk child; task-bound fifth exception retains original fourth contract. Existing registrations, product logic, classifier, runner and auditor unchanged.",
+    "basis": "Correction 3: retain correction1 independently reviewed GUI classification basis, explicitly source-review original cases and nine added non-window classifier regressions. Products and existing test expectations are unchanged. Finite registration is authoritative; positive bounded Tk guard rejects proven core conflicts. Correction 4: source-reviewed only same-installation Tcl/Tk helper/preflight and task-bound gate wiring with 13 explicit non-window regressions (mocked probe, exact paths/resources, pure gate fixtures, tiny synthetic runner groups); existing classification and classifier code unchanged. Correction 5: source-reviewed four changed helper/gate/test files and seven explicitly enumerated non-window regressions. Real isolated CLI/history/core execution uses one marker testcase, synthetic Git/CI context and only a stub Tk child; task-bound fifth exception retains original fourth contract. Existing registrations, product logic, classifier, runner and auditor unchanged. Correction 6: source-reviewed ExpectedResolutionGuiTests scoped owner-thread cleanup; two new real-Tk object-retirement/error-cleanup regressions explicitly GUI, two exact sixth-round gate regressions pure core. No product/classifier/other GUI class changes; historical identities unchanged.",
     "prior_classification_ref": "correction1-fa6d3b724cfb46f982bddbd7b9131141/inventory.json",
     "prior_classification_head": "16cac994bf44fb4f9a278ce851d6f0848416987e",
     "prior_classification_tree": "8495c003e66f39561cda42016e09a58b7ce48b8a",
@@ -42,7 +42,7 @@
       "scripts/benchmark_review_confirm.py": "c8e2b5e92c50f3e3a890ff9d1760a054e2e6992b30340795202ed5d7ccb92b0d",
       "scripts/gui_preflight.py": "cf47709e2512c22c9fbf6cfe1621b561a8d1db312355309a4467f57561c9951f",
       "scripts/pr29_review_gate.py": "63ddb7ce48dbc3a8a9ddd121742efab8831b1976041c2e85594996879b79b7cd",
-      "scripts/pr_review_gate.py": "89e27d56ae9ff50aa8a7c055300de1ac05c004b144d0b2c77a330476ff3fd88b",
+      "scripts/pr_review_gate.py": "93b25891a5d454da4020a1a857fe28e3cf286f014359e821860d0aad71a27d6b",
       "scripts/test_entrypoint_audit.py": "38d62ac9e3c0f32266cb68cc7ca60a3ba9c6dea45693f951901ce00ba27d0054",
       "scripts/validation_evidence.py": "ac6d497338a9e99fdac68e0cf187c195f9e78d928cc0e13210e4a98c7b56a3e0",
       "scripts/validation_runner.py": "30452368f477dfafb093b0c8d93f3b340ce57a3b80a785ae75f4caa53bab75e5",
@@ -60,7 +60,7 @@
       "tests/test_delivery_recovery_inspector_v580.py": "f8f6cd29ff9939e7be2b11637031b01378029390e8d813c0e2e292c6111202aa",
       "tests/test_dual_evidence_architecture_v550.py": "a82b5dc8a156e39a1527e5512353183eee93d16dbbd590eebb5d9f55a4e86c87",
       "tests/test_exact_glyph_identity_v580.py": "f9ee7500e9fe8f673065c3cb1b742aa6835e4715874aedea6a7f15e6ada8437f",
-      "tests/test_expected_resolution_binding.py": "b86c028f91ca706a6313e6a340351ad7394f8858afc0c749cb2bc21ebe9df57b",
+      "tests/test_expected_resolution_binding.py": "a55b2f488bafec03069697324509bfe199caba664dae61b6c76bf0c5f1d3909f",
       "tests/test_fingerprint_compat_contract.py": "94cba0e1602e22618a344460d48e6092da57cfbd7cabe0f6fc2d30e95e70fa63",
       "tests/test_global_exact_glyph_read_reuse_v580.py": "428d8414e5c0f35df538ea80f56e7e91d16fbeb64ca9af7862d6f4f0bd4b647a",
       "tests/test_global_exact_glyph_repository_v580.py": "a198389de6f4901a77ba85f02a18772c1ae9a9395c76b42558ca7b383eac6d62",
@@ -93,7 +93,7 @@
       "tests/test_pdf_portability_prewrite.py": "510a342b0ae0a0fa5bf0cfcca5c356831b7df14b98e458dd1f7899699f80d1e5",
       "tests/test_pdf_portability_replay.py": "7926253b9ac063131318fbb101bb159d1bdd5c48dbdc4d3a3eefd0f6c8ad2949",
       "tests/test_pr29_review_gate.py": "41ec6a934f220e2dbec0e2a898fdab679f9a11d0fc8658be6e87824d47c05206",
-      "tests/test_pr_review_gate.py": "64f9d4c47d613b88345f0d01bc2b327ca3d9757b90dabf2ebc1539c04ad9d5a7",
+      "tests/test_pr_review_gate.py": "60db94604afc80a407b21d32a8cb3a587f13207fa947bfede8ee3d56f031c8a9",
       "tests/test_project_path_recovery_v541.py": "3c9519b4bfe328a0a9e09f51fd979ef98459766d7373d547daa363dd9248ea6e",
       "tests/test_project_repair_integration_v562.py": "d41fd27cabcf3673bd2f7c42da99b95ef6e75d1108ab48dbcfb5b847b15fdd69",
       "tests/test_regression_applicability_v562.py": "16076b803604f6009a319b51a9f528950213809c77d3c8f3865d02aa336432e7",
@@ -376,7 +376,9 @@
       "core": [],
       "gui": [
         "test_real_tk_imported_expected_confirm_saves_reopens_and_advances",
-        "test_real_tk_invalid_unbound_confirmation_reports_failure_and_keeps_current_row"
+        "test_real_tk_invalid_unbound_confirmation_reports_failure_and_keeps_current_row",
+        "test_real_tk_owner_cleanup_retires_objects_and_pending_poll",
+        "test_real_tk_mid_body_failure_retires_objects_and_finishes_save"
       ]
     },
     {
@@ -2119,6 +2121,14 @@
         "test_wrong_identity_hash_ref_limit_scope_and_lost_history_fail_closed",
         "test_changed_fifth_or_retained_fourth_raw_bytes_are_rejected",
         "test_post_merge_handoff_preserves_actual_merge_and_five_used_rounds"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_pr_review_gate.Correction6ExceptionTests",
+      "core": [
+        "test_exact_sixth_exception_retains_five_and_stops_seventh",
+        "test_wrong_identity_history_authorization_and_scope_fail_closed"
       ],
       "gui": []
     }
