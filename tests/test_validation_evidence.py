@@ -2,6 +2,7 @@
 from copy import deepcopy
 from datetime import datetime, timezone
 import hashlib
+import copy
 import json
 import os
 import shutil
@@ -87,7 +88,7 @@ def staged_state(coverage=None):
     for review in state["reviews"]:
         review.update(verdict="CODE_REVIEWED", ci=None, coverage_sha256=None, finalizes_report_ref=None)
     state["pr_ci"]["jobs"] = [dict(state["pr_ci"]["jobs"][0], steps={"Verify required validation results": "success"}),
-                                dict(state["pr_ci"]["jobs"][0], name="Grouped validation", steps={"Aggregate functional coverage": "success"})]
+                                dict(state["pr_ci"]["jobs"][0], name="Grouped validation", steps={"Aggregate functional coverage": "success", "Configure same-installation Tcl/Tk": "success", "Early hosted Tk preflight": "success"})]
     return state
 
 
@@ -145,6 +146,15 @@ def short_fixture(root):
 
 
 class StagedGateTests(unittest.TestCase):
+    def test_missing_failed_or_skipped_early_preflight_and_configuration_block_ci(self):
+        state = staged_state(None)
+        for name in ("Early hosted Tk preflight", "Configure same-installation Tcl/Tk"):
+            for outcome in (None, "failure", "skipped", "cancelled"):
+                ci = copy.deepcopy(state["pr_ci"])
+                ci["jobs"][1]["steps"][name] = outcome
+                with self.subTest(name=name, outcome=outcome):
+                    self.assertIsNotNone(gate._staged_ci_problem(ci, "pull_request", "feat/example", HEAD, [BASE, HEAD]))
+
     def cli(self, command, path):
         return subprocess.run([sys.executable, str(ROOT / "scripts/pr_review_gate.py"), command, str(path)], capture_output=True, text=True)
 
@@ -383,7 +393,7 @@ class RawEvidenceTests(unittest.TestCase):
             state["current"]["base"] = MERGE
             state["push_ci"].update(run_id=101, latest_run_id=101)
             state["push_ci"]["jobs"] = [dict(state["push_ci"]["jobs"][0], run_id=101, steps={"Verify required validation results": "success"}),
-                                          dict(state["push_ci"]["jobs"][0], run_id=101, name="Merge short validation")]
+                                          dict(state["push_ci"]["jobs"][0], run_id=101, name="Merge short validation", steps={"Configure same-installation Tcl/Tk": "success"})]
             self.assertEqual(gate.next_action(state)["action"], "COMPLETE", gate.next_action(state))
             data = evidence.load_json(short)
             data["outcome"] = "failed"

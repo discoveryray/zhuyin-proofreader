@@ -530,6 +530,31 @@ class RunnerOrchestrationTests(unittest.TestCase):
         self.assertEqual(self.calls.count("raw.log"), 1)
         self.assertEqual(self.calls.count("preflight.log"), 2)
 
+    def test_new_candidate_preserves_old_core_and_blocked_gui_without_adoption(self):
+        old_core = runner.run_group("core", self.evidence, mode="validation")
+        old_gui = runner.run_group("gui", self.evidence, mode="validation")
+        original = {path: path.read_bytes() for path in (old_core, old_gui)}
+        self.candidate.update(head="e" * 40, tree="f" * 40)
+        self.preflight_success = True
+        new_core = runner.run_group("core", self.evidence, mode="validation")
+        new_gui = runner.run_group("gui", self.evidence, mode="validation")
+        bundle = runner.aggregate(self.evidence, head="e" * 40)
+        self.assertEqual(bundle["core_manifest"], new_core.relative_to(self.evidence).as_posix())
+        self.assertEqual(bundle["gui_manifest"], new_gui.relative_to(self.evidence).as_posix())
+        self.assertEqual(len(bundle["history_manifests"]), 4)
+        self.assertEqual(self.calls.count("raw.log"), 3)  # old core, new core, new GUI exactly once
+        for path, payload in original.items(): self.assertEqual(path.read_bytes(), payload)
+        self.assertEqual(runner.read_verified_manifest(old_gui)["outcome"], "blocked")
+        # Inject a separately validated synthetic environment difference at the
+        # aggregation boundary; never rewrite durable execution artifacts.
+        history = runner.history(self.evidence)
+        foreign = copy.deepcopy(history)
+        for path, value in foreign:
+            if path == new_gui:
+                value["environment"]["environment"]["TCL_LIBRARY"] = "foreign-installation"
+        with patch.object(runner, "history", return_value=foreign), self.assertRaisesRegex(ValueError, "mixed group evidence: environment"):
+            runner.aggregate(self.evidence, head="e" * 40)
+
     def test_core_failure_cannot_be_cleared_by_same_candidate_rerun(self):
         original = ORIGINAL_RUN_PROCESS
         def fail(command, folder, name, timeout, env=None):

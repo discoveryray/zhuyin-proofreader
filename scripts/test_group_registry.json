@@ -2,7 +2,7 @@
   "schema": "zhuyin-test-group-registry/1",
   "source_scope": "repository",
   "source_review": {
-    "basis": "Correction 3: retain correction1 independently reviewed GUI classification basis, explicitly source-review original cases and nine added non-window classifier regressions. Products and existing test expectations are unchanged. Finite registration is authoritative; positive bounded Tk guard rejects proven core conflicts.",
+    "basis": "Correction 3: retain correction1 independently reviewed GUI classification basis, explicitly source-review original cases and nine added non-window classifier regressions. Products and existing test expectations are unchanged. Finite registration is authoritative; positive bounded Tk guard rejects proven core conflicts. Correction 4: source-reviewed only same-installation Tcl/Tk helper/preflight and task-bound gate wiring with 13 explicit non-window regressions (mocked probe, exact paths/resources, pure gate fixtures, tiny synthetic runner groups); existing classification and classifier code unchanged.",
     "prior_classification_ref": "correction1-fa6d3b724cfb46f982bddbd7b9131141/inventory.json",
     "prior_classification_head": "16cac994bf44fb4f9a278ce851d6f0848416987e",
     "prior_classification_tree": "8495c003e66f39561cda42016e09a58b7ce48b8a",
@@ -40,9 +40,9 @@
       "runtime_regression_gate.py": "a9c1064eb573690a9df61566c3eaebd5b352cb6b65be0b9e38a33e6809443a66",
       "runtime_source_validation.py": "560e75a651b67cbef034d780d20cc005aaa6e4f65674eb8a79e59cabd54b5704",
       "scripts/benchmark_review_confirm.py": "c8e2b5e92c50f3e3a890ff9d1760a054e2e6992b30340795202ed5d7ccb92b0d",
-      "scripts/gui_preflight.py": "1a1ea97b83e1ea405090cb039a46c978dc4eb596ff1b5e0420eb7e0c39738fce",
+      "scripts/gui_preflight.py": "cf47709e2512c22c9fbf6cfe1621b561a8d1db312355309a4467f57561c9951f",
       "scripts/pr29_review_gate.py": "63ddb7ce48dbc3a8a9ddd121742efab8831b1976041c2e85594996879b79b7cd",
-      "scripts/pr_review_gate.py": "93152dab5a9d99d63eea9380a93a56340077d42a77002cb501694ee69e143d63",
+      "scripts/pr_review_gate.py": "b30445a8f41d147b99fffd58c55a6a9e485b752aa12a6947310435bce96401e3",
       "scripts/test_entrypoint_audit.py": "38d62ac9e3c0f32266cb68cc7ca60a3ba9c6dea45693f951901ce00ba27d0054",
       "scripts/validation_evidence.py": "ac6d497338a9e99fdac68e0cf187c195f9e78d928cc0e13210e4a98c7b56a3e0",
       "scripts/validation_runner.py": "30452368f477dfafb093b0c8d93f3b340ce57a3b80a785ae75f4caa53bab75e5",
@@ -52,7 +52,7 @@
       "tests/test_actual_post_commit_recovery_v580.py": "5b8d129c5148ee6e0ad0b328b4709a5f089c7c4cef7863a289d07a523ba1677f",
       "tests/test_actual_review_v540.py": "cc1d60e408a9a5e63311365f53691abf5c5d2e2fa15b21f0e067e4bbed164498",
       "tests/test_architecture.py": "41132266b15d802170d905052f275a99d9127e9b52f94577f6708bdf7fdda65f",
-      "tests/test_ci_validation_workflow.py": "42be8f13a81c4660166fd9d910b6d6e305fc0a66006d2ab6339bf68c6f435838",
+      "tests/test_ci_validation_workflow.py": "daee76af70070ad95c6e92955b309ebde5a1269e17a1a49bffc13ea85f223e13",
       "tests/test_company_semantic_rules_v522.py": "65666976d0478a5fac2d382d1a0d60900ea0e86a577e6312aa72d5b82148117f",
       "tests/test_completion_repair_v562.py": "f36c9d645320ed686a15100b500880a40fe6b77801ab617082aece21ad6b2e83",
       "tests/test_cross_version_compat_v560.py": "a2fb3fa2dd1e0c819f36fb63856885222d8a7f44c5d4a2c9f6e607ee24eaf5f1",
@@ -92,7 +92,7 @@
       "tests/test_pdf_portability_prewrite.py": "510a342b0ae0a0fa5bf0cfcca5c356831b7df14b98e458dd1f7899699f80d1e5",
       "tests/test_pdf_portability_replay.py": "7926253b9ac063131318fbb101bb159d1bdd5c48dbdc4d3a3eefd0f6c8ad2949",
       "tests/test_pr29_review_gate.py": "41ec6a934f220e2dbec0e2a898fdab679f9a11d0fc8658be6e87824d47c05206",
-      "tests/test_pr_review_gate.py": "b238383f4e353c0fb3054803f6dfde4db1cc5f8872a7875bb4cebf6f222384ea",
+      "tests/test_pr_review_gate.py": "21a0fd175631bf7e07970b05a96022622d9a9333a73365529cf7b703172bf2cf",
       "tests/test_project_path_recovery_v541.py": "3c9519b4bfe328a0a9e09f51fd979ef98459766d7373d547daa363dd9248ea6e",
       "tests/test_project_repair_integration_v562.py": "d41fd27cabcf3673bd2f7c42da99b95ef6e75d1108ab48dbcfb5b847b15fdd69",
       "tests/test_regression_applicability_v562.py": "16076b803604f6009a319b51a9f528950213809c77d3c8f3865d02aa336432e7",
@@ -111,14 +111,16 @@
       "tests/test_staged_review_navigation_v580.py": "4af5f9d591a93cefe427c8fefb7478dbde60802de175b43e536bd06e4dc344b3",
       "tests/test_test_entrypoint_audit.py": "00c74efb18da82322b0210f43a7011411120b93f061aa5ebcc56dc821ceee995",
       "tests/test_test_group_registry.py": "6d4556b63b72d47e3b1b0391f1c4882b7d45a9383af9d5f1b0833c94dc36716f",
-      "tests/test_validation_evidence.py": "4c43f6c8b4ad24c5e5f8d8e43780cdea1ce7843eb6b41812428db4a62db837ce",
+      "tests/test_validation_evidence.py": "38ae2e499ceecda1ff5768b136a37cb5ccc935f7e806f190045b012692b8786e",
       "tests/test_validation_local_history.py": "1e79b1ed7bb5f5eb92ac8c73948850511e73d17059bf87c5231fd0091eda5d9c",
-      "tests/test_validation_runner.py": "19400b38d754a0b2a8a317bbbf6c61c633f234d44c29f86857da79f57adba75c",
+      "tests/test_validation_runner.py": "3abe5916060d4500a7713bc49895da634b1b3a3b7caa415982cf55dbb2931c17",
       "tests/test_visual_context_repairs_v521.py": "53c869e48900c2fa24616a9afad6c12b4f831c4ea054d6d8c4a6af7baa9b9741",
       "tests/test_zero_occurrence_pdf_v541.py": "ac5c123a1e57a56e574b23bc12be7a270346c5cd05af13f5a3ceda3953505666",
       "tests/test_zero_summary_and_project_status_v541.py": "90ee2ac9a16db64ea2379eb12286b25da24883fee93b7a33cae5402c80517dd1",
       "ttf_symbol_recombination.py": "58f4156cab507c81690775e1b8c94449b808b63f74fc0637f0fc72ce061fc091",
-      "ttf_zhuyin_shape_decoder.py": "612dfb13c2be1ffa2ba32ae5d47136ef207180361c7785c2e6dc205cb45f07c5"
+      "ttf_zhuyin_shape_decoder.py": "612dfb13c2be1ffa2ba32ae5d47136ef207180361c7785c2e6dc205cb45f07c5",
+      "scripts/validation_tk_environment.py": "d35e099c849dd5baad43ba1edde5cf84e37bb68e13773eba7ba8841269546e33",
+      "tests/test_validation_tk_environment.py": "53fefe69920b29ba819b4c09f495b78e7d487456e5c5e12a7239acccf5a7fa43"
     }
   },
   "entries": [
@@ -232,6 +234,7 @@
     {
       "prefix": "test_ci_validation_workflow.ValidationWorkflowTests",
       "core": [
+        "test_early_preflight_precedes_core_and_shared_wiring_does_not_open_post_merge_tk",
         "test_legacy_exception_keeps_exact_original_identity_predicates",
         "test_new_paths_keep_default_capture_and_independent_group_processes",
         "test_required_check_executes_real_failure_sensitive_summary",
@@ -1970,6 +1973,7 @@
         "test_development_and_draft_are_intermediate_not_formal_pass",
         "test_finalization_cannot_clear_code_or_change_scope_or_reviewer_for_gap",
         "test_formal_pass_never_creates_authorization_or_legacy_upgrade",
+        "test_missing_failed_or_skipped_early_preflight_and_configuration_block_ci",
         "test_old_formal_result_cannot_select_or_clear_later_evidence_blocker",
         "test_real_cli_development_correction_is_local_only_and_v3_stays_frozen",
         "test_real_cli_requires_both_formal_reviews_bound_to_raw_coverage"
@@ -2042,6 +2046,7 @@
         "test_core_failure_cannot_be_cleared_by_same_candidate_rerun",
         "test_incomplete_history_and_corrupt_artifact_fail_closed",
         "test_mixed_candidate_and_later_failure_reject_aggregate",
+        "test_new_candidate_preserves_old_core_and_blocked_gui_without_adoption",
         "test_preflight_failure_retains_core_and_retry_uses_full_gui_only"
       ],
       "gui": []
@@ -2073,6 +2078,28 @@
         "test_pre_session_recovery_only_triggers_when_all_stage_outputs_exist",
         "test_processing_phase_is_visible_before_session_manifest",
         "test_zero_summary_value_is_not_treated_as_missing"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_validation_tk_environment.TkEnvironmentTests",
+      "core": [
+        "test_configuration_writes_only_current_job_environment_and_retains_failure",
+        "test_early_probe_does_not_accept_incomplete_success",
+        "test_early_probe_is_fd_same_interpreter_bounded_and_preserves_failed_raw_evidence",
+        "test_exact_installation_resources_accept_venv_base_prefix_and_patchlevels",
+        "test_foreign_extension_and_loaded_dll_are_rejected_without_disk_search",
+        "test_missing_resource_and_incompatible_or_ambiguous_versions_fail_closed"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_pr_review_gate.Correction4ExceptionTests",
+      "core": [
+        "test_exact_exception_allows_only_fourth_round_and_preserves_original_three",
+        "test_fifth_round_missing_history_and_cross_head_are_rejected",
+        "test_post_merge_handoff_retains_four_used_rounds_and_actual_merge",
+        "test_wrong_task_baseline_branch_pr_start_hash_limit_and_reference_fail_closed"
       ],
       "gui": []
     }

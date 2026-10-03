@@ -53,7 +53,7 @@ BLOCKED 必須有明確 `blocker_kind`、非空 findings、唯一 `report_ref`�
 
 ## GUI 隔離與重試的協調
 
-先完成同 interpreter／cwd／權限／環境／default capture 的 preflight，失敗不啟動 GUI，已成功核心證據照常保存。只在 raw evidence 明確為初始化 Tk 資源讀取／runner 啟動問題且無 confirmed code blocker 時，允許相同候選／設定 GUI 一次獨立 process 重試；跨 job/run/attempt/session 累積，先保存首次 log/JUnit/exit code，再 append relation。缺歷史、任意 TclError、assertion、資料／保存問題或未知原因不可自動重試。第二次失敗立即停止 GUI 驗收，不重跑核心、不切 capture、不安裝 Tcl/Tk。環境診斷最多十分鐘；時間預算和 metadata 契約以 VALIDATION_POLICY 為準。
+Hosted PR 在 core 前先使用 `validation_tk_environment.py configure` 的同安裝 job-local 路徑，再以正式 interpreter／cwd／權限／環境／fd 完成 60 秒 early preflight；失敗不啟動 core／GUI，保存原始 log／metadata 並由必要 job failure 阻止 summary 成功。GUI 自身 preflight 保留，失敗不啟動 GUI，既有成功核心證據照常保存。Push 使用相同 configure，但不開真實 Tk，維持原短驗證。只在 raw evidence 明確為初始化 Tk 資源讀取／runner 啟動問題且無 confirmed code blocker 時，允許相同候選／設定 GUI 一次獨立 process 重試；跨 job/run/attempt/session 累積，先保存首次 log/JUnit/exit code，再 append relation。缺歷史、任意 TclError、assertion、資料／保存問題或未知原因不可自動重試。第二次失敗立即停止 GUI 驗收，不重跑核心、不切 capture、不安裝 Tcl/Tk。環境診斷最多十分鐘；時間預算和 metadata 契約以 VALIDATION_POLICY 為準。
 
 新 v4 的 `CODE_REVIEWED` 原文持續保留；正式 PASS 以 `finalizes_report_ref` 連到相同 round/baseline/base/head/scope 的中間報告，附 `resolution_evidence_ref` 與 `coverage_sha256`。這與 non-code BLOCKED 的 `supersedes_report_ref` 補審鏈分開，不將中間狀態偽裝成 BLOCKED 或 PASS。同 reviewer 可核對證據缺口，替代 reviewer 仍須完整 scope review。
 
@@ -83,3 +83,7 @@ Evidence 至少包含：
 `請依 repository 的兩輪獨立審查自動流程，完成：〈任務與驗收條件〉。`
 
 若需限制授權，直接加上例如「只到 PR，不合併」或指定固定 baseline／階段；當次明確限制優先。[ChatGPT 專案指令精簡版](CHATGPT_PROJECT_INSTRUCTIONS.md) 可貼入專案長期指令。
+
+## PR41 第 4 輪接續
+
+[原 task 的限定授權](VALIDATION_FLOW_CORRECTION4.md) 明確追加一輪至 `4/4`，其餘 task 仍三輪。協調者保留全部 ledger／review／CI 原文，以 gate closed `correction_exception` 核對 saved 授權 hash、固定 task/baseline/starting HEAD/branch/PR41 與連續 1～4；不重設 count、不 amend。新 HEAD 第一位完整 reviewer 無 confirmed code blocker 才更新原 PR41，執行新候選一 core＋一 GUI；不採納舊 HEAD core，不自動重開 CI，preflight／正式測試失敗或第 4 輪後需改受審來源即 STOP。兩輪正式 PASS、完整必要 coverage／CI、保護規則與原 merge 授權仍全部必要；實際 merge 及原短 push 驗證保留。

@@ -40,7 +40,9 @@ pytest 仍是唯一例行完整功能測試入口，正式覆蓋改成 **一次�
 
 ## GUI 預檢、重試與停止
 
-正式 GUI 前以相同 interpreter、權限、cwd、必要環境與 default capture 執行預檢，核對 Python／實際依賴版本、evidence/temp 自建探測檔的建立寫讀刪除，以及 Tk root、ttk Combobox／Spinbox 建立更新銷毀。保存 Tcl/Tk 版本與實際載入路徑。失敗便不啟動 GUI 套件，但核心 process 可完成，已取得的核心證據繼續保存。預檢成功不等於 GUI 通過。
+新 hosted PR CI 在核心全集前，以正式測試的相同 interpreter／job 環境／fd capture 執行一次 60 秒 early preflight；失敗時不啟動 core／GUI。`scripts/validation_tk_environment.py configure` 僅核對 `sys.base_prefix` 下 `tcl/tcl<compiled version>`、`tcl/tk<compiled version>` 與 `DLLs` 的有限確定路徑，確認 `_tkinter`／實際載入 DLL 同安裝、資源存在與 exact patchlevel，僅寫當前 job 的 `GITHUB_ENV`；不掃磁碟、不下載／改裝系統或混搭資源。Early preflight 與正式 GUI 自身 preflight 共用原 `scripts/gui_preflight.py`，保存 UUID 目錄、命令／SHA／環境／時間／退出碼、root／Combobox／Spinbox 結果及實際 Tcl/Tk 版本／路徑；沒有 core／GUI manifest 的 early failure 是失敗證據，不製造成功 coverage。Post-merge job 使用相同 configure 接線，仍只跑原非視窗短驗證。
+
+正式 GUI 前以相同 interpreter、權限、cwd、必要環境與 default capture 執行預檢，核對 Python／實際依賴版本、evidence/temp 自建探測檔的建立寫讀刪除，以及 Tk root、ttk Combobox／Spinbox 建立更新銷毀。保存 Tcl/Tk 版本與實際載入路徑。GUI 自身預檢失敗便不啟動 GUI 套件，已取得的核心證據繼續保存；這不繞過更早的 hosted preflight。預檢成功不等於 GUI 通過。
 
 只有原始 log／JUnit 明確證明 Tk 初始化資源讀取或 runner 啟動問題，且無 confirmed code blocker 時，同候選、同設定 GUI 可再啟動一次独立 process。最多初次＋一次重試；額度依 task／候選歷史跨 job、run、attempt、session 計算，不因換目錄、空 commit 或重開 session 重設。先保存首次退出碼、log、JUnit、node ID／traceback，再記 retry relation。任意 TclError、assertion、資料／保存錯誤、未知根因不能自動當環境例外；重試仍失敗即停止必要 GUI 驗收。已有成功核心不重跑。歷史缺失／不可回取時 fail closed，不假設首次執行。
 
@@ -146,3 +148,7 @@ CI 僅在 `pull_request`、上述精確 head branch 且 base SHA 恰等於固定
 ## 可同步文件
 
 `docs/CHATGPT_PROJECT_INSTRUCTIONS.md` 是可完整貼入的專案指令；`docs/V58_MASTER_DEVELOPMENT_REVIEW_PLAN_v1.1.md` 是更新後完整規範副本（版本 1.4，保留檔名）。同步時兩者與本政策／gate v4 同版保存；第 3～4 節安全契約不變。只到 PR 的交付須清楚標示未合併，不宣稱已完成 merge／post-merge。
+
+## PR41 第 4 輪限定接續
+
+[限定授權摘要](VALIDATION_FLOW_CORRECTION4.md) 只適用原 task／baseline／starting HEAD／branch／PR41 及原始授權 hash，保留前三輪，以一次追加至 `4/4`。此次新候選一 core＋一 GUI；early preflight 或正式 CI 失敗即 STOP，不自動重試。一般三輪與既有 retry allowlist 不變，不沿用舊 HEAD core。

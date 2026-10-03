@@ -337,3 +337,13 @@ Git tree 的 text blob 則為 LF。短入口以 `git cat-file --filters <tree>:r
 metadata；不對 runtime assets 自行 normalize、不重算 truth、不修改 manifest。
 所有短命令完成後另重新核對 SHA/tree/parents 與實際環境，執行期漂移會保留 failure，
 不能產生 success。
+
+## PR41 task-bound 第 4 輪例外
+
+一般上限仍為三輪；僅 [限定授權摘要](VALIDATION_FLOW_CORRECTION4.md) 的原 task 可在 v3／v4 加入 optional `correction_exception`，沒有此欄位的舊 snapshots 保持原義。欄位存在時不可為 null，closed object 恰含 `schema`、`task_id`、`baseline`、`starting_head`、`head_branch`、`pr_number`、`extra_rounds`、`limit`、`scope`、`authorization_ref`、`authorization_sha256`。
+
+除 `authorization_ref` 是可讀 saved raw authorization 路徑外，值必須逐一等於 `scripts/pr_review_gate.py` 的有限 `CORRECTION4_EXCEPTION`：schema `validation-flow-correction-exception/1`、task `validation-flow-reduction`、baseline `457707b4c4109c1b10a0da76d8f8a884aca10341`、starting HEAD `a0e647952ae5d973ea30130264294eee4e6982fa`、branch `chore/validation-flow-reduction`、PR `41`、extra `1`、limit `4`、授權 hash `29b2869d5e6584bab8efbf022f697c8ee7331b7e1241ef0c18df7f4a647ec7fc`，scope 必須為 `same-installation Tcl/Tk wiring, early hosted fd preflight, directly related tests/policy and task-bound gate exception`。Gate 實際讀取 ref bytes 核對 hash，要求原 PR41/base/branch 與完整連續前三輪，其第 3 輪 to HEAD 等於 starting HEAD；第 4 輪 from HEAD 亦必須相同。未知欄位、改 task／base／branch／PR／起點／hash、ref 缺失、任意 limit 5／extra 2 或 history 清空均拒絕。
+
+例外只將該 task 的 correction schema／decision／post-merge handoff 上限一致改為四；不允許第五輪，不授權更改來源 scope，不清除歷史 code findings，不代替兩輪新 HEAD 完整審查。原 code／evidence／capability／contract 分類與 append-only 補審規則不變。協調者仍須核對原人類授權及所有操作 allowlist，gate 不創造 scope、測試、push 或 merge 授權。
+
+v4 新接線的適用 PR job 必須有成功的 `Configure same-installation Tcl/Tk` 與 `Early hosted Tk preflight`；適用 push job 必須有成功的 configure。Missing／failed／skipped／cancelled 不能由 summary success 蓋掉。Hosted preflight 的 raw command／fd／60 秒／root／Combobox／Spinbox／實際資源路徑版本由 reviewer 核對，gate 的 step 字串不證明真實執行。

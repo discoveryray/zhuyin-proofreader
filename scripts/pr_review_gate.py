@@ -19,6 +19,16 @@ STAGED_SCHEMA = "zhuyin-pr-review-gate/4"
 REPOSITORY = "discoveryray/zhuyin-proofreader"
 WORKFLOW = ".github/workflows/ci.yml"
 PYTHONS = ("3.13",)
+CORRECTION4_EXCEPTION = {
+    "schema": "validation-flow-correction-exception/1",
+    "task_id": "validation-flow-reduction",
+    "baseline": "457707b4c4109c1b10a0da76d8f8a884aca10341",
+    "starting_head": "a0e647952ae5d973ea30130264294eee4e6982fa",
+    "head_branch": "chore/validation-flow-reduction",
+    "pr_number": 41, "extra_rounds": 1, "limit": 4,
+    "authorization_sha256": "29b2869d5e6584bab8efbf022f697c8ee7331b7e1241ef0c18df7f4a647ec7fc",
+    "scope": "same-installation Tcl/Tk wiring, early hosted fd preflight, directly related tests/policy and task-bound gate exception",
+}
 OPERATIONS = {"implement", "delegate", "test", "commit", "push", "pr", "merge"}
 COMMON_STEPS = (
     "Check out repository", "Set up Python", "Show Python version",
@@ -106,11 +116,56 @@ def _ci_schema(ci, where):
     _require(len(names) == len(set(names)), f"{where}: duplicate jobs")
 
 
+def _correction_limit(state):
+    if "correction_exception" not in state:
+        return 3
+    exception = state["correction_exception"]
+    _fields(exception, " ".join((*CORRECTION4_EXCEPTION, "authorization_ref")), "correction_exception")
+    for name, expected in CORRECTION4_EXCEPTION.items():
+        _require(type(exception[name]) is type(expected) and exception[name] == expected,
+                 "invalid task-bound correction exception: " + name)
+    task = state["task"]
+    _require((task["id"], task["baseline"], task["head_branch"]) ==
+             (exception["task_id"], exception["baseline"], exception["head_branch"]),
+             "correction exception belongs to another task/baseline/branch")
+    pr = state["pr"]
+    _require(type(pr) is dict and (pr.get("number"), pr.get("base_sha"), pr.get("head_branch")) ==
+             (41, exception["baseline"], exception["head_branch"]),
+             "correction exception requires the original PR41/base/branch")
+    _require(pr.get("state") == "merged" or state["current"]["base"] == exception["baseline"],
+             "correction exception base changed")
+    corrections = state["corrections"]
+    _require(type(corrections) is list and len(corrections) in (3, 4),
+             "correction exception must retain the first three rounds")
+    _require(type(corrections[2]) is dict and corrections[2].get("to_head") == exception["starting_head"],
+             "correction exception starting HEAD differs from retained round 3")
+    if len(corrections) == 4:
+        _require(type(corrections[3]) is dict and corrections[3].get("from_head") == exception["starting_head"],
+                 "fourth round must start at the authorized HEAD")
+        _require(state["current"]["head"] == corrections[3].get("to_head"),
+                 "current HEAD differs from the retained fourth correction")
+    else:
+        _require(state["current"]["head"] == exception["starting_head"],
+                 "fourth-round authorization must start at the exact current HEAD")
+    _text(exception["authorization_ref"], "correction_exception.authorization_ref")
+    try:
+        digest = hashlib.sha256(Path(exception["authorization_ref"]).read_bytes()).hexdigest()
+    except OSError as error:
+        raise EvidenceError("saved correction authorization unavailable") from error
+    _require(digest == exception["authorization_sha256"], "saved correction authorization hash differs")
+    return 4
+
+
+def _correction_exhausted(state):
+    return ("three" if _correction_limit(state) == 3 else "four") + " corrective rounds exhausted"
+
+
 def validate_state(state):
     """Validate the closed input schema. This does not grant permission."""
     staged = type(state) is dict and state.get("schema") == STAGED_SCHEMA
     fields = "schema task authorization current implementers corrections reviews unavailable_review_rounds pr pr_ci merge push_ci handoffs"
-    _fields(state, fields + (" execution coverage short_validation" if staged else ""), "state")
+    _fields(state, fields + (" execution coverage short_validation" if staged else "")
+            + (" correction_exception" if type(state) is dict and "correction_exception" in state else ""), "state")
     _require(state["schema"] in (SCHEMA, STAGED_SCHEMA), "unsupported schema")
     if staged:
         _fields(state["execution"], "mode validation_authorization_ref", "execution")
@@ -150,8 +205,8 @@ def validate_state(state):
     _require(type(state["unavailable_review_rounds"]) is list and
              all(type(n) is int and n in (1, 2) for n in state["unavailable_review_rounds"]),
              "invalid unavailable review rounds")
-    _require(type(state["corrections"]) is list and len(state["corrections"]) <= 3,
-             "at most three correction rounds")
+    _require(type(state["corrections"]) is list and len(state["corrections"]) <= _correction_limit(state),
+             "correction rounds exceed the applicable task limit")
     previous = None
     for number, correction in enumerate(state["corrections"], 1):
         _fields(correction, "number from_head to_head evidence_ref", "correction")
@@ -259,21 +314,21 @@ def _decision(state, action, reason, **details):
 
 def _correct(state, reason):
     count = len(state["corrections"])
-    if count >= 3:
-        return _decision(state, "STOP", "three corrective rounds exhausted: " + reason)
+    if count >= _correction_limit(state):
+        return _decision(state, "STOP", _correction_exhausted(state) + ": " + reason)
     return _decision(state, "CORRECT_IMPLEMENTATION", reason, correction_round=count + 1)
 
 
 def _post_merge_blocked(state, reason, *, code=True):
-    if code and len(state["corrections"]) >= 3:
-        reason += "; three corrective rounds exhausted"
+    if code and len(state["corrections"]) >= _correction_limit(state):
+        reason += "; " + _correction_exhausted(state)
     return _decision(
         state, "STOP", "post-merge blocker: " + reason,
         handoff="retain this task ledger and correction limit; do not reset the task; "
                 "do not re-merge, push develop, or revert",
         task_id=state["task"]["id"], baseline=state["task"]["baseline"],
         merge_sha=state["merge"]["sha"] if state["merge"] is not None else None,
-        corrections_used=len(state["corrections"]), correction_limit=3,
+        corrections_used=len(state["corrections"]), correction_limit=_correction_limit(state),
     )
 
 
@@ -519,6 +574,12 @@ def _staged_ci_problem(ci, event, branch, head, parents):
             return "job metadata belongs to a different run/attempt/checkout"
     if not summary["runner"].startswith("windows-") or summary["python_version"] != "3.13.0":
         return "summary lacks the supported Windows Python environment"
+    required_steps = ["Configure same-installation Tcl/Tk"]
+    if event == "pull_request":
+        required_steps.append("Early hosted Tk preflight")
+    for required_step in required_steps:
+        if jobs[required_name]["steps"].get(required_step) != "success":
+            return "same-installation wiring or early preflight is missing or unsuccessful"
     step = "Verify required validation results"
     if summary["steps"].get(step) != "success":
         return "required evidence verifier step is missing or unsuccessful"

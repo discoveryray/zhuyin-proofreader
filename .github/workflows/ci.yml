@@ -49,6 +49,11 @@ jobs:
           & tmp/ci-venv/Scripts/python.exe -m pip install -r requirements-ci-lock.txt
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           (Resolve-Path tmp/ci-venv/Scripts).Path | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Configure same-installation Tcl/Tk
+        shell: pwsh
+        run: python scripts/validation_tk_environment.py configure --evidence-root tmp/validation-evidence --github-env "$env:GITHUB_ENV"
+      - name: Early hosted Tk preflight
+        run: python scripts/validation_tk_environment.py preflight --evidence-root tmp/validation-evidence
       - name: Restore validation history
         run: python scripts/validation_runner.py restore-history --evidence-root tmp/validation-evidence
       - name: Run core group
@@ -121,6 +126,9 @@ jobs:
           & tmp/ci-venv/Scripts/python.exe -m pip install -r requirements-ci-lock.txt
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           (Resolve-Path tmp/ci-venv/Scripts).Path | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - name: Configure same-installation Tcl/Tk
+        shell: pwsh
+        run: python scripts/validation_tk_environment.py configure --evidence-root tmp/validation-evidence --github-env "$env:GITHUB_ENV"
       - name: Verify merge and run short validation
         run: python scripts/validation_evidence.py post-merge --evidence-root tmp/validation-evidence
       - name: Upload validation evidence

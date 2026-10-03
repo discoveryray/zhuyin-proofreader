@@ -71,6 +71,23 @@ class ValidationWorkflowTests(unittest.TestCase):
         self.assertNotIn('python -m pytest tests/', grouped)
         self.assertNotIn('unittest discover', grouped)
 
+    def test_early_preflight_precedes_core_and_shared_wiring_does_not_open_post_merge_tk(self):
+        grouped = job('grouped')
+        self.assertLess(grouped.index('Configure same-installation Tcl/Tk'), grouped.index('Early hosted Tk preflight'))
+        self.assertLess(grouped.index('Early hosted Tk preflight'), grouped.index('Run core group'))
+        for section in (grouped, job('short')):
+            configure = step(section, 'Configure same-installation Tcl/Tk')
+            self.assertIn('validation_tk_environment.py configure', configure)
+            self.assertIn('--github-env "$env:GITHUB_ENV"', configure)
+            self.assertNotIn('if:', configure)
+            self.assertNotIn('continue-on-error', configure)
+        preflight = step(grouped, 'Early hosted Tk preflight')
+        self.assertIn('validation_tk_environment.py preflight', preflight)
+        self.assertNotIn('if:', preflight)
+        self.assertNotIn('continue-on-error', preflight)
+        self.assertNotIn('Early hosted Tk preflight', job('short'))
+        self.assertNotIn('validation_tk_environment.py preflight', job('short'))
+
     def test_upload_cannot_overwrite_or_export_test_scratch(self):
         for section in (job('grouped'), job('short')):
             upload = step(section, 'Upload validation evidence')

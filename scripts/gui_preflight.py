@@ -11,12 +11,15 @@ import tempfile
 def test_gui_environment():
     import tkinter as tk
     from tkinter import ttk
+    from scripts.validation_tk_environment import configuration
+    expected = configuration()
     result = {"python": platform.python_version(), "stage": "paths"}
     output = Path(os.environ["VALIDATION_PREFLIGHT_OUTPUT"])
 
     def save():
         output.write_text(json.dumps(result, indent=2), encoding="utf-8")
 
+    result["configuration"] = expected
     save()
     for folder in (output.parent, Path(os.environ["VALIDATION_TEMP"])):
         with tempfile.NamedTemporaryFile(dir=folder, delete=False) as handle:
@@ -36,6 +39,12 @@ def test_gui_environment():
                       tcl_library=root.tk.eval("info library"),
                       tk_library=root.tk.eval("set tk_library"),
                       loaded_libraries=root.tk.eval("info loaded"))
+        save()
+        assert Path(result["tcl_library"]).resolve() == Path(expected["tcl_library"])
+        assert Path(result["tk_library"]).resolve() == Path(expected["tk_library"])
+        assert result["tcl_version"] == expected["tcl_version"]
+        assert result["tk_version"] == expected["tk_version"]
+        result["stage"] = "widgets"
         save()
         combo = ttk.Combobox(root, values=("probe",))
         spin = ttk.Spinbox(root, from_=0, to=1)
