@@ -2,7 +2,7 @@
   "schema": "zhuyin-test-group-registry/1",
   "source_scope": "repository",
   "source_review": {
-    "basis": "Correction 3: retain correction1 independently reviewed GUI classification basis, explicitly source-review original cases and nine added non-window classifier regressions. Products and existing test expectations are unchanged. Finite registration is authoritative; positive bounded Tk guard rejects proven core conflicts. Correction 4: source-reviewed only same-installation Tcl/Tk helper/preflight and task-bound gate wiring with 13 explicit non-window regressions (mocked probe, exact paths/resources, pure gate fixtures, tiny synthetic runner groups); existing classification and classifier code unchanged. Correction 5: source-reviewed four changed helper/gate/test files and seven explicitly enumerated non-window regressions. Real isolated CLI/history/core execution uses one marker testcase, synthetic Git/CI context and only a stub Tk child; task-bound fifth exception retains original fourth contract. Existing registrations, product logic, classifier, runner and auditor unchanged. Correction 6: source-reviewed ExpectedResolutionGuiTests scoped owner-thread cleanup; two new real-Tk object-retirement/error-cleanup regressions explicitly GUI, two exact sixth-round gate regressions pure core. No product/classifier/other GUI class changes; historical identities unchanged. Correction 7: reviewed actual workflow routing/PowerShell summary regression sources and exact seventh task-bound adapter; four new non-window identities explicit core. The regression evaluator consumes real job/step expressions, real run/uses and summary body on isolated event/outcome fixtures. No GUI tests/product/classifier/provenance helper changes. Correction 8: only unittest step metadata order changed (if then same id); unchanged PR29 predicate assertions and actual workflow readers remain authoritative. Exact eighth task-bound adapter introduces two pure authorization/history core regressions; source registration updated only changed gate/test hashes. No product/GUI/classifier/dependency/capture changes or order-mirror tests.",
+    "basis": "Correction 3: retain correction1 independently reviewed GUI classification basis, explicitly source-review original cases and nine added non-window classifier regressions. Products and existing test expectations are unchanged. Finite registration is authoritative; positive bounded Tk guard rejects proven core conflicts. Correction 4: source-reviewed only same-installation Tcl/Tk helper/preflight and task-bound gate wiring with 13 explicit non-window regressions (mocked probe, exact paths/resources, pure gate fixtures, tiny synthetic runner groups); existing classification and classifier code unchanged. Correction 5: source-reviewed four changed helper/gate/test files and seven explicitly enumerated non-window regressions. Real isolated CLI/history/core execution uses one marker testcase, synthetic Git/CI context and only a stub Tk child; task-bound fifth exception retains original fourth contract. Existing registrations, product logic, classifier, runner and auditor unchanged. Correction 6: source-reviewed ExpectedResolutionGuiTests scoped owner-thread cleanup; two new real-Tk object-retirement/error-cleanup regressions explicitly GUI, two exact sixth-round gate regressions pure core. No product/classifier/other GUI class changes; historical identities unchanged. Correction 7: reviewed actual workflow routing/PowerShell summary regression sources and exact seventh task-bound adapter; four new non-window identities explicit core. The regression evaluator consumes real job/step expressions, real run/uses and summary body on isolated event/outcome fixtures. No GUI tests/product/classifier/provenance helper changes. Correction 8: only unittest step metadata order changed (if then same id); unchanged PR29 predicate assertions and actual workflow readers remain authoritative. Exact eighth task-bound adapter introduces two pure authorization/history core regressions; source registration updated only changed gate/test hashes. No product/GUI/classifier/dependency/capture changes or order-mirror tests. CFF batch fingerprint task: source-reviewed cff_zero_map_batch._patch_workbook and seven new bounded non-window regressions. Acquisition uses synthetic PDF/font surfaces and an existing real CFF recording inspector; decoder bootstrap, batch maps/workbook writes, per-PDF dependencies, fingerprints and analyzer execute unchanged. Temp-only PDFs/workbooks/evidence, explicit snapshot, no Tk or live DB. Exact finite core registration; existing classifications unchanged.",
     "prior_classification_ref": "correction1-fa6d3b724cfb46f982bddbd7b9131141/inventory.json",
     "prior_classification_head": "16cac994bf44fb4f9a278ce851d6f0848416987e",
     "prior_classification_tree": "8495c003e66f39561cda42016e09a58b7ce48b8a",
@@ -12,7 +12,7 @@
       "actual_review.py": "d882b4ae42bb02c69cdda0016a8d0eaff94227584b8e49c022e6e99602b80dae",
       "build_handbook_rules.py": "62056a0a617f399423800ef04e9dfb2c6a88d8a026f2184c071f78942debb9c0",
       "cff_unseen_family_bootstrap.py": "69d680451647d7cb61685d860af5e81339e40f313186a78fabdfb50a0258ee66",
-      "cff_zero_map_batch.py": "a78e5256885b3cab8f5d7ea157bd8a3c7f375b266c77b926409b2fb2ead5fa22",
+      "cff_zero_map_batch.py": "7c100f4168551c33c8a4c4ecf829bfa06bbe42a7e4530c448e9b95289c6cba2e",
       "cff_zhuyin_decoder.py": "81ebcc999645185ca9ab0eabc6e64143f28f116e62cbc7e9cff22915f062d4dc",
       "check_pronunciation_candidates.py": "dca94d7a0662780c1be813ef13ef6733f236c2e269c4d7a69b63bd865c170713",
       "concise_expected_resolver.py": "20dbe9e4406f3ad90a93fcfd6691ebb9f684e527ae056ccab029c4559db0bdcb",
@@ -53,6 +53,7 @@
       "tests/test_actual_post_commit_recovery_v580.py": "5b8d129c5148ee6e0ad0b328b4709a5f089c7c4cef7863a289d07a523ba1677f",
       "tests/test_actual_review_v540.py": "cc1d60e408a9a5e63311365f53691abf5c5d2e2fa15b21f0e067e4bbed164498",
       "tests/test_architecture.py": "41132266b15d802170d905052f275a99d9127e9b52f94577f6708bdf7fdda65f",
+      "tests/test_cff_batch_fingerprint.py": "0fffe680054d0cc483ee23d80cb5524c73619a9fa3eda7c23f0f516f18072385",
       "tests/test_ci_validation_workflow.py": "0e95c7a061ece985bbad6c390feab05dbc8ff13e7513dda7f03c856b84f52199",
       "tests/test_company_semantic_rules_v522.py": "65666976d0478a5fac2d382d1a0d60900ea0e86a577e6312aa72d5b82148117f",
       "tests/test_completion_repair_v562.py": "f36c9d645320ed686a15100b500880a40fe6b77801ab617082aece21ad6b2e83",
@@ -2147,6 +2148,19 @@
       "core": [
         "test_exact_eighth_exception_retains_seven_and_stops_ninth",
         "test_wrong_identity_history_authorization_and_scope_fail_closed"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_cff_batch_fingerprint.CFFBatchFingerprintTests",
+      "core": [
+        "test_conflicting_batch_retracts_reading_without_changing_dependency_or_seal",
+        "test_cross_file_addition_preserves_unknown_identity_and_unrelated_bytes",
+        "test_insufficient_batch_abstains_without_creating_reusable_identity",
+        "test_manual_occurrence_override_survives_conflicting_batch",
+        "test_non_unseen_rows_remain_unchanged_and_candidate_compatible",
+        "test_pdf_applicable_global_change_and_unprovable_roster_still_rejected",
+        "test_single_decode_seal_real_batch_then_candidate_accepts_unchanged_reading"
       ],
       "gui": []
     }
