@@ -10,6 +10,8 @@ from pathlib import Path
 from unittest.mock import patch
 import sys
 
+import fitz
+
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
@@ -55,17 +57,27 @@ class GptSingleBundleV541Tests(unittest.TestCase):
             }
             sp.seal_manifest(manifest)
             (folder / "校對工作階段.json").write_text(json.dumps(manifest, ensure_ascii=False), encoding="utf-8")
+            # Keep the source guard real: this orchestration fixture has its
+            # own finite PDF, not a source-less mocked READABLE result.
+            pdf = folder / "a.pdf"
+            with fitz.open() as document:
+                document.new_page(width=200, height=200)
+                page = document.new_page(width=200, height=200)
+                page.insert_text((20, 30), "fixture", fontsize=8)
+                document.save(pdf)
             entry = {
                 "occurrence_id": ("occ_" + hashlib.sha256(b"occ1").hexdigest()),
                 "review_id": "rev1",
                 "pdf_name": "a.pdf",
+                "pdf": str(pdf),
+                "pdf_sha256": hashlib.sha256(pdf.read_bytes()).hexdigest(),
                 "physical_page": 2,
                 "char": "蛋",
                 "actual": "ㄊㄢˊ",
                 "actual_evidence": "glyph-evidence",
                 "stable_key": "k1",
                 "state": "DIFFERENCE_PENDING_CONFIRMATION",
-                "x0": 1, "y0": 2, "x1": 3, "y1": 4,
+                "x0": 10, "y0": 10, "x1": 60, "y1": 40,
             }
             csv_path = folder / "actual_occurrence_decisions.csv"
             fields = [
