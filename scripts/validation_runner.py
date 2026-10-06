@@ -242,6 +242,52 @@ def read_verified_manifest(path):
     return data
 
 
+_TCL_RESOURCE_READ = r'(?:couldn.t read file|error reading) "[^"\r\n]+\.tcl": (?:permission denied|no such file or directory|no error|invalid argument)'
+
+
+def _initializer_read_message(message):
+    """Recognize a direct read error or the retained Tk8.6 SourceLibFile wrapper."""
+    if re.fullmatch(r'_tkinter\.TclError: ' + _TCL_RESOURCE_READ, message, re.IGNORECASE):
+        return True
+    # Match the complete known initializer wrapper, including the repeated
+    # inner error and source chain. A bare tk.tcl lookup failure is not proof.
+    wrapper = (
+        r"_tkinter\.TclError: Can't find a usable tk\.tcl in the following directories:[ \t]*\n"
+        r"[ \t]+[^\r\n]+\n\n"
+        r'(?P<library>[^"\r\n]+)[/\\]tk\.tcl: '
+        r'(?P<inner>(?:couldn.t read file|error reading) "(?P=library)[/\\](?P<resource>[A-Za-z][A-Za-z0-9_]*)\.tcl": '
+        r'(?:permission denied|no such file or directory|no error|invalid argument))\n'
+        r'(?P=inner)\n    while executing\n'
+        r'"source -encoding utf-8 (?P=library)[/\\](?P=resource)\.tcl"\n'
+        r'    \(in namespace eval "::" script line 1\)\n    invoked from within\n'
+        r'"namespace eval :: \[list source -encoding utf-8 \[file join \$::tk_library \$file\.tcl\]\]"\n'
+        r'    \(procedure "SourceLibFile" line 2\)\n    invoked from within\n'
+        r'"SourceLibFile (?P=resource)"\n'
+        r'    \(in namespace eval "::tk" script line 3\)\n    invoked from within\n'
+        r'"namespace eval ::tk \{\n\tSourceLibFile icons\n\tSourceLibFile button\n'
+        r'\tSourceLibFile entry\n\tSourceLibFile listbox\n\tSourceLibFile menu\n\tSourceLibFile panedw\.\.\."\n'
+        r'    \(file "(?P=library)[/\\]tk\.tcl" line 506\)\n    invoked from within\n'
+        r'"source (?P=library)[/\\]tk\.tcl"\n'
+        r'    \("uplevel" body line 1\)\n    invoked from within\n'
+        r'"uplevel #0 \[list source \$file\]"\n\n\n'
+        r"This probably means that tk wasn't installed properly\."
+    )
+    return bool(re.fullmatch(wrapper, message.replace("\r\n", "\n"), re.IGNORECASE))
+
+
+def _matching_initializer_trace(traceback, message):
+    # pytest adds E prefixes to exception lines; remove only that known display
+    # prefix, never normalize error paths or infer the inner cause from keywords.
+    text = re.sub(r"(?m)^E {7}", "", traceback)
+    errors = list(re.finditer(r"(?m)^_tkinter\.TclError: ", text))
+    if len(errors) != 1 or not re.search(
+            r"(?m)^[> \t]*self\.tk[ \t]*=[ \t]*_tkinter\.create\(", text[:errors[0].start()]):
+        return False
+    error = text[errors[0].start():].rstrip()
+    error = re.sub(r'\n[^\r\n]+[/\\]tkinter[/\\]__init__\.py:\d+: TclError$', "", error).rstrip()
+    return error == message.replace("\r\n", "\n")
+
+
 def retry_eligible(folder, result, preflight=None):
     """Only narrow, recorded initializer read errors or OS resource launch errors."""
     launch = result.get("runner_start_error")
@@ -256,19 +302,43 @@ def retry_eligible(folder, result, preflight=None):
             return False
         try:
             junit = ET.parse(report)
-            failures = list(junit.iter("failure")) + list(junit.iter("error"))
-            events = [json.loads(line) for line in events_path.read_text(encoding="utf-8").splitlines()]
+            failures = [(case, failure) for case in junit.iter("testcase")
+                        for tag in ("failure", "error") for failure in case.findall(tag)]
+            events = [parse_json(line) for line in events_path.read_text(encoding="utf-8").splitlines()]
         except (ET.ParseError, ValueError):
             return False
-        unsuccessful = [event for event in events if event["outcome"] != "passed"]
-        if not failures or not unsuccessful or list(junit.iter("skipped")):
+        event_fields = {"nodeid", "outcome", "when", "subtest", "traceback"}
+        if any(not isinstance(event, dict) or set(event) != event_fields
+               or not isinstance(event["nodeid"], str) or not event["nodeid"]
+               or not isinstance(event["outcome"], str) or event["outcome"] not in {"passed", "failed"}
+               or not isinstance(event["when"], str) or event["when"] not in {"setup", "call", "teardown"}
+               or type(event["subtest"]) is not bool
+               or (event["traceback"] is not None and not isinstance(event["traceback"], str))
+               for event in events):
             return False
-        initializer = re.compile(r'_tkinter\.TclError: (?:couldn.t read file|error reading) "[^"\r\n]+\.tcl": (?:permission denied|no such file or directory|no error|invalid argument)', re.IGNORECASE)
-        return all(initializer.fullmatch(failure.get("message", "")) for failure in failures) and all(
-            not event["subtest"] and event["when"] in {"setup", "call"}
-            and "_tkinter.create" in (event["traceback"] or "")
-            and initializer.search(event["traceback"] or "")
-            for event in unsuccessful)
+        unsuccessful = [event for event in events if event["outcome"] != "passed"]
+        if (not failures or len(failures) != len(unsuccessful) or list(junit.iter("skipped"))
+                or len(failures) != len(list(junit.iter("failure"))) + len(list(junit.iter("error")))):
+            return False
+        by_case = {}
+        for event in unsuccessful:
+            parts = event["nodeid"].split("::")
+            if len(parts) < 2 or event["subtest"] or event["when"] not in {"setup", "call"}:
+                return False
+            classname = ".".join([parts[0].replace("\\", "/").removesuffix(".py").replace("/", "."), *parts[1:-1]])
+            key = (classname, parts[-1])
+            if key in by_case:
+                return False
+            by_case[key] = event
+        for case, failure in failures:
+            event = by_case.pop((case.get("classname", ""), case.get("name", "")), None)
+            message = failure.get("message", "")
+            if (event is None or not _initializer_read_message(message)
+                    or not isinstance(failure.text, str)
+                    or failure.text.replace("\r\n", "\n") != (event["traceback"] or "").replace("\r\n", "\n")
+                    or not _matching_initializer_trace(event["traceback"] or "", message)):
+                return False
+        return not by_case
     if preflight.get("outcome") != "failed":
         return False
     probe = folder / "preflight.json"

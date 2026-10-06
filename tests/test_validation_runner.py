@@ -17,6 +17,154 @@ ROOT = Path(__file__).resolve().parents[1]
 ORIGINAL_RUN_PROCESS = runner.run_process
 
 
+def tk_initializer_wrapper(resource="button", reason="no such file or directory"):
+    """Retained Tk8.6 wrapper/SourceLibFile structure, with portable paths."""
+    return f'''_tkinter.TclError: Can't find a usable tk.tcl in the following directories:
+    {{C:/Python/tcl/tk8.6}} C:/Python/lib/tk8.6
+
+C:/Python/tcl/tk8.6/tk.tcl: couldn't read file "C:/Python/tcl/tk8.6/{resource}.tcl": {reason}
+couldn't read file "C:/Python/tcl/tk8.6/{resource}.tcl": {reason}
+    while executing
+"source -encoding utf-8 C:/Python/tcl/tk8.6/{resource}.tcl"
+    (in namespace eval "::" script line 1)
+    invoked from within
+"namespace eval :: [list source -encoding utf-8 [file join $::tk_library $file.tcl]]"
+    (procedure "SourceLibFile" line 2)
+    invoked from within
+"SourceLibFile {resource}"
+    (in namespace eval "::tk" script line 3)
+    invoked from within
+"namespace eval ::tk {{
+\tSourceLibFile icons
+\tSourceLibFile button
+\tSourceLibFile entry
+\tSourceLibFile listbox
+\tSourceLibFile menu
+\tSourceLibFile panedw..."
+    (file "C:/Python/tcl/tk8.6/tk.tcl" line 506)
+    invoked from within
+"source C:/Python/tcl/tk8.6/tk.tcl"
+    ("uplevel" body line 1)
+    invoked from within
+"uplevel #0 [list source $file]"
+
+
+This probably means that tk wasn't installed properly.'''
+
+
+def write_retry_suite(folder, message, nodeid="tests/test_probe.py::Probe::test_root"):
+    parts = nodeid.split("::")
+    classname = ".".join([parts[0].replace("/", ".").removesuffix(".py"), *parts[1:-1]])
+    root = ET.Element("testsuite")
+    case = ET.SubElement(root, "testcase", classname=classname, name=parts[-1])
+    traceback = ('Tk.__init__\n>       self.tk = _tkinter.create(screenName, baseName)\n'
+                 + "\n".join("E       " + line for line in message.splitlines())
+                 + '\n\nC:/Python/Lib/tkinter/__init__.py:2459: TclError')
+    ET.SubElement(case, "failure", message=message).text = traceback
+    ET.ElementTree(root).write(folder / "junit.xml")
+    event = {"nodeid": nodeid, "outcome": "failed", "when": "call", "subtest": False, "traceback": traceback}
+    (folder / "events.jsonl").write_text(json.dumps(event) + "\n", encoding="utf-8")
+    return root, event
+
+
+class RunnerRetryClassificationTests(unittest.TestCase):
+    """Finite raw-error fixtures; no Tk, Tcl repair or formal GUI execution."""
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.folder = Path(self.temporary.name)
+
+    def eligible(self):
+        return runner.retry_eligible(self.folder, {}, {"outcome": "success"})
+
+    def test_original_wrapper_inner_resource_error_is_retryable(self):
+        for resource, reason in (("button", "no such file or directory"), ("entry", "permission denied")):
+            with self.subTest(resource=resource):
+                write_retry_suite(self.folder, tk_initializer_wrapper(resource, reason))
+                self.assertTrue(self.eligible())
+
+    def test_wrapper_unknown_inner_cause_and_missing_proof_are_rejected(self):
+        message = tk_initializer_wrapper()
+        invalid = [message.replace("Can't find a usable", "Unknown initialization wrapper"),
+                   message.split("\n\n", 1)[0],
+                   message.replace("no such file or directory", "unknown filesystem error"),
+                   message.replace('"SourceLibFile button"', '"load_saved_review button"'),
+                   message.replace('C:/Python/tcl/tk8.6/button.tcl"', 'C:/Other/button.tcl"'),
+                   '_tkinter.TclError: invalid command name "save"',
+                   'AssertionError: bad saved review']
+        for value in invalid:
+            with self.subTest(message=value[:100]):
+                write_retry_suite(self.folder, value)
+                self.assertFalse(self.eligible())
+
+    def test_direct_resource_read_still_needs_initializer_and_matching_failure(self):
+        message = '_tkinter.TclError: couldn\'t read file "C:/Tk/entry.tcl": invalid argument'
+        root, event = write_retry_suite(self.folder, message)
+        self.assertTrue(self.eligible())
+        event["traceback"] = event["traceback"].replace('self.tk = _tkinter.create(screenName, baseName)', 'save_review()')
+        root.find("testcase/failure").text = event["traceback"]
+        ET.ElementTree(root).write(self.folder / "junit.xml")
+        (self.folder / "events.jsonl").write_text(json.dumps(event) + "\n")
+        self.assertFalse(self.eligible())
+        _root, event = write_retry_suite(self.folder, message)
+        event["traceback"] = event["traceback"].replace("invalid argument", "permission denied")
+        (self.folder / "events.jsonl").write_text(json.dumps(event) + "\n")
+        self.assertFalse(self.eligible())
+
+    def test_wrapper_non_initializer_identity_mismatch_and_extra_event_rejected(self):
+        message = tk_initializer_wrapper()
+        for change in ("non_initializer", "wrong_case", "duplicate", "missing_field", "wrong_field_type", "subtest", "teardown"):
+            with self.subTest(change=change):
+                root, event = write_retry_suite(self.folder, message)
+                events = [event]
+                if change == "non_initializer":
+                    event["traceback"] = event["traceback"].replace('self.tk = _tkinter.create(screenName, baseName)', 'load_saved_review()')
+                    root.find("testcase/failure").text = event["traceback"]
+                    ET.ElementTree(root).write(self.folder / "junit.xml")
+                elif change == "wrong_case":
+                    event["nodeid"] += "_different"
+                elif change == "duplicate":
+                    events.append(event.copy())
+                elif change == "missing_field":
+                    del event["when"]
+                elif change == "wrong_field_type":
+                    event["outcome"] = []
+                elif change == "subtest":
+                    event["subtest"] = True
+                else:
+                    event["when"] = "teardown"
+                (self.folder / "events.jsonl").write_text("\n".join(json.dumps(value) for value in events) + "\n")
+                self.assertFalse(self.eligible())
+
+    def test_mixed_assertion_skip_and_corrupt_reports_are_rejected(self):
+        for change in ("assertion", "skip", "xml", "json", "duplicate_json_key", "duplicate_case", "missing_event", "mismatched_junit_trace"):
+            with self.subTest(change=change):
+                root, event = write_retry_suite(self.folder, tk_initializer_wrapper())
+                if change in {"assertion", "skip", "duplicate_case"}:
+                    case = ET.SubElement(root, "testcase", classname="tests.test_probe.Probe", name="test_other")
+                    if change == "duplicate_case":
+                        case.set("name", "test_root")
+                        ET.SubElement(case, "failure", message=tk_initializer_wrapper())
+                    else:
+                        ET.SubElement(case, "failure" if change == "assertion" else "skipped", message="AssertionError: bad save")
+                    ET.ElementTree(root).write(self.folder / "junit.xml")
+                    other = {**event, "nodeid": "tests/test_probe.py::Probe::test_other",
+                             "outcome": "skipped" if change == "skip" else "failed", "traceback": "AssertionError: bad save"}
+                    (self.folder / "events.jsonl").write_text(json.dumps(event) + "\n" + json.dumps(other) + "\n")
+                elif change == "xml":
+                    (self.folder / "junit.xml").write_text("<testcase")
+                elif change == "json":
+                    (self.folder / "events.jsonl").write_text("{broken json")
+                elif change == "duplicate_json_key":
+                    (self.folder / "events.jsonl").write_text('{"outcome":"passed",' + json.dumps(event)[1:])
+                elif change == "mismatched_junit_trace":
+                    root.find("testcase/failure").text = "AssertionError: bad saved review"
+                    ET.ElementTree(root).write(self.folder / "junit.xml")
+                else:
+                    (self.folder / "events.jsonl").write_text("")
+                self.assertFalse(self.eligible())
+
+
 def fixture_registration(folder, module, gui, core):
     """Explicit tiny-fixture declarations; not an automatic classifier."""
     path = folder / "registry.json"
@@ -590,6 +738,34 @@ class RunnerOrchestrationTests(unittest.TestCase):
             runner.aggregate(self.evidence)
         self.assertEqual(runner.read_verified_manifest(gui)["outcome"], "success")
 
+    def test_original_false_manifest_rejects_new_classifier_without_rewriting_history(self):
+        self.preflight_success = True
+        def failed_suite(_command, folder, name, _timeout, _env=None):
+            self.assertEqual(name, "raw.log")
+            (folder / name).write_text("synthetic original Tk initializer failure; no Tk created\n")
+            nodeid = next(record["nodeid"] for record in self.inventory["records"] if record["group"] == "gui")
+            write_retry_suite(folder, tk_initializer_wrapper(), nodeid)
+            return {"exit_code": 1, "outcome": "failed", "started_at": runner.utc_now(),
+                    "finished_at": runner.utc_now(), "runner_start_error": None}
+        self.real_run = failed_suite
+        # Explicit synthetic environment for this manifest-contract fixture;
+        # it does not execute Tk or certify the installed Python/dependencies.
+        environment = runner.environment()
+        environment["python"] = "3.13.0"
+        environment["dependencies"] = {name.replace("_", "-").lower(): version for name, version in
+            (line.split("==") for line in (ROOT / "requirements-ci-lock.txt").read_text().splitlines()
+             if line and not line.startswith("#"))}
+        with patch.object(runner, "environment", return_value=environment), \
+                patch.object(runner, "retry_eligible", return_value=False):
+            manifest = runner.run_group("gui", self.evidence, mode="validation")
+            self.assertFalse(runner.read_verified_manifest(manifest)["retry_eligible"])
+        original = {path: path.read_bytes() for path in manifest.parent.iterdir() if path.is_file()}
+        self.assertTrue(runner.retry_eligible(manifest.parent, {}, {"outcome": "success"}))
+        with self.assertRaisesRegex(ValueError, "retry eligibility differs from original raw evidence"):
+            runner.read_verified_manifest(manifest)
+        for path, payload in original.items():
+            self.assertEqual(path.read_bytes(), payload)
+
 
 class HistoryRetrievalTests(unittest.TestCase):
     def test_prior_attempt_missing_artifact_fails_cli_without_reset(self):
@@ -611,10 +787,10 @@ class HistoryRetrievalTests(unittest.TestCase):
             folder = Path(temporary)
             message = '_tkinter.TclError: couldn\'t read file "C:/Tk/fonts.tcl": permission denied'
             root = ET.Element("testsuite")
-            case = ET.SubElement(root, "testcase")
-            ET.SubElement(case, "failure", message=message)
+            case = ET.SubElement(root, "testcase", classname="tests.test_probe.Probe", name="test_root")
+            event = {"nodeid": "tests/test_probe.py::Probe::test_root", "outcome": "failed", "when": "call", "subtest": False, "traceback": "setUp\n self.tk = _tkinter.create()\n" + message}
+            ET.SubElement(case, "failure", message=message).text = event["traceback"]
             ET.ElementTree(root).write(folder / "junit.xml")
-            event = {"outcome": "failed", "when": "call", "subtest": False, "traceback": "setUp\n self.tk = _tkinter.create()\n" + message}
             (folder / "events.jsonl").write_text(json.dumps(event) + "\n")
             self.assertTrue(runner.retry_eligible(folder, {}, {"outcome": "success"}))
             event["traceback"] = "save_data\n" + message
