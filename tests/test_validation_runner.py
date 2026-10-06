@@ -136,6 +136,32 @@ class RunnerRetryClassificationTests(unittest.TestCase):
                 (self.folder / "events.jsonl").write_text("\n".join(json.dumps(value) for value in events) + "\n")
                 self.assertFalse(self.eligible())
 
+    def test_single_failure_exception_chains_and_extra_blocks_are_rejected(self):
+        root, event = write_retry_suite(self.folder, tk_initializer_wrapper())
+        # Exception names mentioned in ordinary frame source are not failures.
+        event["traceback"] = '        note = "AssertionError: saved review mismatch"\n' + event["traceback"]
+        root.find("testcase/failure").text = event["traceback"]
+        ET.ElementTree(root).write(self.folder / "junit.xml")
+        (self.folder / "events.jsonl").write_text(json.dumps(event) + "\n")
+        self.assertTrue(self.eligible())
+        for separator, summary in (
+                ("During handling of the above exception, another exception occurred:",
+                 "AssertionError: saved review mismatch"),
+                ("The above exception was the direct cause of the following exception:",
+                 "AssertionError: saved review mismatch"),
+                ("", "review.StateMismatch: unexpected saved state"),
+                ("", "ReviewFailure")):
+            with self.subTest(separator=separator, summary=summary):
+                root, event = write_retry_suite(self.folder, tk_initializer_wrapper())
+                earlier = ('save_review\n>       validate_saved_review()\nE       ' + summary
+                           + '\n\nC:/project/review.py:12: ' + summary.split(":", 1)[0] + '\n\n')
+                event["traceback"] = earlier + separator + '\n\n' + event["traceback"]
+                root.find("testcase/failure").text = event["traceback"]
+                ET.ElementTree(root).write(self.folder / "junit.xml")
+                (self.folder / "events.jsonl").write_text(json.dumps(event) + "\n")
+                self.assertEqual(root.find("testcase/failure").text, event["traceback"])
+                self.assertFalse(self.eligible())
+
     def test_mixed_assertion_skip_and_corrupt_reports_are_rejected(self):
         for change in ("assertion", "skip", "xml", "json", "duplicate_json_key", "duplicate_case", "missing_event", "mismatched_junit_trace"):
             with self.subTest(change=change):

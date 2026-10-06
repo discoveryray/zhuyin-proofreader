@@ -279,6 +279,17 @@ def _matching_initializer_trace(traceback, message):
     # pytest adds E prefixes to exception lines; remove only that known display
     # prefix, never normalize error paths or infer the inner cause from keywords.
     text = re.sub(r"(?m)^E {7}", "", traceback)
+    # A later initializer error cannot erase an earlier exception in the same
+    # failure. Match Python/pytest exception structure, not exception keywords
+    # that can also occur in ordinary frame source or local variable values.
+    if re.search(
+            r"(?m)^(?:During handling of the above exception, another exception occurred:|"
+            r"The above exception was the direct cause of the following exception:)$", text):
+        return False
+    exception_name = r"(?:[A-Za-z_]\w*\.)*[A-Za-z_]\w*"
+    if (len(re.findall(r"(?m)^" + exception_name + r":(?:[ \t]|$)", text)) != 1
+            or re.search(r"(?m)^E {7}" + exception_name + r"[ \t]*$", traceback)):
+        return False
     errors = list(re.finditer(r"(?m)^_tkinter\.TclError: ", text))
     if len(errors) != 1 or not re.search(
             r"(?m)^[> \t]*self\.tk[ \t]*=[ \t]*_tkinter\.create\(", text[:errors[0].start()]):
