@@ -29,6 +29,66 @@ _DRAWS = {
     5848: ((511.831, 151.133, 511.831, 167.432), "8fb9d7a3f2dc8a276d4f38e900a64be4d125c223025fc656725f4e123cbb23a0"),
 }
 
+# SOURCE_DRAWING_CLIPPED_v1: the independently audited direct page-4 drawings
+# are wholly excluded by their effective clipping paths (including the second
+# draw whose outline partly intersects the page). Exact PDF bytes seal content,
+# resource scope, metrics and clipping; this does not infer from negative boxes.
+SOURCE_CLIPPED_PDF_SHA256 = "820924406c7452d9cc12f2a143a852e092f4143f8ec061606992b87cd59d8cbf"
+_CLIPPED_DRAWS = (
+    ("occ_04baa04670870eaf8b222b2851434d15ead10a5fd6329919df546efd332d3fa2",
+     "rev_9dd88223dd16012ccd76670eeb980f6ab5c4d3e35c0add6486d235899228bcd3",
+     (271.002, -20.159, 285.219, -5.941), 256, 29856, 15100,
+     "2d621e553dc7f804064dd5beb8f5e682edb213a51a47abc6ca72001a5d042e2e"),
+    ("occ_c299a82eb43907d3df41b0bde08d6796d0b4eb5c502f6f1cb4a6780a29315331",
+     "rev_c352f3a5ee8b2cbe2117642c74df52fbdc51872b17d16f33316da11e9eaee255",
+     (110.926, -5.036, 125.143, 9.181), 276, 19586, 14310,
+     "e6bd2a27ab4862895519a59322786f7d776bf8e200d29c9518b54764ba07be25"),
+)
+
+
+def source_clipped_candidate(entry):
+    """Identify the finite drawing before validating its occurrence binding.
+
+    Missing/changed IDs must not turn a known drawing into an ordinary sample.
+    No font name, character label, nearest box or negative-coordinate heuristic.
+    """
+    source = entry.get("source_record") or {}
+    for draw in _CLIPPED_DRAWS:
+        oid, rid, bbox, xref, gid, component, sha = draw
+        if (entry.get("occurrence_id") == oid or entry.get("review_id") == rid
+                or source.get("occurrence_id") == oid or source.get("review_id") == rid):
+            return draw
+        if (entry.get("pdf_sha256") == SOURCE_CLIPPED_PDF_SHA256
+                or source.get("pdf_sha256") == SOURCE_CLIPPED_PDF_SHA256):
+            if (entry.get("physical_page") == 4 or source.get("實體頁碼") == 4) and (
+                    entry.get("glyph_id") == gid or source.get("glyph_id_字形索引") == gid
+                    or tuple(entry.get(k) for k in ("x0", "y0", "x1", "y1")) == bbox):
+                return draw
+    return None
+
+
+def source_drawing_clipped(pdf: Path, entry) -> bool:
+    """Reprove only the two source bindings against actual current PDF bytes."""
+    draw = source_clipped_candidate(entry)
+    if draw is None:
+        return False
+    oid, rid, bbox, xref, gid, component, sha = draw
+    source = entry.get("source_record") or {}
+    expected = {"occurrence_id": oid, "review_id": rid,
+                "pdf_sha256": SOURCE_CLIPPED_PDF_SHA256, "physical_page": 4,
+                "font_xref": xref, "glyph_id": gid, "zhuyin_component_id": component,
+                **dict(zip(("x0", "y0", "x1", "y1"), bbox))}
+    source_expected = {"occurrence_id": oid, "review_id": rid,
+                       "pdf_sha256": SOURCE_CLIPPED_PDF_SHA256, "實體頁碼": 4,
+                       "font_xref": xref, "glyph_id_字形索引": gid,
+                       "注音元件ID": component, "TTF字形SHA256": sha,
+                       **dict(zip(("x0", "y0", "x1", "y1"), bbox))}
+    if (any(entry.get(k) != value for k, value in expected.items())
+            or any(source.get(k) != value for k, value in source_expected.items())
+            or hashlib.sha256(Path(pdf).read_bytes()).hexdigest() != SOURCE_CLIPPED_PDF_SHA256):
+        raise ValueError("SOURCE_DRAWING_CLIPPED_v1 source tuple／實際 PDF bytes 不符或缺失")
+    return True
+
 
 def _project_contours(recording, origin, scale):
     """Project every contour/control point, retaining all tone/tiny contours."""

@@ -50,7 +50,11 @@ from global_glyph_promotion import (
     project_delivery_lock,
 )
 
-ACTUAL_REVIEW_SCHEMA_VERSION = "1.1"
+ACTUAL_REVIEW_SCHEMA_VERSION = "1.2"
+ACTUAL_SAMPLE_PROFILE_SCHEMA = "actual-gpt-sample-profile/1"
+ACTUAL_SAMPLE_PROFILE_SHEET = "actual圖證契約"
+ACTUAL_SAMPLE_PROFILE_META = ("actual_sample_profile_schema", "actual_sample_profile_sha256",
+                              "actual_sample_profile_sheet")
 MANUAL_ACTUAL_STAGING_SCHEMA_VERSION = "1.1"
 LEGACY_MANUAL_ACTUAL_STAGING_SCHEMA_VERSION = "1.0"
 MANUAL_ACTUAL_STAGING_FILE = "manual_actual_staging.json"
@@ -1363,6 +1367,243 @@ def render_annotation_only_png(entry: Mapping[str, Any], output_path: Path, *, o
     return output_path
 
 
+def actual_sample_availability(entry: Mapping[str, Any], output_dir: Path | None = None,
+                               *, pdf_resolver=None) -> str:
+    """Classify source drawings, never editable workbook declarations.
+
+    Only the two audited clipped bindings may be unavailable. Ordinary source
+    boxes must still be finite and have area; zero-width CFF draws use their
+    existing exact geometry proof. PDF relocation is always SHA verified.
+    """
+    from actual_render_geometry import source_clipped_candidate, source_drawing_clipped
+    if source_clipped_candidate(entry) is not None:
+        pdf = pdf_resolver(entry) if pdf_resolver else _resolve_pdf_path(entry, output_dir)
+        source_drawing_clipped(pdf, entry)
+        return "SOURCE_DRAWING_CLIPPED"
+    bounds = tuple(float(entry[k]) for k in ("x0", "y0", "x1", "y1"))
+    if not all(math.isfinite(v) for v in bounds) or min(bounds) < 0:
+        raise ValueError("未知來源 drawing 定位不足；不能宣告 READABLE")
+    if bounds[2] <= bounds[0] or bounds[3] <= bounds[1]:
+        if pdf_resolver:
+            from actual_render_geometry import exact_vertical_cff_location
+            pdf = pdf_resolver(entry)
+            exact_vertical_cff_location(pdf, entry, digest=_sha256_file(pdf))
+        else:
+            _confirmed_render_location(entry, output_dir)
+    elif pdf_resolver:
+        # The portable caller's resolver verifies actual mapped target bytes.
+        # A different SHA is legal only after its existing full-page mapping;
+        # source coordinates are then validated by that mapping, not guessed.
+        pdf = pdf_resolver(entry)
+        if _sha256_file(pdf) == entry.get("pdf_sha256"):
+            relocated = dict(entry, pdf=str(pdf))
+            _confirmed_render_location(relocated)
+    else:
+        _confirmed_render_location(entry, output_dir)
+    return "READABLE"
+
+
+def _sample_source_profile(entry, availability):
+    # Only actual source location/identity evidence is carried. In particular,
+    # source_record's expected reading/context fields never enter this profile.
+    keys = ("occurrence_id", "review_id", "pdf_sha256", "physical_page", "font_xref",
+            "glyph_id", "zhuyin_component_id", "x0", "y0", "x1", "y1")
+    source_keys = ("occurrence_id", "review_id", "pdf_sha256", "實體頁碼", "font_xref",
+                   "glyph_id_字形索引", "注音元件ID", "TTF字形SHA256", "CFF整字字形SHA256",
+                   "x0", "y0", "x1", "y1")
+    source = entry.get("source_record") or {}
+    return {"source": {key: entry.get(key) for key in keys},
+            "source_record": {key: source.get(key) for key in source_keys},
+            "availability": availability,
+            "reason": "SOURCE_DRAWING_CLIPPED_v1" if availability == "SOURCE_DRAWING_CLIPPED" else ""}
+
+
+def _actual_profile(groups, output_dir=None, *, statuses=None, pdf_resolver=None):
+    rows = []
+    for group in groups:
+        samples = {}
+        for label, entry in zip(("a", "b"), group["members"][:2]):
+            status = (statuses[(group["group_id"], label)] if statuses is not None else
+                      actual_sample_availability(entry, output_dir, pdf_resolver=pdf_resolver))
+            samples[label] = _sample_source_profile(entry, status)
+        if any(sample["availability"] == "SOURCE_DRAWING_CLIPPED" for sample in samples.values()):
+            if len(group["members"]) != 1 or set(samples) != {"a"}:
+                raise ValueError("SOURCE_DRAWING_CLIPPED_v1 只支持已審計 singleton A")
+        rows.append({"group_id": group["group_id"], "group_snapshot": group["group_snapshot"],
+                     "samples": samples})
+    return {"schema": ACTUAL_SAMPLE_PROFILE_SCHEMA, "groups": rows}
+
+
+def _profile_bytes(profile):
+    return json.dumps(profile, ensure_ascii=False, sort_keys=True, separators=(",", ":"),
+                      allow_nan=False).encode("utf-8")
+
+
+def _write_actual_sample_profile(workbook, profile):
+    raw = _profile_bytes(profile)
+    text = raw.decode("utf-8")
+    chunks = [text[i:i + 30000] for i in range(0, len(text), 30000)]
+    digest = hashlib.sha256(raw).hexdigest()
+    sheet = workbook.create_sheet(ACTUAL_SAMPLE_PROFILE_SHEET)
+    sheet.append(["schema", ACTUAL_SAMPLE_PROFILE_SCHEMA])
+    sheet.append(["sha256", digest])
+    sheet.append(["chunk_count", len(chunks)])
+    for index, chunk in enumerate(chunks, 1):
+        sheet.append([index, chunk])
+    sheet.sheet_state = "veryHidden"
+    for key, value in zip(ACTUAL_SAMPLE_PROFILE_META,
+                          (ACTUAL_SAMPLE_PROFILE_SCHEMA, digest, ACTUAL_SAMPLE_PROFILE_SHEET)):
+        workbook["匯入中繼資料"].append([key, value])
+
+
+def _actual_profile_metadata(workbook):
+    metadata = {}
+    for row in workbook["匯入中繼資料"].values:
+        if row[0] in (None, "", "項目"):
+            continue
+        key = str(row[0])
+        if key in metadata:
+            raise ValueError("actual GPT metadata duplicate field")
+        metadata[key] = row[1]
+    return {key: metadata.get(key) for key in ("actual_review_schema_version", *ACTUAL_SAMPLE_PROFILE_META)}
+
+
+def _load_actual_sample_profile(workbook):
+    metadata = _actual_profile_metadata(workbook)
+    version = str(metadata["actual_review_schema_version"])
+    headers = [str(v or "") for v in next(workbook["actual待判定"].values)]
+    flags = {"sample_a_availability", "sample_b_availability", "source_availability_reason"}
+    if version == "1.1":
+        # historical_complete_samples_v1_1: original complete-sample contract,
+        # with no residue from the new availability package.
+        if (ACTUAL_SAMPLE_PROFILE_SHEET in workbook.sheetnames or flags & set(headers)
+                or any(metadata[key] is not None for key in ACTUAL_SAMPLE_PROFILE_META)):
+            raise ValueError("actual GPT schema downgrade／1.2 profile residue")
+        required = {"sample_a_occurrence_id", "sample_b_occurrence_id", "sample_a_image", "sample_b_image"}
+        if not required <= set(headers):
+            raise ValueError("historical_complete_samples_v1_1 欄位不足")
+        return None
+    if version != ACTUAL_REVIEW_SCHEMA_VERSION:
+        raise ValueError("actual GPT unknown actual_review_schema_version")
+    if (metadata["actual_sample_profile_schema"] != ACTUAL_SAMPLE_PROFILE_SCHEMA
+            or metadata["actual_sample_profile_sheet"] != ACTUAL_SAMPLE_PROFILE_SHEET
+            or ACTUAL_SAMPLE_PROFILE_SHEET not in workbook.sheetnames or not flags <= set(headers)):
+        raise ValueError("actual GPT 1.2 profile／flags 缺失或未知")
+    rows = list(workbook[ACTUAL_SAMPLE_PROFILE_SHEET].values)
+    if (len(rows) < 4 or rows[0][:2] != ("schema", ACTUAL_SAMPLE_PROFILE_SCHEMA)
+            or rows[1][0] != "sha256" or rows[2][0] != "chunk_count"
+            or type(rows[2][1]) is not int or rows[2][1] < 1
+            or len(rows) != rows[2][1] + 3
+            or any(row[0] != i or not isinstance(row[1], str) or not row[1]
+                   or len(row[1]) > 30000 for i, row in enumerate(rows[3:], 1))):
+        raise ValueError("actual GPT profile chunk contract 不完整")
+    raw = "".join(row[1] for row in rows[3:]).encode("utf-8")
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("actual GPT profile duplicate field")
+            result[key] = value
+        return result
+    profile = json.loads(raw, object_pairs_hook=unique)
+    if (not isinstance(profile, dict) or set(profile) != {"schema", "groups"}
+            or profile["schema"] != ACTUAL_SAMPLE_PROFILE_SCHEMA or not isinstance(profile["groups"], list)
+            or _profile_bytes(profile) != raw
+            or hashlib.sha256(raw).hexdigest() != rows[1][1]
+            or rows[1][1] != metadata["actual_sample_profile_sha256"]):
+        raise ValueError("actual GPT profile hash／schema 不符")
+    group_ids = set()
+    source_keys = set(_sample_source_profile({}, "READABLE")["source"])
+    record_keys = set(_sample_source_profile({}, "READABLE")["source_record"])
+    for group in profile["groups"]:
+        if (not isinstance(group, dict) or set(group) != {"group_id", "group_snapshot", "samples"}
+                or not isinstance(group["group_id"], str) or not group["group_id"]
+                or group["group_id"] in group_ids or not group["group_snapshot"]
+                or not isinstance(group["samples"], dict) or set(group["samples"]) not in ({"a"}, {"a", "b"})):
+            raise ValueError("actual GPT profile source group contract 無效")
+        group_ids.add(group["group_id"])
+        for sample in group["samples"].values():
+            if (not isinstance(sample, dict) or set(sample) != {"source", "source_record", "availability", "reason"}
+                    or not isinstance(sample["source"], dict) or set(sample["source"]) != source_keys
+                    or not isinstance(sample["source_record"], dict) or set(sample["source_record"]) != record_keys
+                    or sample["availability"] not in {"READABLE", "SOURCE_DRAWING_CLIPPED"}
+                    or sample["reason"] != ("SOURCE_DRAWING_CLIPPED_v1" if sample["availability"] == "SOURCE_DRAWING_CLIPPED" else "")):
+                raise ValueError("actual GPT profile unknown／missing source field or availability")
+    return profile
+
+
+def load_actual_sample_profile(xlsx: Path):
+    """Read and structurally verify the carried profile; source guard is separate.
+
+    Returns a profile dict for 1.2, None for the explicitly named 1.1 adapter.
+    A self-sealed digest alone does not authenticate current source evidence.
+    """
+    workbook = load_workbook(xlsx, read_only=True, data_only=True)
+    try:
+        return _load_actual_sample_profile(workbook)
+    finally:
+        workbook.close()
+
+
+def validate_actual_sample_profile(xlsx: Path, groups, output_dir=None, *, pdf_resolver=None,
+                                  require_content_proof=False, source_manifest=None):
+    """Recompute the selected source contract before any visual import effects."""
+    carried = load_actual_sample_profile(xlsx)
+    from pdf_portability import EXCEL_PROOF_SHEET, validate_actual_profile_content_proof
+    workbook = load_workbook(xlsx, read_only=True)
+    try:
+        if EXCEL_PROOF_SHEET not in workbook.sheetnames:
+            if carried is not None and require_content_proof:
+                raise ValueError("actual GPT 1.2 source content proof deleted／missing")
+        else:
+            validate_actual_profile_content_proof(workbook, source_manifest=source_manifest)
+    finally:
+        workbook.close()
+    _, rows = _load_sheet_rows(xlsx, "actual待判定")
+    by_id = {group["group_id"]: group for group in groups}
+    selected = []
+    seen = set()
+    for row in rows:
+        gid = _text(row.get("group_id"))
+        if not gid and not _text(row.get("decision")):
+            continue
+        group = by_id.get(gid)
+        if group is None or gid in seen:
+            raise ValueError("actual GPT source group 未知或重複")
+        seen.add(gid)
+        members = group["members"][:2]
+        for label, entry in zip(("a", "b"), members):
+            if _text(row.get(f"sample_{label}_occurrence_id")) != _text(entry.get("occurrence_id")):
+                raise ValueError("actual GPT source sample identity 缺失或不符")
+        if len(members) == 1 and _text(row.get("sample_b_occurrence_id")):
+            raise ValueError("actual GPT source 多出 sample B")
+        selected.append(group)
+    expected = _actual_profile(selected, output_dir, pdf_resolver=pdf_resolver)
+    if carried is not None and seen != set(by_id):
+        raise ValueError("actual GPT 1.2 selected plan 缺少來源 group／sample")
+    if carried is not None and carried != expected:
+        raise ValueError("actual GPT profile 與可信 current source selection／drawing 不符")
+    for row, group_profile in zip([r for r in rows if _text(r.get("group_id"))], expected["groups"]):
+        if "b" not in group_profile["samples"] and any(_text(row.get(f"sample_b_{key}"))
+                for key in ("availability", "image")):
+            raise ValueError("actual GPT singleton 多出 B flag／image")
+        for label, sample in group_profile["samples"].items():
+            status = sample["availability"]
+            if carried is None:
+                if status != "READABLE" or not _text(row.get(f"sample_{label}_image")):
+                    raise ValueError("historical_complete_samples_v1_1 不允許 clipped／缺圖樣本")
+            elif (row.get(f"sample_{label}_availability") != status
+                  or _text(row.get("source_availability_reason")) != sample["reason"]):
+                raise ValueError("actual GPT source availability flags 不符")
+            if status == "SOURCE_DRAWING_CLIPPED":
+                if (row.get("decision") != "UNRESOLVED" or _text(row.get("actual_reading"))
+                        or _text(row.get("confidence")) or row.get(f"sample_{label}_checked") != "N"
+                        or _text(row.get(f"sample_{label}_image"))
+                        or _text(row.get("sample_b_checked")).upper() == "Y"):
+                    raise ValueError("SOURCE_DRAWING_CLIPPED 不允許 visual decision／reading／Y／image")
+    return expected
+
+
 def export_actual_review_package(
     output_dir: Path,
     ledger: Sequence[Mapping[str, Any]],
@@ -1382,7 +1623,9 @@ def export_actual_review_package(
         selected = []
         for label, entry in zip(("A", "B"), group["members"][:2]):
             try:
-                location = _confirmed_render_location(entry, output_dir)
+                availability = actual_sample_availability(entry, output_dir)
+                location = (None if availability == "SOURCE_DRAWING_CLIPPED" else
+                            _confirmed_render_location(entry, output_dir))
                 selected.append((label.lower(), entry, location))
             except Exception as exc:
                 errors.append(json.dumps({
@@ -1413,7 +1656,7 @@ def export_actual_review_package(
             review_id_schema_version=review_id_schema_version, portable_source=portable_source,
         )
         staged_package = stage / "actual待判定_GPT包"
-        _validate_actual_review_package(staged_package, zip_path, groups)
+        _validate_actual_review_package(staged_package, zip_path, groups, source_output_dir=output_dir)
         _publish_actual_review_package(output_dir, stage)
         published = True
     finally:
@@ -1429,12 +1672,19 @@ def export_actual_review_package(
     return output_dir / "actual待判定_GPT包.zip"
 
 
-def _validate_actual_review_package(package_dir: Path, archive: Path, groups: Sequence[Mapping[str, Any]]) -> None:
+def _validate_actual_review_package(package_dir: Path, archive: Path, groups: Sequence[Mapping[str, Any]], *,
+                                    source_output_dir: Path | None = None) -> None:
     xlsx = package_dir / "actual待判定_給GPT.xlsx"
     meta, rows = _load_sheet_rows(xlsx, "actual待判定")
     if int(meta.get("exported_group_count", -1)) != len(groups) or len(rows) != len(groups):
         raise ValueError("actual GPT 暫存工作簿組數不符")
-    expected_files = {xlsx.name}
+    carried = load_actual_sample_profile(xlsx)
+    validate_actual_sample_profile(xlsx, groups, source_output_dir)
+    statuses = {(item["group_id"], label): sample["availability"]
+                for item in carried["groups"] for label, sample in item["samples"].items()}
+    if carried != _actual_profile(groups, statuses=statuses):
+        raise ValueError("actual GPT 暫存 profile source selection 不符")
+    expected_files = {xlsx.name, "README.txt"}
     for row, group in zip(rows, groups):
         members = group["members"]
         if (row.get("group_id"), row.get("group_snapshot"), row.get("sample_a_occurrence_id"), row.get("sample_b_occurrence_id") or "") != (
@@ -1442,6 +1692,12 @@ def _validate_actual_review_package(package_dir: Path, archive: Path, groups: Se
         ):
             raise ValueError("actual GPT 暫存工作簿選取或識別不符")
         for label, member in zip(("a", "b"), members[:2]):
+            if statuses[(group["group_id"], label)] == "SOURCE_DRAWING_CLIPPED":
+                if (row.get(f"sample_{label}_image") or row.get("decision") != "UNRESOLVED"
+                        or row.get("actual_reading") or row.get("confidence")
+                        or row.get(f"sample_{label}_checked") != "N"):
+                    raise ValueError("actual GPT 暫存 clipped row contract 不符")
+                continue
             references = []
             for kind in ("annotation", "whole_glyph"):
                 path = package_dir / "images" / f"{group['group_id']}_{label}_{kind}.png"
@@ -1509,6 +1765,17 @@ def _write_actual_review_package(
     images_dir = package_dir / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
 
+    statuses = {(group["group_id"], label): "READABLE" if location is not None else "SOURCE_DRAWING_CLIPPED"
+                for group, selected in zip(groups, plan) for label, entry, location in selected}
+    profile = _actual_profile(groups, statuses=statuses)
+    readable_count = sum(value == "READABLE" for value in statuses.values())
+    blocked_count = len(statuses) - readable_count
+    (package_dir / "README.txt").write_text(
+        f"actual GPT 1.2：{len(groups)} groups／{len(statuses)} selected samples。\n"
+        f"{readable_count} 可判定樣本／{blocked_count} SOURCE_DRAWING_CLIPPED 不可判定樣本。\n"
+        "不可判定列保留原 occurrence ID／bbox／group snapshot，無圖片，保持 UNRESOLVED、空 reading/confidence、N。\n"
+        "不得用 expected、字典、其他同字或解除原頁 clip 代替原頁可見注音。\n", encoding="utf-8")
+
     wb = Workbook()
     guide = wb.active
     guide.title = "使用說明"
@@ -1535,8 +1802,11 @@ def _write_actual_review_package(
         ("review_id_schema_version", review_id_schema_version),
         ("actual_review_schema_version", ACTUAL_REVIEW_SCHEMA_VERSION),
         ("exported_group_count", len(groups)),
+        ("readable_sample_count", readable_count),
+        ("blocked_sample_count", blocked_count),
     ]:
         meta.append(row)
+    _write_actual_sample_profile(wb, profile)
 
     ws = wb.create_sheet("actual待判定")
     headers = [
@@ -1545,6 +1815,7 @@ def _write_actual_review_package(
         "sample_a_pdf", "sample_a_page", "sample_b_pdf", "sample_b_page",
         "current_actual", "actual_evidence", "decision", "actual_reading", "confidence",
         "sample_a_checked", "sample_b_checked", "note",
+        "sample_a_availability", "sample_b_availability", "source_availability_reason",
     ]
     ws.append(headers)
 
@@ -1554,6 +1825,8 @@ def _write_actual_review_package(
         b = members[1] if len(members) > 1 else None
         image_names = ["", ""]
         for sample_index, (label, entry, location) in enumerate(selected):
+            if location is None:
+                continue
             annotation = images_dir / f"{group['group_id']}_{label}_annotation.png"
             tight = images_dir / f"{group['group_id']}_{label}_whole_glyph.png"
             render_annotation_only_png(entry, annotation, output_dir=source_output_dir, _location=location)
@@ -1564,7 +1837,11 @@ def _write_actual_review_package(
             image_names[0], image_names[1], a.get("occurrence_id", ""), b.get("occurrence_id", "") if b else "",
             a.get("pdf_name", ""), a.get("printed_page", ""),
             b.get("pdf_name", "") if b else "", b.get("printed_page", "") if b else "",
-            a.get("actual", "") or "", a.get("actual_evidence", "") or "", "", "", "", "", "", "",
+            a.get("actual", "") or "", a.get("actual_evidence", "") or "",
+            "UNRESOLVED" if statuses[(group["group_id"], "a")] == "SOURCE_DRAWING_CLIPPED" else "",
+            "", "", "N" if statuses[(group["group_id"], "a")] == "SOURCE_DRAWING_CLIPPED" else "", "", "",
+            statuses[(group["group_id"], "a")], statuses[(group["group_id"], "b")] if b else "",
+            "SOURCE_DRAWING_CLIPPED_v1" if statuses[(group["group_id"], "a")] == "SOURCE_DRAWING_CLIPPED" else "",
         ])
 
     decision_col = headers.index("decision") + 1
@@ -2298,11 +2575,17 @@ def import_actual_review_workbook(
     *,
     expected_metadata: Mapping[str, Any],
     source_context: Mapping[str, Any] | None = None,
-    initialize_evidence=None, prewrite_guard=None,
+    initialize_evidence=None, prewrite_guard=None, source_output_dir: Path | None = None,
 ) -> dict[str, Any]:
     meta, rows = _load_sheet_rows(Path(xlsx), "actual待判定")
     required_meta = dict(expected_metadata)
-    required_meta["actual_review_schema_version"] = ACTUAL_REVIEW_SCHEMA_VERSION
+    required_meta["actual_review_schema_version"] = meta.get("actual_review_schema_version")
+    validate_actual_sample_profile(xlsx, groups, source_output_dir)
+    original_guard = prewrite_guard
+    def guarded_prewrite():
+        if original_guard:
+            original_guard()
+        validate_actual_sample_profile(xlsx, groups, source_output_dir)
     schema_mismatches = _actual_workbook_schema_mismatches(meta, required_meta)
     mismatched = {}
     for key, required in required_meta.items():
@@ -2377,7 +2660,7 @@ def import_actual_review_workbook(
           "source": "GPT actual 視覺證據匯入", "note": note}
          for group, reading, ids, note in staged],
         source_context=source_context, initialize_evidence=initialize_evidence,
-        prewrite_guard=prewrite_guard,
+        prewrite_guard=guarded_prewrite,
     )
     results = transaction_result["group_results"]
     return {**transaction_result, "imported_groups": len(results), "results": results}

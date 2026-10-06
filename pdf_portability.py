@@ -628,6 +628,10 @@ def write_excel_content_proof(workbook, output_dir: Path, manifest, db, *, kind:
                "proof": page_proof,
                "bound_rows": _excel_bound_rows(workbook, kind),
                "attestations": attestations or {}}
+    if kind == "actual":
+        import actual_review as ar
+        ar._load_actual_sample_profile(workbook)
+        payload["actual_profile_metadata"] = ar._actual_profile_metadata(workbook)
     raw = _canonical(payload)
     encoded = base64.b64encode(zlib.compress(raw, level=9)).decode("ascii")
     chunks = [encoded[index:index + 30000] for index in range(0, len(encoded), 30000)]
@@ -640,6 +644,42 @@ def write_excel_content_proof(workbook, output_dir: Path, manifest, db, *, kind:
     sheet.sheet_state = "veryHidden"
 
 
+def validate_actual_profile_content_proof(workbook, *, source_manifest=None):
+    """Bounded read-only consistency check for the 1.2 same-session route."""
+    import actual_review as ar
+    rows = list(workbook[EXCEL_PROOF_SHEET].values)
+    if (len(rows) < 4 or rows[0][:2] != ("version", EXCEL_PROOF_VERSION)
+            or rows[1][0] != "sha256" or rows[2][0] != "chunk_count"
+            or type(rows[2][1]) is not int or rows[2][1] < 1
+            or len(rows) != rows[2][1] + 3
+            or any(row[0] != i or not isinstance(row[1], str) or not row[1]
+                   for i, row in enumerate(rows[3:], 1))):
+        raise ValueError("actual GPT source content proof chunk contract 不完整")
+    try:
+        packed = base64.b64decode("".join(row[1] for row in rows[3:]), validate=True)
+        decoder = zlib.decompressobj()
+        raw = decoder.decompress(packed, 128 * 1024 * 1024 + 1)
+        if (len(raw) > 128 * 1024 * 1024 or not decoder.eof
+                or decoder.unconsumed_tail or decoder.unused_data):
+            raise ValueError("actual GPT source content proof 超過上限或不完整")
+        payload = json.loads(raw)
+    except (ValueError, TypeError, zlib.error) as exc:
+        raise ValueError("actual GPT source content proof 無法解碼") from exc
+    if not isinstance(payload, dict):
+        raise ValueError("actual GPT source content proof 根節點無效")
+    metadata = ar._actual_profile_metadata(workbook)
+    profile_mismatch = (payload.get("actual_profile_metadata") != metadata
+                        if metadata["actual_review_schema_version"] == "1.2" else
+                        "actual_profile_metadata" in payload and payload["actual_profile_metadata"] != metadata)
+    if (not isinstance(payload, dict) or _canonical(payload) != raw
+            or hashlib.sha256(raw).hexdigest() != rows[1][1]
+            or payload.get("version") != EXCEL_PROOF_VERSION or payload.get("kind") != "actual"
+            or profile_mismatch
+            or payload.get("bound_rows") != _excel_bound_rows(workbook, "actual")
+            or (source_manifest is not None and payload.get("manifest") != source_manifest)):
+        raise ValueError("actual GPT source content proof／metadata／來源封印不符")
+
+
 def load_excel_content_proof(xlsx: Path, target_dir: Path, target_manifest, *,
                              kind: str, workbook_session: str):
     """Validate the carried source and map every occurrence by displayed position."""
@@ -648,7 +688,14 @@ def load_excel_content_proof(xlsx: Path, target_dir: Path, target_manifest, *,
 
     workbook = load_workbook(xlsx, read_only=True, data_only=True)
     try:
+        actual_profile_metadata = None
+        if kind == "actual":
+            import actual_review as ar
+            ar._load_actual_sample_profile(workbook)
+            actual_profile_metadata = ar._actual_profile_metadata(workbook)
         if EXCEL_PROOF_SHEET not in workbook.sheetnames:
+            if kind == "actual" and actual_profile_metadata["actual_review_schema_version"] != "1.1":
+                raise ValueError("actual GPT 1.2 source content proof deleted／missing")
             return _legacy_exact_excel_mapping(xlsx, target_dir, target_manifest,
                                                kind=kind, workbook_session=workbook_session)
         rows = list(workbook[EXCEL_PROOF_SHEET].values)
@@ -677,6 +724,12 @@ def load_excel_content_proof(xlsx: Path, target_dir: Path, target_manifest, *,
             or payload.get("kind") != kind or _canonical(payload) != raw):
         raise ValueError("Excel 跨電腦內容證據完整性或種類不符")
     source_manifest, source_db, proof = (payload.get(key) for key in ("manifest", "db", "proof"))
+    if kind == "actual":
+        if actual_profile_metadata["actual_review_schema_version"] == "1.2":
+            if payload.get("actual_profile_metadata") != actual_profile_metadata:
+                raise ValueError("actual GPT 1.2 metadata／portable proof mismatch")
+        elif "actual_profile_metadata" in payload and payload["actual_profile_metadata"] != actual_profile_metadata:
+            raise ValueError("actual GPT schema downgrade／portable profile residue")
     if payload.get("bound_rows") != bound_rows:
         raise ValueError("Excel 來源判定列的原始識別、快照或位置已被修改")
     if not isinstance(source_manifest, dict) or not isinstance(source_db, dict) or not isinstance(proof, dict):
@@ -696,6 +749,8 @@ def load_excel_content_proof(xlsx: Path, target_dir: Path, target_manifest, *,
         raise ValueError("Excel 來源全頁內容證據與封印不符")
     pdf_map, geometry = _match_pdfs(proof, source_manifest, target_manifest, Path(target_dir))
     reviews = _map_reviews(source_manifest, target_manifest, pdf_map, geometry)
+    if kind == "actual":
+        _guard_actual_excel_sources(xlsx, source_ledger, target_dir, target_manifest, pdf_map)
     return (source_manifest, source_db, source_ledger, reviews, pdf_map,
             payload["exported_at"], payload, geometry)
 
@@ -733,6 +788,9 @@ def _legacy_exact_excel_mapping(xlsx: Path, target_dir: Path, target_manifest, *
             checked += 1
     else:
         _, rows = ar._load_sheet_rows(xlsx, "actual待判定")
+        _guard_actual_excel_sources(
+            xlsx, source_ledger, target_dir, target_manifest,
+            {info["pdf_sha256"]: info["pdf_sha256"] for info in target_manifest["pdfs"]})
         groups = {group["group_id"]: group for group in ar.build_actual_review_groups(source_ledger)}
         checked = 0
         for number, row in enumerate(rows, 2):
@@ -834,11 +892,12 @@ def attach_filled_excel_proof(source_dir: Path, xlsx: Path, *,
                     raise ValueError(f"舊 Excel row {number} 原始識別/快照/位置無法從 A 封印重建")
         else:
             metadata, rows = ar._load_sheet_rows(xlsx, "actual待判定")
-            if str(metadata.get("actual_review_schema_version")) != ar.ACTUAL_REVIEW_SCHEMA_VERSION:
-                raise ValueError("舊 Excel actual schema 與 A 不相容")
+            ar.load_actual_sample_profile(xlsx)
             snapshot_db = current_db
             attestations = {"basis": "CURRENT_SEALED_PROJECT_AT_ATTACHMENT", "actual_groups": {}}
             ledger = sp.materialize_ledger(manifest, current_db)
+            _guard_actual_excel_sources(xlsx, ledger, source_dir, manifest,
+                                        {info["pdf_sha256"]: info["pdf_sha256"] for info in manifest["pdfs"]})
             by_occ = {entry["occurrence_id"]: entry for entry in ledger}
             current_pending = {group["group_id"]: group for group in ar.build_actual_review_groups(ledger)}
             override_path = sp.project_actual_evidence_root(source_dir) / ar.OCCURRENCE_OVERRIDE_FILE
@@ -1584,6 +1643,49 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
     return imported, skipped + duplicates, target_dir / "注音校對_最終報告.xlsx"
 
 
+def _guard_actual_excel_sources(xlsx, source_ledger, target_dir, target_manifest, pdf_map):
+    """Read-only source guard using sealed source rows and verified PDF mapping."""
+    import actual_review as ar
+    _, rows = ar._load_sheet_rows(xlsx, "actual待判定")
+    groups = {group["group_id"]: group for group in ar.build_actual_review_groups(source_ledger)}
+    by_occ = {entry["occurrence_id"]: entry for entry in source_ledger}
+    for row in rows:
+        gid = str(row.get("group_id") or "")
+        if gid not in groups:
+            entry = by_occ.get(str(row.get("sample_a_occurrence_id") or ""))
+            if entry is not None:
+                group = ar.build_actual_group_for_entry(source_ledger, entry)
+                if group["group_id"] == gid:
+                    groups[gid] = group
+    def resolve(entry):
+        from actual_render_geometry import source_clipped_candidate
+        if (source_clipped_candidate(entry) is not None
+                or entry.get("x0") == entry.get("x1") or entry.get("y0") == entry.get("y1")):
+            # Finite geometry/clip evidence needs the original exact bytes.
+            # A mapped target with another SHA cannot replace that evidence.
+            try:
+                return _source_pdf({}, entry, Path(target_dir))
+            except FileNotFoundError:
+                try:
+                    return ar._resolve_pdf_path(entry, Path(target_dir))
+                except (FileNotFoundError, ValueError):
+                    pass
+        wanted = pdf_map.get(entry.get("pdf_sha256"))
+        infos = [info for info in target_manifest["pdfs"] if info["pdf_sha256"] == wanted]
+        if len(infos) != 1:
+            raise ValueError("actual GPT source PDF 無唯一可信 mapping")
+        return _source_pdf(target_manifest, infos[0], Path(target_dir))
+    try:
+        return ar.validate_actual_sample_profile(xlsx, list(groups.values()), target_dir,
+                                                pdf_resolver=resolve,
+                                                require_content_proof=bool(target_manifest.get("pdfs")))
+    except ValueError as exc:
+        metadata, _ = ar._load_sheet_rows(xlsx, "actual待判定")
+        if str(metadata.get("actual_review_schema_version")) == "1.1":
+            raise ValueError("舊 Excel actual 沒有全頁證據或來源 contract 不符；不同 SHA／ID 不能走 historical_complete_samples_v1_1：" + str(exc)) from exc
+        raise
+
+
 @_stable_excel_import
 def import_actual_excel(target_dir: Path, xlsx: Path, *,
                         _original_xlsx: Path, _snapshot_sha: str):
@@ -1602,6 +1704,7 @@ def import_actual_excel(target_dir: Path, xlsx: Path, *,
     if target_actual_state["status"] != "NONE":
         raise ValueError("目標尚有未核對的 actual 暫存/來源轉送；先完成本地恢復")
     metadata, rows = ar._load_sheet_rows(xlsx, "actual待判定")
+    ar.load_actual_sample_profile(xlsx)
     _verify_excel_import_snapshot(xlsx, _original_xlsx, _snapshot_sha)
     from openpyxl import load_workbook
     workbook = load_workbook(xlsx, read_only=True)
@@ -1610,6 +1713,9 @@ def import_actual_excel(target_dir: Path, xlsx: Path, *,
     finally:
         workbook.close()
     if legacy:
+        _guard_actual_excel_sources(
+            xlsx, sp.materialize_ledger(target_manifest, target_db), target_dir, target_manifest,
+            {info["pdf_sha256"]: info["pdf_sha256"] for info in target_manifest["pdfs"]})
         with sp.project_delivery_lock(sp.project_actual_evidence_root(target_dir)):
             if _legacy_actual_already_imported(target_dir, target_manifest, target_db, xlsx, rows):
                 _verify_excel_import_snapshot(xlsx, _original_xlsx, _snapshot_sha)
@@ -1624,8 +1730,7 @@ def import_actual_excel(target_dir: Path, xlsx: Path, *,
     source_manifest, _, source_ledger, reviews, pdf_map, _, proof_payload, geometry = load_excel_content_proof(
         xlsx, target_dir, target_manifest, kind="actual",
         workbook_session=str(metadata.get("session_id") or ""))
-    if (str(metadata.get("actual_review_schema_version")) != ar.ACTUAL_REVIEW_SCHEMA_VERSION
-            or str(metadata.get("session_id")) != str(source_manifest["session_id"])):
+    if str(metadata.get("session_id")) != str(source_manifest["session_id"]):
         raise ValueError("Excel actual group/session 來源契約不符")
     groups = {group["group_id"]: group for group in ar.build_actual_review_groups(source_ledger)}
     source_by_occ = {entry["occurrence_id"]: entry for entry in source_ledger}
@@ -1785,6 +1890,7 @@ def import_actual_excel(target_dir: Path, xlsx: Path, *,
         if live_manifest != target_manifest or live_db != target_db:
             raise ValueError("目標封印或人工判定於 actual Excel 匯入期間變動；未寫入")
         _verify_mapped_target_pdfs(target_dir, live_manifest, pdf_map, geometry)
+        _guard_actual_excel_sources(xlsx, source_ledger, target_dir, live_manifest, pdf_map)
         if (_sha(conflict_receipt_path) if conflict_receipt_path.exists() else None) != conflict_receipt_sha:
             raise ValueError("Excel actual 衝突紀錄於匯入期間變動；未寫入")
 
@@ -1885,6 +1991,7 @@ def import_actual_excel(target_dir: Path, xlsx: Path, *,
             with direct_visual_project_transaction(root) as bind_recovery_plan:
                 _assert_actual_marker_owner(marker, marker_sha)
                 _verify_mapped_target_pdfs(target_dir, live_manifest, pdf_map, geometry)
+                _guard_actual_excel_sources(xlsx, source_ledger, target_dir, live_manifest, pdf_map)
                 ar._write_csv(override_path, ar.OVERRIDE_HEADERS,
                               sorted(by_key.values(), key=lambda row: tuple(row[field] for field in fields)))
                 _assert_actual_marker_owner(marker, marker_sha)

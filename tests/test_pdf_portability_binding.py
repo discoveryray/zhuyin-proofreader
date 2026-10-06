@@ -39,6 +39,9 @@ def filled_actual(output, path, *, proof=True, reading="ㄐㄩㄝˊ"):
     w = load_workbook(output / "actual待判定_GPT包" / "actual待判定_給GPT.xlsx")
     if not proof:
         del w[p.EXCEL_PROOF_SHEET]
+        # A genuine historical 1.1 complete-sample file, not a damaged 1.2.
+        from tests.test_actual_sample_profile import make_historical
+        make_historical(w)
     sheet = w["actual待判定"]
     headers = [c.value for c in sheet[1]]
     for key, value in {"decision": "VERIFIED", "actual_reading": reading,

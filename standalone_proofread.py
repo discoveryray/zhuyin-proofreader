@@ -108,6 +108,8 @@ from actual_review import (
     apply_direct_visual_actual_batch,
     export_actual_review_package,
     import_actual_review_workbook,
+    actual_sample_availability,
+    validate_actual_sample_profile,
     ensure_user_evidence_files,
     actual_workbook_dynamic_dependencies,
     actual_workbook_global_exact_dependencies,
@@ -1379,6 +1381,44 @@ def _validate_gpt_bundle_metadata(meta: Mapping[str, Any], manifest: Mapping[str
     if bad:
         raise ValueError(f"GPT 判定包 session/schema 不相容：{bad}")
 
+def _read_actual_csv_rows(csv_path):
+    required = {
+        "occurrence_id", "review_id", "pdf_name", "physical_page", "char",
+        "exported_actual", "exported_actual_evidence_sha256", "verified_actual",
+        "visual_confirmation", "note",
+    }
+    with Path(csv_path).open("r", encoding="utf-8-sig", newline="") as stream:
+        reader = csv.DictReader(stream)
+        if not reader.fieldnames or not required.issubset(set(reader.fieldnames)):
+            raise ValueError(f"GPT actual occurrence 決策表缺少欄位：{sorted(required - set(reader.fieldnames or []))}")
+        return list(reader)
+
+
+def _guard_actual_csv_sources(output_dir, ledger, rows):
+    # This visual-confirmation route is separate from local manual correction.
+    by_occ = {entry["occurrence_id"]: entry for entry in ledger}
+    for row in rows:
+        entry = by_occ.get(str(row.get("occurrence_id") or "").strip())
+        if entry is None or str(row.get("review_id") or "").strip() != entry["review_id"]:
+            raise ValueError("GPT actual visual source identity 未知或不符；未 recovery／初始化")
+        if actual_sample_availability(entry, output_dir) != "READABLE":
+            raise ValueError("SOURCE_DRAWING_CLIPPED 不允許 GPT CSV visual_confirmation")
+    if not rows:
+        from actual_render_geometry import source_clipped_candidate
+        for entry in ledger:
+            if source_clipped_candidate(entry) is not None:
+                actual_sample_availability(entry, output_dir)
+
+
+def _read_actual_source_db(output_dir):
+    # Avoid load_or_initialize_db's legacy orphan report and all recovery writes.
+    path = Path(output_dir) / "人工判定資料庫.json"
+    raw = json_load_strict(path) if path.exists() else {}
+    if not isinstance(raw, dict):
+        raise ValueError("DATA_INTEGRITY_ERROR：人工判定資料庫根節點必須是物件")
+    return normalize_db(raw)
+
+
 @_serialized_user_project_entry
 def import_actual_occurrence_decisions(output_dir: Path, csv_path: Path, *, package_meta: Mapping[str, Any]) -> tuple[int, int, Path]:
     """Import occurrence-scoped visual actual decisions from a GPT bundle.
@@ -1395,22 +1435,17 @@ def import_actual_occurrence_decisions(output_dir: Path, csv_path: Path, *, pack
     validate_manifest_integrity(manifest)
     validate_output_artifact_hashes(manifest)
     _validate_gpt_bundle_metadata(package_meta, manifest)
+    rows = _read_actual_csv_rows(csv_path)
+    _guard_actual_csv_sources(output_dir, materialize_ledger(manifest, _read_actual_source_db(output_dir)), rows)
     recover_pending_project_actual_write(project_actual_evidence_root(output_dir))
     db = load_or_initialize_db(output_dir)
     ledger = materialize_ledger(manifest, db)
     by_occ = {str(e.get("occurrence_id") or ""): e for e in ledger}
 
-    required = {
-        "occurrence_id", "review_id", "pdf_name", "physical_page", "char",
-        "exported_actual", "exported_actual_evidence_sha256", "verified_actual",
-        "visual_confirmation", "note",
-    }
-    with Path(csv_path).open("r", encoding="utf-8-sig", newline="") as f:
-        reader = csv.DictReader(f)
-        if not reader.fieldnames or not required.issubset(set(reader.fieldnames)):
-            raise ValueError(f"GPT actual occurrence 決策表缺少欄位：{sorted(required - set(reader.fieldnames or []))}")
-        rows = list(reader)
-    prewrite_guard = lambda: _validate_actual_import_target(output_dir, manifest, db)
+    def prewrite_guard():
+        _validate_actual_import_target(output_dir, manifest, db)
+        _guard_actual_csv_sources(output_dir, ledger, rows)
+    _guard_actual_csv_sources(output_dir, ledger, rows)
     if not rows:
         prewrite_guard()
         return 0, 0, generate_report(output_dir, manifest, db)
@@ -1545,6 +1580,9 @@ def import_gpt_decision_bundle(output_dir: Path, bundle: Path) -> tuple[int, int
             td = Path(td)
             actual_csv = td / "actual_occurrence_decisions.csv"
             actual_csv.write_bytes(zf.read("actual_occurrence_decisions.csv"))
+            _guard_actual_csv_sources(
+                output_dir, materialize_ledger(manifest, _read_actual_source_db(output_dir)),
+                _read_actual_csv_rows(actual_csv))
             expected_path = None
             if expected_name:
                 expected_path = td / Path(expected_name).name
@@ -4241,6 +4279,10 @@ def _import_same_session_actual_snapshot(output_dir: Path, xlsx: Path, *,
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
     validate_output_artifact_hashes(manifest)
+    readonly_db = _read_actual_source_db(output_dir)
+    readonly_groups = build_actual_review_groups(materialize_ledger(manifest, readonly_db))
+    validate_actual_sample_profile(xlsx, readonly_groups, output_dir,
+                                  require_content_proof=bool(manifest.get("pdfs")), source_manifest=manifest)
     recover_pending_project_actual_write(project_actual_evidence_root(output_dir))
     db = load_or_initialize_db(output_dir)
     ledger = materialize_ledger(manifest, db)
@@ -4249,6 +4291,8 @@ def _import_same_session_actual_snapshot(output_dir: Path, xlsx: Path, *,
         from pdf_portability import _verify_excel_import_snapshot
         _verify_excel_import_snapshot(xlsx, _original_xlsx, _snapshot_sha)
         _validate_actual_import_target(output_dir, manifest, db)
+        validate_actual_sample_profile(xlsx, groups, output_dir,
+                                      require_content_proof=bool(manifest.get("pdfs")), source_manifest=manifest)
     result = import_actual_review_workbook(
         project_actual_evidence_root(output_dir),
         Path(xlsx),
@@ -4257,6 +4301,7 @@ def _import_same_session_actual_snapshot(output_dir: Path, xlsx: Path, *,
         source_context=_global_direct_source_context(output_dir, manifest),
         initialize_evidence=lambda: initialize_project_actual_evidence(output_dir),
         prewrite_guard=prewrite_guard,
+        source_output_dir=output_dir,
     )
     _reject_incomplete_portable_project(output_dir)
     removed, report = _finish_direct_actual_commit(output_dir, ledger, result, acknowledge=False)

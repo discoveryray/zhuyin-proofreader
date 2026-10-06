@@ -835,6 +835,8 @@ def test_old_filled_actual_excel_imported_in_a_can_gain_present_proof(tmp_path, 
         workbook = load_workbook(a / "actual待判定_GPT包" / "actual待判定_給GPT.xlsx")
         del workbook[portability.EXCEL_PROOF_SHEET]
         sheet = workbook["actual待判定"]
+        from tests.test_actual_sample_profile import make_historical
+        make_historical(workbook)
         headers = [cell.value for cell in sheet[1]]
         for key, value in {"decision": "VERIFIED", "actual_reading": "ㄐㄩㄝˊ",
                            "confidence": "高", "sample_a_checked": "Y", "note": "A 原頁"}.items():
@@ -1016,6 +1018,9 @@ def test_old_proofless_excel_only_maps_exact_same_sha_and_snapshot(tmp_path, mon
                 "confidence": "高", "sample_a_checked": "Y"}
         workbook = load_workbook(exported)
         del workbook[portability.EXCEL_PROOF_SHEET]
+        if kind == "actual":
+            from tests.test_actual_sample_profile import make_historical
+            make_historical(workbook)
         sheet = workbook[sheet_name]
         headers = [cell.value for cell in sheet[1]]
         for key, value in filled.items():
