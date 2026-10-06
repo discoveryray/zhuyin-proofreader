@@ -3,7 +3,11 @@ from __future__ import annotations
 import csv
 import copy
 import hashlib
+import json
+import subprocess
+import sys
 import tempfile
+import time
 import unittest
 import zipfile
 from pathlib import Path
@@ -72,6 +76,110 @@ def entry(oid: str, rid: str, pdf: Path, x: float, *, state="ACTUAL_DECODE_ERROR
 
 
 class ActualReviewV540Tests(unittest.TestCase):
+    def _assert_cross_process_publication(self, *, rollback):
+        # Only the pause/failure boundary is injected; the child publisher,
+        # project lock and every successful rename execute real production code.
+        worker = r'''
+import json, sys, time
+from pathlib import Path
+from actual_review import _publish_actual_review_package
+output, stage, paused, release, result = map(Path, sys.argv[1:6])
+rollback = sys.argv[6] == "rollback"
+package = "actual待判定_GPT包"
+original_replace = Path.replace
+def pause():
+    paused.write_text("paused", encoding="utf-8")
+    deadline = time.monotonic() + 15
+    while not release.exists():
+        if time.monotonic() >= deadline:
+            raise TimeoutError("publication test release timeout")
+        time.sleep(.02)
+def replace(path, target):
+    target = Path(target)
+    if rollback and path == stage / (package + ".zip"):
+        raise OSError("injected first writer ZIP failure")
+    if rollback and path == output / package and target == stage / package:
+        pause()
+    value = original_replace(path, target)
+    if not rollback and path == stage / package and target == output / package:
+        pause()
+    return value
+Path.replace = replace
+try:
+    _publish_actual_review_package(output, stage)
+    record = {"status": "success"}
+except Exception as exc:
+    record = {"status": "error", "error": str(exc)}
+result.write_text(json.dumps(record), encoding="utf-8")
+'''
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            output = root / "output"
+            output.mkdir()
+            stage_a, stage_b = root / "stage-a", root / "stage-b"
+
+            def pair(target, value):
+                package = target / "actual待判定_GPT包"
+                package.mkdir(parents=True)
+                (package / "payload.txt").write_bytes(value)
+                with zipfile.ZipFile(target / (package.name + ".zip"), "w") as archive:
+                    archive.writestr("payload.txt", value)
+
+            def assert_pair(value):
+                self.assertEqual((output / "actual待判定_GPT包/payload.txt").read_bytes(), value)
+                with zipfile.ZipFile(output / "actual待判定_GPT包.zip") as archive:
+                    self.assertIsNone(archive.testzip())
+                    self.assertEqual(archive.read("payload.txt"), value)
+
+            pair(output, b"OLD")
+            pair(stage_a, b"A")
+            pair(stage_b, b"B")
+            paused, release, result = (root / name for name in ("paused", "release", "result.json"))
+            process = subprocess.Popen(
+                [sys.executable, "-c", worker, str(output), str(stage_a), str(paused),
+                 str(release), str(result), "rollback" if rollback else "publish"],
+                cwd=Path(__file__).resolve().parents[1],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            )
+            try:
+                deadline = time.monotonic() + 10
+                while not paused.exists() and process.poll() is None and time.monotonic() < deadline:
+                    time.sleep(.02)
+                self.assertTrue(paused.exists(), "first writer failed to reach the bounded pause")
+                started = time.monotonic()
+                with self.assertRaises(OSError):
+                    _publish_actual_review_package(output, stage_b)
+                self.assertLess(time.monotonic() - started, 5, "second writer must reject without deadlock")
+                self.assertEqual((stage_b / "actual待判定_GPT包/payload.txt").read_bytes(), b"B")
+                self.assertFalse((stage_b / "previous-0").exists())
+                self.assertFalse((stage_b / "previous-1").exists())
+            finally:
+                release.touch()
+                try:
+                    child_log, _ = process.communicate(timeout=20)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    child_log, _ = process.communicate(timeout=5)
+                    self.fail(f"publication child exceeded its finite timeout: {child_log!r}")
+            self.assertEqual(process.returncode, 0, child_log.decode("utf-8", errors="replace"))
+            record = json.loads(result.read_text(encoding="utf-8"))
+            if rollback:
+                self.assertEqual(record, {"status": "error", "error": "injected first writer ZIP failure"})
+                assert_pair(b"OLD")
+            else:
+                self.assertEqual(record, {"status": "success"})
+                assert_pair(b"A")
+            # After lock release the same competing stage may commit. The first
+            # writer has completed its rollback before it can replace this pair.
+            _publish_actual_review_package(output, stage_b)
+            assert_pair(b"B")
+
+    def test_publication_excludes_other_process_until_both_files_commit(self):
+        self._assert_cross_process_publication(rollback=False)
+
+    def test_publication_rollback_excludes_other_process_until_old_pair_restored(self):
+        self._assert_cross_process_publication(rollback=True)
+
     def test_export_deep_stage_paths_preserve_rendered_png_bytes(self):
         temporary_root = Path.cwd() / "tmp"
         temporary_root.mkdir(exist_ok=True)

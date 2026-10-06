@@ -47,6 +47,7 @@ from global_glyph_promotion import (
     post_commit_recovery_plan_from_results,
     direct_visual_intents,
     enqueue_promotion_intents,
+    project_delivery_lock,
 )
 
 ACTUAL_REVIEW_SCHEMA_VERSION = "1.1"
@@ -1465,35 +1466,38 @@ def _validate_actual_review_package(package_dir: Path, archive: Path, groups: Se
 
 
 def _publish_actual_review_package(output_dir: Path, stage: Path) -> None:
-    names = ("actual待判定_GPT包", "actual待判定_GPT包.zip")
-    backed_up = []
-    published = []
-    try:
-        for index, name in enumerate(names):
-            target = output_dir / name
-            backup = stage / f"previous-{index}"
-            if target.exists():
-                target.replace(backup)
-                backed_up.append((backup, target))
-        for name in names:
-            target = output_dir / name
-            (stage / name).replace(target)
-            published.append(target)
-    except BaseException as failure:
-        rollback_errors = []
-        for target in reversed(published):
-            try:
-                target.replace(stage / target.name)
-            except Exception as exc:
-                rollback_errors.append(f"{target}: {exc}")
-        for backup, target in reversed(backed_up):
-            try:
-                backup.replace(target)
-            except Exception as exc:
-                rollback_errors.append(f"{backup} -> {target}: {exc}")
-        if rollback_errors:
-            raise OSError(f"actual GPT 發布失敗且無法完整回復；舊輸出保留於 {stage}，需人工回復：" + "; ".join(rollback_errors)) from failure
-        raise
+    # Both files and any rollback share one output-scoped, cross-process lock.
+    # Staging remains independent; a competing publisher fails before backups.
+    with project_delivery_lock(output_dir):
+        names = ("actual待判定_GPT包", "actual待判定_GPT包.zip")
+        backed_up = []
+        published = []
+        try:
+            for index, name in enumerate(names):
+                target = output_dir / name
+                backup = stage / f"previous-{index}"
+                if target.exists():
+                    target.replace(backup)
+                    backed_up.append((backup, target))
+            for name in names:
+                target = output_dir / name
+                (stage / name).replace(target)
+                published.append(target)
+        except BaseException as failure:
+            rollback_errors = []
+            for target in reversed(published):
+                try:
+                    target.replace(stage / target.name)
+                except Exception as exc:
+                    rollback_errors.append(f"{target}: {exc}")
+            for backup, target in reversed(backed_up):
+                try:
+                    backup.replace(target)
+                except Exception as exc:
+                    rollback_errors.append(f"{backup} -> {target}: {exc}")
+            if rollback_errors:
+                raise OSError(f"actual GPT 發布失敗且無法完整回復；舊輸出保留於 {stage}，需人工回復：" + "; ".join(rollback_errors)) from failure
+            raise
 
 
 def _write_actual_review_package(
