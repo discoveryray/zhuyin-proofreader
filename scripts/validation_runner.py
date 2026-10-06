@@ -6,6 +6,7 @@ an explicitly supplied validation mode, a clean frozen source and fd capture.
 from __future__ import annotations
 
 import argparse
+import ast
 import base64
 from contextlib import contextmanager
 import io
@@ -35,6 +36,24 @@ SCHEMA = "zhuyin-validation-run/1"
 COVERAGE_SCHEMA = "zhuyin-validation-coverage/1"
 ENV_KEYS = ("PYTHONUTF8", "PYTHONIOENCODING", "PYTEST_ADDOPTS", "TCL_LIBRARY", "TK_LIBRARY")
 DEFAULT_TIMEOUTS = {"core": 5400, "gui": 1200, "preflight": 60}
+
+# Human-adopted finite contract: docs/PR43_GUI_SUPPLEMENT_CONTRACT.md.
+# These pins authenticate the original adoption and immutable failed artifact;
+# they do not change legacy retry_eligible or admit arbitrary skipped tests.
+PR43_GUI_ONCE = {
+    "repository": "discoveryray/zhuyin-proofreader", "pr": 43,
+    "task_id": "actual-gpt-bbox-export",
+    "baseline": "8eab9a1de34b59115658a2c7d3565adb347e59ab",
+    "starting_head": "d59358cd45cc65a73b1d4dcb0aa228ffe7233435",
+    "run_id": 37453889278, "attempt": 1, "artifact_id": 11412967278,
+    "archive_sha256": "200ff76738c7cb565cfad1cc470be97fa0bc3a2197908a63391c1335f0d82235",
+    "execution_id": "08e193d65afa44a6b9498f631561521b",
+    "manifest_sha256": "0d9a0e94a3d6b52e0fbeb2930af31d0180d6756ec6dfe8c142a6bdaa5ffc4b0f",
+    "setup_sha256": "c662bd9592094a5c03ead85a304a4e532b254f7c580a955fffc736b655bfb041",
+    "authorization_sha256": "39da5b779290cdb2b95eff70c8859122366dd7c5ca44d0fa3cdd4d2aae8bb50b",
+    "proposal_sha256": "9b0aba33f2cf34b5ec29c290f3388501899e9e577e5a123b55c9bf53212c364a",
+    "human_reply_sha256": "f5a5e87d7770e46fcf9e0875dd3b08f05ff7bec298aa5a9df9df2700e185220c",
+}
 
 
 def utc_now():
@@ -310,7 +329,250 @@ def history(root):
     return list(unique.values())
 
 
-def retry_history(values, key):
+def pr43_gui_block(head, authorization, proposal, human_reply):
+    """Encode the exact adopted bytes; this does not create authorization."""
+    data = {"schema": "pr43-gui-once/1", **PR43_GUI_ONCE, "new_head": head}
+    for name, path in (("authorization", authorization), ("proposal", proposal), ("human_reply", human_reply)):
+        data[name + "_base64"] = base64.b64encode(Path(path).read_bytes()).decode()
+    _pr43_declaration(data)
+    return "<!-- pr43-gui-once\n" + json.dumps(data, ensure_ascii=False, separators=(",", ":")) + "\n-->"
+
+
+def _pr43_declaration(data):
+    fields = {"schema", "new_head", "authorization_base64", "proposal_base64", "human_reply_base64", *PR43_GUI_ONCE}
+    if set(data) != fields or data["schema"] != "pr43-gui-once/1":
+        raise ValueError("unknown PR43 GUI supplement declaration")
+    if any(type(data[key]) is not type(value) or data[key] != value for key, value in PR43_GUI_ONCE.items()):
+        raise ValueError("PR43 GUI supplement belongs to another adopted contract")
+    if not re.fullmatch(r"[0-9a-f]{40}", data["new_head"] or "") or data["new_head"] in {data["baseline"], data["starting_head"]}:
+        raise ValueError("PR43 GUI supplement requires the new frozen feature head")
+    payloads = {}
+    for name in ("authorization", "proposal", "human_reply"):
+        raw = base64.b64decode(data[name + "_base64"], validate=True)
+        if hashlib.sha256(raw).hexdigest() != data[name + "_sha256"]:
+            raise ValueError("PR43 original adopted bytes differ: " + name)
+        payloads[name] = raw
+    authorization = parse_json(payloads["authorization"].decode("utf-8"))
+    proposal = parse_json(payloads["proposal"].decode("utf-8"))
+    if (authorization["human_message_exact"] != "核准"
+            or payloads["human_reply"].decode("utf-8").strip() != "核准"
+            or authorization["proposal_sha256"] != data["proposal_sha256"]
+            or proposal["task"] != data["task_id"] or proposal["repository"] != data["repository"]
+            or proposal["pr"] != data["pr"] or proposal["starting_head"] != data["starting_head"]
+            or proposal["baseline"] != data["baseline"]
+            or proposal["original_gui_execution"] != data["execution_id"]):
+        raise ValueError("PR43 adopted literal/identity differs")
+    return data
+
+
+def _pr43_ref(root, reference):
+    if set(reference) != {"path", "sha256"}:
+        raise ValueError("malformed PR43 side-evidence reference")
+    relative = Path(reference["path"])
+    target = (root / relative).resolve()
+    if relative.as_posix() not in {"pr43-gui-once/declaration.json", "pr43-gui-once/claim.json"}:
+        raise ValueError("unknown PR43 side-evidence path")
+    if not target.exists():
+        # Restored bundles retain their original root-relative references.
+        # Resolve only this exact namespace and digest, never rewrite bytes.
+        copies = [path for path in root.rglob(relative.name)
+                  if path.parent.name == "pr43-gui-once" and digest(path) == reference["sha256"]]
+        if copies:
+            target = copies[0].resolve()
+    if (not target.is_relative_to(root.resolve()) or not target.is_file()
+            or digest(target) != reference["sha256"]):
+        raise ValueError("missing/corrupt PR43 side evidence")
+    return target
+
+
+def _pr43_setup_source():
+    source = (ROOT / "tests/test_manual_actual_gui_batch_v570.py").read_text(encoding="utf-8")
+    cls = next(node for node in ast.parse(source).body if isinstance(node, ast.ClassDef)
+               and node.name == "ManualActualGuiVisibleLayoutTests")
+    setup = next(node for node in cls.body if isinstance(node, ast.FunctionDef) and node.name == "setUpClass")
+    first = min([setup.lineno, *[node.lineno for node in setup.decorator_list]])
+    text = "".join(source.splitlines(keepends=True)[first - 1:setup.end_lineno])
+    if hashlib.sha256(text.encode()).hexdigest() != PR43_GUI_ONCE["setup_sha256"]:
+        raise ValueError("PR43 actual Tk initializer source changed")
+
+
+def _pr43_skips(folder, value):
+    """Only the source-bound setUpClass wrapper around actual Tk init reads."""
+    _pr43_setup_source()
+    tree = junit_binding(folder / "junit.xml", value["execution_id"], value["inventory_sha256"])
+    if list(tree.iter("failure")) or list(tree.iter("error")):
+        raise ValueError("PR43 mixed assertion/error failure is not an initializer skip")
+    events = [parse_json(line) for line in (folder / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+    bad = [event for event in events if event["outcome"] != "passed"]
+    cases = [case for case in tree.iter("testcase") if case.find("skipped") is not None]
+    prefix = "tests/test_manual_actual_gui_batch_v570.py::ManualActualGuiVisibleLayoutTests::"
+    inventory = read_json(folder / "inventory.json")
+    expected = {row["nodeid"] for row in inventory["records"] if row["group"] == "gui" and row["nodeid"].startswith(prefix)}
+    if (len(cases) != 11 or len(expected) != 11 or len(bad) != 11
+            or Counter(event["nodeid"] for event in bad) != Counter(expected)
+            or any(event["when"] != "setup" or event["subtest"] or event["outcome"] != "skipped" for event in bad)):
+        raise ValueError("PR43 original skip identities/phases differ")
+    raw = (folder / "raw.log").read_text(encoding="utf-8")
+    # The outer Tcl init discovery wrapper and inner exact init.tcl read failure
+    # are both mandatory; no generic TclError or post-initialization skip.
+    pattern = re.compile(
+        r"Tk display unavailable: Can't find a usable init\.tcl in the following directories: \n[^\r\n]+\n\n"
+        r'(?P<file>[^"\r\n]+/init\.tcl): couldn\'t read file "(?P=file)": (?P<reason>No error|permission denied|no such file or directory|invalid argument)\n'
+        r'couldn\'t read file "(?P=file)": (?P=reason)\n    while executing\n"source (?P=file)"\n'
+        r'    \("uplevel" body line 1\)\n    invoked from within\n"uplevel #0 \[list source \$tclfile\]"\n\n\n'
+        r"This probably means that Tcl wasn't installed properly\.")
+    messages = {}
+    for case in cases:
+        if case.get("classname") != "tests.test_manual_actual_gui_batch_v570.ManualActualGuiVisibleLayoutTests":
+            raise ValueError("PR43 unknown skip wrapper owner")
+        message = case.find("skipped").get("message", "")
+        match = pattern.fullmatch(message)
+        if not match or match["file"] != value["environment"]["environment"]["TCL_LIBRARY"].replace("\\", "/") + "/init.tcl":
+            raise ValueError("PR43 unknown/non-initialization resource wrapper")
+        if message not in raw:
+            raise ValueError("PR43 raw/JUnit skip reason differs")
+        messages[prefix + case.get("name", "")] = message
+    if set(messages) != expected or len(set(messages.values())) != 1:
+        raise ValueError("PR43 original JUnit identities/reasons differ")
+    for event in bad:
+        trace = ast.literal_eval(event["traceback"])
+        if (not isinstance(trace, tuple) or len(trace) != 3 or trace[1] != 523
+                or not trace[0].replace("\\", "/").endswith("/_pytest/unittest.py")
+                or trace[2] != "Skipped: " + messages[event["nodeid"]]):
+            raise ValueError("PR43 raw/JUnit/events skip wrapper differs")
+    selected = {row["nodeid"] for row in inventory["records"] if row["group"] == "gui"}
+    calls = Counter(event["nodeid"] for event in events if event["when"] == "call" and not event["subtest"])
+    if calls != Counter(selected - expected) or any(event["nodeid"] not in selected for event in events):
+        raise ValueError("PR43 original other GUI execution is incomplete")
+
+
+def validate_pr43_gui_once(root, context, candidate, *, env=None, inventory=None, require_claim=False):
+    """The sole admission validator, also consumed by aggregate/coverage."""
+    root = Path(root).resolve()
+    binding = context.get("pr43_gui_once")
+    original_paths = [path for path in root.rglob("manifest.json")
+                      if read_json(path).get("execution_id") == PR43_GUI_ONCE["execution_id"]]
+    if binding is None:
+        if context.get("task_id") == PR43_GUI_ONCE["task_id"] and (
+                original_paths or candidate.get("parents", [None])[:1] == [PR43_GUI_ONCE["baseline"]]):
+            raise ValueError("PR43 adopted supplement evidence missing; candidate change cannot reset budget")
+        return None
+    if set(binding) not in ({"declaration"}, {"declaration", "claim"}):
+        raise ValueError("unknown PR43 context binding")
+    declaration_path = _pr43_ref(root, binding["declaration"])
+    data = _pr43_declaration(read_json(declaration_path))
+    if (context.get("task_id") != data["task_id"] or candidate["parents"] != [data["baseline"], data["new_head"]]
+            or not original_paths or candidate["head"] in {data["starting_head"], data["new_head"]}):
+        raise ValueError("PR43 candidate/task/base/head admission differs")
+    if git("show", "-s", "--format=%P", data["new_head"]).split() != [data["starting_head"]]:
+        raise ValueError("PR43 frozen feature must directly preserve the adopted starting head")
+    original_path = original_paths[0]
+    original = read_verified_manifest(original_path)
+    if (digest(original_path) != data["manifest_sha256"]
+            or original["ci"] != {"run_id": data["run_id"], "attempt": data["attempt"], "job": "grouped", "event": "pull_request"}
+            or original["candidate"]["parents"] != [data["baseline"], data["starting_head"]]
+            or original["retry_eligible"] or original["retry_of"] is not None
+            or original["code_blockers"] or original["outcome"] != "failed"):
+        raise ValueError("PR43 original immutable execution differs")
+    archive = declaration_path.parent / "pr-artifact.zip"
+    if not archive.is_file() or digest(archive) != data["archive_sha256"]:
+        raise ValueError("PR43 original binary artifact missing/corrupt")
+    with zipfile.ZipFile(archive) as zipped:
+        names = zipped.namelist()
+        if len(names) != len(set(names)):
+            raise ValueError("PR43 original artifact duplicate member")
+        for info in zipped.infolist():
+            path = Path(info.filename)
+            target = (original_path.parent.parent / path).resolve()
+            if (path.is_absolute() or ".." in path.parts or "\\" in info.filename
+                    or not target.is_relative_to(original_path.parent.parent.resolve())
+                    or ((info.external_attr >> 16) & 0o170000) == 0o120000):
+                raise ValueError("unsafe PR43 artifact member")
+            if not info.is_dir() and (not target.is_file() or target.read_bytes() != zipped.read(info)):
+                raise ValueError("PR43 artifact original extracted bytes differ")
+    _pr43_skips(original_path.parent, original)
+    if env is not None and env != original["environment"]:
+        raise ValueError("PR43 supplement actual environment changed")
+    if inventory is not None:
+        previous = read_json(original_path.parent / "inventory.json")
+        if set(previous["gui_ids"]) != set(inventory["gui_ids"]):
+            raise ValueError("PR43 required GUI identities changed")
+    claims = {}
+    for path in root.rglob("pr43-gui-once/claim.json"):
+        claim = read_json(path)
+        if (set(claim) != {"execution_id", "candidate", "environment", "declaration_sha256", "declared_at"}
+                or claim["declaration_sha256"] != digest(declaration_path)
+                or claim["candidate"] != candidate or claim["environment"] != original["environment"]
+                or not re.fullmatch(r"[0-9a-f]{32}", claim["execution_id"])
+                or not claim["declared_at"]):
+            raise ValueError("PR43 supplement claim malformed/cross-head")
+        if claim["execution_id"] in claims and claims[claim["execution_id"]][1] != claim:
+            raise ValueError("PR43 conflicting duplicate supplement claim")
+        claimed_context = path.parent.parent / claim["execution_id"] / "history-context.json"
+        if not claimed_context.is_file():
+            raise ValueError("PR43 durable claim context missing; budget remains consumed")
+        claimed_binding = read_json(claimed_context).get("pr43_gui_once", {})
+        if (set(claimed_binding) != {"declaration", "claim"}
+                or claimed_binding["declaration"]["sha256"] != digest(declaration_path)
+                or claimed_binding["claim"] != artifact_entry(path, path.parent.parent)):
+            raise ValueError("PR43 durable claim context binding differs")
+        claims.setdefault(claim["execution_id"], (path, claim))
+    linked = [read_json(path) for path in root.rglob("manifest.json")
+              if read_json(path).get("retry_of") == data["execution_id"]]
+    if any(value["execution_id"] not in claims for value in linked):
+        raise ValueError("PR43 retained supplement has missing durable claim")
+    if len(claims) > 1:
+        raise ValueError("PR43 original plus supplement GUI budget exceeded")
+    if "claim" in binding:
+        bound = _pr43_ref(root, binding["claim"])
+        if not claims or read_json(bound) != next(iter(claims.values()))[1]:
+            raise ValueError("PR43 supplement claim reference differs")
+    elif require_claim:
+        raise ValueError("PR43 supplement claim reference missing")
+    return {"original": (original_path, original), "claims": claims, "data": data,
+            "binding": binding, "declaration_path": declaration_path}
+
+
+def import_pr43_gui_once(body, root, context, candidate, api, repository, pr_number):
+    blocks = re.findall(r"<!-- pr43-gui-once\s+(.*?)\s*-->", body or "", re.DOTALL)
+    if not blocks:
+        validate_pr43_gui_once(root, context, candidate)
+        return
+    if len(blocks) != 1 or len(blocks[0].encode()) > 12000:
+        raise ValueError("exactly one bounded PR43 supplement block is required")
+    data = _pr43_declaration(parse_json(blocks[0]))
+    if repository != data["repository"] or pr_number != data["pr"]:
+        raise ValueError("PR43 supplement repository/PR mismatch")
+    metadata = api(f"repos/{repository}/actions/artifacts/{data['artifact_id']}")
+    if (metadata["id"] != data["artifact_id"] or metadata["digest"] != "sha256:" + data["archive_sha256"]
+            or metadata["workflow_run"]["id"] != data["run_id"] or metadata["expired"]):
+        raise ValueError("PR43 original artifact identity/digest differs")
+    folder = Path(root) / "pr43-gui-once"
+    folder.mkdir()
+    payload = subprocess.check_output(["gh", "api", f"repos/{repository}/actions/artifacts/{data['artifact_id']}/zip"])
+    if hashlib.sha256(payload).hexdigest() != data["archive_sha256"]:
+        raise ValueError("PR43 original artifact downloaded bytes differ")
+    with (folder / "pr-artifact.zip").open("xb") as output:
+        output.write(payload)
+    write_json(folder / "declaration.json", data)
+    context["pr43_gui_once"] = {"declaration": artifact_entry(folder / "declaration.json", Path(root))}
+    validate_pr43_gui_once(root, context, candidate)
+
+def retry_history(values, key, supplement=None):
+    if supplement is not None:
+        original_path, original = supplement["original"]
+        current = [(path, value) for path, value in values if value["group"] == "gui" and value["retry_key"] == key]
+        claims = supplement["claims"]
+        if len(current) > 1:
+            raise ValueError("PR43 original plus supplement GUI budget exceeded")
+        if current:
+            value = current[0][1]
+            if (value["retry_of"] != original["execution_id"] or value["execution_id"] not in claims
+                    or value["candidate"] != claims[value["execution_id"]][1]["candidate"]):
+                raise ValueError("PR43 supplement retry/claim relation differs")
+        if claims and not current:
+            raise ValueError("unfinished PR43 supplement declaration consumes final GUI budget")
+        return [(original_path, original), *current]
     values = [(path, value) for path, value in values if value["retry_key"] == key and value["group"] == "gui"]
     values.sort(key=lambda pair: pair[1]["started_at"])
     if len(values) > 2:
@@ -537,11 +799,12 @@ def _run_group(group, evidence_root, *, timeout=None, tests=None, mode=None, cod
         handle.write(str(os.getpid()))
     try:
         previous = history(evidence_root)
+        supplement = validate_pr43_gui_once(evidence_root, context, candidate, env=env)
         key = canonical_digest({"task": context["task_id"], "tree": candidate["tree"]})
         matching = [(path, value) for path, value in previous
                     if value["retry_key"] == key and value["group"] == group]
         if group == "gui":
-            matching = retry_history(previous, key)
+            matching = retry_history(previous, key, supplement)
         elif any(value["outcome"] != "success" for _, value in matching):
             raise ValueError("same-candidate core failure remains unresolved; no automatic core retry")
         if matching and matching[-1][1]["outcome"] == "success" and matching[-1][1]["candidate"] == candidate and ((matching[-1][1]["ci"]["event"] == "local") == (local_context is not None)):
@@ -552,7 +815,7 @@ def _run_group(group, evidence_root, *, timeout=None, tests=None, mode=None, cod
         if group == "gui" and matching:
             if any(value["environment"] != env for _, value in matching):
                 raise ValueError("same-candidate GUI retry settings changed")
-            if len(matching) >= 2 or not matching[0][1]["retry_eligible"] or matching[0][1]["code_blockers"] or code_blockers:
+            if len(matching) >= 2 or (supplement is None and not matching[0][1]["retry_eligible"]) or matching[0][1]["code_blockers"] or code_blockers:
                 raise ValueError("GUI retry is not authorized by retained failure evidence or budget")
             retry_of = matching[0][1]["execution_id"]
         if code_blockers:
@@ -564,9 +827,19 @@ def _run_group(group, evidence_root, *, timeout=None, tests=None, mode=None, cod
                        {"execution_id": execution_id, "group": group, "candidate": candidate,
                         "declared_at": utc_now(), "store_id": local_context["store_id"]})
         folder.mkdir()
+        if group == "gui" and supplement is not None:
+            claim = supplement["declaration_path"].parent / "claim.json"
+            write_json(claim, {"execution_id": execution_id, "candidate": candidate, "environment": env,
+                               "declaration_sha256": digest(supplement["declaration_path"]), "declared_at": utc_now()})
+            context = {**context, "pr43_gui_once": {**context["pr43_gui_once"],
+                       "claim": artifact_entry(claim, evidence_root)}}
+            write_json(folder / "history-context.json", context)
         inventory = collect_inventory(folder, tests)
         inventory_hash = digest(folder / "inventory.json")
-        if group == "gui" and any(value["inventory_sha256"] != inventory_hash for _, value in matching):
+        if supplement is not None:
+            validate_pr43_gui_once(evidence_root, context, candidate, env=env, inventory=inventory,
+                                  require_claim=group == "gui")
+        if group == "gui" and supplement is None and any(value["inventory_sha256"] != inventory_hash for _, value in matching):
             raise ValueError("same-candidate GUI retry inventory changed")
         temporary = folder / "temp"
         temporary.mkdir()
@@ -583,7 +856,8 @@ def _run_group(group, evidence_root, *, timeout=None, tests=None, mode=None, cod
                 "exit_code": None, "outcome": "interrupted", "verification": {"top_level": 0, "subtests": 0, "error": "unfinished"},
                 "ci": ci, "retry_of": retry_of, "artifacts": {}, "retry_key": key, "retry_eligible": False,
                 "preflight": None, "runner_start_error": None, "code_blockers": False}
-        write_json(folder / "history-context.json", context)
+        if not (folder / "history-context.json").exists():
+            write_json(folder / "history-context.json", context)
         write_json(folder / "started.json", data)
         try:
             result = None
@@ -703,7 +977,14 @@ def aggregate(evidence_root, head=None, ci=None):
         if latest["outcome"] != "success" or latest["code_blockers"]:
             raise ValueError("latest " + group + " attempt is unresolved")
         if group == "gui":
-            retry_history(values, latest["retry_key"])
+            context = read_json(path.parent / "history-context.json")
+            supplement = validate_pr43_gui_once(root, context, latest["candidate"], env=latest["environment"],
+                                               inventory=read_json(path.parent / "inventory.json"), require_claim=True)
+            retry_history(values, latest["retry_key"], supplement)
+            if supplement is not None:
+                claim = supplement["claims"][latest["execution_id"]][1]
+                if claim["candidate"] != latest["candidate"]:
+                    raise ValueError("PR43 selected GUI claim candidate differs")
         by_group[group] = (path, latest)
     core, gui = by_group["core"][1], by_group["gui"][1]
     if any(value["group"] == "core" and value["retry_key"] == core["retry_key"]
@@ -747,6 +1028,11 @@ def restore_history(root):
     current = [run for run in runs if run["id"] == current_run]
     if len(current) != 1 or current[0]["head_sha"] != head or current[0]["run_attempt"] != current_attempt:
         raise ValueError("current PR workflow run is absent or mismatched")
+    if "<!-- pr43-gui-once" in (event["pull_request"].get("body") or ""):
+        if (current[0].get("head_repository", {}).get("full_name") != repository
+                or event["pull_request"]["head"].get("repo", {}).get("full_name") != repository
+                or event["pull_request"]["base"].get("repo", {}).get("full_name") != repository):
+            raise ValueError("PR43 supplement requires the exact head/base repository")
     candidate = snapshot()
     if candidate["parents"] != [event["pull_request"]["base"]["sha"], head]:
         raise ValueError("checkout is not the current PR integration commit")
@@ -790,10 +1076,11 @@ def restore_history(root):
                 retrieved.append(value)
     seen = {value["execution_id"]: path for path, value in history(root)}
 
-    write_json(root / ("history-index-" + uuid.uuid4().hex + ".json"),
-               {"head": head, "current_run": current_run, "current_attempt": current_attempt,
+    context = {"head": head, "current_run": current_run, "current_attempt": current_attempt,
                 "runs": [{"id": run["id"], "attempt": run["run_attempt"]} for run in runs],
-                "executions": sorted(seen), "candidate": candidate, "raw_runs": runs, "task_id": handoff["task_id"], "local_handoff_sha256": handoff["archive_sha256"]})
+                "executions": sorted(seen), "candidate": candidate, "raw_runs": runs, "task_id": handoff["task_id"], "local_handoff_sha256": handoff["archive_sha256"]}
+    import_pr43_gui_once(event["pull_request"].get("body"), root, context, candidate, api, repository, pr_number)
+    write_json(root / ("history-index-" + uuid.uuid4().hex + ".json"), context)
 
 
 def main(argv=None):
@@ -819,11 +1106,22 @@ def main(argv=None):
     export = sub.add_parser("export-local-history")
     export.add_argument("--task-id", required=True)
     export.add_argument("--output", type=Path, required=True)
+    pr43 = sub.add_parser("pr43-gui-block")
+    pr43.add_argument("--head", required=True)
+    pr43.add_argument("--authorization", type=Path, required=True)
+    pr43.add_argument("--proposal", type=Path, required=True)
+    pr43.add_argument("--human-reply", type=Path, required=True)
+    pr43.add_argument("--output", type=Path, required=True)
     child = sub.add_parser("_pytest")
     child.add_argument("folder", type=Path)
     child.add_argument("group", choices=("core", "gui"))
     args = parser.parse_args(argv)
     try:
+        if args.command == "pr43-gui-block":
+            text = pr43_gui_block(args.head, args.authorization, args.proposal, args.human_reply)
+            with args.output.open("x", encoding="utf-8") as output:
+                output.write(text + "\n")
+            return 0
         if args.command == "bootstrap-local":
             print(bootstrap_local(args.task_id, args.source_ref, args.baseline))
             return 0
