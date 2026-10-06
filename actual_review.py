@@ -3,8 +3,10 @@ from __future__ import annotations
 import csv
 import hashlib
 import json
+import math
 import os
 import shutil
+import tempfile
 import zipfile
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -1236,9 +1238,16 @@ def build_actual_group_for_entry(entries: Sequence[Mapping[str, Any]], target: M
 
 def _resolve_pdf_path(entry: Mapping[str, Any], output_dir: Path | None = None) -> Path:
     stored = Path(_text(entry.get("pdf")))
+    name = _text(entry.get("pdf_name"))
+    wanted = _text(entry.get("pdf_sha256"))
+    if output_dir and name and wanted:
+        adjacent = Path(output_dir).parent / name
+        if adjacent.is_file():
+            if _sha256_file(adjacent) != wanted:
+                raise ValueError(f"相鄰 PDF SHA 與 occurrence 來源不符：{name}")
+            return adjacent
     if stored.exists():
         return stored
-    name = _text(entry.get("pdf_name"))
     if output_dir and name:
         candidates = []
         for base in [Path(output_dir).parent, Path(output_dir)]:
@@ -1255,23 +1264,59 @@ def _resolve_pdf_path(entry: Mapping[str, Any], output_dir: Path | None = None) 
             rp = str(p.resolve())
             if rp not in seen:
                 seen.add(rp); unique.append(p)
+        if wanted:
+            unique = [p for p in unique if _sha256_file(p) == wanted]
         if len(unique) == 1:
             return unique[0]
     raise FileNotFoundError(f"找不到現版 PDF：{name or stored}")
 
 
-def render_occurrence_png(entry: Mapping[str, Any], output_path: Path, *, context: bool = False, output_dir: Path | None = None) -> Path:
+def _confirmed_render_location(entry: Mapping[str, Any], output_dir: Path | None = None) -> tuple:
+    """Validate a source rectangle without changing occurrence evidence.
+
+    A degenerate source rectangle has no proven replacement here. In particular,
+    rawdict, character text and nearby glyphs cannot supply occurrence binding.
+    """
     pdf = _resolve_pdf_path(entry, output_dir)
     page_number = int(entry.get("physical_page") or 0) - 1
     if page_number < 0:
         raise ValueError("缺少實體頁碼")
-    x0, y0, x1, y1 = [float(entry.get(k) or 0) for k in ("x0", "y0", "x1", "y1")]
+    bounds = tuple(float(entry[k]) for k in ("x0", "y0", "x1", "y1"))
+    if not all(math.isfinite(value) for value in bounds):
+        raise ValueError("bbox 含非有限座標")
+    digest = _sha256_file(pdf)
+    wanted = _text(entry.get("pdf_sha256"))
+    if wanted and digest != wanted:
+        raise ValueError("PDF SHA 與 occurrence 來源不符")
+    x0, y0, x1, y1 = bounds
+    geometry = None
     if x1 <= x0 or y1 <= y0:
-        raise ValueError("缺少可用 bbox")
+        from actual_render_geometry import exact_vertical_cff_location
+        try:
+            geometry = exact_vertical_cff_location(pdf, entry, digest=digest)
+            bounds = geometry["whole"]
+        except Exception as exc:
+            raise ValueError("來源 bbox 無面積；缺少同 PDF SHA／頁／occurrence 唯一繪製綁定及可驗證座標轉換的替代範圍：" + str(exc)) from exc
+    with fitz.open(pdf) as doc:
+        if page_number >= len(doc):
+            raise ValueError("實體頁碼超出 PDF")
+        page = doc[page_number]
+        if not page.rect.contains(fitz.Rect(bounds)):
+            raise ValueError("來源 bbox 超出 PDF 頁面")
+    return pdf, page_number, bounds, digest, geometry
+
+
+def render_occurrence_png(entry: Mapping[str, Any], output_path: Path, *, context: bool = False, output_dir: Path | None = None, _location: tuple | None = None) -> Path:
+    pdf, page_number, bounds, digest, geometry = _location or _confirmed_render_location(entry, output_dir)
+    if _sha256_file(pdf) != digest:
+        raise ValueError("PDF 在繪圖預檢後變動")
+    x0, y0, x1, y1 = bounds
     doc = fitz.open(pdf)
     try:
         page = doc[page_number]
-        if context:
+        if geometry and not context:
+            px, py, scale = .25, .25, 7.0
+        elif context:
             px, py, scale = 95, 60, 3.0
         else:
             px, py, scale = 16, 14, 7.0
@@ -1284,7 +1329,7 @@ def render_occurrence_png(entry: Mapping[str, Any], output_path: Path, *, contex
     return output_path
 
 
-def render_annotation_only_png(entry: Mapping[str, Any], output_path: Path, *, output_dir: Path | None = None) -> Path:
+def render_annotation_only_png(entry: Mapping[str, Any], output_path: Path, *, output_dir: Path | None = None, _location: tuple | None = None) -> Path:
     """Render only the right-side Bopomofo region of one annotated glyph.
 
     The GPT actual-review path deliberately minimizes Chinese semantic context.
@@ -1292,13 +1337,10 @@ def render_annotation_only_png(entry: Mapping[str, Any], output_path: Path, *, o
     right-side convention the package still includes the whole-glyph tight crop
     as a second visual reference, never expected/dictionary data.
     """
-    pdf = _resolve_pdf_path(entry, output_dir)
-    page_number = int(entry.get("physical_page") or 0) - 1
-    if page_number < 0:
-        raise ValueError("缺少實體頁碼")
-    x0, y0, x1, y1 = [float(entry.get(k) or 0) for k in ("x0", "y0", "x1", "y1")]
-    if x1 <= x0 or y1 <= y0:
-        raise ValueError("缺少可用 bbox")
+    pdf, page_number, bounds, digest, geometry = _location or _confirmed_render_location(entry, output_dir)
+    if _sha256_file(pdf) != digest:
+        raise ValueError("PDF 在繪圖預檢後變動")
+    x0, y0, x1, y1 = bounds
     width = x1 - x0
     # In the supported textbook fonts, Bopomofo occupies the right ~45% of the
     # annotated glyph advance.  Keep a small overlap so the first symbol is not
@@ -1308,7 +1350,10 @@ def render_annotation_only_png(entry: Mapping[str, Any], output_path: Path, *, o
     doc = fitz.open(pdf)
     try:
         page = doc[page_number]
-        clip = fitz.Rect(max(0, ax0-pad_x), max(0, y0-pad_y), min(page.rect.width, x1+pad_x), min(page.rect.height, y1+pad_y))
+        if geometry:
+            clip = fitz.Rect(geometry["annotation"])
+        else:
+            clip = fitz.Rect(max(0, ax0-pad_x), max(0, y0-pad_y), min(page.rect.width, x1+pad_x), min(page.rect.height, y1+pad_y))
         pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), clip=clip, alpha=False)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         pix.save(str(output_path))
@@ -1330,10 +1375,134 @@ def export_actual_review_package(
 ) -> Path:
     output_dir = Path(output_dir)
     groups = build_actual_review_groups(ledger)
+    plan = []
+    errors = []
+    for group in groups:
+        selected = []
+        for label, entry in zip(("A", "B"), group["members"][:2]):
+            try:
+                location = _confirmed_render_location(entry, output_dir)
+                selected.append((label.lower(), entry, location))
+            except Exception as exc:
+                errors.append(json.dumps({
+                    "group_id": group["group_id"], "sample": label,
+                    "occurrence_id": entry.get("occurrence_id"), "review_id": entry.get("review_id"),
+                    "pdf": entry.get("pdf"), "pdf_name": entry.get("pdf_name"),
+                    "physical_page": entry.get("physical_page"),
+                    "source_bbox": [entry.get(k) for k in ("x0", "y0", "x1", "y1")],
+                    "reason": str(exc),
+                }, ensure_ascii=False))
+        plan.append(selected)
+    if errors:
+        raise ValueError("actual GPT 匯出預檢失敗；全部拒絕，既有輸出保留：\n" + "\n".join(errors))
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    # Keep both completed artifacts untouched until all staged content validates.
+    # This is deliberately bounded to this directory/ZIP pair, not a transaction framework.
+    # The random eight-character suffix remains unique. Keep the prefix short:
+    # added staging depth must not push otherwise valid Windows image paths
+    # over MAX_PATH (native PNG writes truncate there on the supported runtime).
+    stage = Path(tempfile.mkdtemp(prefix=".ag-", dir=output_dir))
+    published = False
+    try:
+        zip_path = _write_actual_review_package(
+            stage, groups, plan, source_output_dir=output_dir, version=version,
+            session_id=session_id, session_schema_version=session_schema_version,
+            workbook_schema_version=workbook_schema_version,
+            review_id_schema_version=review_id_schema_version, portable_source=portable_source,
+        )
+        staged_package = stage / "actual待判定_GPT包"
+        _validate_actual_review_package(staged_package, zip_path, groups)
+        _publish_actual_review_package(output_dir, stage)
+        published = True
+    finally:
+        # A failed rollback must retain the old bytes and concrete recovery paths.
+        if published or not any((stage / f"previous-{index}").exists() for index in (0, 1)):
+            try:
+                shutil.rmtree(stage)
+            except OSError:
+                # Publication is already committed, or the original failure is
+                # still active. Cleanup cannot change either outcome; leftovers
+                # remain in the named sibling stage for later housekeeping.
+                pass
+    return output_dir / "actual待判定_GPT包.zip"
+
+
+def _validate_actual_review_package(package_dir: Path, archive: Path, groups: Sequence[Mapping[str, Any]]) -> None:
+    xlsx = package_dir / "actual待判定_給GPT.xlsx"
+    meta, rows = _load_sheet_rows(xlsx, "actual待判定")
+    if int(meta.get("exported_group_count", -1)) != len(groups) or len(rows) != len(groups):
+        raise ValueError("actual GPT 暫存工作簿組數不符")
+    expected_files = {xlsx.name}
+    for row, group in zip(rows, groups):
+        members = group["members"]
+        if (row.get("group_id"), row.get("group_snapshot"), row.get("sample_a_occurrence_id"), row.get("sample_b_occurrence_id") or "") != (
+            group["group_id"], group["group_snapshot"], members[0].get("occurrence_id"), members[1].get("occurrence_id") if len(members) > 1 else ""
+        ):
+            raise ValueError("actual GPT 暫存工作簿選取或識別不符")
+        for label, member in zip(("a", "b"), members[:2]):
+            references = []
+            for kind in ("annotation", "whole_glyph"):
+                path = package_dir / "images" / f"{group['group_id']}_{label}_{kind}.png"
+                name = path.relative_to(package_dir).as_posix()
+                expected_files.add(name)
+                references.append(name)
+                with fitz.open(path) as image:
+                    pixmap = image[0].get_pixmap()
+                    if pixmap.width <= 0 or pixmap.height <= 0:
+                        raise ValueError(f"actual GPT 暫存圖片無效：{path.name}")
+            if row.get(f"sample_{label}_image") != " | ".join(references):
+                raise ValueError("actual GPT 暫存工作簿圖片連結不符")
+    files = {p.relative_to(package_dir).as_posix(): p for p in package_dir.rglob("*") if p.is_file()}
+    if set(files) != expected_files:
+        raise ValueError("actual GPT 暫存檔案清單不符")
+    with zipfile.ZipFile(archive) as zf:
+        if len(zf.namelist()) != len(files) or set(zf.namelist()) != set(files) or zf.testzip() is not None:
+            raise ValueError("actual GPT 暫存 ZIP 清單或 CRC 不符")
+        for name, path in files.items():
+            if hashlib.sha256(zf.read(name)).hexdigest() != _sha256_file(path):
+                raise ValueError(f"actual GPT 暫存 ZIP 內容不符：{name}")
+
+
+def _publish_actual_review_package(output_dir: Path, stage: Path) -> None:
+    names = ("actual待判定_GPT包", "actual待判定_GPT包.zip")
+    backed_up = []
+    published = []
+    try:
+        for index, name in enumerate(names):
+            target = output_dir / name
+            backup = stage / f"previous-{index}"
+            if target.exists():
+                target.replace(backup)
+                backed_up.append((backup, target))
+        for name in names:
+            target = output_dir / name
+            (stage / name).replace(target)
+            published.append(target)
+    except BaseException as failure:
+        rollback_errors = []
+        for target in reversed(published):
+            try:
+                target.replace(stage / target.name)
+            except Exception as exc:
+                rollback_errors.append(f"{target}: {exc}")
+        for backup, target in reversed(backed_up):
+            try:
+                backup.replace(target)
+            except Exception as exc:
+                rollback_errors.append(f"{backup} -> {target}: {exc}")
+        if rollback_errors:
+            raise OSError(f"actual GPT 發布失敗且無法完整回復；舊輸出保留於 {stage}，需人工回復：" + "; ".join(rollback_errors)) from failure
+        raise
+
+
+def _write_actual_review_package(
+    output_dir: Path, groups: Sequence[Mapping[str, Any]], plan: Sequence[Sequence[tuple]], *,
+    source_output_dir: Path, version: str, session_id: str, session_schema_version: str,
+    workbook_schema_version: str, review_id_schema_version: str, portable_source=None,
+) -> Path:
     package_dir = output_dir / "actual待判定_GPT包"
     images_dir = package_dir / "images"
-    if package_dir.exists():
-        shutil.rmtree(package_dir)
     images_dir.mkdir(parents=True, exist_ok=True)
 
     wb = Workbook()
@@ -1375,20 +1544,17 @@ def export_actual_review_package(
     ]
     ws.append(headers)
 
-    for index, group in enumerate(groups, 1):
+    for index, (group, selected) in enumerate(zip(groups, plan), 1):
         members = group["members"]
         a = members[0]
         b = members[1] if len(members) > 1 else None
-        image_names = []
-        for label, entry in (("a", a), ("b", b)):
-            if entry is None:
-                image_names.append("")
-                continue
+        image_names = ["", ""]
+        for sample_index, (label, entry, location) in enumerate(selected):
             annotation = images_dir / f"{group['group_id']}_{label}_annotation.png"
             tight = images_dir / f"{group['group_id']}_{label}_whole_glyph.png"
-            render_annotation_only_png(entry, annotation, output_dir=output_dir)
-            render_occurrence_png(entry, tight, context=False, output_dir=output_dir)
-            image_names.append(f"images/{annotation.name} | images/{tight.name}")
+            render_annotation_only_png(entry, annotation, output_dir=source_output_dir, _location=location)
+            render_occurrence_png(entry, tight, context=False, output_dir=source_output_dir, _location=location)
+            image_names[sample_index] = f"images/{annotation.name} | images/{tight.name}"
         ws.append([
             index, group["group_id"], group["group_snapshot"], group["kind"], group["exact_key"], group["occurrence_count"],
             image_names[0], image_names[1], a.get("occurrence_id", ""), b.get("occurrence_id", "") if b else "",
@@ -1421,13 +1587,11 @@ def export_actual_review_package(
     if portable_source is not None:
         from pdf_portability import write_excel_content_proof
         manifest, db = portable_source
-        write_excel_content_proof(wb, output_dir, manifest, db, kind="actual")
+        write_excel_content_proof(wb, source_output_dir, manifest, db, kind="actual")
     xlsx = package_dir / "actual待判定_給GPT.xlsx"
     wb.save(xlsx)
 
     zip_path = output_dir / "actual待判定_GPT包.zip"
-    if zip_path.exists():
-        zip_path.unlink()
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for path in package_dir.rglob("*"):
             if path.is_file():
