@@ -217,6 +217,7 @@ class EntrypointAuditTests(unittest.TestCase):
                 "        self.root = tk.Tk()\n"
                 "        self.addCleanup(self.root.destroy)\n"
                 "    def test_existing(self): pass\n"
+                "def setup_module(): tk.Tk = lambda: type('RootDouble', (), {'destroy': lambda self: None})()\n"
                 "@pytest.mark.parametrize('case', [1, 2])\n"
                 "@pytest.mark.skip(reason='prove GUI verifier rejects skipped functions')\n"
                 "def test_new_gui(case):\n"
@@ -321,7 +322,8 @@ class EntrypointAuditTests(unittest.TestCase):
                 "    def setUp(self):\n"
                 "        self.root = tk.Tk()\n"
                 "        self.addCleanup(self.root.destroy)\n"
-                "    def test_ok(self): pass\n", encoding="utf-8"
+                "    def test_ok(self): pass\n"
+                "def setup_module(): tk.Tk = lambda: type('RootDouble', (), {'destroy': lambda self: None})()\n", encoding="utf-8"
             )
             (tests / "test_cross_module_imported.py").write_text(
                 "import pytest\nfrom cross_gui_helper import create_root\n"

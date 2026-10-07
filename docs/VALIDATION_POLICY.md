@@ -1,6 +1,14 @@
-# Windows 分階段驗證政策與制度過渡
+# Windows 無視窗分階段驗證政策
 
-本政策是現行驗證策略的主要來源，分階段契約版本為 `validation-flow/1`，搭配明確採用的 gate v4。只適用採用後的新任務；未收尾任務維持原 task baseline 凍結的 gate、審查、CI、授權與修正計數，不自動升級。`validation-flow-reduction` 的驗收來自使用者事前採納的過渡契約，不由受審的新 gate 自行創造授權。
+本政策是現行驗證策略的主要來源，現行版本為 `validation-flow/no-real-tk/1`，搭配明確採用的 gate v4。2026-10-07 使用者明確採納完全取消真視窗驗證；本次 `no-real-tk-validation` 本身及後續驗證均適用。尚未結案的既有任務只遷移真視窗義務，其餘 task／baseline／授權／修正計數／凍結契約與全部失敗歷史保留。政策修改完成不會解除其他 code／evidence blocker，也不會自動使舊功能任務 COMPLETE。
+
+取消範圍涵蓋本機短測、完整 pytest／unittest、fixture／import／子程序、PR、main／develop push、legacy branch、preflight、post-merge；立即隱藏的 Tk root 或虛擬顯示器中的視窗同樣取消。Tcl/Tk configure、初始化能力門檻、真視窗 retry／supplement 均退場，不執行 fd／sys 對照或修補 Tcl/Tk。產品 GUI、啟動器與正常使用所需 Tk 依賴保持原功能。
+
+保留按鈕命令組裝、參數傳遞、背景狀態、成功／失敗回報，以及 actual／expected、identity、fingerprint、匯入／匯出、交易、保存與恢復的有效非視窗驗證。簡單替身可以隔離元件，但必須執行受測行為，不能 mock 受測功能為成功。
+
+新 run／coverage／inventory 分別為 `zhuyin-validation-run/2`、`zhuyin-validation-coverage/2`、`zhuyin-test-groups/2`，明列 policy 與「真視窗驗證已依政策取消」。新成功證據不要求 GUI manifest，不產生 GUI PASS／空成功報告，不宣稱完整介面覆蓋。舊 `/1`、`validation-flow/1` 原件及原判定只讀保留；原 Tk 失敗不是通過、skip-success 或根因已修復，原 retry 額度不重設。
+
+Gate v3／v4 snapshot 以明確 optional `validation_policy: "validation-flow/no-real-tk/1"` 選取本次採納；缺少旗標仍維持舊判定。新 v4 必須使用 policy 相符的 `/2` coverage。旗標不創造授權、不新增正式驗證額度、不變更其他凍結契約，詳見 [gate 契約](PR_REVIEW_GATE.md)。
 
 ## 支援環境與來源（歷史快照）
 
@@ -24,76 +32,53 @@
 
 ## 開發與驗證兩階段
 
-預設為 **開發模式**：修改工具、CI、測試及直接相關規範，保存本機 commit；每輪只做預估五分鐘內的語法／compile、diff 和最小相關回歸或隔離故障注入。不啟動 full pytest、整套 GUI、真實教材 PDF／Excel 整合驗證，不建立 PR，也不 push 會觸發昂貴 workflow 的更新。無 PR 分支只有核對不會觸發昂貴 workflow 且已獲授權才可備份 push。累積中間 commit 不要求逐個跑完整套件。可先做第一輪完整程式差異審查，交付狀態為「已修改、待正式驗證」。
+預設 **開發模式**：修改範圍內工具、CI、測試及指令，保存本機 commit；每輪只做預估五分鐘內的必要定向 regression／隔離故障注入、compile／diff。不啟動有效非視窗全集、教材 PDF／Excel 驗收，不建立 PR 或 push 觸發昂貴 CI。第一輪固定 baseline→HEAD 完整 cumulative review 可記 `CODE_REVIEWED`，交付「已修改、待正式驗證」，不是正式 PASS。
 
-只有使用者明確說 **「開始驗證」** 才進入驗證模式；不是排程，也不因時間、session 恢復或等待而自動切換。重新核對原 task ledger、HEAD、工作樹、base 與已有結果，固定最後候選後停止修改受測來源。另行開發使用隔離分支／checkout。依原授權接續唯一 draft PR、兩輪獨立審查、merge commit 和短驗證；「只測試、不合併」等較窄限制優先。
+只有使用者明確 **「開始驗證」** 才固定候選並進入驗證模式，不因等待、session 恢復或政策修改自動新增正式時段。若已有明確安排的正式驗證時段，依原安排接續一次無視窗完整驗證。重新核對 task ledger、HEAD、working tree、base 與已有結果；第一輪無 confirmed code blocker 才查找／建立唯一 draft PR。第二輪可與 CI 重疊，兩位獨立 reviewer 各自核對必要原始證據後才正式 PASS。較窄授權、三輪 corrective 限制、完整補審與 merge commit 規則保留。
 
-第一位 reviewer 審固定 baseline→HEAD 完整累積差異後，可記 `CODE_REVIEWED` 中間狀態。驗證模式且無 confirmed code blocker 才可建立 draft PR 取得 CI，不需先偽填正式 PASS。第二位 reviewer 可在 CI 執行期間審完整 PR／整合路徑。功能證據齊備後，兩位各自補核必要證據，才可產生正式 `REVIEW: PASS`。中間狀態、tests passing、CI 上傳成功均不允許 merge，也不能當正式 PASS。保持兩位獨立 reviewer，沒有第三輪正式 reviewer。
+## 有效 collection 與執行對帳
 
-## 實際 collection、核心與 GUI
+pytest 是唯一例行完整功能入口，一次 `core` 包含全部有效非視窗 cases。沿用既有有限、精確 case identity 登記與來源審查；逐項退役純視窗／layout／native widget cases，不依 GUI 檔名整批排除。混合案例必要的資料及流程保障移到真正執行邏輯的非視窗案例。Fixture／import／子程序的 Tk 路徑同樣退出；不能先嘗試 Tk 再 skip。
 
-pytest 仍是唯一例行完整功能測試入口，正式覆蓋改成 **一次核心全集＋全部必要 GUI** 的兩個獨立 pytest process；不另跑混合 full pytest 或完整 unittest。本機定向測試 → PR 一次正式分組功能驗證 → 實際 merge SHA 的 post-merge 短檢查。第一版不選擇性省略 GUI、不用 xdist、不重寫大量測試或共用可變 DB fixture。
+`scripts/test_entrypoint_audit.py` 與 `scripts/test_group_registry.json` 核對當次 collection：明確 active core IDs 與 `cancelled_window_ids` 分開，沒有 class wildcard、unknown-default-core 或檔名推定。來源清單及 SHA256 綁定 repository 根目錄、tests 與 scripts `.py`（source review 只正規化 CRLF→LF；physical bytes/hash 另存 evidence）。來源增刪或 hash 改變須明確重新來源審查，不自動刷 hash。有限 Tk 正向防漏核對 case、MRO、fixture closure、loaded helper／alias；已證 Tk 不能納入 active core。不新增一般 callee／provider framework。
 
-`scripts/test_entrypoint_audit.py` 保留 unittest／pytest identity 對照，collection 不代表測試已執行。分類採明確分組登記＋實際 pytest collection 完整對帳。`scripts/test_group_registry.json` 可按 class／module 簡寫，但每個 member 都是有限、精確的 case identity（含 inherited cases／參數化 identity），沒有 class wildcard；新增或未登記案例、重複、遺漏及分組衝突一律拒絕。分組正確性由既有有效 GUI 清冊分類依據、來源審查及回歸共同確認，不能只看檔名／GUI 字樣，也不要求工具自行證明任意 Python 呼叫或標準函式庫不會使用 Tk。核心與 GUI 必須 disjoint，聯集精確等於當次 collection；只有明確 core 登記可納入核心，不因未辨認 Tk 就默認 core。既有有限正向 Tk 防漏掃描核對 case、MRO setup／teardown、真正 fixture closure 與 loaded source-local helper／簡單 alias；已證 Tk 與 core 登記衝突即停止。未知呼叫行為由明確登記的來源審查負責，不擴成通用 callee／provider resolver。既有純邏輯確認、保存、binding、actual／expected 案例照常保留。測試數以當次清冊為準，top-level cases 與 subtests 分開記錄。
-
-各組使用隔離 temp、JUnit 與原始 log，逐一核對每個必要 identity 恰好成功一次。unknown、missing、duplicate、skip、failure、error 都拒絕；缺失、舊 execution、其他 SHA、損毀 JUnit 不能替代。失敗後不得製造空白成功報告。只跑 collection／preflight 不代表 GUI 驗收。具體跨測試順序線索才使用最小 targeted order regression，不能因集合相等宣稱執行順序完全等價。
-
-## GUI 預檢、重試與停止
-
-新 hosted PR CI 在核心全集前，以正式測試的相同 interpreter／job 環境／fd capture 執行一次 60 秒 early preflight；失敗時不啟動 core／GUI。`scripts/validation_tk_environment.py configure` 僅核對 `sys.base_prefix` 下 `tcl/tcl<compiled version>`、`tcl/tk<compiled version>` 與 `DLLs` 的有限確定路徑，確認 `_tkinter`／實際載入 DLL 同安裝、資源存在與 exact patchlevel，僅寫當前 job 的 `GITHUB_ENV`；不掃磁碟、不下載／改裝系統或混搭資源。Early preflight 使用非 group 的 `preflight-start.json`／`preflight-result.json`（schema `zhuyin-early-preflight/1`、kind `early_preflight`），不得使用正式 group 的 `started.json`；既有 JSON／XML／log artifact globs 保存原件，真正 grouped start 缺 manifest 的 history 拒絕不變。Early preflight 與正式 GUI 自身 preflight 共用原 `scripts/gui_preflight.py`，保存 UUID 目錄、命令／SHA／環境／時間／退出碼、root／Combobox／Spinbox 結果及實際 Tcl/Tk 版本／路徑；沒有 core／GUI manifest 的 early failure 是失敗證據，不製造成功 coverage。Post-merge job 使用相同 configure 接線，仍只跑原非視窗短驗證。
-
-正式 GUI 前以相同 interpreter、權限、cwd、必要環境與 default capture 執行預檢，核對 Python／實際依賴版本、evidence/temp 自建探測檔的建立寫讀刪除，以及 Tk root、ttk Combobox／Spinbox 建立更新銷毀。保存 Tcl/Tk 版本與實際載入路徑。GUI 自身預檢失敗便不啟動 GUI 套件，已取得的核心證據繼續保存；這不繞過更早的 hosted preflight。預檢成功不等於 GUI 通過。
-
-只有原始 log／JUnit 明確證明 Tk 初始化資源讀取或 runner 啟動問題，且無 confirmed code blocker 時，同候選、同設定 GUI 可再啟動一次独立 process。最多初次＋一次重試；額度依 task／候選歷史跨 job、run、attempt、session 計算，不因換目錄、空 commit 或重開 session 重設。先保存首次退出碼、log、JUnit、node ID／traceback，再記 retry relation。任意 TclError、assertion、資料／保存錯誤、未知根因不能自動當環境例外；重試仍失敗即停止必要 GUI 驗收。已有成功核心不重跑。歷史缺失／不可回取時 fail closed，不假設首次執行。
-
-預算起始值為核心 90 分鐘、GUI 每次 20 分鐘、預檢 60 秒，開跑前核對，不是耗時保證。環境定向診斷最多 10 分鐘；不研究 Tk 根因、不安裝修復、不切換 sys capture、不下載／複製／混搭 Tcl/Tk、不修改系統 Python 或全域環境。超時保存紀錄，只終止自己啟動的程序，不重啟全套。環境限制不消耗 code corrective count；原始失敗保留，未知根因不得標已解決或 flaky。
+Default pytest collection 與 unittest discovery 均不執行退役的真視窗 cases。`collect`／`collect-groups` 只是清冊；正式 core 或保留的歷史 full pytest 使用實際 JUnit，必要 active IDs 必須恰好成功一次。Unknown、missing、duplicate、skip、failure、error、損毀或錯 SHA／舊 execution 全部拒絕；上傳成功或 collection 成功不等於測試成功。`verify-active` 核對 main／legacy full pytest 的 active inventory；`verify-gui` 與真視窗 launcher 不再是有效自動化入口。
 
 ## CI、證據與受控沿用
 
-一般 PR 使用 grouped 核心／GUI；一般 `refs/heads/develop` push 使用嚴格實際 merge 短驗證。`refs/heads/main` push 保留 baseline 的 Windows Python3.13.0 完整 pytest、GUI execution verifier、runtime、compile、push diff 與 clean，於原 required Python job執行，不走 develop-only short、不追加 full unittest。Main-only原樣重用 same-installation Tcl/Tk configure接線；不改資源或建立 main證據沿用制度。PR29／simplify精確歷史條件保持各自原版本／入口／capture。Required summary按真event/ref核對適用jobs，以及main／legacy每個必要step outcome；missing／skip／cancel／failure拒絕，unsupported workflow_dispatch仍失敗。
+一般 PR：restore-history → core → aggregate → verify-coverage，另保留 runtime integrity、compile、PR diff 與 clean-tree。一般 `refs/heads/develop` push：真正 merge SHA 的短驗證。`refs/heads/main` push：原 Python job 的完整有效非視窗 pytest、active execution verifier、runtime、compile、push diff、clean，不追加 unittest。PR29／simplify 精確 legacy 條件保留雙 Python、原 full unittest／pytest 入口及 capture 窄例外，只取消真視窗義務；unsupported workflow_dispatch 仍拒絕成功。
 
-CI 保留 Windows Python **3.13.0** 及 required check **Python 3.13**。該 check 必須彙總真實必要 group／runtime／compile／diff／clean-tree 結果；缺 job、skip、cancel、timeout、缺 artifact 都不能成功。GUI 必須以 preflight 成功為前提，不能用 `!cancelled()` 繞過。上傳與 summary 成功不能蓋掉 pytest／verifier 的退出狀態。成功／失敗都上傳實際存在的驗證紀錄，排除教材、live DB、整個 tmp 與秘密。
+Windows **Python 3.13.0** 及 required check **Python 3.13** 保留。Summary 核對適用 job 的真實結果及 main／legacy 全部必要 step outcomes；非視窗 failure、missing、skip、cancel、timeout、缺 artifact 均不能綠。Nonapplicable conditional job 原樣 skipped，不偽造 GUI 或 Python 3.12 成功。上傳實際 logs／JUnit／inventory／manifest／events，不能蓋掉測試或 verifier 退出狀態，不上傳教材、live DB、整個 tmp 或秘密。
 
-每 execution 使用拒絕覆寫的唯一目錄，保存 SHA／tree、命令、實際 Python／完整安裝依賴、必要環境與 capture、起訖時間、退出碼、清冊、JUnit、raw log 與失敗事件。各組明列原 run／attempt／job／tested SHA；不得混版拼接。中止後保留已寫事件與失敗，不得以新執行遮掉較新的未解失敗。相同 dependency resolution 須可核對，單看 requirements 檔未變不足以证明。沒有適用成功證據即不得 merge。
+每 execution 用拒絕覆寫唯一目錄，保存 policy／SHA／tree、命令、實際 Python／完整依賴、必要環境／capture、時間／退出碼、清冊、raw log／JUnit／events。新旧政策不得混版拼成成功；保留原 run／attempt／job／tested SHA。舊 GUI 失敗與原 retry relation／額度供歷史查核，不要求新 Tk 補驗，不清除其他較新未解失敗或 confirmed blocker。
 
-PR 功能覆蓋沿用到 merge 必須同時證明：
+PR coverage 沿用到 merge 必須證明 actual ordered parents 等於 reviewed base/head、merge tree 等於 PR integration tree，來源／tests／workflow／runtime assets 全部一致；實際 Python／解析依賴／capture／命令／必要非視窗範圍相符或有明確可驗等價理由，raw artifacts 完整且 hash/execution 綁定可核對。不能把 PR tested SHA 改稱在 merge SHA 重跑。
 
-1. 實際 merge 的兩個 ordered parents 恰為受審 base/head。
-2. merge tree 等於通過的 PR integration tree，包含來源、tests、workflow、runtime assets。
-3. Python、實際依賴、capture、命令及必要範圍一致，或有可回查的明確等價理由；不預設未知等價。
-4. log／JUnit／清冊／metadata 的原始檔可回取且完整，hash 與 execution 綁定可驗。
-5. 沒有較新的未解失敗或 confirmed code blocker；合法 GUI retry 保留失敗前件、relation 和跨 run 額度。
-6. 各組來源分開記錄，不能把 PR tested SHA 改稱已在 actual merge SHA 重跑。
+實際 merge SHA 必須另取得 develop `push` CI：merge／parents／tree／PR artifact、實際依賴／資產、runtime integrity、非視窗 import／CLI smoke、compile、push diff、clean-tree。PR CI 不代替短 CI，不例行 post-merge full。等價性不足或必要證據缺失先停止沿用，具體列缺口，不自動擴成全套或宣告 COMPLETE。
 
-實際 merge SHA 仍必須有 `push` CI，執行 merge／parents／tree／PR run artifact 核對、實際依賴和資產核對、runtime integrity、非視窗基本 import／CLI smoke、compile、push diff、clean-tree。這是獨立的短檢查證據，不例行再跑 full pytest／真實視窗。任一等價性不足先停止沿用，列出缺口，由具體影響決定補驗範圍；不得自動擴成全套或宣告 COMPLETE。
-
-每次 rerun／效能量測必須有修改影響、具體失敗線索或明確 gate；等待 CI、重開 session、整理報告不是理由。舊證據保留原 tested SHA、raw logs、環境與適用範圍，不能重新標記為新版本執行。相同 baseline/base/head/scope 的補審保留 append-only 原報告與 resolution relation；同 reviewer 可 evidence_gap，replacement reviewer 必須 full_diff。Confirmed code BLOCKED 只透過新 corrective commit 處理，同 task 最多三輪；新 HEAD 兩輪仍完整審查，non-code 證據補充不耗此計數。
+重跑須有修改影響、具體失敗線索或明確 gate；等待 CI、重開 session、整理報告不是理由。原 report／BLOCKED／correction count 與 append-only supersedes／finalizes relation 保留；non-code 補證據不新增空 commit、不消耗 code corrective 次數。
 
 ## 可複製入口與執行限制
 
-本機開發短回歸（使用已核對的 Python 3.13.0 環境；這不是正式核心／GUI驗收）：
+開發模式按具體改動選最小短回歸，以下僅為本政策 routing 的定向範例；不能把工具 fixture 宣稱正式核心／review PASS。使用實際 Python 版本並揭露與正式 3.13.0 的差異。
 
 ```powershell
-python -m pytest tests/test_pr_review_gate.py tests/test_validation_evidence.py tests/test_validation_runner.py tests/test_validation_local_history.py tests/test_ci_validation_workflow.py tests/test_test_entrypoint_audit.py tests/test_test_group_registry.py -q -k "not test_pytest_only_tk_functions_are_mandatory_even_when_skipped and not test_cross_module_tk_helper_skip_cannot_escape_junit_gate"
+python -m pytest tests/test_ci_validation_workflow.py -q
 python -m compileall -q scripts
-New-Item -ItemType Directory -Force tmp | Out-Null
 python scripts/test_entrypoint_audit.py collect-groups tmp/group-inventory.json
 git diff --check
 ```
 
-短回歸排除的兩個既有工具 fixture 會在子程序中建立真實 Tk；它們仍在正式 GUI 清冊中，不是免驗或永久 skip。`collect-groups` 只收集而不執行案例；不可把 collection 成功報成 GUI 成功。 登記 source review 綁定 repository 根目錄、tests 與 scripts 的 `.py` 來源清單及 SHA256（只正規化 CRLF→LF；實體 bytes/hash 另存 execution evidence）。來源增刪或 hash 改變必須重新來源審查與明確更新登記；工具不自動刷 hash，不沿用舊清冊冒充新來源。`--registry` 可提供隔離小 fixture 的明確有限登記，其來源 scope 是該 tests 目錄。原 F1 instance method 與 factory()() 以明確 GUI 登記、原重現 sentinel 及真 CLI 回歸驗證。保留的 `callable_uses_tk` 舊 source-pattern regression API 不參與正式分類，也不是 core admission；不新增 provider adapter。
-
-本機分組是可選的昂貴驗證，也只能在「開始驗證」後按具體驗證需求執行。先以原 task、baseline、原始需求 reference bootstrap 一次 canonical ledger；`git-common-dir` 的共同 repository 旁 `tmp/validation-task-ledgers/<task-id>` 是持久來源，跨 worktree、session 或 `--evidence-root` 共用，不因輸出目錄改變重設額度。缺失／損毀 ledger、未知 task、已封存 handoff 均停止，不能自行重新初始化。 Local ledger／handoff v2 另保存固定 store identity、兩份 store marker 及獨立 append-only execution declarations；每次啟動前先 durable 寫入宣告。read／export／import 必須證明全部宣告與 execution 目錄一一對應，且原始 manifest／log 等檔案完整；整個 store、單次 execution 或宣告遺失都不能當成空 history。真正空 handoff 仍包含 ledger 和兩份 marker；舊 v1 不自動遷移或追認。以下為本 task 的具體命令：
+本機完整 core 仍屬可選昂貴驗證，只有「開始驗證」後按具體需求執行。Canonical ledger 必須以原 task/baseline/source_ref bootstrap 一次；`git-common-dir` 旁 `tmp/validation-task-ledgers/<task-id>` 跨 worktree/session/output 共用。缺失／損毀 ledger、未知 task 或 sealed handoff 停止，不能自行重新初始化。Local ledger／handoff 保留 store identity、兩份 marker、append-only declarations；啟動前 durable 宣告，read/export/import 核對宣告與 execution 一一對應及完整原 artifacts。舊 v1 不自動升級、追認或清空 history。
 
 ```powershell
-python scripts/validation_runner.py bootstrap-local --task-id validation-flow-reduction --source-ref tmp/pr-review-automation/validation-flow-reduction/original-request.txt --baseline 457707b4c4109c1b10a0da76d8f8a884aca10341
-# 只有當下驗證需求確實包含本機分組時執行；預設仍用PR一次正式功能覆蓋。
-python scripts/validation_runner.py run --group core --mode validation --task-id validation-flow-reduction --evidence-root tmp/local-validation-results
-python scripts/validation_runner.py run --group gui --mode validation --task-id validation-flow-reduction --evidence-root tmp/local-validation-results
-python scripts/validation_runner.py export-local-history --task-id validation-flow-reduction --output tmp/local-validation-handoff.json
+python scripts/validation_runner.py bootstrap-local --task-id no-real-tk-validation --source-ref tmp/pr-review-automation/no-real-tk-validation/original-request.md --baseline 8eab9a1de34b59115658a2c7d3565adb347e59ab
+# 只在明確正式需求包含本機 core 時執行；預設 PR 一次正式全集。
+python scripts/validation_runner.py run --group core --mode validation --task-id no-real-tk-validation --evidence-root tmp/local-validation-results
+python scripts/validation_runner.py export-local-history --task-id no-real-tk-validation --output tmp/local-validation-handoff.json
 ```
 
-直接進 PR 的路徑也須 bootstrap 後 export 真正的空 history，但不跑上述本機 core／GUI。空 history archive 仍含原 task/baseline/source_ref，不是預填成功或臆測零次。Export 在發布前 durable seal，之後禁止任何本機新嘗試；換輸出目錄或候選微變不能解封。協調者將原 export JSON 原樣放入唯一 PR description 的下列資料區塊，CI 由只讀 PR API 回取並校驗 hash／ZIP allowlist／完整原始 manifests：
+直接 PR 路徑 bootstrap 後 export 真正空 history，仍含 task/baseline/source_ref／ledger／marker，不能預填成功或臆測零次。Export durable seal 後禁止新本機嘗試，換目錄或候選不能解封；原樣放入唯一 PR description 資料區塊：
 
 ```text
 <!-- validation-local-history
@@ -101,21 +86,30 @@ python scripts/validation_runner.py export-local-history --task-id validation-fl
 -->
 ```
 
-不是程式指令，不執行 block 內容；缺少或多個 block、損毀、跨 task、不完整失敗紀錄均拒絕。壓縮資料的 JSON 上限 40,000 bytes、展開上限 16 MiB，超限保留原始 evidence 並 STOP，交回可回取原始 artifact 的能力缺口，不丟棄 history。只匯出驗證檔案 allowlist，不含整個 tmp、basetemp、教材或 DB。
+CI 只讀 PR API 回取，核對 hash／ZIP allowlist／完整 manifests。缺少、多個、損毀、跨 task、不完整歷史拒絕；JSON 上限 40,000 bytes、展開 16 MiB，超限保留 evidence 並 STOP，不丟 history。Archive 只含 allowlist 驗證 artifacts，不含 temp／教材／DB。本機結果不默認等於正式 PR PASS，原失敗照常參與適用歷史核對。
 
-本機與 PR 的 tested SHA 不同時不默認成功等價；本機 raw records可參與相同 task/tree 的失敗／retry budget 核對，正式 PR selected core／GUI仍必須是可驗證的 PR 執行。若本機必要 GUI 已成功而再次在 PR 初次執行會違反一次政策，初版停止並交回明確證據適用採納缺口，不自動把 local success 當 PR PASS，也不再跑一次洗掉歷史。這是沿用 adapter 的限制，沒有新增免驗規則。
-
-以下是 PR CI 的正式分組入口，必須先收到「開始驗證」、使用乾淨固定來源、`requirements-ci-lock.txt` 同一解析版本，以及真實 CI context／完整遠端歷史。不能自行填 CI 身分或以新目錄假設零次重試。任一 history 欠缺先停止，保留已得證據。
+正式 PR 入口要求「開始驗證」、乾淨固定來源、`requirements-ci-lock.txt` 同一解析版本、真實 CI context 及完整遠端歷史；不能自行填 CI 身分或用新目錄假設零次：
 
 ```powershell
 python scripts/validation_runner.py restore-history --evidence-root tmp/validation-evidence
 python scripts/validation_runner.py run --group core --mode validation --evidence-root tmp/validation-evidence
-python scripts/validation_runner.py run --group gui --mode validation --evidence-root tmp/validation-evidence
 python scripts/validation_runner.py aggregate --evidence-root tmp/validation-evidence --output tmp/validation-evidence/coverage.json
 python scripts/validation_evidence.py verify-coverage tmp/validation-evidence/coverage.json
 ```
 
-初版以同一 CI job 的獨立 processes依序執行核心／GUI；尚未宣稱跨 job 並行隔離。必要 GUI 只在內建 preflight 成功後啟動。CI rerun 必須先回取同 task branch 的原始歷史，成功 core 沿用、GUI 額度沿用；不無條件重跑兩組。實際 develop push 使用 `python scripts/validation_evidence.py post-merge --evidence-root tmp/validation-evidence`，缺正確 PR provenance的 main push／workflow_dispatch 不會產生新流程成功或 COMPLETE。
+實際 develop push 使用 `python scripts/validation_evidence.py post-merge --evidence-root tmp/validation-evidence`；沒有正確 PR provenance 的 main push／dispatch 不產生新流程 COMPLETE。所有 event/ref 自動入口均無 Tcl/Tk configure、preflight、GUI group 或 GUI verifier。
+
+## no-real-tk-validation 明確採納與外部設定
+
+Task `no-real-tk-validation`，branch `codex/no-real-tk-validation`，固定 baseline/base `8eab9a1de34b59115658a2c7d3565adb347e59ab`。原始 2026-10-07 採納保存於 task evidence `original-request.md`。先保存既有 bbox `4/4` 與 CFF `2/3` 的審查／失敗／BLOCKED，不修改其 worktree、baseline、count 或判定。本次短回歸→第一輪 cumulative CODE_REVIEWED→原正式時段或「開始驗證」→一次無視窗全集→第二輪及兩正式 PASS→適用 CI／保護規則→merge commit→actual 短驗證。未安排正式時段時開發模式停在「已修改、待正式驗證」，不自行開始昂貴驗證。
+
+開工唯讀核對 ruleset `21894326` 原件位於本 task evidence `develop-ruleset.json`：strict required check 為 `Python 3.13`，仍要求 thread resolution、merge commit only、no bypass，沒有專屬 GUI check。本次不修改外部保護；不能把歷史雙 required check 快照當成當前設定。
+
+本政策不重跑 108 份教材、不執行 56 檔正式還原，不寫正式教材／session／live DB，不另造一般測試框架。交付明列退役 cases、仍由非視窗測試保護的行為及未再驗證的版面／原生元件／互動視窗行為。其他舊功能任務須分別核對剩餘門檻，不能自動 COMPLETE。
+
+## 歷史契約原文與限定窗口義務遷移
+
+下列 `validation-flow/1`／PR29／PR41／simplify 文字保留歷史原義與原判定。2026-10-07 新採納僅使其中要求 configure／Tk preflight／GUI case／GUI retry／GUI supplement 的未來執行義務退場；原失敗、原 retry 額度、baseline、雙 Python／full 入口、capture 窄例外、修正次數、其他授權與所有 non-window 安全門檻不變。這些歷史 GUI 命令不得再複製執行，不將舊證據改標 `/2`，不追認 PASS。
 
 ## validation-flow-reduction 明確過渡驗收
 

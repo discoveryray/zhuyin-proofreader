@@ -38,7 +38,10 @@ def raw_bundle(root):
                  "records": [{"identity": "test_small.test_" + group,
                               "nodeid": "tests/test_small.py::test_" + group, "group": group}
                              for group in ("core", "gui")]}
-    environment = runner.environment()
+    environment = {"python": "3.13.0", "platform": "Windows", "capture": "fd",
+                   "dependencies": {"pytest": "9.1.1"},
+                   "environment": {name: "" for name in runner.ENV_KEYS}}
+    # Explicit raw-evidence specification, never the actual executing interpreter.
     candidate = {"head": SYNTHETIC, "tree": TREE, "parents": [BASE, HEAD]}
     manifests = []
     for group in ("core", "gui"):
@@ -103,10 +106,10 @@ def formalize(state, coverage):
         state["reviews"].append(fresh)
 
 
-def short_fixture(root):
+def short_fixture(root, *, current=False):
     pr_root = root / "pr-evidence"
     pr_root.mkdir()
-    coverage_path = raw_bundle(pr_root)
+    coverage_path = NoWindowEvidenceTests().new_bundle(pr_root) if current else raw_bundle(pr_root)
     coverage = evidence.load_json(coverage_path)
     candidate = {"head": MERGE, "tree": TREE, "parents": [BASE, HEAD]}
     repository = {"full_name": "discoveryray/zhuyin-proofreader"}
@@ -137,6 +140,9 @@ def short_fixture(root):
              "started_at": "2026-10-01T01:00:00+00:00", "finished_at": "2026-10-01T01:00:01+00:00",
              "ci": {"event": "push", "run_id": 101, "attempt": 1, "job": "short"}, "checks": [],
              "assets_sha256": assets_digest, "pr_assets_sha256": assets_digest, "outcome": "success"}
+    if current:
+        short.update(schema=evidence.SHORT_SCHEMA, policy=runner.POLICY,
+                     window_validation=runner.audit.WINDOW_NOTICE)
     for name, command in evidence.short_commands(BASE, MERGE):
         log = root / (name + ".log")
         log.write_text("" if name == "clean" else "isolated successful command fixture", encoding="utf-8")
@@ -434,7 +440,7 @@ class RawEvidenceTests(unittest.TestCase):
                 root = Path(temporary)
                 original = root / "original"
                 original.mkdir()
-                coverage_path = raw_bundle(original)
+                coverage_path = NoWindowEvidenceTests().new_bundle(original)
                 bundle = evidence.load_json(coverage_path)
                 candidate = {"head": MERGE, "tree": TREE, "parents": [BASE, HEAD]}
                 after = dict(candidate, head="f" * 40) if problem == "source_drift" else candidate
@@ -448,6 +454,7 @@ class RawEvidenceTests(unittest.TestCase):
                 with patch.dict(os.environ, {"GITHUB_EVENT_NAME": "push", "GITHUB_REF": "refs/heads/develop",
                                              "GITHUB_SHA": MERGE, "GITHUB_RUN_ID": "101", "GITHUB_RUN_ATTEMPT": "1", "GITHUB_JOB": "short", "GITHUB_TOKEN": "isolated-fixture"}), \
                      patch.object(runner, "snapshot", side_effect=[candidate, after]), \
+                     patch.object(runner, "environment", return_value=bundle["environment"]), \
                      patch.object(evidence, "fetch_pr_evidence", side_effect=isolated_fetch), \
                      patch.object(evidence.subprocess, "run", side_effect=isolated_command), \
                      patch.object(evidence, "verify_reuse", side_effect=ValueError("injected final raw verification failure")):
@@ -470,3 +477,122 @@ class RawEvidenceTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class NoWindowEvidenceTests(unittest.TestCase):
+    def new_bundle(self, root):
+        coverage = raw_bundle(root)
+        bundle = evidence.load_json(coverage)
+        core = root / bundle["core_manifest"]
+        folder = core.parent
+        data = evidence.load_json(core)
+        inventory = evidence.load_json(folder / "inventory.json")
+        inventory.update(schema="zhuyin-test-groups/2", policy=runner.POLICY,
+                         window_validation=runner.audit.WINDOW_NOTICE,
+                         pytest_ids=inventory["core_ids"], cancelled_window_ids=inventory.pop("gui_ids"))
+        inventory["records"] = [record for record in inventory["records"] if record["group"] == "core"]
+        write(folder / "inventory.json", inventory)
+        data.update(schema=runner.SCHEMA, policy=runner.POLICY, window_validation=runner.audit.WINDOW_NOTICE,
+                    inventory_sha256=evidence.sha256_file(folder / "inventory.json"))
+        report = (folder / "junit.xml").read_text()
+        report = report.replace(bundle["inventory_sha256"], data["inventory_sha256"])
+        (folder / "junit.xml").write_text(report, encoding="utf-8")
+        write(folder / "started.json", data)
+        data["artifacts"] = {name: ref(folder / entry["path"]) for name, entry in data["artifacts"].items()}
+        write(core, data)
+        bundle.update(schema=runner.COVERAGE_SCHEMA, policy=runner.POLICY,
+                      window_validation=runner.audit.WINDOW_NOTICE,
+                      inventory_sha256=data["inventory_sha256"])
+        bundle.pop("gui_manifest")
+        write(coverage, bundle)
+        return coverage
+
+    def test_current_coverage_needs_only_active_non_window_success(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            coverage = self.new_bundle(root)
+            original_gui = {p: p.read_bytes() for p in (root / "gui").iterdir()}
+            bundle = evidence.verify_coverage(coverage)
+            self.assertEqual(bundle["policy"], runner.POLICY)
+            self.assertNotIn("gui_manifest", bundle)
+            self.assertEqual({p: p.read_bytes() for p in original_gui}, original_gui)
+            # A cancelled old GUI failure stays failed in the reader, not PASS.
+            data = evidence.load_json(root / "gui/manifest.json")
+            data.update(outcome="failed", exit_code=1)
+            write(root / "gui/manifest.json", data)
+            evidence.verify_coverage(coverage)
+            self.assertEqual(runner.read_verified_manifest(root / "gui/manifest.json")["outcome"], "failed")
+
+    def test_active_failure_skip_missing_and_corrupt_raw_evidence_reject(self):
+        for mutation in ("failure", "skip", "missing", "corrupt", "duplicate", "omitted_history"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                coverage = self.new_bundle(root)
+                report = root / "core/junit.xml"
+                if mutation == "missing":
+                    report.unlink()
+                elif mutation == "corrupt":
+                    report.write_text("<broken")
+                elif mutation == "omitted_history":
+                    data = evidence.load_json(coverage)
+                    data["history_manifests"].pop()
+                    write(coverage, data)
+                else:
+                    text = report.read_text()
+                    addition = '<testcase classname="tests.test_small" name="test_core" />' if mutation == "duplicate" else ''
+                    text = text.replace('name="test_core" />', 'name="test_core"><' + ('skipped' if mutation == 'skip' else 'failure') + ' /></testcase>') if mutation != "duplicate" else text.replace('</testsuite>', addition + '</testsuite>')
+                    report.write_text(text)
+                    data = evidence.load_json(root / "core/manifest.json")
+                    data["artifacts"]["junit"] = ref(report)
+                    write(root / "core/manifest.json", data)
+                with self.assertRaises((ValueError, FileNotFoundError)):
+                    evidence.verify_coverage(coverage)
+
+    def test_old_policy_original_bundle_keeps_gui_requirement(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            coverage = raw_bundle(root)
+            original = coverage.read_bytes()
+            evidence.verify_coverage(coverage)
+            (root / "gui/preflight.json").unlink()
+            with self.assertRaises(ValueError):
+                evidence.verify_coverage(coverage)
+            self.assertEqual(coverage.read_bytes(), original)
+
+    def test_adopted_gate_cancels_window_steps_only_and_rejects_unknown_policy(self):
+        state = staged_state(None)
+        state["validation_policy"] = gate.NO_WINDOW_POLICY
+        gate.validate_state(state)
+        ci = state["pr_ci"]
+        for job in ci["jobs"]:
+            job["steps"].pop("Early hosted Tk preflight", None)
+            job["steps"].pop("Configure same-installation Tcl/Tk", None)
+        self.assertIsNone(gate._staged_ci_problem(ci, "pull_request", "feat/example", HEAD, [BASE, HEAD], no_window=True))
+        self.assertIsNotNone(gate._staged_ci_problem(ci, "pull_request", "feat/example", HEAD, [BASE, HEAD]))
+        ci["jobs"][0]["steps"]["Verify required validation results"] = "failure"
+        self.assertIsNotNone(gate._staged_ci_problem(ci, "pull_request", "feat/example", HEAD, [BASE, HEAD], no_window=True))
+        state["validation_policy"] = "future"
+        with self.assertRaises(ValueError):
+            gate.validate_state(state)
+
+    def test_current_short_reuse_binds_policy_and_keeps_provenance_checks(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            coverage, short = short_fixture(root, current=True)
+            evidence.verify_reuse(coverage, short)
+            data = evidence.load_json(short)
+            data["policy"] = "future"
+            write(short, data)
+            with self.assertRaisesRegex(ValueError, "policy"):
+                evidence.verify_reuse(coverage, short)
+
+    def test_cancelled_gui_does_not_clear_retained_code_blocker(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            coverage = self.new_bundle(root)
+            manifest = root / "gui/manifest.json"
+            data = evidence.load_json(manifest)
+            data.update(outcome="failed", exit_code=1, code_blockers=True)
+            write(manifest, data)
+            with self.assertRaisesRegex(ValueError, "code blocker"):
+                evidence.verify_coverage(coverage)

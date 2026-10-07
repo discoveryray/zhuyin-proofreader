@@ -69,7 +69,7 @@ class LocalHistoryTests(unittest.TestCase):
             runner.export_local_history(TASK, self.root / 'export.json')
         (folder / 'ledger.json').unlink()
         with self.assertRaises(FileNotFoundError):
-            runner.run_group('gui', self.root / 'another-output', task_id=TASK, mode='validation')
+            runner.run_group('core', self.root / 'another-output', task_id=TASK, mode='validation')
         self.assertFalse((folder / 'ledger.json').exists())
 
     def test_empty_export_is_original_raw_ledger_and_seals_every_output_path(self):
@@ -90,7 +90,7 @@ class LocalHistoryTests(unittest.TestCase):
         with patch.object(runner, '_run_group') as execute:
             for destination in ('new-output', 'different-session-output'):
                 with self.assertRaisesRegex(ValueError, 'sealed'):
-                    runner.run_group('gui', self.root / destination, task_id=TASK, mode='validation')
+                    runner.run_group('core', self.root / destination, task_id=TASK, mode='validation')
             execute.assert_not_called()
         with self.assertRaisesRegex(ValueError, 'sealed'):
             runner.export_local_history(TASK, self.root / 'second-export.json')
@@ -120,7 +120,7 @@ class LocalHistoryTests(unittest.TestCase):
         self.assertTrue((folder / 'sealed.json').is_file())
         self.assertFalse(output.exists())
         with patch.object(runner, '_run_group') as execute, self.assertRaisesRegex(ValueError, 'sealed'):
-            runner.run_group('gui', self.root / 'another-output', task_id=TASK, mode='validation')
+            runner.run_group('core', self.root / 'another-output', task_id=TASK, mode='validation')
         execute.assert_not_called()
 
     def test_missing_multiple_corrupt_and_cross_task_handoff_cannot_reset_history(self):
@@ -175,19 +175,17 @@ class LocalHistoryTests(unittest.TestCase):
         store = ledger / "executions"
         core = runner._run_group("core", store, mode="validation", local_context=context)
         core_bytes = core.read_bytes()
-        first = runner._run_group("gui", store, mode="validation", local_context=context)
-        probe.preflight_success = True
-        second = runner._run_group("gui", store, mode="validation", local_context=context)
-        self.assertEqual(runner.read_verified_manifest(second)["retry_of"], first.parent.name)
+        with self.assertRaisesRegex(ValueError, "取消"):
+            runner._run_group("gui", store, mode="validation", local_context=context)
         self.assertEqual(core.read_bytes(), core_bytes)
-        self.assertEqual(len(list((ledger / "declarations").glob("*.json"))), 4)
+        self.assertEqual(len(list((ledger / "declarations").glob("*.json"))), 2)
         with patch.object(runner, "git", return_value=str(self.common)):
             value = runner.export_local_history(TASK, self.root / "nonempty.json")
         destination = self.root / "imported-nonempty"
         destination.mkdir()
         runner.import_local_handoff(block(value), destination, TASK)
-        self.assertEqual(len(runner.history(destination)), 3)
-        for missing in ("executions/" + core.parent.name, "declarations/" + first.parent.name + ".json", "executions/" + second.parent.name + "/raw.log"):
+        self.assertEqual(len(runner.history(destination)), 1)
+        for missing in ("executions/" + core.parent.name, "declarations/" + core.parent.name + ".json", "executions/" + core.parent.name + "/raw.log"):
             with self.subTest(missing=missing):
                 raw = io.BytesIO()
                 with zipfile.ZipFile(io.BytesIO(base64.b64decode(value['archive_base64']))) as original, zipfile.ZipFile(raw, "w") as changed:
@@ -250,7 +248,7 @@ class LocalHistoryTests(unittest.TestCase):
         output = clone / 'export.json'
         exported = cli('export-local-history', '--task-id', TASK, '--output', str(output))
         self.assertEqual(exported.returncode, 0, exported.stderr)
-        attempted = cli('run', '--task-id', TASK, '--group', 'gui', '--mode', 'validation', '--evidence-root', str(clone / 'new-output'))
+        attempted = cli('run', '--task-id', TASK, '--group', 'core', '--mode', 'validation', '--evidence-root', str(clone / 'new-output'))
         self.assertEqual(attempted.returncode, 2, attempted.stderr)
         self.assertIn(b'sealed', attempted.stderr)
         self.assertFalse((clone / 'new-output').exists())

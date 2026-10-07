@@ -22,7 +22,9 @@ Reviewer 應使用全新 context（例如本環境 `fork_turns="none"`），提�
 
 ## 一次任務的執行步驟
 
-先採用 [驗證政策](VALIDATION_POLICY.md) 的開發／驗證兩階段及證據適用規則。新任務明確採用 gate v4，未完成舊任務維持凍結契約。預設開發模式只短定向 tests、compile／diff及本機 commit，不開 PR／昂貴 CI。只有使用者說「開始驗證」才固定候選、PR 一次核心全集＋全部必要 GUI，merge 後短驗證。不因等待 CI、session 恢復或報告整理重跑已具可追溯適用性的測試／效能量測。
+2026-10-07 使用者明確採納 `validation-flow/no-real-tk/1`，完全取消所有自動化入口的真視窗驗證（含 hidden root、虛擬顯示器、fixture／import／子程序）、Tcl/Tk configure／preflight／初始化能力門檻及 GUI retry／補驗。新政策適用本身與後續驗證；尚未結案任務只遷移 window 義務，其餘凍結契約、baseline、修正計數、原 Tk 失敗及 retry 額度保留，其他 blocker 不自動解除。產品 GUI／Tk／launcher 保留；有效非視窗資料／交易／恢復與功能測試、Python 3.13.0、runtime／compile／diff、兩輪審查與 actual merge 短驗證仍必要。詳見 [驗證政策](VALIDATION_POLICY.md)。
+
+先採用 [驗證政策](VALIDATION_POLICY.md) 的開發／驗證兩階段及證據適用規則。新任務明確採用 gate v4，未完成舊任務維持凍結契約。預設開發模式只短定向 tests、compile／diff及本機 commit，不開 PR／昂貴 CI。只有使用者說「開始驗證」才固定候選、PR 一次有效非視窗測試全集，merge 後短驗證。不因等待 CI、session 恢復或報告整理重跑已具可追溯適用性的測試／效能量測。
 
 1. Fetch，核對 origin/develop、branch、working tree、現有 PR 與舊任務。建立獨立 task branch。保存固定 task baseline、原始需求與驗收條件，使用者指定固定 base 時不得改動。
 2. 建立 `tmp/pr-review-automation/<task-id>/` evidence 目錄；保存角色分工及 correction round（初始 0）。只有協調者安排 Git mutation；同一時間不得有兩個代理操作同一 index／checkout。可平行編輯明確互不重疊的檔案；跨帳號仍須 clone／worktree 隔離。
@@ -30,7 +32,7 @@ Reviewer 應使用全新 context（例如本環境 `fork_turns="none"`），提�
 4. 委派第一輪 reviewer 親自審完整 cumulative diff。正式功能證據未齊可記 `CODE_REVIEWED`（程式已審、待測試），不是正式 PASS。開發模式在此回報「已修改、待正式驗證」，等待口令；不為取得 PASS 啟動昂貴驗證。保存完整報告、session ID、`blocker_kind`、findings 及唯一 `report_ref`。BLOCKED 先依下述分類與 gate 核對，只有 confirmed code finding 交回實作代理新增 corrective commit，使用一次同 task corrective round，再對新 HEAD 取得兩輪完整適用 PASS。Evidence 補證據、capability／contract STOP；解決後保留 HEAD 與 count，以 append-only 完整補審接續。最多三輪程式修正，不因 CI 重跑或重開 session／task 清零，不新增空 commit。
 5. 收到「開始驗證」後重新核對最後候選、工作樹、base、原紀錄及可沿用結果；第一輪已完成完整程式審查且無 confirmed code blocker，先查詢 repository/base/compare 的 PR。不存在才建立 draft PR；存在唯一 open PR 則更新；已 merged 則轉入實際 merge 驗證；closed-unmerged 或多個不明結果停止。建立 API timeout 時先重新查詢，不重複送出。PR description 清楚寫問題、行為、範圍及驗證，附完整第一輪 evidence。
 6. 核對最新適用 CI：workflow path、event、run ID、run attempt、API head SHA 與 log 實際 checkout SHA、完整 jobs／必要 steps。查詢需完整分頁；不能只憑一頁或合併 status success。Synthetic merge 需取得 Git object，驗證兩個 parents 為實際 base、HEAD，並記錄 tree。每組分別核對原 run／attempt／job；新 attempt／新 run 必須帶完整歷史，不能把舊 success 改稱新執行，也不能清除較新的未解失敗。
-7. CI 期間即可委派第二輪 reviewer 親自審 PR 的完整檔案差異、baseline cumulative context、最新 findings、merge-base及合併情境，先記程式審查中間狀態。CI 核心／GUI覆蓋及必要原始證據完成後，兩位各自補核其必要證據才給正式 PASS；第二輪 PASS 必須綁 exact base/head 與其核對的 CI run／attempt，兩輪均綁必要 coverage。BLOCKED 使用與步驟 4 相同的分類及補審契約；程式修正使 HEAD 變更時兩輪都重做，不能只審修正片段。
+7. CI 期間即可委派第二輪 reviewer 親自審 PR 的完整檔案差異、baseline cumulative context、最新 findings、merge-base及合併情境，先記程式審查中間狀態。CI 有效非視窗覆蓋及必要原始證據完成後，兩位各自補核其必要證據才給正式 PASS；第二輪 PASS 必須綁 exact base/head 與其核對的 CI run／attempt，兩輪均綁必要 coverage。BLOCKED 使用與步驟 4 相同的分類及補審契約；程式修正使 HEAD 變更時兩輪都重做，不能只審修正片段。
 8. 協調者從原始代理輸出及即時遠端建立 gate state，依 [gate 契約](PR_REVIEW_GATE.md) 執行 `validate` 和 `next-action`。不能自行寫入 PASS 來取得 merge proposal。Gate 僅驗證提供資料的一致性，不能認證 reviewer 身分或取代 GitHub 的保護規則；需留存原始來源供追溯。
 9. Merge 前緊接著重讀 base/head、PR open／mergeability、最新 review findings、保護規則與最新 CI；差異先使現有 proposal 失效。確認授權仍有效後，只呼叫 merge method `merge`，綁 `expected_head_sha`。不得自行 approve／resolve／刪 branch，或在 API 被保護規則拒絕後繞過。
 10. 保存實際 merge 回傳，再從 GitHub／Git object 交叉核對 SHA、兩個 parents、tree。預期 tree 取自通過整合檢查的 synthetic merge；若 base 是 feature 的 ancestor，也可核對 feature tree。GitHub 沒有 base SHA CAS，若合併瞬間 base 競態發生，記錄已發生的實際 merge，停止完成宣告並交回受影響 integration review，不自行 revert／force push。
@@ -51,9 +53,9 @@ BLOCKED 必須有明確 `blocker_kind`、非空 findings、唯一 `report_ref`�
 
 原／新 reviewer 均須獨立於實作者，第二輪 reviewer 不得參與同 code scope 第一輪；補審依 gate v3 核對完整 scope 的既有結論與缺口；同原 reviewer 且版本完全未變時無須從頭重讀全部差異，第二輪 PASS 綁最新適用 CI。未知／較晚／自身 target、叉分、跨 scope、缺 resolution、非獨立或不符合 gate v3 review_mode 的補審均 fail closed。Code BLOCKED 不可同 HEAD supersede，CI rerun 或無關 PASS 不能清除。JSON reference 不是原始證據真偽的認證。
 
-## GUI 隔離與重試的協調
+## 無視窗範圍與歷史接續
 
-Hosted PR 在 core 前先使用 `validation_tk_environment.py configure` 的同安裝 job-local 路徑，再以正式 interpreter／cwd／權限／環境／fd 完成 60 秒 early preflight；失敗不啟動 core／GUI，保存原始 log／metadata 並由必要 job failure 阻止 summary 成功。GUI 自身 preflight 保留，失敗不啟動 GUI，既有成功核心證據照常保存。Push 使用相同 configure，但不開真實 Tk，維持原短驗證。只在 raw evidence 明確為初始化 Tk 資源讀取／runner 啟動問題且無 confirmed code blocker 時，允許相同候選／設定 GUI 一次獨立 process 重試；跨 job/run/attempt/session 累積，先保存首次 log/JUnit/exit code，再 append relation。缺歷史、任意 TclError、assertion、資料／保存問題或未知原因不可自動重試。第二次失敗立即停止 GUI 驗收，不重跑核心、不切 capture、不安裝 Tcl/Tk。環境診斷最多十分鐘；時間預算和 metadata 契約以 VALIDATION_POLICY 為準。
+現行 `validation-flow/no-real-tk/1` 的 PR 只 restore-history→core→aggregate→verify-coverage，不啟動 configure／early preflight／GUI group。Main／legacy 原有效 full 入口改由 verify-active 核對全部 active JUnit，develop push 保留短驗證；失敗／missing／skip／cancel／損毀拒絕成功。新 run/coverage/inventory `/2` 明列 policy 與「真視窗驗證已依政策取消」；原 `/1` 只讀保留原判定，GUI failures／retry relations 不追認為成功，不啟動新的 Tk 重試或補驗。
 
 新 v4 的 `CODE_REVIEWED` 原文持續保留；正式 PASS 以 `finalizes_report_ref` 連到相同 round/baseline/base/head/scope 的中間報告，附 `resolution_evidence_ref` 與 `coverage_sha256`。這與 non-code BLOCKED 的 `supersedes_report_ref` 補審鏈分開，不將中間狀態偽裝成 BLOCKED 或 PASS。同 reviewer 可核對證據缺口，替代 reviewer 仍須完整 scope review。
 
@@ -83,6 +85,8 @@ Evidence 至少包含：
 `請依 repository 的兩輪獨立審查自動流程，完成：〈任務與驗收條件〉。`
 
 若需限制授權，直接加上例如「只到 PR，不合併」或指定固定 baseline／階段；當次明確限制優先。[ChatGPT 專案指令精簡版](CHATGPT_PROJECT_INSTRUCTIONS.md) 可貼入專案長期指令。
+
+以下保存歷史契約原文；其中 window 義務已依 `validation-flow/no-real-tk/1` 取消，不再執行 configure／preflight／GUI／retry。原失敗、baseline、count、其他精確 adapter／授權／正式額度與所有 non-window 門檻保持。
 
 ## PR41 第 4 輪接續
 

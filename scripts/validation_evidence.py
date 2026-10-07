@@ -22,7 +22,8 @@ import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY = "discoveryray/zhuyin-proofreader"
-SHORT_SCHEMA = "zhuyin-merge-short/1"
+SHORT_SCHEMA = "zhuyin-merge-short/2"
+LEGACY_SHORT_SCHEMA = "zhuyin-merge-short/1"
 
 
 def require(condition, message):
@@ -73,14 +74,19 @@ def verify_coverage(path):
     """Recompute the bundle from every retained execution, including failures."""
     path = Path(path)
     bundle = load_json(path)
-    require(bundle.get("schema") == "zhuyin-validation-coverage/1", "unknown coverage schema")
+    require(bundle.get("schema") in {"zhuyin-validation-coverage/1", "zhuyin-validation-coverage/2"}, "unknown coverage schema")
+    legacy = bundle["schema"].endswith("/1")
+    selected = [bundle["core_manifest"], bundle["gui_manifest"]] if legacy else [bundle["core_manifest"]]
+    if not legacy:
+        require(bundle.get("policy") == runner_module().POLICY and bundle.get("window_validation") == runner_module().audit.WINDOW_NOTICE,
+                "unknown coverage validation policy")
     require(bundle.get("status") == "success", "coverage is not successful")
-    for reference in [bundle["core_manifest"], bundle["gui_manifest"], *bundle["history_manifests"]]:
+    for reference in [*selected, *bundle["history_manifests"]]:
         local_path(path.parent, reference)
     # aggregate reads log/JUnit/inventory hashes and enforces complete history,
     # one-success-per-identity, exact environment and the bounded GUI retry.
     try:
-        actual = runner_module().aggregate(path.parent, head=bundle["candidate"]["head"], ci=bundle["ci"])
+        actual = runner_module().aggregate(path.parent, head=bundle["candidate"]["head"], ci=bundle["ci"], legacy=legacy)
     except ET.ParseError as exc:
         raise ValueError("corrupt raw JUnit: " + str(exc)) from exc
     require(actual == bundle, "coverage does not match retained raw execution history")
@@ -92,7 +98,7 @@ def verify_coverage(path):
     _ci_identity(bundle["ci"], "pull_request")
     # Imported local attempts remain in aggregate's retry/failure history, but
     # only original PR executions may supply formal functional coverage.
-    for reference in (bundle["core_manifest"], bundle["gui_manifest"]):
+    for reference in selected:
         original = runner_module().read_verified_manifest(local_path(path.parent, reference))
         _ci_identity(original["ci"], "pull_request")
     return bundle
@@ -141,7 +147,11 @@ def verify_reuse(coverage_path, short_path, *, _record=None):
     coverage = verify_coverage(coverage_path)
     short_path = Path(short_path)
     short = load_json(short_path) if _record is None else _record
-    require(short.get("schema") == SHORT_SCHEMA and short.get("outcome") == "success", "short validation did not succeed")
+    current = coverage["schema"] == "zhuyin-validation-coverage/2"
+    require(short.get("schema") == (SHORT_SCHEMA if current else LEGACY_SHORT_SCHEMA) and short.get("outcome") == "success", "short validation did not succeed")
+    if current:
+        require(short.get("policy") == coverage["policy"] and short.get("window_validation") == coverage["window_validation"],
+                "short validation policy differs from PR coverage")
     require(short["coverage_sha256"] == sha256_file(coverage_path), "short validation refers to different PR coverage")
     candidate = short["candidate"]
     require(len(candidate["parents"]) == 2 and candidate["parents"] == coverage["candidate"]["parents"], "actual merge ordered parents differ")
@@ -282,7 +292,8 @@ def post_merge(evidence_root):
     output.mkdir(parents=True, exist_ok=False)
     started = datetime.now(timezone.utc).isoformat()
     _write_json(output / "started.json", {"started_at": started, "command": sys.argv})
-    result = {"schema": SHORT_SCHEMA, "started_at": started, "outcome": "failed", "checks": []}
+    result = {"schema": SHORT_SCHEMA, "policy": runner.POLICY, "window_validation": runner.audit.WINDOW_NOTICE,
+              "started_at": started, "outcome": "failed", "checks": []}
     try:
         require(os.environ.get("GITHUB_EVENT_NAME") == "push" and os.environ.get("GITHUB_REF") == "refs/heads/develop", "short entrypoint requires actual develop push")
         candidate = runner.snapshot()
@@ -291,6 +302,7 @@ def post_merge(evidence_root):
         result["environment"] = runner.environment()
         result["ci"] = {"run_id": int(os.environ["GITHUB_RUN_ID"]), "attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]), "job": os.environ["GITHUB_JOB"], "event": "push"}
         coverage_path, coverage, source = fetch_pr_evidence(GitHub(os.environ.get("GITHUB_TOKEN")), candidate, output)
+        require(coverage.get("policy") == runner.POLICY, "current post-merge requires adopted no-window PR coverage; legacy evidence remains read-only")
         result.update(coverage_sha256=sha256_file(coverage_path), source=source,
                       coverage_path=coverage_path.relative_to(output).as_posix())
         require(candidate["parents"] == coverage["candidate"]["parents"] and candidate["tree"] == coverage["candidate"]["tree"], "actual merge parents/tree differ from PR integration")
