@@ -456,8 +456,15 @@ class PR29GateTests(unittest.TestCase):
         self.assertTrue(evaluate(pr30))
         self.assertEqual(evaluate(pr30, capture_expression), "")
         self.assertEqual(evaluate(pr30, matrix_choice), '["3.12", "3.13"]')
+        # The frozen PR29 reader retains its original GUI evidence contract;
+        # the adopted current workflow requires real active-case accounting.
+        self.assertIn("Verify GUI test execution", gate.COMMON_STEPS)
         for step in gate.COMMON_STEPS:
-            self.assertIn("- name: " + step, text)
+            current_step = "Verify active test execution" if step == "Verify GUI test execution" else step
+            self.assertIn("- name: " + current_step + "\n", text)
+        self.assertNotIn("- name: Verify GUI test execution\n", text)
+        self.assertIn("run: python scripts/test_entrypoint_audit.py verify-active "
+                      "tmp/ci-test-inventory.json --junit tmp/ci-pytest.xml\n", text)
 
 
 class PR29MergeContinuationTests(unittest.TestCase):
