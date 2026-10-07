@@ -2,7 +2,7 @@
   "schema": "zhuyin-test-group-registry/1",
   "source_scope": "repository",
   "source_review": {
-    "basis": "Correction 3: retain correction1 independently reviewed GUI classification basis, explicitly source-review original cases and nine added non-window classifier regressions. Products and existing test expectations are unchanged. Finite registration is authoritative; positive bounded Tk guard rejects proven core conflicts. Correction 4: source-reviewed only same-installation Tcl/Tk helper/preflight and task-bound gate wiring with 13 explicit non-window regressions (mocked probe, exact paths/resources, pure gate fixtures, tiny synthetic runner groups); existing classification and classifier code unchanged. Correction 5: source-reviewed four changed helper/gate/test files and seven explicitly enumerated non-window regressions. Real isolated CLI/history/core execution uses one marker testcase, synthetic Git/CI context and only a stub Tk child; task-bound fifth exception retains original fourth contract. Existing registrations, product logic, classifier, runner and auditor unchanged. Correction 6: source-reviewed ExpectedResolutionGuiTests scoped owner-thread cleanup; two new real-Tk object-retirement/error-cleanup regressions explicitly GUI, two exact sixth-round gate regressions pure core. No product/classifier/other GUI class changes; historical identities unchanged. Correction 7: reviewed actual workflow routing/PowerShell summary regression sources and exact seventh task-bound adapter; four new non-window identities explicit core. The regression evaluator consumes real job/step expressions, real run/uses and summary body on isolated event/outcome fixtures. No GUI tests/product/classifier/provenance helper changes. Correction 8: only unittest step metadata order changed (if then same id); unchanged PR29 predicate assertions and actual workflow readers remain authoritative. Exact eighth task-bound adapter introduces two pure authorization/history core regressions; source registration updated only changed gate/test hashes. No product/GUI/classifier/dependency/capture changes or order-mirror tests.",
+    "basis": "Correction 3: retain correction1 independently reviewed GUI classification basis, explicitly source-review original cases and nine added non-window classifier regressions. Products and existing test expectations are unchanged. Finite registration is authoritative; positive bounded Tk guard rejects proven core conflicts. Correction 4: source-reviewed only same-installation Tcl/Tk helper/preflight and task-bound gate wiring with 13 explicit non-window regressions (mocked probe, exact paths/resources, pure gate fixtures, tiny synthetic runner groups); existing classification and classifier code unchanged. Correction 5: source-reviewed four changed helper/gate/test files and seven explicitly enumerated non-window regressions. Real isolated CLI/history/core execution uses one marker testcase, synthetic Git/CI context and only a stub Tk child; task-bound fifth exception retains original fourth contract. Existing registrations, product logic, classifier, runner and auditor unchanged. Correction 6: source-reviewed ExpectedResolutionGuiTests scoped owner-thread cleanup; two new real-Tk object-retirement/error-cleanup regressions explicitly GUI, two exact sixth-round gate regressions pure core. No product/classifier/other GUI class changes; historical identities unchanged. Correction 7: reviewed actual workflow routing/PowerShell summary regression sources and exact seventh task-bound adapter; four new non-window identities explicit core. The regression evaluator consumes real job/step expressions, real run/uses and summary body on isolated event/outcome fixtures. No GUI tests/product/classifier/provenance helper changes. Correction 8: only unittest step metadata order changed (if then same id); unchanged PR29 predicate assertions and actual workflow readers remain authoritative. Exact eighth task-bound adapter introduces two pure authorization/history core regressions; source registration updated only changed gate/test hashes. No product/GUI/classifier/dependency/capture changes or order-mirror tests. review-start-save-responsive (baseline 8eab9a1de34b59115658a2c7d3565adb347e59ab): personally source-reviewed only review_gui.py, review_save_service.py, standalone_gui.py and tests/test_review_responsive_startup.py. Startup workers carry plain paths/data/queues/cancellation only; save advisory phases retain complete byte checks and atomic commit; launcher supervision preserves exit semantics. Eleven exact core regressions use synthetic temporary PDF/workbook/session/DB fixtures, fake widgets/queued event pumps, held/released background workers and one Python child that only prints and exits. Fixture/import closure was read: create_staged_navigation_fixture/create_gui_fixture/headless_app/QueuedRoot never initialize Tk; Tk/Toplevel constructor guards reject accidental native entry. Existing finite classifications and prior provenance remain unchanged. Original registry bytes and these four prior hashes are retained under tmp/pr-review-automation/review-start-save-responsive/registry-before-responsive.json and responsive-registry-review.json; no bulk hash refresh, CI or policy change.",
     "prior_classification_ref": "correction1-fa6d3b724cfb46f982bddbd7b9131141/inventory.json",
     "prior_classification_head": "16cac994bf44fb4f9a278ce851d6f0848416987e",
     "prior_classification_tree": "8495c003e66f39561cda42016e09a58b7ce48b8a",
@@ -34,8 +34,8 @@
       "pdf_portability.py": "b9143b309e67ce8aa411c5f559d70cbfd701060e7365bd3df51b2c765c54614a",
       "pronunciation_rule_engine.py": "27fadd760c509546f59c042d1fb48fb4e076c9aba1c4d1834365f9d09baf4fc4",
       "review_display.py": "577b6b5912134921c9f7ab11c93e1ae8ee81fc528a06170ca5c51720aa674b9b",
-      "review_gui.py": "1b43f61f837d634cfe823003c93603f5486023d19f99c15dd1176f3925bb32e9",
-      "review_save_service.py": "177c9639f396a5516d37804ec2ba2bcdb4e824e6360f5366c25fd803843eca04",
+      "review_gui.py": "24f24ecdea87953dfa488a403d726018b20e8a32e7bde73f65e4396ec7e2aa9e",
+      "review_save_service.py": "97ea4b3a66d061af1c2ad99815f82c67066b3960228e6ae86b71dd9a7ec465ef",
       "revision_diff.py": "5062e986de7728ca523d5825f00a467206525cf8150fda9630101615c8776b3d",
       "runtime_regression_gate.py": "a9c1064eb573690a9df61566c3eaebd5b352cb6b65be0b9e38a33e6809443a66",
       "runtime_source_validation.py": "560e75a651b67cbef034d780d20cc005aaa6e4f65674eb8a79e59cabd54b5704",
@@ -47,7 +47,7 @@
       "scripts/validation_evidence.py": "ac6d497338a9e99fdac68e0cf187c195f9e78d928cc0e13210e4a98c7b56a3e0",
       "scripts/validation_runner.py": "30452368f477dfafb093b0c8d93f3b340ce57a3b80a785ae75f4caa53bab75e5",
       "scripts/validation_tk_environment.py": "bb170657551942c7e70c59fc29d8e08a562f671c20a9066f67311916feab658e",
-      "standalone_gui.py": "99dd840ca050478763e75b0444ca241c9a109a2e0ab2fc7af907e34c48c9bc63",
+      "standalone_gui.py": "1a1768ec338fb609df5623a6b9a117ecd12cee58b136cef859e39fda5a6d394a",
       "standalone_proofread.py": "9a0eff7ffaee0aa6c7182925a3feabe19b584cfa9c0e960b2a9ea2a4b1c55993",
       "tests/review_save_test_support.py": "7d39422c637eda60506103c8c087a2fcb872be31c779472a7e1378f3961ea357",
       "tests/test_actual_post_commit_recovery_v580.py": "5b8d129c5148ee6e0ad0b328b4709a5f089c7c4cef7863a289d07a523ba1677f",
@@ -120,7 +120,8 @@
       "tests/test_zero_occurrence_pdf_v541.py": "ac5c123a1e57a56e574b23bc12be7a270346c5cd05af13f5a3ceda3953505666",
       "tests/test_zero_summary_and_project_status_v541.py": "90ee2ac9a16db64ea2379eb12286b25da24883fee93b7a33cae5402c80517dd1",
       "ttf_symbol_recombination.py": "58f4156cab507c81690775e1b8c94449b808b63f74fc0637f0fc72ce061fc091",
-      "ttf_zhuyin_shape_decoder.py": "612dfb13c2be1ffa2ba32ae5d47136ef207180361c7785c2e6dc205cb45f07c5"
+      "ttf_zhuyin_shape_decoder.py": "612dfb13c2be1ffa2ba32ae5d47136ef207180361c7785c2e6dc205cb45f07c5",
+      "tests/test_review_responsive_startup.py": "4a334a2bd78156bca3da4ef8def14f5bfb1bb2cbe0e6bd48ce722ae3e3f90295"
     }
   },
   "entries": [
@@ -2147,6 +2148,23 @@
       "core": [
         "test_exact_eighth_exception_retains_seven_and_stops_ninth",
         "test_wrong_identity_history_authorization_and_scope_fail_closed"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_review_responsive_startup.ResponsiveReviewTests",
+      "core": [
+        "test_close_loading_cancels_owned_poll_and_ignores_late_result",
+        "test_constructor_returns_while_loading_and_publishes_only_on_ui_thread",
+        "test_corrupt_artifact_fails_closed_then_retry_loads",
+        "test_failed_write_never_reports_durable_save",
+        "test_launcher_duplicate_and_normal_close_do_not_claim_completion",
+        "test_launcher_spawn_error_restores_retry",
+        "test_launcher_supervisor_captures_synthetic_child_stderr_and_exit",
+        "test_loader_replays_bound_expected_and_preserves_actual",
+        "test_progress_is_published_by_save_ui_poll",
+        "test_save_progress_commit_boundary_and_observer_failure",
+        "test_thread_start_failure_is_visible_and_retryable"
       ],
       "gui": []
     }
