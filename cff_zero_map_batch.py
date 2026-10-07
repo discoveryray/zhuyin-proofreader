@@ -249,10 +249,7 @@ def _patch_workbook(path, wb, h, items, final_maps, audit_rows, propagated, glob
         )
         if new_reading:
             auto_group = f"AUTOBOOT-SESSION:{it['family_key']}"
-            ws.cell(it["row"], h["字型相容群組"]).value = f"CFF:{auto_group}"
-            ws.cell(it["row"], h["群組注音鍵"]).value = f"CFF:{auto_group}#{it['glyph_id']}"
             ws.cell(it["row"], h["判定方式"]).value = "跨PDF CID雙重共識→目標exact簽名暫存→無衝突exact傳播→exact解碼"
-            ws.cell(it["row"], h["CFF樣式群組"]).value = auto_group
         # Show which individual signatures are actually proven.  Missing exact
         # labels remain '?' so an abstention is visibly auditable.
         if "CFF符號序列" in h:

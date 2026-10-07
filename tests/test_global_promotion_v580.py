@@ -736,12 +736,12 @@ class AdmissionAndProjectIntegrationTests(unittest.TestCase):
 
     def test_delivery_failure_does_not_prevent_controller_refresh(self):
         output = self.base / "output"
-        result = {"group_results": [{"affected_occurrence_ids": ["occ_" + sha("occ-0")]}]}
+        result = {"applied_group_count": 1, "group_results": [{"group_id": "agr_fixture", "affected_occurrence_ids": ["occ_" + sha("occ-0")], "verified_occurrence_ids": ["occ_" + sha("occ-0")], "reading": "ㄆ"}]}
         with (patch.object(pipeline, "deliver_pending_promotion_outbox", return_value={"status": "PENDING_RETRY"}),
               patch.object(pipeline, "_clear_actual_dependent_events", return_value=1) as clear,
-              patch.object(pipeline, "refresh_actual_project", return_value=output / "report.xlsx") as refresh):
+              patch.object(pipeline, "refresh_actual_project", side_effect=lambda *a, **kw: (kw["_refresh_status"].update(cleared_actual_dependent_event_count=1), output / "report.xlsx")[1]) as refresh):
             removed, _ = pipeline._finish_direct_actual_commit(output, [], result)
-        clear.assert_called_once()
+        clear.assert_not_called()
         refresh.assert_called_once()
         self.assertEqual(removed, 1)
         self.assertEqual(result["project_actual_commit"], "COMMITTED")
@@ -754,7 +754,7 @@ class AdmissionAndProjectIntegrationTests(unittest.TestCase):
         promotion.enqueue_promotion_intents(root, [intent()])
         repo = library.GlobalExactGlyphRepository.resolved(self.base / "global")
         original = promotion.deliver_pending_promotion_outbox
-        result = {"group_results": [{"affected_occurrence_ids": ["occ_" + sha("occ-0")]}]}
+        result = {"applied_group_count": 1, "group_results": [{"group_id": "agr_fixture", "affected_occurrence_ids": ["occ_" + sha("occ-0")], "verified_occurrence_ids": ["occ_" + sha("occ-0")], "reading": "ㄆ"}]}
         with (patch.object(pipeline, "deliver_pending_promotion_outbox", side_effect=lambda root: original(root, repo)),
               patch.object(pipeline, "_clear_actual_dependent_events", return_value=1),
               patch.object(pipeline, "refresh_actual_project", side_effect=RuntimeError("refresh failure")),

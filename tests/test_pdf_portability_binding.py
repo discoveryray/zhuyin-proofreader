@@ -19,6 +19,27 @@ def read(path):
     return path.read_bytes() if path.exists() else None
 
 
+def test_owned_actual_ack_cleans_only_verified_refresh_publication(tmp_path, monkeypatch):
+    from tests.test_actual_refresh_publication import sealed_project, commit_empty_plan, successful_stage
+    output, _ = sealed_project(tmp_path)
+    token = commit_empty_plan(output)
+    monkeypatch.setattr(sp, "run_pipeline_pdfs", successful_stage)
+    sp.refresh_actual_project(output)
+    publication = output / sp.ACTUAL_REFRESH_PUBLICATION
+    marker = output / p.INCOMPLETE_FILE
+    marker.write_bytes(b"owned-marker")
+    digest = sp.sha256_file(marker)
+    with pytest.raises(ValueError):
+        p._acknowledge_owned_actual_refresh(sp.project_actual_evidence_root(output), token, marker, "f" * 64)
+    assert publication.exists()
+    assert gp.project_refresh_token(sp.project_actual_evidence_root(output)) == token
+    p._acknowledge_owned_actual_refresh(sp.project_actual_evidence_root(output), token, marker, digest)
+    assert marker.read_bytes() == b"owned-marker"
+    assert gp.project_refresh_token(sp.project_actual_evidence_root(output)) is None
+    assert not publication.exists()
+    sp.validate_output_artifact_hashes(sp.json_load_strict(output / "校對工作階段.json"))
+
+
 @pytest.fixture
 def actual_projects(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
@@ -282,7 +303,7 @@ def test_actual_marker_ownership_at_each_boundary(actual_projects, tmp_path, win
             result = original_ack(*args, **kwargs)
             original_save(marker, foreign)
             return result
-        with patch.object(gp, "acknowledge_project_refresh", side_effect=inject):
+        with patch.object(sp, "acknowledge_project_refresh", side_effect=inject):
             with pytest.raises(ValueError):
                 sp.import_actual_gpt_decisions(target, x)
         assert gp.committed_project_recovery(root) is not None

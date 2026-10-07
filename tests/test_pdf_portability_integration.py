@@ -95,7 +95,9 @@ def _synthetic_decode(pdf, output, *args, global_snapshot=None):
 
 def _synthetic_unresolved_decode(pdf, output, *args, global_snapshot=None):
     _synthetic_decode(pdf, output, *args, global_snapshot=global_snapshot)
-    override_rows = ar._read_csv(sp.project_actual_evidence_root(Path(output).parent.parent)
+    # Match decode's explicit positional dynamic_evidence_root (argument 16).
+    assert len(args) == 14 and isinstance(args[13], Path)
+    override_rows = ar._read_csv(args[13]
                                  / ar.OCCURRENCE_OVERRIDE_FILE, ar.OVERRIDE_HEADERS)
     workbook = load_workbook(output)
     sheet = workbook["實際注音"]

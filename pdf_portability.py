@@ -2288,14 +2288,18 @@ def _assert_actual_marker_owner(path: Path, expected_sha: str) -> None:
 
 
 def _acknowledge_owned_actual_refresh(root: Path, token, marker_path: Path, marker_sha: str):
-    from global_glyph_promotion import acknowledge_project_refresh, PROJECT_TRANSACTION_FILE
+    from global_glyph_promotion import PROJECT_TRANSACTION_FILE
+    import standalone_proofread as sp
 
     journal = root / PROJECT_TRANSACTION_FILE
     raw = journal.read_bytes()
     _assert_actual_marker_owner(marker_path, marker_sha)
-    acknowledge_project_refresh(root, token)
+    output_dir = marker_path.parent.resolve()
+    if Path(root).resolve() != sp.project_actual_evidence_root(output_dir):
+        raise ValueError("actual Excel acknowledgement root 不符")
     try:
-        _assert_actual_marker_owner(marker_path, marker_sha)
+        sp._acknowledge_actual_refresh(output_dir, token,
+            _post_ack_guard=lambda: _assert_actual_marker_owner(marker_path, marker_sha))
     except ValueError:
         # A foreign marker published during acknowledgement cannot consume our
         # recovery evidence. Restore only an absent journal; never another owner.

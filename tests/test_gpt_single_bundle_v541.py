@@ -112,7 +112,7 @@ class GptSingleBundleV541Tests(unittest.TestCase):
                  patch.object(sp, "apply_verified_actual_group", return_value={"target_occurrence_ids": [entry["occurrence_id"]],
                                                                            "verified_occurrence_ids": [entry["occurrence_id"]], "reading": "ㄉㄢˋ"}) as apply_mock, \
                  patch.object(sp, "_clear_actual_dependent_events", return_value=0), \
-                 patch.object(sp, "refresh_actual_project", return_value=folder / "report.xlsx") as refresh_mock:
+                 patch.object(sp, "refresh_actual_project", side_effect=lambda *a, **kw: (kw["_refresh_status"].update(cleared_actual_dependent_event_count=0), folder / "report.xlsx")[1]) as refresh_mock:
                 n, removed, report = sp.import_actual_occurrence_decisions(folder, csv_path, package_meta=meta)
             self.assertEqual(n, 1)
             self.assertEqual(removed, 0)
