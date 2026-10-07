@@ -229,7 +229,9 @@ fetch 只更新遠端 refs，不代表可以自行 merge、rebase 或 pull unrel
 
 ## 11. 測試原則
 
-支援 Windows Python 3.13.0；現行驗證策略以 [驗證政策](docs/VALIDATION_POLICY.md) 為主要來源。新任務預設開發模式，每輪只做預估五分鐘內的必要定向 regression、compile／diff，保存本機 commit；延後 PR 與昂貴測試。只有使用者明確說「開始驗證」才固定候選並進入驗證模式，執行一次 PR 核心全集＋全部必要 GUI，合併後執行實際 merge SHA 的短檢查。不例行另跑本機 full、完整 unittest、混合 full pytest 或 post-merge full。重跑必須有修改影響、失敗線索或明確門檻，不因等待 CI、重開 session 或整理報告而無理由重跑。
+2026-10-07 使用者明確採納 `validation-flow/no-real-tk/1`，完全取消所有自動化入口的真視窗驗證（含 hidden root、虛擬顯示器、fixture／import／子程序）、Tcl/Tk configure／preflight／初始化能力門檻及 GUI retry／補驗。新政策適用本身與後續驗證；尚未結案任務只遷移 window 義務，其餘凍結契約、baseline、修正計數、原 Tk 失敗及 retry 額度保留，其他 blocker 不自動解除。產品 GUI／Tk／launcher 保留；有效非視窗資料／交易／恢復與功能測試、Python 3.13.0、runtime／compile／diff、兩輪審查與 actual merge 短驗證仍必要。詳見 [驗證政策](docs/VALIDATION_POLICY.md)。
+
+支援 Windows Python 3.13.0；現行驗證策略以 [驗證政策](docs/VALIDATION_POLICY.md) 為主要來源。新任務預設開發模式，每輪只做預估五分鐘內的必要定向 regression、compile／diff，保存本機 commit；延後 PR 與昂貴測試。只有使用者明確說「開始驗證」才固定候選並進入驗證模式，執行一次 PR 有效非視窗測試全集，合併後執行實際 merge SHA 的短檢查。不例行另跑本機 full、完整 unittest、混合 full pytest 或 post-merge full。重跑必須有修改影響、失敗線索或明確門檻，不因等待 CI、重開 session 或整理報告而無理由重跑。
 
 Production 修改至少應依風險執行：
 
@@ -238,7 +240,7 @@ Production 修改至少應依風險執行：
 3. cross-version / architecture tests（若適用）
 4. integration tests（若適用）
 5. runtime asset validation（若涉及正式 runtime）
-6. PR 一次正式分組 pytest 覆蓋（固定候選且已進入驗證模式，核心＋全部必要 GUI；依 VALIDATION_POLICY 執行）
+6. PR 一次正式分組 pytest 覆蓋（固定候選且已進入驗證模式，全部有效非視窗測試；依 VALIDATION_POLICY 執行）
 7. `compileall`
 8. `git diff --check`
 9. `git status`
@@ -408,7 +410,7 @@ Codex 不得僅依自己的 implementation、tests 或自我 code review
 
 ## 17. 兩輪獨立審查與 Codex 執行期間自動接續
 
-新制度只適用採用後的新任務；未收尾任務維持其凍結契約。開發／驗證模式及使用者事前明確採納的制度變更過渡驗收見 [驗證政策](docs/VALIDATION_POLICY.md)，不得用受審新 gate 自行創造授權或追認舊 PASS。
+除已明確採納的無視窗義務遷移外，新制度只適用採用後的新任務；未收尾任務維持其餘凍結契約。開發／驗證模式及使用者事前明確採納的制度變更過渡驗收見 [驗證政策](docs/VALIDATION_POLICY.md)，不得用受審新 gate 自行創造授權或追認舊 PASS。
 
 適用完整規範為 [v5.8 完整規範](docs/V58_MASTER_DEVELOPMENT_REVIEW_PLAN_v1.1.md)，其中第 1、5～8 節及 [執行手冊](docs/PR_REVIEW_AUTOMATION.md) 定義自動協調契約；安全契約仍依本文件及完整規範第 3～4 節。
 

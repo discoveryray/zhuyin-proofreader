@@ -25,6 +25,8 @@ import xml.etree.ElementTree as ET
 
 
 ROOT = Path(__file__).resolve().parents[1]
+POLICY = "validation-flow/no-real-tk/1"
+WINDOW_NOTICE = "真視窗驗證已依政策取消"
 _MISSING = object()
 _CLASSIFICATION_UNKNOWN_SOURCES = set()
 
@@ -1045,8 +1047,10 @@ def normalized_source_sha256(path):
 
 def expand_registry(registry):
     """Expand explicitly listed members, never a class or function wildcard."""
-    if registry.get("schema") != "zhuyin-test-group-registry/1":
+    if registry.get("schema") not in {"zhuyin-test-group-registry/1", "zhuyin-test-group-registry/2"}:
         raise ValueError("unknown group registry schema")
+    if registry["schema"].endswith("/2") and registry.get("policy") != POLICY:
+        raise ValueError("unknown registry validation policy")
     if not isinstance(registry.get("source_review"), dict) or not registry["source_review"].get("basis"):
         raise ValueError("missing registry source review")
     entries = registry.get("entries")
@@ -1095,6 +1099,27 @@ def validate_registry_sources(registry, source_root):
     changed = sorted(name for name in set(hashes) & set(actual) if hashes[name] != actual[name])
     if missing or unknown or changed:
         raise ValueError(f"registry reviewed source changed: missing={missing}, unregistered={unknown}, changed={changed}")
+    if registry["schema"] == "zhuyin-test-group-registry/2" and registry.get("source_scope") == "repository":
+        registration = expand_registry(registry)
+        cancelled = registry.get("cancelled_window_cases")
+        required = {identity for identity, group in registration.items() if group == "gui"}
+        if not isinstance(cancelled, dict) or set(cancelled) != required:
+            raise ValueError("cancelled window source inventory mismatch")
+        for identity, item in cancelled.items():
+            if (not isinstance(item, dict) or set(item) != {"source_path", "callable", "reason"}
+                    or any(not isinstance(item[key], str) or not item[key] for key in ("source_path", "callable", "reason"))):
+                raise ValueError("invalid cancelled window source record")
+            path = (source_root / item["source_path"]).resolve()
+            if not path.is_relative_to(source_root / "tests") or path.relative_to(source_root).as_posix() not in hashes:
+                raise ValueError("cancelled source escapes reviewed tests")
+            nodes = ast.parse(path.read_text(encoding="utf-8-sig")).body
+            for part in item["callable"].split("."):
+                selected = [node for node in nodes if isinstance(node, (ast.ClassDef, ast.FunctionDef)) and node.name == part]
+                if len(selected) != 1:
+                    raise ValueError("cancelled callable missing or ambiguous: " + identity)
+                nodes = selected[0].body
+            if not part.startswith("cancelled_window_"):
+                raise ValueError("native case remains in default discovery: " + identity)
     return actual
 
 
@@ -1270,7 +1295,11 @@ def grouped_collection(output, tests=None, registry_path=None):
 
     registry = json.loads(Path(registry_path or REGISTRY_PATH).read_text(encoding="utf-8"))
     registration = expand_registry(registry)
+    current = registry["schema"].endswith("/2")
     source_root = ROOT if registry.get("source_scope") == "repository" else tests
+    # Refuse unreviewed source before either collection subprocess imports it.
+    if current:
+        validate_registry_sources(registry, source_root)
 
     class Groups:
         records = []
@@ -1279,10 +1308,15 @@ def grouped_collection(output, tests=None, registry_path=None):
             failures = []
             collected = [{"identity": ".".join([Path(item.nodeid.split("::")[0]).stem, *item.nodeid.split("::")[1:]]),
                           "nodeid": item.nodeid} for item in session.items]
-            reconcile_registered_cases(collected, registration)
+            reconcile_registered_cases(
+                [record for record in collected if registration.get(record["identity"]) != "gui"] if current else collected,
+                {identity: group for identity, group in registration.items() if group == "core"} if current else registration)
             validate_registry_sources(registry, source_root)
             for item in session.items:
                 parts = item.nodeid.split("::")
+                identity = ".".join([Path(parts[0]).stem, *parts[1:]])
+                if current and registration.get(identity) == "gui":
+                    continue
                 try:
                     group = classify_item(item, registration)
                 except (ValueError, RecursionError) as error:
@@ -1302,7 +1336,10 @@ def grouped_collection(output, tests=None, registry_path=None):
         unittest_ids = json.loads(identity_path.read_text(encoding="utf-8"))["ids"]
     _cached_uses_tk.cache_clear()
     plugin = Groups()
-    code = pytest.main([str(tests), "--collect-only", "-q"], plugins=[plugin])
+    options = [str(tests), "--collect-only", "-q"]
+    if tests == ROOT / "tests" and (tests / "conftest.py").is_file():
+        options.append("--audit-window-inventory")
+    code = pytest.main(options, plugins=[plugin])
     if code:
         raise ValueError(f"group collection failed: {code}")
     records = plugin.records
@@ -1310,12 +1347,21 @@ def grouped_collection(output, tests=None, registry_path=None):
               "pytest_ids": [record["identity"] for record in records],
               "core_ids": [record["identity"] for record in records if record["group"] == "core"],
               "gui_ids": [record["identity"] for record in records if record["group"] == "gui"]}
+    if current:
+        unittest_ids = [identity for identity in unittest_ids if registration.get(identity) != "gui"]
     if unittest_ids:
         result.update(compare_collections(unittest_ids, result["pytest_ids"]))
     else:
         result.update(unittest_ids=[], pytest_only=result["pytest_ids"], same_common_order=True)
     result["registration"] = {"registry_sha256": hashlib.sha256(Path(registry_path or REGISTRY_PATH).read_bytes()).hexdigest(),
                               "source_review": registry["source_review"], "source_scope": registry["source_scope"]}
+    if registry["schema"].endswith("/2"):
+        result.update(schema="zhuyin-test-groups/2", policy=POLICY, window_validation=WINDOW_NOTICE,
+                      cancelled_window_ids=[identity for identity, group in registration.items() if group == "gui"])
+        result.pop("gui_ids")
+        result["pytest_ids"] = result["core_ids"][:]
+        result["unittest_ids"] = [identity for identity in result["unittest_ids"] if identity in result["core_ids"]]
+        result["pytest_only"] = [identity for identity in result["pytest_only"] if identity in result["core_ids"]]
     validate_groups(result)
     with output.open("x", encoding="utf-8") as handle:
         json.dump(result, handle, ensure_ascii=False, indent=2)
@@ -1323,6 +1369,15 @@ def grouped_collection(output, tests=None, registry_path=None):
 
 
 def validate_groups(inventory):
+    if inventory.get("schema") == "zhuyin-test-groups/2":
+        if inventory.get("policy") != POLICY or inventory.get("window_validation") != WINDOW_NOTICE:
+            raise ValueError("unknown non-window inventory policy")
+        active, cancelled = inventory["core_ids"], inventory["cancelled_window_ids"]
+        if not active or inventory["pytest_ids"] != active or len(active + cancelled) != len(set(active + cancelled)):
+            raise ValueError("empty/duplicate/inconsistent active inventory")
+        legacy = dict(inventory, schema="zhuyin-test-groups/1", pytest_ids=active, gui_ids=[])
+        validate_groups(legacy)
+        return inventory
     if inventory.get("schema") != "zhuyin-test-groups/1":
         raise ValueError("unknown grouped inventory schema")
     all_ids, core, gui = (inventory[key] for key in ("pytest_ids", "core_ids", "gui_ids"))
@@ -1343,6 +1398,8 @@ def validate_groups(inventory):
 
 def verify_group(report, inventory, group):
     validate_groups(inventory)
+    if inventory["schema"].endswith("/2") and group != "core":
+        raise ValueError(WINDOW_NOTICE)
     required = inventory[group + "_ids"]
     cases = list(ET.parse(report).iter("testcase"))
     mapping = {}
@@ -1361,7 +1418,7 @@ def verify_group(report, inventory, group):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("collect", "verify-gui", "_unittest", "_pytest", "_identities", "collect-groups"))
+    parser.add_argument("command", choices=("collect", "verify-gui", "verify-active", "_unittest", "_pytest", "_identities", "collect-groups"))
     parser.add_argument("output", type=Path)
     parser.add_argument("--junit", type=Path)
     parser.add_argument("--tests", type=Path)
@@ -1372,26 +1429,18 @@ def main(argv=None):
     elif args.command.startswith("_"):
         collect(args.command[1:], args.output, args.tests)
     elif args.command == "collect":
-        with tempfile.TemporaryDirectory() as temporary:
-            paths = [Path(temporary) / f"{runner}.json" for runner in ("unittest", "pytest")]
-            for runner, path in zip(("unittest", "pytest"), paths):
-                subprocess.run([sys.executable, __file__, "_" + runner, str(path)], cwd=ROOT, check=True)
-            unittest_collection, pytest_ids = (
-                json.loads(path.read_text(encoding="utf-8")) for path in paths
-            )
-            result = inventory_from_collections(
-                unittest_collection, pytest_ids, gui_functions(ROOT / "tests")
-            )
-        args.output.parent.mkdir(parents=True, exist_ok=True)
-        args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
-        print(json.dumps({"unittest": len(result["unittest_ids"]), "pytest": len(result["pytest_ids"]),
-                          "pytest_only": result["pytest_only"], "gui": len(result["gui_ids"]),
-                          "same_common_order": result["same_common_order"]}))
-    else:
+        grouped_collection(args.output, args.tests, args.registry)
+    elif args.command == "verify-active":
         if args.junit is None:
-            parser.error("verify-gui requires --junit")
-        result = verify_gui(args.junit, json.loads(args.output.read_text(encoding="utf-8")))
-        print(f"Verified {result} required GUI cases executed successfully")
+            parser.error("verify-active requires --junit")
+        inventory = json.loads(args.output.read_text(encoding="utf-8"))
+        if inventory.get("schema") != "zhuyin-test-groups/2":
+            raise ValueError("current active verification requires no-window inventory")
+        print(f"Verified {verify_group(args.junit, inventory, 'core')} active non-window cases")
+    elif args.command == "verify-gui":
+        raise ValueError(WINDOW_NOTICE + "; legacy evidence is read-only")
+    else:
+        raise ValueError("unknown audit command")
     return 0
 
 

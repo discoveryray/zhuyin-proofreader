@@ -17,6 +17,7 @@ from openpyxl import Workbook, load_workbook
 
 import occurrence_ledger as ol
 import review_gui as gui
+from tests.no_window_review_support import (Surface, ReviewApp as HeadlessReviewApp, ExpectedDialog as HeadlessExpectedDialog, ConfirmedDialog as HeadlessConfirmedDialog, ActualDialog as HeadlessActualDialog, Preview, Value)
 import standalone_proofread as sp
 from tests.review_save_test_support import wait_for_save
 
@@ -303,10 +304,9 @@ class ManualExpectedContractTests(unittest.TestCase):
 class ManualReviewGuiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        # This task requires a real Windows/Tk GUI. Missing capability is a test
-        # error requiring the authorized desktop test environment, never a skip.
-        cls.root = tk.Tk()
-        cls.root.withdraw()
+        # Finite state/event owner; no Tcl interpreter or native widgets.
+        cls.root = Surface()
+        pass
 
     @classmethod
     def tearDownClass(cls):
@@ -316,8 +316,10 @@ class ManualReviewGuiTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.output = Path(self.temp.name)
         self.manifest = create_gui_fixture(self.output)
-        self.window = tk.Toplevel(self.root)
-        self.app = gui.ReviewApp(self.window, self.output)
+        self.window = Surface(self.root)
+        for name in ("showinfo", "showwarning", "showerror"):
+            self.enterContext(patch.object(gui.messagebox, name))
+        self.app = HeadlessReviewApp(self.window, self.output)
         self.window.update()
 
     def tearDown(self):
@@ -328,9 +330,9 @@ class ManualReviewGuiTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             output = Path(td)
             manifest = create_gui_fixture(output, missing_printed_page=True)
-            owner = tk.Toplevel(self.root)
+            owner = Surface(self.root)
             try:
-                app = gui.ReviewApp(owner, output)
+                app = HeadlessReviewApp(owner, output)
                 owner.update()
                 target = next(row for row in app.records if row["state"] == "DIFFERENCE_PENDING_CONFIRMATION"
                               and row["printed_page"] == "")
@@ -668,9 +670,9 @@ class ManualReviewGuiTests(unittest.TestCase):
         db = sp.load_or_initialize_db(self.output)
         db["events"][first["review_id"]] = legacy
         sp.json_save(self.output / "人工判定資料庫.json", db)
-        reopened_window = tk.Toplevel(self.root)
+        reopened_window = Surface(self.root)
         try:
-            reopened = gui.ReviewApp(reopened_window, self.output)
+            reopened = HeadlessReviewApp(reopened_window, self.output)
             reopened_window.update()
             with patch.object(gui, "ConfirmedItemsDialog") as choose:
                 choose.return_value.result = first["review_id"]
@@ -694,13 +696,13 @@ class ManualReviewGuiTests(unittest.TestCase):
         first = app.current()
         app.primary.invoke()
         wait_for_save(app)
-        reopened_window = tk.Toplevel(self.root)
+        reopened_window = Surface(self.root)
         try:
-            reopened = gui.ReviewApp(reopened_window, self.output)
+            reopened = HeadlessReviewApp(reopened_window, self.output)
             reopened_window.update()
             ledger = sp.materialize_ledger(reopened.manifest, reopened.db)
             confirmed = [row for row in ledger if row["review_id"] == first["review_id"]]
-            dialog = gui.ConfirmedItemsDialog(reopened_window, confirmed, wait=False)
+            dialog = HeadlessConfirmedDialog(reopened_window, confirmed, wait=False)
             dialog.pdf_filter.set("隔離操作樣本")
             dialog.page_filter.set("1")
             dialog.text_filter.set("窗外")
@@ -765,7 +767,7 @@ class ManualReviewGuiTests(unittest.TestCase):
         app.show()
         self.assertEqual(gui.review_lane(app.current()), "expected")
         self.assertEqual(app.primary.cget("text"), "輸入其他應標注音")
-        dialog = gui.ExpectedDialog(self.window, both, "輸入其他應標注音", wait=False)
+        dialog = HeadlessExpectedDialog(self.window, both, "輸入其他應標注音", wait=False)
         dialog.expected.set("ㄎㄢˋ")
         dialog.evidence.set(" \t ")
         dialog.submit()
@@ -832,7 +834,7 @@ class ManualReviewGuiTests(unittest.TestCase):
     def test_ctrl_enter_dialog_repetition_and_busy_action_save_only_one_item(self):
         app = self.app
         first_id = app.current()["review_id"]
-        original_dialog = gui.ExpectedDialog
+        original_dialog = HeadlessExpectedDialog
 
         def keyboard_dialog(*args, **kwargs):
             dialog = original_dialog(*args, **kwargs, wait=False)
@@ -865,9 +867,9 @@ class ManualReviewGuiTests(unittest.TestCase):
         self.assertTrue(app._last_event_saved)
         self.assertFalse(app._last_event_refreshed)
         self.assertEqual(app.primary.cget("state"), "disabled")
-        reopened_window = tk.Toplevel(self.root)
+        reopened_window = Surface(self.root)
         try:
-            reopened = gui.ReviewApp(reopened_window, self.output)
+            reopened = HeadlessReviewApp(reopened_window, self.output)
             reopened_window.update()
             self.assertIn(first_id, reopened.db["events"])
             self.assertNotIn(first_id, [row["review_id"] for row in reopened.records])
@@ -913,7 +915,7 @@ class ManualReviewGuiTests(unittest.TestCase):
         self.assertIsNone(app._rendered_review_id)
         self.assertEqual(app.primary.cget("state"), "disabled")
 
-    def test_shortcut_full_label_and_staged_batch_footer_remain_visible(self):
+    def cancelled_window_shortcut_full_label_and_staged_batch_footer_remain_visible(self):
         app = self.app
         self.window.update()
         label_width = tkfont.Font(font=app.primary.cget("font")).measure(app.primary.cget("text"))

@@ -149,7 +149,7 @@ class ValidationWorkflowTests(unittest.TestCase):
         main = event_context('push', 'refs/heads/main')
         legacy = event_context(event__pull_request__number=29, head_ref='codex/review-confirm-responsive',
                                event__pull_request__base__sha='502414b3b38e004a6d8d9cb693cf21b65148765a')
-        ids = ['checkout', 'python', 'version', 'pip', 'dependencies', 'runtime', 'inventory', 'pytest', 'gui', 'compile', 'clean', 'diff_push', 'tk_environment']
+        ids = ['checkout', 'python', 'version', 'pip', 'dependencies', 'runtime', 'inventory', 'pytest', 'active', 'compile', 'clean', 'diff_push']
         success = {key: 'success' for key in ids}; success.update(unittest='skipped', diff_pr='skipped')
         cases = [(pr, {}, True), (develop, {}, True), (main, success, True),
                  (event_context('workflow_dispatch', 'refs/heads/main'), success, False),
@@ -159,10 +159,11 @@ class ValidationWorkflowTests(unittest.TestCase):
             for context, required in ((pr, 'grouped'), (develop, 'short')):
                 changed = {**context, 'needs': {k: dict(v) for k, v in context['needs'].items()}}
                 changed['needs'][required]['result'] = result; cases.append((changed, {}, False))
-        legacy_success = {**success, 'diff_push': 'skipped', 'diff_pr': 'success', 'unittest': 'success', 'tk_environment': 'skipped'}
+        legacy_success = {**success, 'diff_push': 'skipped', 'diff_pr': 'success', 'unittest': 'success'}
         cases.append((legacy, legacy_success, True))
-        for key in ('runtime', 'pytest', 'gui', 'unittest', 'diff_pr', 'clean'):
-            cases.append((legacy, {**legacy_success, key: 'skipped'}, False))
+        for result in ('failure', 'cancelled', 'skipped', ''):
+            for key in [name for name in ids if name != 'diff_push'] + ['unittest', 'diff_pr']:
+                cases.append((legacy, {**legacy_success, key: result}, False))
         for context in (pr, develop, main, legacy):
             changed = {**context, 'needs': dict(grouped=dict(result='success'), short=dict(result='success'))}
             cases.append((changed, legacy_success if context is legacy else success, False))
@@ -209,13 +210,12 @@ foreach ($case in $cases) {
             self.assertEqual(set(dict(planned(context)['test'])), {'Check out repository', 'Set up Python', 'Show Python version', 'Verify required validation results'})
         selected = dict(planned(main)['test'])
         required = {'Check out repository', 'Set up Python', 'Show Python version', 'Upgrade pip', 'Install development dependencies',
-                    'Validate runtime asset integrity', 'Audit test entrypoint coverage', 'Run full pytest suite', 'Verify GUI test execution',
-                    'Configure same-installation Tcl/Tk', 'Compile Python sources', 'Check committed whitespace (push)', 'Check repository working tree', 'Verify required validation results'}
+                    'Validate runtime asset integrity', 'Audit test entrypoint coverage', 'Run full pytest suite', 'Verify active test execution',
+                    'Compile Python sources', 'Check committed whitespace (push)', 'Check repository working tree', 'Verify required validation results'}
         self.assertEqual(set(selected), required)
         self.assertEqual(selected['Run full pytest suite'], ('run', 'python -m pytest tests/ -q -rs --junitxml=tmp/ci-pytest.xml'))
-        self.assertEqual(selected['Verify GUI test execution'], ('run', 'python scripts/test_entrypoint_audit.py verify-gui tmp/ci-test-inventory.json --junit tmp/ci-pytest.xml'))
+        self.assertEqual(selected['Verify active test execution'], ('run', 'python scripts/test_entrypoint_audit.py verify-active tmp/ci-test-inventory.json --junit tmp/ci-pytest.xml'))
         self.assertEqual(selected['Validate runtime asset integrity'], ('run', 'python -m pytest tests/test_runtime_asset_manifest_integrity_v562.py -q'))
-        self.assertEqual(selected['Configure same-installation Tcl/Tk'], ('run', 'python scripts/validation_tk_environment.py configure --evidence-root tmp/validation-evidence --github-env \"$env:GITHUB_ENV\"'))
         self.assertEqual(selected['Check out repository'], ('uses', 'actions/checkout@v7'))
         self.assertEqual(selected['Set up Python'], ('uses', 'actions/setup-python@v7'))
         matrix = re.search(r'^        python-version: (.*)$', job('test'), re.M).group(1)
@@ -234,7 +234,7 @@ foreach ($case in $cases) {
                 self.assertEqual(set(planned(context)), {'test'})
                 selected = dict(planned(context)['test'])
                 self.assertEqual(selected['Run full unittest suite'], ('run', 'python -m unittest discover -s tests -p "test_*.py"'))
-                self.assertTrue('Run full pytest suite' in selected and 'Verify GUI test execution' in selected)
+                self.assertTrue('Run full pytest suite' in selected and 'Verify active test execution' in selected)
                 matrix = re.search(r'^        python-version: (.*)$', job('test'), re.M).group(1)
                 self.assertEqual(expression(matrix, context), ['3.12', '3.13'])
                 outcomes = {re.search(r'^        id: (.*)$', body, re.M).group(1): 'success'
@@ -252,33 +252,36 @@ foreach ($case in $cases) {
             self.assertEqual(re.findall(r'^      PYTEST_ADDOPTS: (.*)$', section, re.M), ['""'])
             self.assertNotIn('--capture=sys', section)
         self.assertIn('python-version: \'3.13.0\'', grouped)
-        for group in ('core', 'gui'):
-            body = step(grouped, 'Run ' + ('GUI' if group == 'gui' else 'core') + ' group')
-            self.assertIn('--group ' + group + ' --mode validation', body)
-            self.assertNotIn('continue-on-error', body)
-            self.assertNotIn('!cancelled()', body)
+        body = step(grouped, 'Run core group')
+        self.assertIn('--group core --mode validation', body)
+        self.assertNotIn('continue-on-error', body)
+        self.assertNotIn('!cancelled()', body)
         self.assertLess(grouped.index('Restore validation history'), grouped.index('Run core group'))
-        self.assertLess(grouped.index('Run core group'), grouped.index('Run GUI group'))
-        self.assertLess(grouped.index('Run GUI group'), grouped.index('Aggregate functional coverage'))
+        self.assertLess(grouped.index('Run core group'), grouped.index('Aggregate functional coverage'))
+        self.assertLess(grouped.index('Aggregate functional coverage'), grouped.index('Verify functional coverage'))
+        self.assertIn('verify-coverage tmp/validation-evidence/coverage.json', step(grouped, 'Verify functional coverage'))
         self.assertNotIn('python -m pytest tests/', grouped)
         self.assertNotIn('unittest discover', grouped)
 
     def test_early_preflight_precedes_core_and_shared_wiring_does_not_open_post_merge_tk(self):
-        grouped = job('grouped')
-        self.assertLess(grouped.index('Configure same-installation Tcl/Tk'), grouped.index('Early hosted Tk preflight'))
-        self.assertLess(grouped.index('Early hosted Tk preflight'), grouped.index('Run core group'))
-        for section in (grouped, job('short')):
-            configure = step(section, 'Configure same-installation Tcl/Tk')
-            self.assertIn('validation_tk_environment.py configure', configure)
-            self.assertIn('--github-env "$env:GITHUB_ENV"', configure)
-            self.assertNotIn('if:', configure)
-            self.assertNotIn('continue-on-error', configure)
-        preflight = step(grouped, 'Early hosted Tk preflight')
-        self.assertIn('validation_tk_environment.py preflight', preflight)
-        self.assertNotIn('if:', preflight)
-        self.assertNotIn('continue-on-error', preflight)
-        self.assertNotIn('Early hosted Tk preflight', job('short'))
-        self.assertNotIn('validation_tk_environment.py preflight', job('short'))
+        # All event/ref paths use this one workflow; reject retired launchers globally.
+        for forbidden in ('validation_tk_environment.py', 'gui_preflight.py', '--group gui',
+                          'verify-gui', 'steps.gui.outcome', 'steps.tk_environment.outcome',
+                          'GUI_RESULT', 'TK_ENVIRONMENT_RESULT'):
+            self.assertNotIn(forbidden, WORKFLOW)
+        self.assertIn('Verify active test execution', job('test'))
+        for context in (event_context(), event_context('push', 'refs/heads/develop'),
+                        event_context('push', 'refs/heads/main'),
+                        event_context('workflow_dispatch', 'refs/heads/main'),
+                        event_context(event__pull_request__number=29, head_ref='codex/review-confirm-responsive',
+                                      event__pull_request__base__sha='502414b3b38e004a6d8d9cb693cf21b65148765a'),
+                        event_context(head_ref='codex/simplify-validation',
+                                      event__pull_request__base__sha='1593e7af65596d320b4427f1b15bb2bc0bdc949c')):
+            for selected in planned(context).values():
+                for label, (_, command) in selected:
+                    self.assertNotIn('Tk', label)
+                    self.assertNotIn('--group gui', command)
+                    self.assertNotIn('verify-gui', command)
 
     def test_upload_cannot_overwrite_or_export_test_scratch(self):
         for section in (job('grouped'), job('short')):
@@ -313,7 +316,7 @@ foreach ($case in $cases) {
         self.assertEqual(expression, expected)
         matrix = re.search(r'^        python-version: (.*)$', section, re.M).group(1)
         self.assertIn("github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c'", matrix)
-        for name in ('Run full unittest suite', 'Run full pytest suite', 'Verify GUI test execution'):
+        for name in ('Run full unittest suite', 'Run full pytest suite', 'Verify active test execution'):
             condition = re.search(r'^        if: (.*)$', step(section, name), re.M).group(1)
             for required in ("github.event.pull_request.number == 29", "github.head_ref == 'codex/review-confirm-responsive'", "github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a'", "github.head_ref == 'codex/simplify-validation'"):
                 self.assertIn(required, condition)
