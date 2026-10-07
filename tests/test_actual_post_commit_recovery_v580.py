@@ -11,6 +11,8 @@ from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import patch
 
+import fitz
+
 import actual_review as review
 import global_exact_glyph_library as library
 import global_glyph_promotion as promotion
@@ -61,11 +63,30 @@ def prepared_publication_crash_worker(output):
         commit(output)
 
 
+def sealed_recovery_pdf(output):
+    """Keep controller mocks while exercising real sealed PDF acknowledgement."""
+    output = Path(output)
+    path = output / '校對工作階段.json'
+    if path.exists():
+        return pipeline.json_load_strict(path)
+    output.mkdir(parents=True, exist_ok=True)
+    pdf = output.parent / 'book.pdf'
+    document = fitz.open()
+    document.new_page()
+    document.save(pdf)
+    document.close()
+    manifest = pipeline.seal_manifest({'session_id': 'recovery-fixture', 'records': [],
+        'pdfs': [{'pdf': str(pdf), 'pdf_name': pdf.name, 'pdf_sha256': pipeline.sha256_file(pdf)}]})
+    pipeline.json_save(path, manifest)
+    return manifest
+
+
 def crash_after_refresh_worker(output, store):
     output = Path(output)
+    manifest = sealed_recovery_pdf(output)
     ledger = [dict(row, actual='ㄅ') for row in fixture_group()['members']]
     with ExitStack() as stack:
-        stack.enter_context(patch.object(pipeline, 'json_load_strict', return_value={}))
+        stack.enter_context(patch.object(pipeline, 'json_load_strict', return_value=manifest))
         stack.enter_context(patch.object(pipeline, 'validate_manifest_integrity'))
         stack.enter_context(patch.object(pipeline, 'validate_output_artifact_hashes'))
         stack.enter_context(patch.object(pipeline, 'load_or_initialize_db', return_value={}))
@@ -96,6 +117,7 @@ class DurableActualRecoveryTests(unittest.TestCase):
         } for row in self.ledger}}
 
     def run_recovery(self, fail=None, wrapper=False, mismatch=False, defer_ack=False):
+        manifest = sealed_recovery_pdf(self.output)
         real_clear = pipeline._clear_actual_dependent_events
         def deliver(root):
             self.calls.append('delivery')
@@ -125,7 +147,7 @@ class DurableActualRecoveryTests(unittest.TestCase):
             refreshed[0]['actual'] = 'ㄆ'
         with ExitStack() as stack:
             stack.enter_context(patch.object(pipeline, 'deliver_pending_promotion_outbox', side_effect=deliver))
-            stack.enter_context(patch.object(pipeline, 'json_load_strict', return_value={}))
+            stack.enter_context(patch.object(pipeline, 'json_load_strict', return_value=manifest))
             stack.enter_context(patch.object(pipeline, 'validate_manifest_integrity'))
             stack.enter_context(patch.object(pipeline, 'validate_output_artifact_hashes'))
             stack.enter_context(patch.object(pipeline, 'load_or_initialize_db', return_value=self.events))

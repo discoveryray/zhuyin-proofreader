@@ -71,6 +71,221 @@ def commit_empty_plan(output):
     return promotion.project_refresh_token(sp.project_actual_evidence_root(output))
 
 
+def _refresh_retained_bytes(output):
+    files = {p: p.read_bytes() for p in output.rglob('*') if p.is_file()}
+    journal_path = output / sp.ACTUAL_REFRESH_PUBLICATION
+    if journal_path.exists():
+        stage = output.parent / sp.json_load_strict(journal_path)['stage']
+        files.update({p: p.read_bytes() for p in stage.rglob('*') if p.is_file()})
+    return files
+
+
+def _mutate_refresh_pdf(manifest, mutation):
+    pdf = Path(manifest['pdfs'][0]['pdf'])
+    if mutation == 'missing':
+        pdf.unlink()
+    elif mutation == 'same_metadata':
+        metadata = pdf.stat()
+        raw = pdf.read_bytes()
+        pdf.write_bytes(raw[:-1] + bytes([raw[-1] ^ 1]))
+        os.utime(pdf, ns=(metadata.st_atime_ns, metadata.st_mtime_ns))
+        assert pdf.stat().st_size == metadata.st_size
+        assert pdf.stat().st_mtime_ns == metadata.st_mtime_ns
+        assert sp.sha256_file(pdf) != manifest['pdfs'][0]['pdf_sha256']
+    else:
+        pdf.write_bytes(b'changed PDF after sealed refresh')
+
+
+@pytest.mark.parametrize('phase', ['PUBLISHED', 'ACKNOWLEDGING', 'ACKNOWLEDGED'])
+@pytest.mark.parametrize('mutation', ['missing', 'changed', 'same_metadata', 'unreadable'])
+def test_refresh_restart_requires_sealed_pdf_before_token_or_cleanup(tmp_path, monkeypatch, phase, mutation):
+    output, manifest = sealed_project(tmp_path)
+    token = commit_empty_plan(output)
+    monkeypatch.setattr(sp, 'run_pipeline_pdfs', successful_stage)
+    sp.refresh_actual_project(output)
+    journal_path = output / sp.ACTUAL_REFRESH_PUBLICATION
+    if phase != 'PUBLISHED':
+        acknowledge = sp.acknowledge_project_refresh
+        unlink = Path.unlink
+        if phase == 'ACKNOWLEDGING':
+            def interrupt_ack(*args):
+                raise OSError('before token consumption')
+            monkeypatch.setattr(sp, 'acknowledge_project_refresh', interrupt_ack)
+        else:
+            def interrupt_cleanup(self, *args, **kwargs):
+                if self == journal_path:
+                    raise OSError('after token consumption')
+                return unlink(self, *args, **kwargs)
+            monkeypatch.setattr(Path, 'unlink', interrupt_cleanup)
+        with pytest.raises(OSError, match='token consumption'):
+            sp._acknowledge_actual_refresh(output, token)
+        monkeypatch.setattr(sp, 'acknowledge_project_refresh', acknowledge)
+        monkeypatch.setattr(Path, 'unlink', unlink)
+        assert sp.json_load_strict(journal_path)['phase'] == 'ACKNOWLEDGING'
+    if mutation == 'unreadable':
+        sha = sp.sha256_file
+        pdf = Path(manifest['pdfs'][0]['pdf'])
+        def unreadable_pdf(path):
+            if Path(path).resolve() == pdf.resolve():
+                raise PermissionError('PDF bytes unreadable')
+            return sha(path)
+        monkeypatch.setattr(sp, 'sha256_file', unreadable_pdf)
+    else:
+        _mutate_refresh_pdf(manifest, mutation)
+    before = _refresh_retained_bytes(output)
+    monkeypatch.setattr(sp, 'run_pipeline_pdfs', lambda *a, **kw: pytest.fail('duplicate rebuild'))
+    monkeypatch.setattr(sp, '_publish_actual_refresh', lambda *a, **kw: pytest.fail('duplicate publish'))
+    with pytest.raises(FileNotFoundError, match='PDF'):
+        sp.refresh_actual_with_recovery(output)
+    assert _refresh_retained_bytes(output) == before
+    assert promotion.project_refresh_token(sp.project_actual_evidence_root(output)) == (None if phase == 'ACKNOWLEDGED' else token)
+
+
+@pytest.mark.parametrize('boundary', ['before_publish', 'before_published_mark', 'before_ack', 'after_ack_intent'])
+@pytest.mark.parametrize('mutation', ['missing', 'changed', 'same_metadata'])
+def test_refresh_final_boundaries_reject_pdf_drift(tmp_path, monkeypatch, boundary, mutation):
+    output, manifest = sealed_project(tmp_path)
+    token = commit_empty_plan(output)
+    old = _refresh_retained_bytes(output)
+    monkeypatch.setattr(sp, 'run_pipeline_pdfs', successful_stage)
+    if boundary == 'before_publish':
+        publish = sp._publish_actual_refresh
+        def mutate_then_publish(*args, **kwargs):
+            _mutate_refresh_pdf(manifest, mutation)
+            return publish(*args, **kwargs)
+        monkeypatch.setattr(sp, '_publish_actual_refresh', mutate_then_publish)
+    elif boundary == 'before_published_mark':
+        verify = sp._verify_manual_actual_batch_postconditions
+        def mutate_after_postconditions(*args, **kwargs):
+            result = verify(*args, **kwargs)
+            # The publication check follows the native target renames.
+            if (output / sp.ACTUAL_REFRESH_PUBLICATION).exists():
+                _mutate_refresh_pdf(manifest, mutation)
+            return result
+        monkeypatch.setattr(sp, '_verify_manual_actual_batch_postconditions', mutate_after_postconditions)
+    else:
+        sp.refresh_actual_project(output)
+        if boundary == 'before_ack':
+            _mutate_refresh_pdf(manifest, mutation)
+        else:
+            save = sp.json_save
+            def mutate_after_ack_intent(path, value, *args, **kwargs):
+                result = save(path, value, *args, **kwargs)
+                if Path(path) == output / sp.ACTUAL_REFRESH_PUBLICATION and value.get('phase') == 'ACKNOWLEDGING':
+                    _mutate_refresh_pdf(manifest, mutation)
+                return result
+            monkeypatch.setattr(sp, 'json_save', mutate_after_ack_intent)
+        old = _refresh_retained_bytes(output)
+    with pytest.raises(FileNotFoundError, match='PDF'):
+        if boundary in {'before_ack', 'after_ack_intent'}:
+            sp._acknowledge_actual_refresh(output, token)
+        else:
+            sp.refresh_actual_project(output)
+    assert promotion.project_refresh_token(sp.project_actual_evidence_root(output)) == token
+    assert {p: p.read_bytes() for p in old if p.name != sp.ACTUAL_REFRESH_PUBLICATION} == {
+        p: raw for p, raw in old.items() if p.name != sp.ACTUAL_REFRESH_PUBLICATION}
+    journal_path = output / sp.ACTUAL_REFRESH_PUBLICATION
+    if boundary == 'before_publish':
+        assert not journal_path.exists()
+    else:
+        journal = sp.json_load_strict(journal_path)
+        assert journal['phase'] == {'before_published_mark': 'PREPARED', 'before_ack': 'PUBLISHED', 'after_ack_intent': 'ACKNOWLEDGING'}[boundary]
+        assert (output.parent / journal['stage'] / 'previous').is_dir()
+
+
+@pytest.mark.parametrize('phase', ['PUBLISHED', 'ACKNOWLEDGING'])
+@pytest.mark.parametrize('relocated', [False, True])
+def test_refresh_restart_accepts_exact_pdf_without_duplicate_work(tmp_path, monkeypatch, phase, relocated):
+    output, manifest = sealed_project(tmp_path)
+    token = commit_empty_plan(output)
+    monkeypatch.setattr(sp, 'run_pipeline_pdfs', successful_stage)
+    sp.refresh_actual_project(output)
+    if phase == 'ACKNOWLEDGING':
+        acknowledge = sp.acknowledge_project_refresh
+        monkeypatch.setattr(sp, 'acknowledge_project_refresh', lambda *args: (_ for _ in ()).throw(OSError('ack interruption')))
+        with pytest.raises(OSError, match='ack interruption'):
+            sp._acknowledge_actual_refresh(output, token)
+        monkeypatch.setattr(sp, 'acknowledge_project_refresh', acknowledge)
+    if relocated:
+        destination = tmp_path / 'moved' / 'source.pdf'
+        destination.parent.mkdir()
+        Path(manifest['pdfs'][0]['pdf']).replace(destination)
+        assert sp.sha256_file(destination) == manifest['pdfs'][0]['pdf_sha256']
+    journal = sp.json_load_strict(output / sp.ACTUAL_REFRESH_PUBLICATION)
+    before = {p: p.read_bytes() for p in output.rglob('*') if p.is_file() and p.name not in {sp.ACTUAL_REFRESH_PUBLICATION, promotion.PROJECT_TRANSACTION_FILE}}
+    monkeypatch.setattr(sp, 'run_pipeline_pdfs', lambda *a, **kw: pytest.fail('duplicate rebuild'))
+    monkeypatch.setattr(sp, '_publish_actual_refresh', lambda *a, **kw: pytest.fail('duplicate publish'))
+    assert sp.refresh_actual_with_recovery(output) == output / '注音校對_最終報告.xlsx'
+    assert {p: p.read_bytes() for p in before} == before
+    assert promotion.project_refresh_token(sp.project_actual_evidence_root(output)) is None
+    assert not (output / sp.ACTUAL_REFRESH_PUBLICATION).exists()
+    assert not (output.parent / journal['stage']).exists()
+
+
+@pytest.mark.parametrize('seal', ['missing', 'changed'])
+def test_refresh_cannot_replace_original_sealed_pdf_hash(tmp_path, monkeypatch, seal):
+    output, manifest = sealed_project(tmp_path)
+    token = commit_empty_plan(output)
+    before = _refresh_retained_bytes(output)
+    def unbound_stage(pdfs, destination, **kwargs):
+        result = successful_stage(pdfs, destination, **kwargs)
+        path = Path(destination) / '校對工作階段.json'
+        staged = sp.json_load_strict(path)
+        if seal == 'missing':
+            staged['pdfs'][0].pop('pdf_sha256')
+        else:
+            _mutate_refresh_pdf(manifest, 'changed')
+            staged['pdfs'][0]['pdf_sha256'] = sp.sha256_file(pdfs[0])
+        sp.json_save(path, sp.seal_manifest(staged))
+        return result
+    monkeypatch.setattr(sp, 'run_pipeline_pdfs', unbound_stage)
+    with pytest.raises(ValueError, match='PDF'):
+        sp.refresh_actual_project(output)
+    assert _refresh_retained_bytes(output) == before
+    assert promotion.project_refresh_token(sp.project_actual_evidence_root(output)) == token
+
+
+@pytest.mark.parametrize('phase', ['PUBLISHED', 'ACKNOWLEDGING'])
+def test_restored_sealed_pdf_resumes_and_repeat_does_not_reapply_transaction(tmp_path, monkeypatch, phase):
+    output, manifest = sealed_project(tmp_path)
+    token = commit_empty_plan(output)
+    pdf = Path(manifest['pdfs'][0]['pdf'])
+    original_pdf = pdf.read_bytes()
+    monkeypatch.setattr(sp, 'run_pipeline_pdfs', successful_stage)
+    sp.refresh_actual_project(output)
+    if phase == 'ACKNOWLEDGING':
+        acknowledge = sp.acknowledge_project_refresh
+        def interrupt(*args):
+            raise OSError('ack interruption')
+        monkeypatch.setattr(sp, 'acknowledge_project_refresh', interrupt)
+        with pytest.raises(OSError, match='ack interruption'):
+            sp._acknowledge_actual_refresh(output, token)
+        monkeypatch.setattr(sp, 'acknowledge_project_refresh', acknowledge)
+    _mutate_refresh_pdf(manifest, 'same_metadata')
+    retained = _refresh_retained_bytes(output)
+    with pytest.raises(FileNotFoundError, match='PDF'):
+        sp.refresh_actual_with_recovery(output)
+    assert _refresh_retained_bytes(output) == retained
+    pdf.write_bytes(original_pdf)
+    assert sp.sha256_file(pdf) == manifest['pdfs'][0]['pdf_sha256']
+    monkeypatch.setattr(sp, 'run_pipeline_pdfs', lambda *a, **kw: pytest.fail('duplicate recovery rebuild'))
+    monkeypatch.setattr(sp, 'apply_staged_manual_actual_batch', lambda *a, **kw: pytest.fail('reapplied transaction'))
+    report = sp.refresh_actual_with_recovery(output)
+    root = sp.project_actual_evidence_root(output)
+    actual_bytes = {p: p.read_bytes() for p in root.rglob('*') if p.is_file()}
+    final = sp.json_load_strict(output / '校對工作階段.json')
+    assert final['session_id'] == manifest['session_id']
+    assert final['pdfs'][0]['pdf_sha256'] == manifest['pdfs'][0]['pdf_sha256']
+    # New explicit refresh requests may stage, but cannot recreate the consumed
+    # actual transaction, alter evidence, or enqueue/deliver it again.
+    monkeypatch.setattr(sp, 'run_pipeline_pdfs', successful_stage)
+    assert sp.refresh_actual_with_recovery(output) == report
+    assert sp.refresh_actual_with_recovery(output) == report
+    assert promotion.project_refresh_token(root) is None
+    assert {p: p.read_bytes() for p in root.rglob('*') if p.is_file()} == actual_bytes
+    assert not (output / sp.ACTUAL_REFRESH_PUBLICATION).exists()
+
+
 def test_native_publish_failure_restores_all_old_bytes(tmp_path, monkeypatch):
     output, manifest = sealed_project(tmp_path)
     token = commit_empty_plan(output)

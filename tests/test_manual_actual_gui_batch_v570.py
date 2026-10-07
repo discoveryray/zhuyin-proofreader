@@ -84,7 +84,18 @@ def entry(
 def make_project(base: Path) -> Path:
     output_dir = base / "output"
     output_dir.mkdir(parents=True)
-    manifest = sp.seal_manifest({"pdfs": [], "records": []})
+    pdf = base / "controller-source.pdf"
+    with fitz.open() as document:
+        document.new_page()
+        document.save(pdf)
+    info = {"pdf": str(pdf), "pdf_name": pdf.name, "pdf_sha256": sp.sha256_file(pdf)}
+    for kind, directory in [("actual", "01_實際注音"), ("candidate", "02_候選報告")]:
+        path = output_dir / directory / (kind + ".xlsx")
+        path.parent.mkdir()
+        path.write_bytes(("sealed-controller-" + kind).encode())
+        info[kind + "_workbook"] = str(path)
+        info[kind + "_workbook_sha256"] = sp.sha256_file(path)
+    manifest = sp.seal_manifest({"pdfs": [info], "records": []})
     sp.json_save(output_dir / "校對工作階段.json", manifest)
     sp.json_save(output_dir / "人工判定資料庫.json", sp.normalize_db({}))
     return output_dir

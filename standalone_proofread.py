@@ -4384,6 +4384,28 @@ def _read_actual_refresh_publication(output_dir, *, acknowledged=None):
     return journal, digest, stage, originals
 
 
+def _verify_actual_refresh_pdf_binding(output_dir, manifest, *, sealed_manifest=None):
+    """Require readable bytes bound to the original sealed PDF roster."""
+    def roster(value):
+        pdfs = value.get("pdfs")
+        if not isinstance(pdfs, list) or not pdfs:
+            raise ValueError("actual refresh sealed PDF roster 缺失")
+        result = []
+        for info in pdfs:
+            digest = info.get("pdf_sha256") if isinstance(info, dict) else None
+            name = info.get("pdf_name") if isinstance(info, dict) else None
+            if (not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+                    or not isinstance(name, str) or not name):
+                raise ValueError("actual refresh sealed PDF name/SHA 缺失或不符")
+            result.append((name, digest))
+        return sorted(result)
+
+    current = roster(manifest)
+    if sealed_manifest is not None and current != roster(sealed_manifest):
+        raise ValueError("actual refresh staged PDF roster 改變原封印")
+    return _resolve_session_pdfs(output_dir, manifest)
+
+
 def _resume_actual_refresh_publication(output_dir, *, cleanup=False, acknowledged=None):
     pending = _read_actual_refresh_publication(output_dir, acknowledged=acknowledged)
     if pending is None:
@@ -4399,6 +4421,8 @@ def _resume_actual_refresh_publication(output_dir, *, cleanup=False, acknowledge
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
     validate_output_artifact_hashes(manifest)
+    sealed_manifest = json_parse_strict(originals["校對工作階段.json"], output_dir / ACTUAL_REFRESH_PUBLICATION)
+    _verify_actual_refresh_pdf_binding(output_dir, manifest, sealed_manifest=sealed_manifest)
     if journal["phase"] != "PREPARED":
         pending_actual = committed_project_recovery(project_actual_evidence_root(output_dir))
         recovery_plan = pending_actual[1] if pending_actual is not None else None
@@ -4408,6 +4432,7 @@ def _resume_actual_refresh_publication(output_dir, *, cleanup=False, acknowledge
         if recovery_plan is not None:
             _verify_manual_actual_batch_postconditions(
                 materialize_ledger(manifest, load_or_initialize_db(output_dir)), recovery_plan["checked_postconditions"])
+        _verify_actual_refresh_pdf_binding(output_dir, manifest, sealed_manifest=sealed_manifest)
         if journal["phase"] == "ACKNOWLEDGING":
             if pending_actual is not None:
                 acknowledge_project_refresh(project_actual_evidence_root(output_dir), journal["token"])
@@ -4440,12 +4465,20 @@ def _acknowledge_actual_refresh_locked(output_dir, token, *, _post_ack_guard=Non
         if token != journal["token"]:
             from global_exact_glyph_library import GlobalLibraryIntentConflictError
             raise GlobalLibraryIntentConflictError("project refresh acknowledgement is stale")
+        manifest = json_load_strict(output_dir / "校對工作階段.json")
+        validate_manifest_integrity(manifest)
+        sealed_manifest = json_parse_strict(pending[3]["校對工作階段.json"], output_dir / ACTUAL_REFRESH_PUBLICATION)
+        _verify_actual_refresh_pdf_binding(output_dir, manifest, sealed_manifest=sealed_manifest)
         if journal["phase"] == "PUBLISHED":
             from global_glyph_promotion import PROJECT_TRANSACTION_FILE
             raw = (project_actual_evidence_root(output_dir) / PROJECT_TRANSACTION_FILE).read_bytes()
             _refresh_atomic_bytes(stage / "ack-committed.json", raw)
             journal.update(phase="ACKNOWLEDGING", ack_sha=hashlib.sha256(raw).hexdigest())
             json_save(output_dir / ACTUAL_REFRESH_PUBLICATION, journal, expected_sha256=digest)
+    manifest = json_load_strict(output_dir / "校對工作階段.json")
+    validate_manifest_integrity(manifest)
+    _verify_actual_refresh_pdf_binding(output_dir, manifest,
+                                      sealed_manifest=sealed_manifest if pending is not None else None)
     acknowledge_project_refresh(project_actual_evidence_root(output_dir), token)
     if _post_ack_guard is not None:
         _post_ack_guard()
@@ -4455,6 +4488,9 @@ def _acknowledge_actual_refresh_locked(output_dir, token, *, _post_ack_guard=Non
 def _publish_actual_refresh(output_dir, stage, manifest, *, source, token, before, cleared_count=0, _prewrite_guard=None):
     if _prewrite_guard is not None:
         _prewrite_guard()
+    sealed_manifest = json_load_strict(output_dir / "校對工作階段.json")
+    validate_manifest_integrity(sealed_manifest)
+    _verify_actual_refresh_pdf_binding(output_dir, manifest, sealed_manifest=sealed_manifest)
     if (source != _refresh_source_snapshot(output_dir)
             or token != project_refresh_token(project_actual_evidence_root(output_dir))):
         raise ValueError("actual refresh 來源/COMMITTED token 已變動")
@@ -4496,6 +4532,7 @@ def _publish_actual_refresh(output_dir, stage, manifest, *, source, token, befor
         if pending is not None:
             _verify_manual_actual_batch_postconditions(
                 materialize_ledger(manifest, load_or_initialize_db(output_dir)), pending[1]["checked_postconditions"])
+        _verify_actual_refresh_pdf_binding(output_dir, manifest, sealed_manifest=sealed_manifest)
         journal["phase"] = "PUBLISHED"
         json_save(journal_path, journal, expected_sha256=journal_sha)
     except BaseException:
@@ -4545,7 +4582,7 @@ def _stage_actual_refresh(output_dir, *, _prewrite_guard=None, plan=None, status
     validate_output_artifact_hashes(manifest)
     from actual_review import dynamic_actual_hashes
     dynamic_actual_hashes(project_actual_evidence_root(output_dir), read_only=True)
-    pdfs = _resolve_session_pdfs(output_dir, manifest)
+    pdfs = _verify_actual_refresh_pdf_binding(output_dir, manifest)
     if _prewrite_guard is not None:
         _prewrite_guard()
     token = project_refresh_token(project_actual_evidence_root(output_dir))

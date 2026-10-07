@@ -65,6 +65,15 @@ class GptSingleBundleV541Tests(unittest.TestCase):
                 page = document.new_page(width=200, height=200)
                 page.insert_text((20, 30), "fixture", fontsize=8)
                 document.save(pdf)
+            info = {"pdf": str(pdf), "pdf_name": pdf.name, "pdf_sha256": sp.sha256_file(pdf)}
+            for kind, directory in [("actual", "01_實際注音"), ("candidate", "02_候選報告")]:
+                path = folder / directory / (kind + ".xlsx")
+                path.parent.mkdir()
+                path.write_bytes(("sealed-controller-" + kind).encode())
+                info[kind + "_workbook"] = str(path)
+                info[kind + "_workbook_sha256"] = sp.sha256_file(path)
+            manifest["pdfs"] = [info]
+            sp.json_save(folder / "校對工作階段.json", sp.seal_manifest(manifest))
             entry = {
                 "occurrence_id": ("occ_" + hashlib.sha256(b"occ1").hexdigest()),
                 "review_id": "rev1",
