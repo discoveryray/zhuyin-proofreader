@@ -337,6 +337,8 @@ def _correction_limit(state):
     if "correction_exception" not in state:
         return 3
     exception = state["correction_exception"]
+    if type(exception) is dict and exception.get("schema") == CFF_CORRECTION4_EXCEPTION["schema"]:
+        return _cff_correction4_limit(state)
     if type(exception) is dict and exception.get("schema") == CORRECTION8_EXCEPTION["schema"]:
         return _correction8_limit(state)
     if type(exception) is dict and exception.get("schema") == CORRECTION7_EXCEPTION["schema"]:
@@ -580,6 +582,98 @@ CFF_HISTORY_DIGESTS = {
 }
 
 
+CFF_CORRECTION4_EXCEPTION = {
+    "schema": "cff-correction-exception/1", "task_id": CFF_HISTORY_TASK["id"],
+    "baseline": CFF_HISTORY_TASK["baseline"],
+    "base": "476a9823e7ad512f5aa62e388a88fd2b15c357ed",
+    "starting_head": "ec40c51057caa75983d2c3d6948d8b7d9ef8cd18",
+    "head_branch": CFF_HISTORY_TASK["head_branch"], "pr_number": 42,
+    "extra_rounds": 1, "limit": 4,
+    "scope": "exact failed-history reader, R1 ci-null projection/coexistence and fourth-round gate",
+    "authorization_sha256": "7bf99a4fa2ef4446fb8c0490af60ab0ca8014fe35ddf1025329d3ca6fdc5624b",
+}
+CFF_HISTORY_V2_DIGESTS = {
+    "snapshot3": "e3869c79aa2b7d45bc001fcfce36a97fc065f8a50130de6f6346339f127aa807",
+    "authorization4": "7bf99a4fa2ef4446fb8c0490af60ab0ca8014fe35ddf1025329d3ca6fdc5624b",
+    "code_md": "b9475187ad5dcd0305a375731ecab3a12a0fafa76ec90fd448b2c9b44be829f7",
+    "code_json": "f4d59d8c4fcc892f1a6757bd46dc539e7226b988cfdec7bd2606ce04e9ba1240",
+    "blocked_md": "711597905068b55d1c8958e94dd4f371d5f99e42bc304dc00bebe501896d656e",
+    "blocked_json": "dcad0be5ea95bcae56af6ae8432ed952fc6cbfd4f3664d329cd2aee7e711dc66",
+    "projection": "2daef874f07da9421e3b7aabe2b989fb127c6d5dcb63d78c6af7755a14f0d331",
+}
+
+
+def _cff_v2_history(state):
+    adapter = state.get("cff_review_history_adapter")
+    _require(type(adapter) is dict and adapter.get("contract") == "cff-review-history/2",
+             "CFF fourth round requires its explicit v2 history adapter")
+    payloads = {}
+    sources = adapter.get("sources")
+    expected = {**CFF_HISTORY_DIGESTS, **CFF_HISTORY_V2_DIGESTS}
+    _require(type(sources) is dict and sources.keys() == expected.keys(), "CFF v2 exact sources required")
+    for name, digest in expected.items():
+        _text(sources[name], "CFF v2 source")
+        try:
+            raw = Path(sources[name]).read_bytes()
+        except OSError as exc:
+            raise EvidenceError("CFF v2 source unavailable: " + name) from exc
+        _require(hashlib.sha256(raw).hexdigest() == digest, "CFF v2 source hash differs: " + name)
+        if name in ("snapshot3", "code_json", "blocked_json", "projection"):
+            payloads[name] = json.loads(raw.decode("utf-8-sig"), object_pairs_hook=_unique_object)
+    original, code, blocked, projection = (payloads[k] for k in
+                                           ("snapshot3", "code_json", "blocked_json", "projection"))
+    _require(projection == {**blocked, "ci": None} and blocked["ci"] is not None,
+             "CFF projection may change only original ci to null")
+    _require(code in original["reviews"] and blocked in original["reviews"]
+             and code["verdict"] == "CODE_REVIEWED" and blocked["verdict"] == "BLOCKED"
+             and blocked["blocker_kind"] == "contract" and _review_scope(code) == _review_scope(blocked)
+             and code["reviewer"] == blocked["reviewer"] and code["round"] == 1
+             and code["head"] == CFF_CORRECTION4_EXCEPTION["starting_head"]
+             and code["base"] == CFF_CORRECTION4_EXCEPTION["base"]
+             and code["baseline"] == CFF_HISTORY_TASK["baseline"], "CFF v2 exact pair differs")
+    retained = [projection if r == blocked else r for r in original["reviews"]]
+    _require(type(state["reviews"]) is list and type(state["corrections"]) is list,
+             "CFF v2 requires retained review/correction lists")
+    _require(state["reviews"][:len(retained)] == retained and len(original["corrections"]) == 3
+             and state["corrections"][:3] == original["corrections"],
+             "CFF v2 original review/three-correction prefix must remain unchanged")
+    return original, frozenset((code["report_ref"], blocked["report_ref"]))
+
+
+def _cff_correction4_limit(state):
+    exception = state["correction_exception"]
+    _fields(exception, " ".join((*CFF_CORRECTION4_EXCEPTION, "authorization_ref")), "CFF correction exception")
+    for key, value in CFF_CORRECTION4_EXCEPTION.items():
+        _require(type(exception[key]) is type(value) and exception[key] == value,
+                 "invalid CFF fourth-round exception: " + key)
+    _require(state["schema"] == STAGED_SCHEMA and state["task"] == CFF_HISTORY_TASK,
+             "CFF fourth round belongs to exact original task")
+    pr = state["pr"]
+    _require(type(pr) is dict and pr.get("number") == 42
+             and pr.get("base_branch") == "develop" and pr.get("head_branch") == exception["head_branch"]
+             and pr.get("base_sha") == exception["base"], "CFF fourth round requires original PR42/base/branch")
+    _require(state["merge"] is not None or state["current"]["base"] == exception["base"],
+             "CFF fourth-round current base changed")
+    _text(exception["authorization_ref"], "CFF fourth authorization")
+    try:
+        digest = hashlib.sha256(Path(exception["authorization_ref"]).read_bytes()).hexdigest()
+    except OSError as exc:
+        raise EvidenceError("CFF fourth authorization unavailable") from exc
+    _require(digest == exception["authorization_sha256"], "CFF fourth authorization hash differs")
+    _cff_v2_history(state)
+    corrections = state["corrections"]
+    _require(len(corrections) in (3, 4) and corrections[2]["to_head"] == exception["starting_head"],
+             "CFF fourth round must retain exactly three or four rounds")
+    head = exception["starting_head"]
+    if len(corrections) == 4:
+        _require(type(corrections[3]) is dict and corrections[3].get("from_head") == head,
+                 "CFF fourth round must start at retained third HEAD")
+        head = corrections[3].get("to_head")
+    _require(state["current"]["head"] == head and pr.get("head_sha") == head,
+             "CFF fourth-round current/PR HEAD differs")
+    return 4
+
+
 def _cff_history_pairs(state):
     adapter = state.get("cff_review_history_adapter")
     if adapter is None:
@@ -589,9 +683,12 @@ def _cff_history_pairs(state):
              "CFF history adapter belongs to its exact original task")
     _require(state["pr"] is None or state["pr"]["number"] == 42, "CFF history adapter belongs to PR42")
     _fields(adapter, "contract sources", "cff_review_history_adapter")
-    _require(adapter["contract"] == "cff-review-history/1", "unknown CFF history contract")
+    _require(adapter["contract"] in ("cff-review-history/1", "cff-review-history/2"), "unknown CFF history contract")
+    v2 = adapter["contract"] == "cff-review-history/2"
+    additional_pair = _cff_v2_history(state)[1] if v2 else None
     sources = adapter["sources"]
-    _require(type(sources) is dict and sources.keys() == CFF_HISTORY_DIGESTS.keys(),
+    expected_keys = (CFF_HISTORY_DIGESTS.keys() | CFF_HISTORY_V2_DIGESTS.keys()) if v2 else CFF_HISTORY_DIGESTS.keys()
+    _require(type(sources) is dict and sources.keys() == expected_keys,
              "CFF history sources must be the exact retained originals")
     payloads = {}
     for name, expected in CFF_HISTORY_DIGESTS.items():
@@ -609,7 +706,7 @@ def _cff_history_pairs(state):
     _require(state["reviews"][:8] == original["reviews"]
              and state["corrections"][:2] == original["corrections"],
              "CFF original review/correction history must remain an unchanged ordered prefix")
-    pairs = set()
+    pairs = {additional_pair} if additional_pair else set()
     for number in (1, 2):
         code, blocked = original["reviews"][number - 1], original["reviews"][number + 1]
         _require(code["verdict"] == "CODE_REVIEWED" and blocked["verdict"] == "BLOCKED"

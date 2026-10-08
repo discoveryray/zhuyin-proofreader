@@ -169,7 +169,37 @@ def artifact_entry(path, folder):
     return {"path": path.relative_to(folder).as_posix(), "sha256": digest(path)}
 
 
-def read_verified_manifest(path):
+# cff-legacy-failure-read/1: the sole retained producer-legal False record.
+# Producer 4453a35dc7d66b9d9a2f0cca43f49087b4a4cdbc, runner blob
+# 3d33f83055c2c1cff366a1cee415cb81ef609c8d (SHA256
+# 30452368f477dfafb093b0c8d93f3b340ce57a3b80a785ae75f4caa53bab75e5).
+# The manifest binds every original raw artifact, including its task/PR context.
+# No historical source is executed and this never changes retry eligibility.
+CFF_LEGACY_FAILURE_SHA256 = "9b0635cbcb149cf4c272c0c51d28478d66c07d355ffc57117cb0d90b32c0793a"
+CFF_HISTORY_TASK = "cff-batch-fingerprint"
+
+
+def _cff_legacy_failure(path, data, context, policy, task_id):
+    return (policy == POLICY and task_id == CFF_HISTORY_TASK
+            and context.get("task_id") == CFF_HISTORY_TASK
+            and digest(path) == CFF_LEGACY_FAILURE_SHA256
+            and data["schema"] == LEGACY_SCHEMA and data["group"] == "gui"
+            and data["execution_id"] == "0a56d940d31c4b48865cbda948494a7a"
+            and data["candidate"] == {
+                "head": "4453a35dc7d66b9d9a2f0cca43f49087b4a4cdbc",
+                "tree": "d216214e0ff371486e2a0e34cae8332b3fc2918c",
+                "parents": ["8eab9a1de34b59115658a2c7d3565adb347e59ab",
+                            "431b43be38d655b51e58a81ceaa2caff141672e7"]}
+            and data["ci"] == {"run_id": 37293413665, "attempt": 1,
+                               "job": "grouped", "event": "pull_request"}
+            and data["outcome"] == "failed" and type(data["exit_code"]) is int
+            and data["exit_code"] == 1 and data["retry_eligible"] is False
+            and data["retry_of"] is None and data["code_blockers"] is False)
+
+
+def read_verified_manifest(path, *, history_policy=None, task_id=None):
+    if history_policy not in (None, POLICY):
+        raise ValueError("unknown history read policy")
     path = Path(path).resolve()
     data = read_json(path)
     if data.get("schema") not in {SCHEMA, LEGACY_SCHEMA}:
@@ -226,8 +256,14 @@ def read_verified_manifest(path):
     for key in ("execution_id", "candidate", "environment", "inventory_sha256", "retry_key", "retry_of", "ci", "command"):
         if started[key] != data[key]:
             raise ValueError("execution start/finish metadata mismatch: " + key)
-    if not current and data["retry_eligible"] != (data["group"] == "gui" and retry_eligible(
-            path.parent, {"runner_start_error": data["runner_start_error"]}, data["preflight"])):
+    retained_cff = _cff_legacy_failure(path, data, context, history_policy, task_id)
+    if (history_policy == POLICY
+            and data["execution_id"] == "0a56d940d31c4b48865cbda948494a7a"
+            and not retained_cff):
+        raise ValueError("CFF retained failure differs from frozen original/context")
+    if (not current and not retained_cff
+            and data["retry_eligible"] != (data["group"] == "gui" and retry_eligible(
+                path.parent, {"runner_start_error": data["runner_start_error"]}, data["preflight"]))):
         raise ValueError("retry eligibility differs from original raw evidence")
     if data["outcome"] == "success":
         if data["exit_code"] != 0 or data["code_blockers"]:
@@ -380,19 +416,29 @@ def retry_eligible(folder, result, preflight=None):
     return bool(re.fullmatch(r'_tkinter\.TclError: (?:couldn.t read file|error reading) "[^"\r\n]+\.tcl": (?:permission denied|no such file or directory|no error|invalid argument)', message, re.IGNORECASE))
 
 
-def history(root):
+def history(root, *, policy=None, task_id=None):
     root = Path(root)
     if not root.is_dir():
         raise ValueError("execution history store is missing")
     for ledger in root.rglob("ledger.json"):
         data = read_json(ledger)
         read_local_ledger(ledger.parent, data.get("task_id"))
+    if policy not in (None, POLICY):
+        raise ValueError("unknown history read policy")
+    paths = sorted(root.rglob("manifest.json"))
+    # A /2 aggregate may recover the task from bound contexts. A borrowed CFF
+    # record mixed into another task must not receive this read exception.
+    tasks = {read_json(path.parent / "history-context.json").get("task_id") for path in paths}
+    if task_id is None and len(tasks) == 1:
+        task_id = next(iter(tasks))
+    if policy == POLICY and CFF_HISTORY_TASK in tasks and tasks != {task_id}:
+        raise ValueError("CFF retained history task scope mismatch")
     values = []
     for started in Path(root).rglob("started.json"):
         if not (started.parent / "manifest.json").is_file():
             raise ValueError("unfinished execution history; retain and resolve before restarting")
-    for path in sorted(Path(root).rglob("manifest.json")):
-        values.append((path, read_verified_manifest(path)))
+    for path in paths:
+        values.append((path, read_verified_manifest(path, history_policy=policy, task_id=task_id)))
     unique = {}
     for path, value in values:
         identity = value["execution_id"]
@@ -609,7 +655,8 @@ def validate_history_context(root, candidate):
                 and value.get("current_attempt") == int(os.environ["GITHUB_RUN_ATTEMPT"])]
     if len(matching) != 1 or matching[0].get("candidate") != candidate:
         raise ValueError("missing or stale authoritative history scope index")
-    current_ids = {value["execution_id"] for _, value in history(root)}
+    current_ids = {value["execution_id"] for _, value in history(
+        root, policy=POLICY, task_id=matching[0]["task_id"])}
     if not set(matching[0]["executions"]) <= current_ids:
         raise ValueError("retained authoritative execution history is missing")
     return matching[0]
@@ -632,7 +679,8 @@ def _run_group(group, evidence_root, *, timeout=None, tests=None, mode=None, cod
     with lock.open("x", encoding="utf-8") as handle:
         handle.write(str(os.getpid()))
     try:
-        previous = history(evidence_root)
+        previous = history(evidence_root, policy=POLICY if local_context is None else None,
+                           task_id=context["task_id"])
         key = canonical_digest({"task": context["task_id"], "tree": candidate["tree"]})
         matching = [(path, value) for path, value in previous
                     if value["retry_key"] == key and value["group"] == group]
@@ -770,7 +818,7 @@ def pytest_child(folder, group):
 
 def aggregate(evidence_root, head=None, ci=None, *, legacy=False):
     root = Path(evidence_root).resolve()
-    values = history(root)
+    values = history(root, policy=None if legacy else POLICY)
     if not values:
         raise ValueError("no execution evidence")
     by_group = {}
@@ -841,6 +889,10 @@ def restore_history(root):
     if candidate["parents"] != [event["pull_request"]["base"]["sha"], head]:
         raise ValueError("checkout is not the current PR integration commit")
     handoff = import_local_handoff(event["pull_request"].get("body"), root)
+    # Only this exact PR/task caller may opt into the retained False record.
+    history_policy = (POLICY if repository == REPOSITORY
+                      and branch == "codex/cff-batch-fingerprint" and pr_number == 42
+                      and handoff["task_id"] == CFF_HISTORY_TASK else None)
     retrieved = []
     for run in runs:
         if run.get("head_repository", {}).get("full_name") != repository:
@@ -873,12 +925,14 @@ def restore_history(root):
             # Prior bundles already contain earlier history. Keep one original
             # copy per execution, rejecting inconsistent duplicates.
             for manifest in destination.rglob("manifest.json"):
-                value = read_verified_manifest(manifest)
+                value = read_verified_manifest(manifest, history_policy=history_policy,
+                                               task_id=handoff["task_id"])
                 known = {row["execution_id"]: row for row in retrieved}
                 if value["execution_id"] in known and known[value["execution_id"]] != value:
                     raise ValueError("conflicting retained execution")
                 retrieved.append(value)
-    seen = {value["execution_id"]: path for path, value in history(root)}
+    seen = {value["execution_id"]: path for path, value in history(
+        root, policy=history_policy, task_id=handoff["task_id"])}
 
     write_json(root / ("history-index-" + uuid.uuid4().hex + ".json"),
                {"head": head, "current_run": current_run, "current_attempt": current_attempt,

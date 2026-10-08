@@ -781,3 +781,183 @@ class HistoryRetrievalTests(unittest.TestCase):
             event["traceback"] = "save_data\n" + message
             (folder / "events.jsonl").write_text(json.dumps(event) + "\n")
             self.assertFalse(runner.retry_eligible(folder, {}, {"outcome": "success"}))
+
+class CFFLegacyFailureReadTests(unittest.TestCase):
+    """Synthetic raw files only; fixture digest substitution never proves provenance."""
+
+    def setUp(self):
+        from test_validation_evidence import NoWindowEvidenceTests, ref, write
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.ref, self.write = ref, write
+        NoWindowEvidenceTests().new_bundle(self.root)
+        old = self.root / "gui"
+        self.folder = self.root / "0a56d940d31c4b48865cbda948494a7a"
+        old.rename(self.folder)
+        self.manifest = self.folder / "manifest.json"
+        data = runner.read_json(self.manifest)
+        data.update(execution_id=self.folder.name, outcome="failed", exit_code=1,
+                    candidate={"head": "4453a35dc7d66b9d9a2f0cca43f49087b4a4cdbc",
+                               "tree": "d216214e0ff371486e2a0e34cae8332b3fc2918c",
+                               "parents": ["8eab9a1de34b59115658a2c7d3565adb347e59ab",
+                                           "431b43be38d655b51e58a81ceaa2caff141672e7"]},
+                    ci={"run_id": 37293413665, "attempt": 1, "job": "grouped", "event": "pull_request"})
+        data["command"][3] = str(self.folder)
+        write_retry_suite(self.folder, tk_initializer_wrapper(), "tests/test_small.py::test_gui")
+        self.rebind(self.manifest, data, runner.CFF_HISTORY_TASK)
+        core = self.root / "core/manifest.json"
+        self.rebind(core, runner.read_json(core), runner.CFF_HISTORY_TASK)
+        self.fixture_hash = runner.digest(self.manifest)
+        self.kw = {"history_policy": runner.POLICY, "task_id": runner.CFF_HISTORY_TASK}
+
+    def rebind(self, manifest, data, task):
+        folder = manifest.parent
+        context = runner.read_json(folder / "history-context.json")
+        context["task_id"] = task
+        self.write(folder / "history-context.json", context)
+        data["retry_key"] = runner.canonical_digest({"task": task, "tree": data["candidate"]["tree"]})
+        self.write(folder / "started.json", data)
+        data["artifacts"] = {key: self.ref(folder / entry["path"]) for key, entry in data["artifacts"].items()}
+        self.write(manifest, data)
+
+    def test_frozen_false_read_is_opt_in_immutable_and_not_retry_authority(self):
+        originals = {p: p.read_bytes() for p in self.folder.iterdir()}
+        # The production digest refuses these invented records.
+        with self.assertRaises(ValueError):
+            runner.read_verified_manifest(self.manifest, **self.kw)
+        with patch.object(runner, "CFF_LEGACY_FAILURE_SHA256", self.fixture_hash):
+            data = runner.read_verified_manifest(self.manifest, **self.kw)
+            self.assertEqual((data["outcome"], data["exit_code"], data["retry_eligible"]), ("failed", 1, False))
+            for kwargs in ({}, dict(self.kw, task_id="bbox"), dict(self.kw, history_policy="future")):
+                with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                    runner.read_verified_manifest(self.manifest, **kwargs)
+            second = dict(data, execution_id="second", retry_of=data["execution_id"])
+            with self.assertRaisesRegex(ValueError, "illegal GUI retry"):
+                runner.retry_history([(self.manifest, data), (Path("second"), second)], data["retry_key"])
+        self.assertEqual(originals, {p: p.read_bytes() for p in self.folder.iterdir()})
+
+    def test_byte_integrity_unknown_fields_and_identity_fail_closed(self):
+        original = self.manifest.read_bytes()
+        changes = [{"outcome": "success"}, {"retry_eligible": True}, {"retry_of": "prior"},
+                   {"code_blockers": True}, {"schema": "future"}, {"extra": True},
+                   {"ci": {"run_id": 37293413665, "attempt": 2, "job": "grouped", "event": "pull_request"}},
+                   {"candidate": {"head": "a" * 40, "tree": "b" * 40, "parents": []}}]
+        with patch.object(runner, "CFF_LEGACY_FAILURE_SHA256", self.fixture_hash):
+            for change in changes:
+                with self.subTest(change=change):
+                    self.write(self.manifest, dict(json.loads(original), **change))
+                    with self.assertRaises(ValueError):
+                        runner.read_verified_manifest(self.manifest, **self.kw)
+            self.manifest.write_bytes(b'{"schema":"duplicate",' + original[1:])
+            with self.assertRaisesRegex(ValueError, "duplicate"):
+                runner.read_verified_manifest(self.manifest, **self.kw)
+            self.manifest.write_bytes(original)
+            for artifact in runner.read_json(self.manifest)["artifacts"].values():
+                target = self.folder / artifact["path"]
+                payload = target.read_bytes()
+                with self.subTest(artifact=target.name):
+                    target.write_bytes(payload + b"modified")
+                    with self.assertRaisesRegex(ValueError, "corrupt"):
+                        runner.read_verified_manifest(self.manifest, **self.kw)
+                    target.unlink()
+                    with self.assertRaisesRegex(ValueError, "corrupt"):
+                        runner.read_verified_manifest(self.manifest, **self.kw)
+                    target.write_bytes(payload)
+
+    def test_history_aggregate_and_coverage_keep_failure_and_require_current_core(self):
+        import shutil
+        from scripts import validation_evidence
+        with patch.object(runner, "CFF_LEGACY_FAILURE_SHA256", self.fixture_hash):
+            shutil.copytree(self.folder, self.root / "duplicate")
+            values = runner.history(self.root, policy=runner.POLICY)
+            self.assertEqual(len(values), 2)
+            self.assertEqual(sum(v["outcome"] == "failed" for _, v in values), 1)
+            bundle = runner.aggregate(self.root)
+            self.write(self.root / "coverage.json", bundle)
+            self.assertEqual(validation_evidence.verify_coverage(self.root / "coverage.json"), bundle)
+            self.assertEqual(bundle["schema"], runner.COVERAGE_SCHEMA)
+            self.assertEqual(bundle["core_manifest"], "core/manifest.json")
+            with self.assertRaises(ValueError):
+                runner.aggregate(self.root, legacy=True)
+            core = self.root / "core/manifest.json"
+            data = runner.read_json(core)
+            self.rebind(core, data, "other-task")
+            with self.assertRaisesRegex(ValueError, "task scope"):
+                runner.aggregate(self.root)
+            self.rebind(core, data, runner.CFF_HISTORY_TASK)
+            shutil.rmtree(core.parent)
+            with self.assertRaisesRegex(ValueError, "missing core"):
+                runner.aggregate(self.root)
+            # Even a fully valid old core cannot provide new /2 coverage.
+            from test_validation_evidence import raw_bundle
+            other = self.root / "old-bundle"
+            other.mkdir()
+            raw_bundle(other)
+            shutil.rmtree(other / "gui")
+            old_core = other / "core/manifest.json"
+            self.rebind(old_core, runner.read_json(old_core), runner.CFF_HISTORY_TASK)
+            with self.assertRaisesRegex(ValueError, "missing core"):
+                runner.aggregate(self.root)
+
+    def test_restore_history_binds_exact_pr_task_and_preserves_all_bundles(self):
+        import shutil
+        event = self.root / "event.json"
+        current = {"head": "a" * 40, "tree": "b" * 40, "parents": ["c" * 40, "d" * 40]}
+        self.write(event, {"pull_request": {"number": 42, "base": {"sha": "c" * 40},
+                   "head": {"sha": "d" * 40, "ref": "codex/cff-batch-fingerprint"}}})
+        runs = [{"id": 999, "head_sha": "d" * 40, "run_attempt": 1},
+                {"id": 37293413665, "head_sha": "431b43be38d655b51e58a81ceaa2caff141672e7",
+                 "run_attempt": 2, "status": "completed", "head_repository": {"full_name": runner.REPOSITORY},
+                 "pull_requests": [{"number": 42}]}]
+        artifacts = [{"name": f"validation-evidence-37293413665-{n}", "expired": False} for n in (1, 2)]
+        def download(command, **kwargs):
+            destination = Path(command[-1])
+            shutil.copytree(self.folder, destination / self.folder.name)
+        env = {"GITHUB_EVENT_PATH": str(event), "GITHUB_REPOSITORY": runner.REPOSITORY,
+               "GITHUB_RUN_ID": "999", "GITHUB_RUN_ATTEMPT": "1",
+               "GITHUB_JOB": "grouped", "GITHUB_EVENT_NAME": "pull_request"}
+        with patch.object(runner, "CFF_LEGACY_FAILURE_SHA256", self.fixture_hash), patch.dict("os.environ", env), \
+                patch.object(runner, "snapshot", return_value=current), \
+                patch.object(runner, "import_local_handoff", return_value={"task_id": runner.CFF_HISTORY_TASK, "archive_sha256": "f" * 64}), \
+                patch.object(runner.subprocess, "check_output", side_effect=[json.dumps({"workflow_runs": runs, "total_count": 2}), json.dumps({"artifacts": artifacts, "total_count": 2})]), \
+                patch.object(runner.subprocess, "run", side_effect=download):
+            output = self.root / "restored"
+            runner.restore_history(output)
+            index = runner.read_json(next(output.glob("history-index-*.json")))
+            self.assertEqual(index["executions"], [self.folder.name])
+            self.assertEqual(len(list(output.rglob("manifest.json"))), 2)
+            with self.assertRaisesRegex(ValueError, "missing core"):
+                runner.aggregate(output)
+            from scripts import validation_evidence
+            shutil.copytree(self.root / "core", output / "core")
+            bundle = runner.aggregate(output)
+            self.write(output / "coverage.json", bundle)
+            self.assertEqual(validation_evidence.verify_coverage(output / "coverage.json"), bundle)
+            self.assertEqual(len(bundle["history_manifests"]), 2)
+        # Wrong PR/branch/task must not opt in, even with the same retained files.
+        for field, value in (("number", 43), ("branch", "codex/other"), ("task", "other-task"),
+                             ("repository", "other/repo")):
+            changed_event = runner.read_json(event)
+            changed_env = dict(env)
+            task = runner.CFF_HISTORY_TASK
+            if field == "number":
+                changed_event["pull_request"]["number"] = value
+            elif field == "branch":
+                changed_event["pull_request"]["head"]["ref"] = value
+            elif field == "task":
+                task = value
+            else:
+                changed_env["GITHUB_REPOSITORY"] = value
+            self.write(event, changed_event)
+            prior = dict(runs[1], head_repository={"full_name": changed_env["GITHUB_REPOSITORY"]},
+                         pull_requests=[{"number": changed_event["pull_request"]["number"]}])
+            with self.subTest(field=field), patch.object(runner, "CFF_LEGACY_FAILURE_SHA256", self.fixture_hash), \
+                    patch.dict("os.environ", changed_env), patch.object(runner, "snapshot", return_value=current), \
+                    patch.object(runner, "import_local_handoff", return_value={"task_id": task, "archive_sha256": "f" * 64}), \
+                    patch.object(runner.subprocess, "check_output", side_effect=[json.dumps({"workflow_runs": [runs[0], prior], "total_count": 2}), json.dumps({"artifacts": artifacts, "total_count": 2})]), \
+                    patch.object(runner.subprocess, "run", side_effect=download):
+                with self.assertRaises(ValueError):
+                    runner.restore_history(self.root / ("rejected-" + field))
+            self.write(event, {"pull_request": {"number": 42, "base": {"sha": "c" * 40},
+                       "head": {"sha": "d" * 40, "ref": "codex/cff-batch-fingerprint"}}})
