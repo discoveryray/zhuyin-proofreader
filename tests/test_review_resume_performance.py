@@ -180,6 +180,104 @@ class ReviewResumeTests(unittest.TestCase):
         self.assertFalse(app.staging_summary.get("staging_error"))
         self.assertEqual(app._save_service._ledger, sp.materialize_ledger(app.manifest, app.db))
 
+    def _save_during_final_staging_capture(self, *, change_pdf=False):
+        self.stage()
+        snapshot = self.service.load_resume_snapshot()
+        entered, release, attempted = threading.Event(), threading.Event(), threading.Event()
+        cancelled = threading.Event()
+        outcomes = {}
+        original_lock = self.service._lock
+
+        class ObservedLock:
+            # Signal after a nonblocking attempt, or before a blocking wait.
+            # Thus the original false acquisition is observed before release,
+            # without sleeps or assuming which worker the scheduler runs next.
+            def acquire(inner, blocking=True):
+                saving = threading.current_thread() is saver
+                if saving and blocking:
+                    attempted.set()
+                acquired = original_lock.acquire(blocking=blocking)
+                if saving and not blocking:
+                    attempted.set()
+                return acquired
+
+            def release(inner):
+                original_lock.release()
+
+            def __enter__(inner):
+                inner.acquire()
+                return inner
+
+            def __exit__(inner, *args):
+                inner.release()
+
+        capture = self.service._capture
+        def held_capture(*args, **kwargs):
+            if threading.current_thread() is staging:
+                entered.set()
+                if not release.wait(10):
+                    raise AssertionError("final capture was not released")
+            return capture(*args, **kwargs)
+
+        row = self.manifest["records"][0]
+        event = sp.build_manual_expected_event(row, operation="ENTER_EXPECTED", expected_set="ㄎㄢ")
+        before = (self.output / "人工判定資料庫.json").read_bytes()
+        def save():
+            try:
+                outcomes["result"] = self.service.save_event(
+                    row["review_id"], event, expected_manifest=self.manifest,
+                    expected_db=self.db, defer_staging_validation=True)
+            except Exception as exc:
+                outcomes["error"] = exc
+
+        staging = threading.Thread(target=lambda: outcomes.update(summary=
+            self.service.validate_resume_staging(snapshot, cancelled=cancelled.is_set)))
+        saver = threading.Thread(target=save)
+        self.service._lock = ObservedLock()
+        with patch.object(self.service, "_capture", side_effect=held_capture):
+            staging.start()
+            try:
+                self.assertTrue(entered.wait(5), "staging did not reach final capture")
+                cancelled.set()
+                saver.start()
+                self.assertTrue(attempted.wait(5), "save did not reach capture serialization")
+                # A waiting first save still owns admission; another caller
+                # must not queue a duplicate decision behind the reader.
+                with self.assertRaisesRegex(RuntimeError, "正在保存"):
+                    self.service.save_event(row["review_id"], event, defer_staging_validation=True)
+                if change_pdf:
+                    pdf = Path(row["pdf"])
+                    pdf.write_bytes(pdf.read_bytes() + b"source drift while waiting")
+            finally:
+                release.set()
+                staging.join(15)
+                if saver.ident is not None:
+                    saver.join(15)
+                self.service._lock = original_lock
+            self.assertFalse(staging.is_alive())
+            self.assertFalse(saver.is_alive())
+        if change_pdf:
+            self.assertIsInstance(outcomes.get("error"), ValueError)
+            self.assertIn("SOURCE_INVALID", str(outcomes["error"]))
+            self.assertEqual((self.output / "人工判定資料庫.json").read_bytes(), before)
+            self.assertEqual(outcomes["summary"]["staged_checked_occurrence_ids"], [])
+        else:
+            self.assertNotIn("error", outcomes)
+            result = outcomes["result"]
+            self.assertEqual(sp.load_or_initialize_db(self.output), result.db)
+            self.assertEqual(len(result.db["events"]), len(self.db["events"]) + 1)
+            self.assertEqual(result.ledger, sp.materialize_ledger(self.manifest, result.db))
+            # A later user operation remains possible after admission releases.
+            self.service.save_event(row["review_id"], event, expected_db=result.db,
+                                    defer_staging_validation=True)
+        self.assertFalse(original_lock.locked())
+
+    def test_expected_save_waits_for_final_staging_capture_without_duplicate_save(self):
+        self._save_during_final_staging_capture()
+
+    def test_waiting_expected_save_still_rejects_source_drift(self):
+        self._save_during_final_staging_capture(change_pdf=True)
+
     def test_pending_save_and_worker_start_failures_leave_no_orphan_pending_state(self):
         app = headless_app(self.output)
         row = app.current()

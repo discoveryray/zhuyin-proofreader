@@ -100,6 +100,7 @@ class ReviewSaveService:
     def __init__(self, output_dir: Path, *, evidence_anchor: ReviewEvidenceAnchor | None = None):
         self.output_dir = Path(output_dir).resolve()
         self._lock = threading.Lock()
+        self._save_lock = threading.Lock()
         self._evidence_anchor = evidence_anchor
         self.invalidate()
 
@@ -204,16 +205,18 @@ class ReviewSaveService:
 
     def save_event(self, review_id, event, *, expected_manifest=None, expected_db=None,
                    defer_staging_validation=False):
-        if not self._lock.acquire(blocking=False):
+        # Reject a second save, but allow the admitted worker to wait for a
+        # read-only staging capture. Cancellation does not release that lock.
+        if not self._save_lock.acquire(blocking=False):
             raise RuntimeError("人工判定正在保存中，請勿重複操作")
         try:
             # Use the same project lock as actual apply/recovery. It prevents
             # those transactions racing a save of a now-obsolete expected row.
-            with sp.project_delivery_lock(sp.project_actual_evidence_root(self.output_dir)):
+            with self._lock, sp.project_delivery_lock(sp.project_actual_evidence_root(self.output_dir)):
                 return self._save(review_id, event, expected_manifest, expected_db,
                                   defer_staging_validation=defer_staging_validation)
         finally:
-            self._lock.release()
+            self._save_lock.release()
 
     def _prepare_snapshot(self, timings, expected_manifest, expected_db):
         if (self.output_dir / "跨電腦接續未完成.json").exists():
