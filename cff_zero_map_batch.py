@@ -248,7 +248,10 @@ def _patch_workbook(path, wb, h, items, final_maps, audit_rows, propagated, glob
             else "未知CFF家族：跨檔批次安全門檻未通過"
         )
         if new_reading:
-            auto_group = f"AUTOBOOT-SESSION:{it['family_key']}"
+            # Batch is a decoding evidence stage, not a new exact identity.
+            # Preserve the decoder's groups (including an unknown/blank CFF
+            # style); changing them would change the sealed dependency roster.
+            # Method/source provenance belongs in the existing audit fields.
             ws.cell(it["row"], h["判定方式"]).value = "跨PDF CID雙重共識→目標exact簽名暫存→無衝突exact傳播→exact解碼"
         # Show which individual signatures are actually proven.  Missing exact
         # labels remain '?' so an abstention is visibly auditable.

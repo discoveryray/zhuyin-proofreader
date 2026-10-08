@@ -427,6 +427,180 @@ ROOT = Path(__file__).resolve().parents[1]
 ORIGINAL_RUN_PROCESS = runner.run_process
 
 
+def tk_initializer_wrapper(resource="button", reason="no such file or directory"):
+    """Retained Tk8.6 wrapper/SourceLibFile structure, with portable paths."""
+    return f'''_tkinter.TclError: Can't find a usable tk.tcl in the following directories:
+    {{C:/Python/tcl/tk8.6}} C:/Python/lib/tk8.6
+
+C:/Python/tcl/tk8.6/tk.tcl: couldn't read file "C:/Python/tcl/tk8.6/{resource}.tcl": {reason}
+couldn't read file "C:/Python/tcl/tk8.6/{resource}.tcl": {reason}
+    while executing
+"source -encoding utf-8 C:/Python/tcl/tk8.6/{resource}.tcl"
+    (in namespace eval "::" script line 1)
+    invoked from within
+"namespace eval :: [list source -encoding utf-8 [file join $::tk_library $file.tcl]]"
+    (procedure "SourceLibFile" line 2)
+    invoked from within
+"SourceLibFile {resource}"
+    (in namespace eval "::tk" script line 3)
+    invoked from within
+"namespace eval ::tk {{
+\tSourceLibFile icons
+\tSourceLibFile button
+\tSourceLibFile entry
+\tSourceLibFile listbox
+\tSourceLibFile menu
+\tSourceLibFile panedw..."
+    (file "C:/Python/tcl/tk8.6/tk.tcl" line 506)
+    invoked from within
+"source C:/Python/tcl/tk8.6/tk.tcl"
+    ("uplevel" body line 1)
+    invoked from within
+"uplevel #0 [list source $file]"
+
+
+This probably means that tk wasn't installed properly.'''
+
+
+def write_retry_suite(folder, message, nodeid="tests/test_probe.py::Probe::test_root"):
+    parts = nodeid.split("::")
+    classname = ".".join([parts[0].replace("/", ".").removesuffix(".py"), *parts[1:-1]])
+    root = ET.Element("testsuite")
+    case = ET.SubElement(root, "testcase", classname=classname, name=parts[-1])
+    traceback = ('Tk.__init__\n>       self.tk = _tkinter.create(screenName, baseName)\n'
+                 + "\n".join("E       " + line for line in message.splitlines())
+                 + '\n\nC:/Python/Lib/tkinter/__init__.py:2459: TclError')
+    ET.SubElement(case, "failure", message=message).text = traceback
+    ET.ElementTree(root).write(folder / "junit.xml")
+    event = {"nodeid": nodeid, "outcome": "failed", "when": "call", "subtest": False, "traceback": traceback}
+    (folder / "events.jsonl").write_text(json.dumps(event) + "\n", encoding="utf-8")
+    return root, event
+
+
+class RunnerRetryClassificationTests(unittest.TestCase):
+    """Finite raw-error fixtures; no Tk, Tcl repair or formal GUI execution."""
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.folder = Path(self.temporary.name)
+
+    def eligible(self):
+        return runner.retry_eligible(self.folder, {}, {"outcome": "success"})
+
+    def test_original_wrapper_inner_resource_error_is_retryable(self):
+        for resource, reason in (("button", "no such file or directory"), ("entry", "permission denied")):
+            with self.subTest(resource=resource):
+                write_retry_suite(self.folder, tk_initializer_wrapper(resource, reason))
+                self.assertTrue(self.eligible())
+
+    def test_wrapper_unknown_inner_cause_and_missing_proof_are_rejected(self):
+        message = tk_initializer_wrapper()
+        invalid = [message.replace("Can't find a usable", "Unknown initialization wrapper"),
+                   message.split("\n\n", 1)[0],
+                   message.replace("no such file or directory", "unknown filesystem error"),
+                   message.replace('"SourceLibFile button"', '"load_saved_review button"'),
+                   message.replace('C:/Python/tcl/tk8.6/button.tcl"', 'C:/Other/button.tcl"'),
+                   '_tkinter.TclError: invalid command name "save"',
+                   'AssertionError: bad saved review']
+        for value in invalid:
+            with self.subTest(message=value[:100]):
+                write_retry_suite(self.folder, value)
+                self.assertFalse(self.eligible())
+
+    def test_direct_resource_read_still_needs_initializer_and_matching_failure(self):
+        message = '_tkinter.TclError: couldn\'t read file "C:/Tk/entry.tcl": invalid argument'
+        root, event = write_retry_suite(self.folder, message)
+        self.assertTrue(self.eligible())
+        event["traceback"] = event["traceback"].replace('self.tk = _tkinter.create(screenName, baseName)', 'save_review()')
+        root.find("testcase/failure").text = event["traceback"]
+        ET.ElementTree(root).write(self.folder / "junit.xml")
+        (self.folder / "events.jsonl").write_text(json.dumps(event) + "\n")
+        self.assertFalse(self.eligible())
+        _root, event = write_retry_suite(self.folder, message)
+        event["traceback"] = event["traceback"].replace("invalid argument", "permission denied")
+        (self.folder / "events.jsonl").write_text(json.dumps(event) + "\n")
+        self.assertFalse(self.eligible())
+
+    def test_wrapper_non_initializer_identity_mismatch_and_extra_event_rejected(self):
+        message = tk_initializer_wrapper()
+        for change in ("non_initializer", "wrong_case", "duplicate", "missing_field", "wrong_field_type", "subtest", "teardown"):
+            with self.subTest(change=change):
+                root, event = write_retry_suite(self.folder, message)
+                events = [event]
+                if change == "non_initializer":
+                    event["traceback"] = event["traceback"].replace('self.tk = _tkinter.create(screenName, baseName)', 'load_saved_review()')
+                    root.find("testcase/failure").text = event["traceback"]
+                    ET.ElementTree(root).write(self.folder / "junit.xml")
+                elif change == "wrong_case":
+                    event["nodeid"] += "_different"
+                elif change == "duplicate":
+                    events.append(event.copy())
+                elif change == "missing_field":
+                    del event["when"]
+                elif change == "wrong_field_type":
+                    event["outcome"] = []
+                elif change == "subtest":
+                    event["subtest"] = True
+                else:
+                    event["when"] = "teardown"
+                (self.folder / "events.jsonl").write_text("\n".join(json.dumps(value) for value in events) + "\n")
+                self.assertFalse(self.eligible())
+
+    def test_single_failure_exception_chains_and_extra_blocks_are_rejected(self):
+        root, event = write_retry_suite(self.folder, tk_initializer_wrapper())
+        # Exception names mentioned in ordinary frame source are not failures.
+        event["traceback"] = '        note = "AssertionError: saved review mismatch"\n' + event["traceback"]
+        root.find("testcase/failure").text = event["traceback"]
+        ET.ElementTree(root).write(self.folder / "junit.xml")
+        (self.folder / "events.jsonl").write_text(json.dumps(event) + "\n")
+        self.assertTrue(self.eligible())
+        for separator, summary in (
+                ("During handling of the above exception, another exception occurred:",
+                 "AssertionError: saved review mismatch"),
+                ("The above exception was the direct cause of the following exception:",
+                 "AssertionError: saved review mismatch"),
+                ("", "review.StateMismatch: unexpected saved state"),
+                ("", "ReviewFailure")):
+            with self.subTest(separator=separator, summary=summary):
+                root, event = write_retry_suite(self.folder, tk_initializer_wrapper())
+                earlier = ('save_review\n>       validate_saved_review()\nE       ' + summary
+                           + '\n\nC:/project/review.py:12: ' + summary.split(":", 1)[0] + '\n\n')
+                event["traceback"] = earlier + separator + '\n\n' + event["traceback"]
+                root.find("testcase/failure").text = event["traceback"]
+                ET.ElementTree(root).write(self.folder / "junit.xml")
+                (self.folder / "events.jsonl").write_text(json.dumps(event) + "\n")
+                self.assertEqual(root.find("testcase/failure").text, event["traceback"])
+                self.assertFalse(self.eligible())
+
+    def test_mixed_assertion_skip_and_corrupt_reports_are_rejected(self):
+        for change in ("assertion", "skip", "xml", "json", "duplicate_json_key", "duplicate_case", "missing_event", "mismatched_junit_trace"):
+            with self.subTest(change=change):
+                root, event = write_retry_suite(self.folder, tk_initializer_wrapper())
+                if change in {"assertion", "skip", "duplicate_case"}:
+                    case = ET.SubElement(root, "testcase", classname="tests.test_probe.Probe", name="test_other")
+                    if change == "duplicate_case":
+                        case.set("name", "test_root")
+                        ET.SubElement(case, "failure", message=tk_initializer_wrapper())
+                    else:
+                        ET.SubElement(case, "failure" if change == "assertion" else "skipped", message="AssertionError: bad save")
+                    ET.ElementTree(root).write(self.folder / "junit.xml")
+                    other = {**event, "nodeid": "tests/test_probe.py::Probe::test_other",
+                             "outcome": "skipped" if change == "skip" else "failed", "traceback": "AssertionError: bad save"}
+                    (self.folder / "events.jsonl").write_text(json.dumps(event) + "\n" + json.dumps(other) + "\n")
+                elif change == "xml":
+                    (self.folder / "junit.xml").write_text("<testcase")
+                elif change == "json":
+                    (self.folder / "events.jsonl").write_text("{broken json")
+                elif change == "duplicate_json_key":
+                    (self.folder / "events.jsonl").write_text('{"outcome":"passed",' + json.dumps(event)[1:])
+                elif change == "mismatched_junit_trace":
+                    root.find("testcase/failure").text = "AssertionError: bad saved review"
+                    ET.ElementTree(root).write(self.folder / "junit.xml")
+                else:
+                    (self.folder / "events.jsonl").write_text("")
+                self.assertFalse(self.eligible())
+
+
 def fixture_registration(folder, module, gui, core):
     """Explicit tiny-fixture declarations; not an automatic classifier."""
     path = folder / "registry.json"
@@ -955,6 +1129,7 @@ class RunnerOrchestrationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unfinished"):
             runner.history(self.evidence)
 
+
     def test_current_manifest_cannot_claim_preflight_or_gui_success(self):
         core = runner.run_group("core", self.evidence, mode="validation")
         data = runner.read_json(core)
@@ -965,6 +1140,27 @@ class RunnerOrchestrationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "policy"):
                 runner.read_verified_manifest(core)
         core.write_text(json.dumps(data), encoding="utf-8")
+
+    def test_original_false_manifest_rejects_new_classifier_without_rewriting_history(self):
+        # Construct retained raw files only. Never invoke the retired GUI launcher.
+        from test_validation_evidence import raw_bundle, ref, write
+        raw_bundle(self.folder)
+        folder = self.folder / "gui"
+        manifest = folder / "manifest.json"
+        data = runner.read_json(manifest)
+        write_retry_suite(folder, tk_initializer_wrapper(), "tests/test_small.py::test_gui")
+        data.update(outcome="failed", exit_code=1, retry_eligible=False)
+        for key in ("junit", "events"):
+            data["artifacts"][key] = ref(folder / data["artifacts"][key]["path"])
+        write(manifest, data)
+        original = {path: path.read_bytes() for path in folder.iterdir() if path.is_file()}
+        with patch.object(runner, "retry_eligible", return_value=False):
+            self.assertFalse(runner.read_verified_manifest(manifest)["retry_eligible"])
+        self.assertTrue(runner.retry_eligible(folder, {}, {"outcome": "success"}))
+        with self.assertRaisesRegex(ValueError, "retry eligibility differs from original raw evidence"):
+            runner.read_verified_manifest(manifest)
+        self.assertEqual(original, {path: path.read_bytes() for path in folder.iterdir() if path.is_file()})
+
 
 class HistoryRetrievalTests(unittest.TestCase):
     def test_prior_attempt_missing_artifact_fails_cli_without_reset(self):
@@ -986,12 +1182,192 @@ class HistoryRetrievalTests(unittest.TestCase):
             folder = Path(temporary)
             message = '_tkinter.TclError: couldn\'t read file "C:/Tk/fonts.tcl": permission denied'
             root = ET.Element("testsuite")
-            case = ET.SubElement(root, "testcase")
-            ET.SubElement(case, "failure", message=message)
+            case = ET.SubElement(root, "testcase", classname="tests.test_probe.Probe", name="test_root")
+            event = {"nodeid": "tests/test_probe.py::Probe::test_root", "outcome": "failed", "when": "call", "subtest": False, "traceback": "setUp\n self.tk = _tkinter.create()\n" + message}
+            ET.SubElement(case, "failure", message=message).text = event["traceback"]
             ET.ElementTree(root).write(folder / "junit.xml")
-            event = {"outcome": "failed", "when": "call", "subtest": False, "traceback": "setUp\n self.tk = _tkinter.create()\n" + message}
             (folder / "events.jsonl").write_text(json.dumps(event) + "\n")
             self.assertTrue(runner.retry_eligible(folder, {}, {"outcome": "success"}))
             event["traceback"] = "save_data\n" + message
             (folder / "events.jsonl").write_text(json.dumps(event) + "\n")
             self.assertFalse(runner.retry_eligible(folder, {}, {"outcome": "success"}))
+
+class CFFLegacyFailureReadTests(unittest.TestCase):
+    """Synthetic raw files only; fixture digest substitution never proves provenance."""
+
+    def setUp(self):
+        from test_validation_evidence import NoWindowEvidenceTests, ref, write
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.ref, self.write = ref, write
+        NoWindowEvidenceTests().new_bundle(self.root)
+        old = self.root / "gui"
+        self.folder = self.root / "0a56d940d31c4b48865cbda948494a7a"
+        old.rename(self.folder)
+        self.manifest = self.folder / "manifest.json"
+        data = runner.read_json(self.manifest)
+        data.update(execution_id=self.folder.name, outcome="failed", exit_code=1,
+                    candidate={"head": "4453a35dc7d66b9d9a2f0cca43f49087b4a4cdbc",
+                               "tree": "d216214e0ff371486e2a0e34cae8332b3fc2918c",
+                               "parents": ["8eab9a1de34b59115658a2c7d3565adb347e59ab",
+                                           "431b43be38d655b51e58a81ceaa2caff141672e7"]},
+                    ci={"run_id": 37293413665, "attempt": 1, "job": "grouped", "event": "pull_request"})
+        data["command"][3] = str(self.folder)
+        write_retry_suite(self.folder, tk_initializer_wrapper(), "tests/test_small.py::test_gui")
+        self.rebind(self.manifest, data, runner.CFF_HISTORY_TASK)
+        core = self.root / "core/manifest.json"
+        self.rebind(core, runner.read_json(core), runner.CFF_HISTORY_TASK)
+        self.fixture_hash = runner.digest(self.manifest)
+        self.kw = {"history_policy": runner.POLICY, "task_id": runner.CFF_HISTORY_TASK}
+
+    def rebind(self, manifest, data, task):
+        folder = manifest.parent
+        context = runner.read_json(folder / "history-context.json")
+        context["task_id"] = task
+        self.write(folder / "history-context.json", context)
+        data["retry_key"] = runner.canonical_digest({"task": task, "tree": data["candidate"]["tree"]})
+        self.write(folder / "started.json", data)
+        data["artifacts"] = {key: self.ref(folder / entry["path"]) for key, entry in data["artifacts"].items()}
+        self.write(manifest, data)
+
+    def test_frozen_false_read_is_opt_in_immutable_and_not_retry_authority(self):
+        originals = {p: p.read_bytes() for p in self.folder.iterdir()}
+        # The production digest refuses these invented records.
+        with self.assertRaises(ValueError):
+            runner.read_verified_manifest(self.manifest, **self.kw)
+        with patch.object(runner, "CFF_LEGACY_FAILURE_SHA256", self.fixture_hash):
+            data = runner.read_verified_manifest(self.manifest, **self.kw)
+            self.assertEqual((data["outcome"], data["exit_code"], data["retry_eligible"]), ("failed", 1, False))
+            for kwargs in ({}, dict(self.kw, task_id="bbox"), dict(self.kw, history_policy="future")):
+                with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                    runner.read_verified_manifest(self.manifest, **kwargs)
+            second = dict(data, execution_id="second", retry_of=data["execution_id"])
+            with self.assertRaisesRegex(ValueError, "illegal GUI retry"):
+                runner.retry_history([(self.manifest, data), (Path("second"), second)], data["retry_key"])
+        self.assertEqual(originals, {p: p.read_bytes() for p in self.folder.iterdir()})
+
+    def test_byte_integrity_unknown_fields_and_identity_fail_closed(self):
+        original = self.manifest.read_bytes()
+        changes = [{"outcome": "success"}, {"retry_eligible": True}, {"retry_of": "prior"},
+                   {"code_blockers": True}, {"schema": "future"}, {"extra": True},
+                   {"ci": {"run_id": 37293413665, "attempt": 2, "job": "grouped", "event": "pull_request"}},
+                   {"candidate": {"head": "a" * 40, "tree": "b" * 40, "parents": []}}]
+        with patch.object(runner, "CFF_LEGACY_FAILURE_SHA256", self.fixture_hash):
+            for change in changes:
+                with self.subTest(change=change):
+                    self.write(self.manifest, dict(json.loads(original), **change))
+                    with self.assertRaises(ValueError):
+                        runner.read_verified_manifest(self.manifest, **self.kw)
+            self.manifest.write_bytes(b'{"schema":"duplicate",' + original[1:])
+            with self.assertRaisesRegex(ValueError, "duplicate"):
+                runner.read_verified_manifest(self.manifest, **self.kw)
+            self.manifest.write_bytes(original)
+            for artifact in runner.read_json(self.manifest)["artifacts"].values():
+                target = self.folder / artifact["path"]
+                payload = target.read_bytes()
+                with self.subTest(artifact=target.name):
+                    target.write_bytes(payload + b"modified")
+                    with self.assertRaisesRegex(ValueError, "corrupt"):
+                        runner.read_verified_manifest(self.manifest, **self.kw)
+                    target.unlink()
+                    with self.assertRaisesRegex(ValueError, "corrupt"):
+                        runner.read_verified_manifest(self.manifest, **self.kw)
+                    target.write_bytes(payload)
+
+    def test_history_aggregate_and_coverage_keep_failure_and_require_current_core(self):
+        import shutil
+        from scripts import validation_evidence
+        with patch.object(runner, "CFF_LEGACY_FAILURE_SHA256", self.fixture_hash):
+            shutil.copytree(self.folder, self.root / "duplicate")
+            values = runner.history(self.root, policy=runner.POLICY)
+            self.assertEqual(len(values), 2)
+            self.assertEqual(sum(v["outcome"] == "failed" for _, v in values), 1)
+            bundle = runner.aggregate(self.root)
+            self.write(self.root / "coverage.json", bundle)
+            self.assertEqual(validation_evidence.verify_coverage(self.root / "coverage.json"), bundle)
+            self.assertEqual(bundle["schema"], runner.COVERAGE_SCHEMA)
+            self.assertEqual(bundle["core_manifest"], "core/manifest.json")
+            with self.assertRaises(ValueError):
+                runner.aggregate(self.root, legacy=True)
+            core = self.root / "core/manifest.json"
+            data = runner.read_json(core)
+            self.rebind(core, data, "other-task")
+            with self.assertRaisesRegex(ValueError, "task scope"):
+                runner.aggregate(self.root)
+            self.rebind(core, data, runner.CFF_HISTORY_TASK)
+            shutil.rmtree(core.parent)
+            with self.assertRaisesRegex(ValueError, "missing core"):
+                runner.aggregate(self.root)
+            # Even a fully valid old core cannot provide new /2 coverage.
+            from test_validation_evidence import raw_bundle
+            other = self.root / "old-bundle"
+            other.mkdir()
+            raw_bundle(other)
+            shutil.rmtree(other / "gui")
+            old_core = other / "core/manifest.json"
+            self.rebind(old_core, runner.read_json(old_core), runner.CFF_HISTORY_TASK)
+            with self.assertRaisesRegex(ValueError, "missing core"):
+                runner.aggregate(self.root)
+
+    def test_restore_history_binds_exact_pr_task_and_preserves_all_bundles(self):
+        import shutil
+        event = self.root / "event.json"
+        current = {"head": "a" * 40, "tree": "b" * 40, "parents": ["c" * 40, "d" * 40]}
+        self.write(event, {"pull_request": {"number": 42, "base": {"sha": "c" * 40},
+                   "head": {"sha": "d" * 40, "ref": "codex/cff-batch-fingerprint"}}})
+        runs = [{"id": 999, "head_sha": "d" * 40, "run_attempt": 1},
+                {"id": 37293413665, "head_sha": "431b43be38d655b51e58a81ceaa2caff141672e7",
+                 "run_attempt": 2, "status": "completed", "head_repository": {"full_name": runner.REPOSITORY},
+                 "pull_requests": [{"number": 42}]}]
+        artifacts = [{"name": f"validation-evidence-37293413665-{n}", "expired": False} for n in (1, 2)]
+        def download(command, **kwargs):
+            destination = Path(command[-1])
+            shutil.copytree(self.folder, destination / self.folder.name)
+        env = {"GITHUB_EVENT_PATH": str(event), "GITHUB_REPOSITORY": runner.REPOSITORY,
+               "GITHUB_RUN_ID": "999", "GITHUB_RUN_ATTEMPT": "1",
+               "GITHUB_JOB": "grouped", "GITHUB_EVENT_NAME": "pull_request"}
+        with patch.object(runner, "CFF_LEGACY_FAILURE_SHA256", self.fixture_hash), patch.dict("os.environ", env), \
+                patch.object(runner, "snapshot", return_value=current), \
+                patch.object(runner, "import_local_handoff", return_value={"task_id": runner.CFF_HISTORY_TASK, "archive_sha256": "f" * 64}), \
+                patch.object(runner.subprocess, "check_output", side_effect=[json.dumps({"workflow_runs": runs, "total_count": 2}), json.dumps({"artifacts": artifacts, "total_count": 2})]), \
+                patch.object(runner.subprocess, "run", side_effect=download):
+            output = self.root / "restored"
+            runner.restore_history(output)
+            index = runner.read_json(next(output.glob("history-index-*.json")))
+            self.assertEqual(index["executions"], [self.folder.name])
+            self.assertEqual(len(list(output.rglob("manifest.json"))), 2)
+            with self.assertRaisesRegex(ValueError, "missing core"):
+                runner.aggregate(output)
+            from scripts import validation_evidence
+            shutil.copytree(self.root / "core", output / "core")
+            bundle = runner.aggregate(output)
+            self.write(output / "coverage.json", bundle)
+            self.assertEqual(validation_evidence.verify_coverage(output / "coverage.json"), bundle)
+            self.assertEqual(len(bundle["history_manifests"]), 2)
+        # Wrong PR/branch/task must not opt in, even with the same retained files.
+        for field, value in (("number", 43), ("branch", "codex/other"), ("task", "other-task"),
+                             ("repository", "other/repo")):
+            changed_event = runner.read_json(event)
+            changed_env = dict(env)
+            task = runner.CFF_HISTORY_TASK
+            if field == "number":
+                changed_event["pull_request"]["number"] = value
+            elif field == "branch":
+                changed_event["pull_request"]["head"]["ref"] = value
+            elif field == "task":
+                task = value
+            else:
+                changed_env["GITHUB_REPOSITORY"] = value
+            self.write(event, changed_event)
+            prior = dict(runs[1], head_repository={"full_name": changed_env["GITHUB_REPOSITORY"]},
+                         pull_requests=[{"number": changed_event["pull_request"]["number"]}])
+            with self.subTest(field=field), patch.object(runner, "CFF_LEGACY_FAILURE_SHA256", self.fixture_hash), \
+                    patch.dict("os.environ", changed_env), patch.object(runner, "snapshot", return_value=current), \
+                    patch.object(runner, "import_local_handoff", return_value={"task_id": task, "archive_sha256": "f" * 64}), \
+                    patch.object(runner.subprocess, "check_output", side_effect=[json.dumps({"workflow_runs": [runs[0], prior], "total_count": 2}), json.dumps({"artifacts": artifacts, "total_count": 2})]), \
+                    patch.object(runner.subprocess, "run", side_effect=download):
+                with self.assertRaises(ValueError):
+                    runner.restore_history(self.root / ("rejected-" + field))
+            self.write(event, {"pull_request": {"number": 42, "base": {"sha": "c" * 40},
+                       "head": {"sha": "d" * 40, "ref": "codex/cff-batch-fingerprint"}}})
