@@ -457,10 +457,194 @@ def _pr43_correction_limit(state):
     return 5
 
 
+# Closed, adopted PR43 sixth correction and the single historical R1 pair.
+PR43_SIXTH_SCHEMA = "pr43-correction-exception/2"
+PR43_HISTORY_CONTRACT = "pr43-review-history/1"
+PR43_FIFTH_HEAD = "3ade65a9e94017c7eede5488508b9c91767f7874"
+PR43_FIFTH_BASE = "1417ac7ef08c7024f5940b3b9192abb4029405c1"
+PR43_FIFTH_CORRECTIVE = "f66d67a4d6c0cbf7895c456cc2791a5b8bdfa2b5"
+PR43_FIFTH_TREE = "e1e9cc0004ea4b17e29d20c6aefceda9dc72a3dc"
+PR43_SIXTH_SOURCES = {
+    "snapshot": "108674542e8a97bb796f6c9a6ab62d0eb1c2778ae440c00e38a2fcddfcb97211",
+    "r1_code": "ed68ac65a94171aaa11e372dfc37bea87f531f14873496037eb5db24d16be9d3",
+    "r1_code_report": "4bf0ca72ce93a41b2ea7016f7eb0b30c72227c6d254ad4eefcfc8cbdcf67d6d4",
+    "r1_blocked": "119a68b126596cdb2805702a803132884b3564701978ff0ca23d9e58f996821c",
+    "r1_blocked_report": "2f4c6b0239112f2a29f32dc30b036eb36391b9314fcac41aa2706157a477ea7f",
+    "r1_rich": "c9b5e1d6d222bb4a54d28b5cfd28a50d0fb1d9d9f659161d07f8bb24c351d0b1",
+    "r1_declaration": "52dcedb0401c037ef8e074e05b7238557a4ad3d955d82dcd88da06f5a5066fc6",
+    "r2_code": "6d0421e80dc0e98e24c4c6d41ee6dc533d324d0b03dd8e50f42279295e59201b",
+    "r2_code_report": "7521a5d106c4fd61d8a8de2c697c310487c5437c03c9ba7ebfa845ae0fde772d",
+    "r2_blocked": "3617502ed5ef5a3bc60b46669fa55056b816b80c0c6df310aedd41a07b457969",
+    "r2_blocked_report": "730ffb2ff537c28871cd47855d9fc6ee162d36e3172fbe9c56aae9cd9b165f60",
+    "r2_rich": "4488e12ab23970ffb014ea08fa4ac4c4dce6f99e51e0dda273aac8d9185887af",
+    "r2_mapping": "2dc096b1b91e5e6e8f2c5ab633e241c5e70c50be52954e1d4d40368f5a4f05fd",
+    "r2_clarification": "e2df9a2ef8178d59ce2ec527246e7ecf2306096f76c3b9b76df85ccce5a23707",
+    "adoption": "a9e605fab7cc52a6159a64528c6f8bd60cbde5989e48d29884aac7ece1a46ccf",
+    "proposal": "937717ab4c55591b1c4c611595c2cc6ad216f7444dc45e0bb445dc85d22248e7",
+    "history_proposal": "7f92f232e35126811de3484b6da7b35e10589d04a6b6df28b7bc680101075c28",
+    "fifth_receipt": "b4d1d93437ac18c5062386755696351cb5dd4a07a2d739362f0614dbd87b99ac",
+    "fifth_object": "1fd8e817ecbef4ae53314ad327a119215f8f62642252b3ffb97f6a6962b89163",
+    "ci_manifest": "60751c6b0e2e483b994a02c251476aeda52fd31685ee23dd525c16ed7941d2e1",
+    "ci_raw": "ea4a86945cc316a9a44b0f525a3158e95f79c14c870b67d2bc2501de0328ba50",
+    "ci_junit": "83582ee5ae168a7dfa0ff514b5c4669ab4f87f235215f5419f66584c2106a9cc",
+    "ci_events": "0411ce76c2a0fbd288b398f58ae0d6ee6b9dcb46a63d54c139451825a36efdae"
+}
+
+
+def _pr43_json(raw):
+    try:
+        return json.loads(raw.decode("utf-8-sig"), object_pairs_hook=_unique_object,
+                          parse_constant=lambda value: (_ for _ in ()).throw(EvidenceError(value)))
+    except (ValueError, UnicodeError) as error:
+        raise EvidenceError("PR43 original JSON malformed") from error
+
+
+def _pr43_commit(record):
+    _fields(record, "sha object_ref", "PR43 raw commit")
+    _sha(record["sha"], "PR43 raw commit SHA")
+    raw = _pr43_saved_bytes(record["object_ref"])
+    actual = hashlib.sha1(b"commit " + str(len(raw)).encode("ascii") + b"\0" + raw).hexdigest()
+    _require(actual == record["sha"], "PR43 commit object hash differs")
+    _require(b"\n\n" in raw, "PR43 commit headers missing")
+    headers = raw.split(b"\n\n", 1)[0].split(b"\n")
+    try:
+        trees = [line[5:].decode("ascii") for line in headers if line.startswith(b"tree ")]
+        parents = [line[7:].decode("ascii") for line in headers if line.startswith(b"parent ")]
+    except UnicodeError as error:
+        raise EvidenceError("PR43 malformed commit tree/parents") from error
+    _require(len(trees) == 1 and headers[0] == b"tree " + trees[0].encode("ascii"),
+             "PR43 unique tree header required")
+    _sha(trees[0], "PR43 commit tree")
+    _require(len(parents) in (1, 2) and len(set(parents)) == len(parents), "PR43 ordinary parents required")
+    for parent in parents:
+        _sha(parent, "PR43 ordered parent")
+    return trees[0], parents
+
+
+def _pr43_history(state):
+    adapter = state.get("pr43_review_history_adapter")
+    _fields(adapter, "contract sources", "PR43 history adapter")
+    _require(adapter["contract"] == PR43_HISTORY_CONTRACT, "unknown PR43 history contract")
+    _require(state["schema"] == STAGED_SCHEMA and state["task"] == {
+        "id": PR43_TASK, "repository": REPOSITORY, "baseline": PR43_BASELINE,
+        "base_branch": "develop", "head_branch": PR43_BRANCH}, "PR43 history identity differs")
+    pr = state["pr"]
+    _require(type(pr) is dict and type(pr.get("number")) is int and pr["number"] == 43
+             and pr.get("head_branch") == PR43_BRANCH and pr.get("base_branch") == "develop",
+             "PR43 history belongs to original PR43")
+    _fields(adapter["sources"], " ".join(PR43_SIXTH_SOURCES), "PR43 sixth original sources")
+    saved = {}
+    for name, digest in PR43_SIXTH_SOURCES.items():
+        raw = _pr43_saved_bytes(adapter["sources"][name])
+        _require(hashlib.sha256(raw).hexdigest() == digest, "PR43 sixth source hash differs: " + name)
+        saved[name] = raw
+    original = _pr43_json(saved["snapshot"])
+    _require(original["task"] == state["task"] and len(original["corrections"]) == 5
+             and original["current"]["head"] == PR43_FIFTH_HEAD
+             and original["current"]["base"] == PR43_FIFTH_BASE
+             and original["correction_exception"]["schema"] == PR43_CORRECTION_SCHEMA
+             and original["correction_exception"]["corrective_head"] == PR43_FIFTH_CORRECTIVE,
+             "PR43 original fifth checkpoint differs")
+    _require(_pr43_correction_limit(original) == 5, "PR43 original fifth contract required")
+    _require(_pr43_commit({"sha": PR43_FIFTH_HEAD, "object_ref": adapter["sources"]["fifth_object"]})
+             == (PR43_FIFTH_TREE, [PR43_FIFTH_CORRECTIVE, PR43_FIFTH_BASE]),
+             "PR43 fifth raw tree/parents differ")
+    _require(type(state["reviews"]) is list and len(original["reviews"]) == 6
+             and state["reviews"][:6] == original["reviews"]
+             and state["corrections"][:5] == original["corrections"],
+             "PR43 complete original review/five-correction prefix must remain unchanged")
+    code1, code2, blocked1, blocked2 = original["reviews"][2:6]
+    for name, review in (("r1_code", code1), ("r2_code", code2),
+                         ("r1_blocked", blocked1), ("r2_blocked", blocked2)):
+        _require(review == _pr43_json(saved[name]), "PR43 author projection differs: " + name)
+        _require(review["baseline"] == PR43_BASELINE and review["base"] == PR43_FIFTH_BASE
+                 and review["head"] == PR43_FIFTH_HEAD and all(review[key] is None for key in
+                    ("supersedes_report_ref", "resolution_evidence_ref", "finalizes_report_ref", "coverage_sha256")),
+                 "PR43 historical scope/null relations differ")
+    for code, blocked, number in ((code1, blocked1, 1), (code2, blocked2, 2)):
+        _require(code["verdict"] == "CODE_REVIEWED" and code["blocker_kind"] is None
+                 and code["findings"] == [] and blocked["verdict"] == "BLOCKED"
+                 and blocked["blocker_kind"] == "code" and len(blocked["findings"]) == 4
+                 and code["round"] == blocked["round"] == number
+                 and _review_scope(code) == _review_scope(blocked)
+                 and code["reviewer"] == blocked["reviewer"], "PR43 original CODE/code BLOCKED pair differs")
+    _require(code1["ci"] is None and blocked1["ci"] is None and code2["ci"] is None
+             and blocked2["ci"] == {"run_id": 37789520018, "attempt": 1,
+                 "tested_sha": "ccb0f970ee3ab4fa707b75ad8c366848746f5a68"},
+             "PR43 original CI tuples differ")
+    # Forbid a third record at this old scope, even with different CI/coverage.
+    _require([r for r in state["reviews"] if _review_scope(r) == _review_scope(code1)] == [code1, blocked1],
+             "PR43 only the original R1 pair may coexist")
+    manifest = _pr43_json(saved["ci_manifest"])
+    _require(manifest["ci"]["run_id"] == 37789520018 and manifest["ci"]["attempt"] == 1
+             and manifest["ci"]["event"] == "pull_request" and manifest["outcome"] == "failed"
+             and manifest["exit_code"] == 1 and manifest["retry_eligible"] is False
+             and manifest["candidate"] == {"head": "ccb0f970ee3ab4fa707b75ad8c366848746f5a68",
+                 "tree": PR43_FIFTH_TREE, "parents": [PR43_FIFTH_BASE, PR43_FIFTH_HEAD]},
+             "PR43 original failed CI must remain failed")
+    return original, {frozenset((code1["report_ref"], blocked1["report_ref"]))}
+
+
+def _pr43_history_pairs(state):
+    if "pr43_review_history_adapter" not in state:
+        return set()
+    return _pr43_history(state)[1]
+
+
+def _pr43_sixth_limit(state):
+    ex = state["correction_exception"]
+    _fields(ex, "schema limit sixth_corrective_head integration_commits candidate_tree", "PR43 sixth exception")
+    _require(type(ex["limit"]) is int and ex["limit"] == 6, "PR43 sixth limit must be exactly six")
+    original, _ = _pr43_history(state)
+    corrections = state["corrections"]
+    _require(len(corrections) == 6, "PR43 sixth candidate requires exactly six retained corrections")
+    sixth = corrections[5]
+    _fields(sixth, "number from_head to_head evidence_ref", "PR43 sixth correction")
+    _require(type(sixth["number"]) is int and sixth["number"] == 6
+             and sixth["from_head"] == PR43_FIFTH_HEAD, "PR43 sixth must start at original fifth HEAD")
+    _sha(ex["sixth_corrective_head"], "PR43 sixth corrective HEAD")
+    _sha(ex["candidate_tree"], "PR43 sixth candidate tree")
+    records = ex["integration_commits"]
+    _require(type(records) is list and bool(records), "PR43 sixth raw commit chain required")
+    previous, base, seen = PR43_FIFTH_HEAD, PR43_FIFTH_BASE, False
+    for record in records:
+        _fields(record, "sha object_ref develop_observation_ref", "PR43 sixth chain record")
+        tree, parents = _pr43_commit({key: record[key] for key in ("sha", "object_ref")})
+        _require(parents[0] == previous, "PR43 sixth ordered first parent differs")
+        if record["sha"] == ex["sixth_corrective_head"]:
+            _require(not seen and len(parents) == 1 and record["develop_observation_ref"] is None,
+                     "PR43 exactly one standalone sixth corrective commit required")
+            seen = True
+        else:
+            _require(len(parents) == 2, "PR43 additional standalone correction forbidden")
+            observation = _pr43_json(_pr43_saved_bytes(record["develop_observation_ref"]))
+            _fields(observation, "repository ref sha evidence_ref", "PR43 saved develop observation")
+            _require(observation["repository"] == REPOSITORY and observation["ref"] == "refs/heads/develop"
+                     and observation["sha"] == parents[1], "PR43 ordinary merge requires actual develop second parent")
+            _text(observation["evidence_ref"], "PR43 develop original observation reference")
+            # Original `git rev-parse origin/develop` output; the coordinator
+            # retains its command/time/API receipt. This gate cannot authenticate it.
+            observed_raw = _pr43_saved_bytes(observation["evidence_ref"])
+            _require(observed_raw in (parents[1].encode("ascii") + b"\n",
+                                      parents[1].encode("ascii") + b"\r\n"),
+                     "PR43 raw develop observation SHA differs")
+            base = parents[1]
+        previous = record["sha"]
+    _require(seen and previous == sixth["to_head"] == state["current"]["head"] == state["pr"]["head_sha"]
+             and tree == ex["candidate_tree"] and state["pr"]["base_sha"] == base,
+             "PR43 sixth final candidate/tree/base differs")
+    _require(state["pr"]["state"] == "merged" or state["current"]["base"] == base,
+             "PR43 sixth current integration base differs")
+    _require(sixth["evidence_ref"] == records[-1]["object_ref"], "PR43 sixth final raw object reference differs")
+    return 6
+
+
 def _correction_limit(state):
     if "correction_exception" not in state:
         return 3
     exception = state["correction_exception"]
+    if type(exception) is dict and exception.get("schema") == PR43_SIXTH_SCHEMA:
+        return _pr43_sixth_limit(state)
     if type(exception) is dict and exception.get("schema") == PR43_CORRECTION_SCHEMA:
         return _pr43_correction_limit(state)
     if type(exception) is dict and exception.get("schema") == CFF_CORRECTION4_EXCEPTION["schema"]:
@@ -520,6 +704,7 @@ def validate_state(state):
     _fields(state, fields + (" execution coverage short_validation" if staged else "")
             + (" correction_exception" if type(state) is dict and "correction_exception" in state else "")
             + (" validation_policy" if type(state) is dict and "validation_policy" in state else "")
+            + (" pr43_review_history_adapter" if type(state) is dict and "pr43_review_history_adapter" in state else "")
             + (" cff_review_history_adapter" if type(state) is dict and "cff_review_history_adapter" in state else ""), "state")
     if "validation_policy" in state:
         _require(state["validation_policy"] == NO_WINDOW_POLICY, "unknown validation policy")
@@ -848,7 +1033,7 @@ def _cff_history_pairs(state):
 
 def _validate_review_history(state):
     """Resolve only explicit, append-only supplements backed by retained evidence."""
-    allowed_pairs = _cff_history_pairs(state)
+    allowed_pairs = _cff_history_pairs(state) | _pr43_history_pairs(state)
     reports, superseded = {}, set()
     for review in state["reviews"]:
         ref, prior = review["report_ref"], review["supersedes_report_ref"]

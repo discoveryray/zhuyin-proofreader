@@ -413,13 +413,26 @@ class ManualActualGuiBatchOrchestrationTests(unittest.TestCase):
                 manifest["pdfs"].append(info)
             manifest = sp.seal_manifest(manifest)
             sp.json_save(output_dir / "校對工作階段.json", manifest)
-            pdfs = [Path(item["pdf"]) for item in manifest["pdfs"]]
-            with patch.object(sp, "run_pipeline_pdfs", side_effect=successful_stage) as pipeline:
-                sp.refresh_actual_project(output_dir)
+            # This is an existing OS path through a real parent directory, not
+            # a fabricated RUNNER~1 spelling. The ordered roster remains exact.
+            alias = Path(directory) / ".." / Path(directory).name
+            self.assertTrue(alias.is_dir())
+            pdfs = [alias / Path(item["pdf"]).name for item in manifest["pdfs"]]
+            self.assertEqual([p.resolve(strict=True) for p in pdfs],
+                             [Path(item["pdf"]).resolve(strict=True) for item in manifest["pdfs"]])
+            source_alias = alias / output_dir.name
+            def checked_stage(pdfs, destination, **kwargs):
+                self.assertNotEqual(Path(destination).resolve(strict=True), source_alias.resolve(strict=True))
+                return successful_stage(pdfs, destination, **kwargs)
+            with patch.object(sp, "run_pipeline_pdfs", side_effect=checked_stage) as pipeline:
+                sp.refresh_actual_project(source_alias)
             pipeline.assert_called_once()
-            self.assertEqual(pipeline.call_args.args[0], pdfs)
-            self.assertNotEqual(pipeline.call_args.args[1], output_dir)
-            self.assertEqual(pipeline.call_args.kwargs["_source_project_dir"], output_dir)
+            self.assertEqual([Path(p).resolve(strict=True) for p in pipeline.call_args.args[0]],
+                             [p.resolve(strict=True) for p in pdfs])
+            # The verified isolated stage has been cleaned after publication.
+            self.assertNotEqual(Path(pipeline.call_args.args[1]).resolve(), output_dir.resolve(strict=True))
+            self.assertEqual(Path(pipeline.call_args.kwargs["_source_project_dir"]).resolve(strict=True),
+                             source_alias.resolve(strict=True))
             self.assertEqual(pipeline.call_args.kwargs["session_id_override"], manifest["session_id"])
             self.assertTrue(pipeline.call_args.kwargs["defer_excel_reports"])
 

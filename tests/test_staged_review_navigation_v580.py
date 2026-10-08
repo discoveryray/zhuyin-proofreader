@@ -79,7 +79,10 @@ def synthetic_actual_stage(pdfs, destination, *, session_id_override,
         raise AssertionError("synthetic producer must not write the live project")
     manifest = sp.json_load_strict(destination / "校對工作階段.json")
     assert manifest["session_id"] == session_id_override and defer_excel_reports
-    assert {Path(info["pdf"]) for info in manifest["pdfs"]} == set(pdfs)
+    # Preserve the complete ordered roster (including multiplicity), while
+    # accepting only spellings that resolve to the same existing OS files.
+    assert [Path(info["pdf"]).resolve(strict=True) for info in manifest["pdfs"]] == [
+        Path(pdf).resolve(strict=True) for pdf in pdfs]
     for row in manifest["records"]:
         overrides = load_actual_occurrence_overrides(
             sp.project_actual_evidence_root(source) / ar.OCCURRENCE_OVERRIDE_FILE, Path(row["pdf"]))
@@ -104,6 +107,61 @@ def controlled_refresh(output, *, _refresh_plan=None, _refresh_status=None):
     with patch.object(sp, "run_pipeline_pdfs", side_effect=synthetic_actual_stage):
         return _REAL_REFRESH_ACTUAL_PROJECT(
             output, _refresh_plan=_refresh_plan, _refresh_status=_refresh_status)
+
+
+class SyntheticActualStageContractTests(unittest.TestCase):
+    def test_real_path_alias_accepts_complete_ordered_roster_in_isolated_stage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source"
+            source.mkdir()
+            create_staged_navigation_fixture(source)
+            ar.ensure_user_evidence_files(sp.project_actual_evidence_root(source))
+            before = {p: p.read_bytes() for p in source.rglob("*") if p.is_file()}
+            calls = []
+            def alias_stage(pdfs, destination, **kwargs):
+                aliases = [Path(p).parent / ".." / Path(p).parent.name / Path(p).name for p in pdfs]
+                self.assertTrue(all(p.is_file() for p in aliases))
+                self.assertEqual([p.resolve(strict=True) for p in aliases],
+                                 [Path(p).resolve(strict=True) for p in pdfs])
+                calls.append((list(pdfs), Path(destination), kwargs))
+                return synthetic_actual_stage(aliases, destination, **kwargs)
+            with patch.object(sp, "run_pipeline_pdfs", side_effect=alias_stage):
+                sp.refresh_actual_project(source)
+            self.assertEqual(len(calls), 1)
+            self.assertNotEqual(calls[0][1].resolve(), source.resolve())
+            self.assertEqual(calls[0][2]["session_id_override"],
+                             sp.json_load_strict(source / "校對工作階段.json")["session_id"])
+            self.assertTrue(calls[0][2]["defer_excel_reports"])
+            # Real publication may add status/DB files; it cannot rewrite the
+            # fixture's sealed workbook or authoritative actual evidence.
+            for path, raw in before.items():
+                if path.suffix == ".xlsx" or "_專案證據" in path.parts:
+                    self.assertEqual(path.read_bytes(), raw)
+
+    def test_missing_extra_different_or_duplicate_roster_rejects_without_live_writes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source"
+            source.mkdir()
+            create_staged_navigation_fixture(source)
+            ar.ensure_user_evidence_files(sp.project_actual_evidence_root(source))
+            other = Path(directory) / "other.pdf"
+            other.write_bytes(Path(sp.json_load_strict(source / "校對工作階段.json")["pdfs"][0]["pdf"]).read_bytes())
+            before = {p: p.read_bytes() for p in source.rglob("*") if p.is_file()}
+            for mutation in ("missing", "extra", "different", "duplicate"):
+                with self.subTest(mutation=mutation):
+                    def invalid_stage(pdfs, destination, **kwargs):
+                        roster = {"missing": [], "extra": [*pdfs, other],
+                                  "different": [other], "duplicate": [*pdfs, *pdfs]}[mutation]
+                        return synthetic_actual_stage(roster, destination, **kwargs)
+                    with patch.object(sp, "run_pipeline_pdfs", side_effect=invalid_stage), self.assertRaises(AssertionError):
+                        sp.refresh_actual_project(source)
+                    self.assertEqual({p: p.read_bytes() for p in before}, before)
+            manifest = sp.json_load_strict(source / "校對工作階段.json")
+            with self.assertRaisesRegex(AssertionError, "must not write the live project"):
+                synthetic_actual_stage([Path(i["pdf"]) for i in manifest["pdfs"]], source,
+                                       session_id_override=manifest["session_id"], defer_excel_reports=True,
+                                       _source_project_dir=source / ".." / source.name)
+            self.assertEqual({p: p.read_bytes() for p in before}, before)
 
 
 class StagedNavigationTests(unittest.TestCase):

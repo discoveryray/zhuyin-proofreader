@@ -456,3 +456,45 @@ HEAD、to 必須 current/PR HEAD，仍需 contiguous/new-commit schema。
 本例外只承載原任務同一第四輪，不自動解除原 BLOCKED、不增加正式 CI 或
 retry 額度、不提供獨立審查或 merge 授權。第四輪新 HEAD 仍需兩輪完整適用
 獨立審查與必要原始證據；4/4 後再有 confirmed code finding 必須 STOP。
+
+
+## PR43 唯一第六輪與原 R1 CODE／code BLOCKED 並存
+
+2026-10-09 人類採納原 proposal SHA256
+`937717ab4c55591b1c4c611595c2cc6ad216f7444dc45e0bb445dc85d22248e7`
+及 history addendum `7f92f232e35126811de3484b6da7b35e10589d04a6b6df28b7bc680101075c28`；
+採納原件 hash `a9e605fab7cc52a6159a64528c6f8bd60cbde5989e48d29884aac7ece1a46ccf`。
+僅限原 `actual-gpt-bbox-export`、PR43、`codex/actual-gpt-bbox-export`、
+baseline `8eab9a1de34b59115658a2c7d3565adb347e59ab`。原 `/1` 仍只接受四／五輪。
+
+Optional `pr43_review_history_adapter` 恰有 `contract=pr43-review-history/1`、
+`sources`；來源 keys／原 bytes SHA256 完整列於 `PR43_SIXTH_SOURCES`，不得缺件或改 hash。
+包含原第五失敗 snapshot、receipt、3ade raw object、四份報告及作者投影／聲明、
+原 CI manifest/raw/JUnit/events、proposal/addendum/adoption。先重驗原 `/1` 的五輪，
+固定 historical base `1417ac7ef08c7024f5940b3b9192abb4029405c1`、HEAD
+`3ade65a9e94017c7eede5488508b9c91767f7874`、true fifth corrective
+`f66d67a4d6c0cbf7895c456cc2791a5b8bdfa2b5` 及 raw tree/ordered parents。
+全部六份 review（包括更早兩份）與五 corrections 必須保持完整 ordered prefix。
+只有該 R1 CODE_REVIEWED／code BLOCKED 原 pair 可並存；null relations、findings、
+report refs、作者 projection 原值不變。R2 原 CI tuple 不同，沒有額外 R2 例外。
+舊第五 `/1` 保持 STOP5/5，CI37789520018/1 仍 failed、exit1、retry false。
+不得新增同原 R1 scope 的第三份 report／PASS，即使變更 CI／coverage 也拒絕。
+
+`correction_exception` 的 `/2` 恰有 `schema=pr43-correction-exception/2`、
+`limit=6`、`sixth_corrective_head`、`integration_commits`、`candidate_tree`，並要求上述 adapter。
+只接受原五筆後追加恰一筆 number6/from3ade/to final candidate；第五 to/evidence_ref 不變。
+新鏈從 3ade 開始，唯一單 parent 節點必須是 sixth_corrective_head；其餘只能是已授權
+ordinary two-parent develop merges。每筆恰有 `sha/object_ref/develop_observation_ref`，
+實讀原 commit bytes 驗 Git object SHA、唯一合法 tree header、ordered parents。
+修正節點的 observation 為 null；merge 節點引用 closed JSON
+`repository/ref/sha/evidence_ref`，固定 repository、`refs/heads/develop`，sha 必須等於
+第二 parent。evidence_ref 實讀當時 `git rev-parse origin/develop` 原始 SHA 行（LF／CRLF）；
+協調者另保留命令、時間與遠端 API 原件，gate 不自稱驗證來源真實性。
+最後 tree 必須等於 candidate_tree，HEAD/base 與當次 scope 相同，number6 evidence_ref
+必須引用最後 raw object。未發生的 merge 不得預填 SHA。
+
+新 HEAD 仍需兩輪完整適用獨立審查與必要 CI；原報告不提供新候選 PASS。
+第六輪 code finding 保持 STOP6/6；額外單 parent 修正、第七輪、壞 hash/tree/parents、
+刪改 prefix、未知 task/schema 或偽造 relations 均拒絕。一般／PR41／CFF 契約不變。
+Synthetic 回歸僅替換 fixture pins／歷史 Git identities，另驗真實 allowlist 拒絕假來源；
+不把 fixture 成功當正式原件、review 或 CI PASS。

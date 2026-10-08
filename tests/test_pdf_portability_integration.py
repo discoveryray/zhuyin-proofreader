@@ -1175,9 +1175,26 @@ def test_actual_excel_prepared_and_post_ack_crash_windows_can_resume(tmp_path, m
         assert not (before_commit / portability.INCOMPLETE_FILE).exists()
         assert portability._actual_excel_file_snapshot(before_commit) == original_before
 
-        with patch.object(promotion, "acknowledge_project_refresh", side_effect=SystemExit("power loss after refresh")):
-            with pytest.raises(SystemExit, match="power loss"):
+        # Crash after the real sealed-source checks but before token consumption.
+        # Patch the bound callable actually used by sp._acknowledge_actual_refresh;
+        # this is not a claim that the token has already been acknowledged.
+        def interrupt_before_token(root, token):
+            assert Path(root).resolve() == sp.project_actual_evidence_root(after_refresh.resolve())
+            pending = promotion.committed_project_recovery(root)
+            assert pending is not None and pending[0] == token
+            owned_marker = sp.json_load_strict(after_refresh / portability.INCOMPLETE_FILE)
+            assert owned_marker["status"] == "ACTUAL_EXCEL_RECOVERED"
+            assert owned_marker["recovery_token"] == token
+            assert sp.json_load_strict(after_refresh / sp.ACTUAL_REFRESH_PUBLICATION)["phase"] == "ACKNOWLEDGING"
+            raise SystemExit("power loss after source validation before token consumption")
+        with patch.object(sp, "_verify_actual_refresh_pdf_binding", wraps=sp._verify_actual_refresh_pdf_binding) as verify_source, \
+             patch.object(sp, "acknowledge_project_refresh", side_effect=interrupt_before_token) as acknowledge:
+            with pytest.raises(SystemExit, match="before token consumption"):
                 sp.import_actual_gpt_decisions(after_refresh, filled)
+            acknowledge.assert_called_once()
+            assert verify_source.call_count >= 1
+            assert Path(acknowledge.call_args.args[0]).resolve() == sp.project_actual_evidence_root(after_refresh.resolve())
+            assert acknowledge.call_args.args[1] == promotion.project_refresh_token(sp.project_actual_evidence_root(after_refresh))
         marker = sp.json_load_strict(after_refresh / portability.INCOMPLETE_FILE)
         assert marker["status"] == "ACTUAL_EXCEL_RECOVERED"
         assert promotion.committed_project_recovery(sp.project_actual_evidence_root(after_refresh)) is not None
@@ -1372,18 +1389,58 @@ def test_actual_excel_midrefresh_workbook_rewrite_can_resume_twice(tmp_path, mon
         root = sp.project_actual_evidence_root(target)
         marker = target / portability.INCOMPLETE_FILE
         old_manifest = sp.json_load_strict(target / "校對工作階段.json")
+        stage_failures = []
+        committed_live = []
+        delivery_lock = root / ".global_exact_glyph_delivery.lock"
+        def live_artifact_snapshot():
+            # Windows denies reads of the byte held by the real delivery lock.
+            # Keep its identity/size in the inventory; every other file,
+            # including DB, manifest, actual CSVs, journal and marker, is bytes.
+            return ({p.relative_to(target): p.read_bytes() for p in target.rglob("*")
+                     if p.is_file() and p != delivery_lock},
+                    delivery_lock.relative_to(target), delivery_lock.stat().st_size)
         def rewrite_then_crash(*args, **kwargs):
+            staged_workbook = Path(args[1]).resolve(strict=True)
+            assert target.resolve() not in staged_workbook.parents
+            stage = staged_workbook.parents[1]
+            assert (stage / "校對工作階段.json").is_file()
+            live = live_artifact_snapshot()
+            if not committed_live:
+                committed_live.append(live)
+            else:
+                assert live == committed_live[0]
+            assert promotion.committed_project_recovery(root) is not None
+            previous = staged_workbook.read_bytes()
             _synthetic_unresolved_decode(*args, **kwargs)
+            assert staged_workbook.read_bytes() != previous
+            assert live_artifact_snapshot() == live
+            stage_failures.append(stage)
             raise RuntimeError("power loss after workbook rewrite")
         with patch.object(sp, "decode", side_effect=rewrite_then_crash):
             with pytest.raises(Exception, match="power loss after workbook rewrite"):
                 sp.import_actual_gpt_decisions(target, filled)
+        assert len(stage_failures) == 1 and not stage_failures[0].exists()
+        assert live_artifact_snapshot() == committed_live[0]
+        assert delivery_lock.read_bytes() == b"0"
         assert marker.exists() and promotion.committed_project_recovery(root) is not None
+        sp.validate_output_artifact_hashes(old_manifest)
+        intact_marker = sp.json_load_strict(marker)
+        # Separate legacy damaged-live-workbook scenario: deliberate corruption,
+        # not an expected side effect of the isolated producer failure.
+        damaged_item = intact_marker["sealed_workbooks"]["entries"][0]
+        damaged_path = target / damaged_item["path"]
+        sealed_backup = base64.b64decode(damaged_item["bytes"], validate=True)
+        assert hashlib.sha256(sealed_backup).hexdigest() == damaged_item["sha256"]
+        damaged_path.write_bytes(b"deliberate legacy workbook damage")
         with pytest.raises(ValueError, match="hash 不符"):
             sp.validate_output_artifact_hashes(old_manifest)
-        intact_marker = sp.json_load_strict(marker)
-        for item in intact_marker["sealed_workbooks"]["entries"]:
-            portability._restore_exact_file(target / item["path"], base64.b64decode(item["bytes"]))
+        # Exercise the real bounded COMMITTED recovery reader/restorer; it must
+        # validate the sealed backup and actual source plan before restoring.
+        portability._restore_sealed_workbooks_for_actual_resume(
+            target, intact_marker, promotion.committed_project_recovery(root))
+        assert damaged_path.read_bytes() == sealed_backup
+        assert live_artifact_snapshot() == committed_live[0]
+        assert delivery_lock.read_bytes() == b"0"
         sp.validate_output_artifact_hashes(old_manifest)
         sp.json_save(marker, {"status": "ACTUAL_EXCEL_REFRESH_PENDING",
                               "source_excel_sha256": "0" * 64})
@@ -1398,13 +1455,18 @@ def test_actual_excel_midrefresh_workbook_rewrite_can_resume_twice(tmp_path, mon
         damaged_marker = copy.deepcopy(intact_marker)
         damaged_marker["sealed_workbooks"]["entries"][0]["bytes"] = "AA=="
         sp.json_save(marker, damaged_marker)
+        before_bad_backup = {path: path.read_bytes() for path in watched}
         with pytest.raises(ValueError, match="完整性|備份內容不符"):
             portability.resume_actual_excel_project(target)
+        assert {path: path.read_bytes() for path in watched} == before_bad_backup
         assert promotion.committed_project_recovery(root) is not None
         sp.json_save(marker, intact_marker)
         with patch.object(sp, "decode", side_effect=rewrite_then_crash):
             with pytest.raises(Exception, match="power loss after workbook rewrite"):
                 portability.resume_actual_excel_project(target)
+        assert len(stage_failures) == 2 and all(not stage.exists() for stage in stage_failures)
+        assert live_artifact_snapshot() == committed_live[0]
+        assert delivery_lock.read_bytes() == b"0"
         assert marker.exists() and promotion.committed_project_recovery(root) is not None
         resumed = portability.resume_actual_excel_project(target)
         assert resumed["project_actual_commit"] == "COMMITTED"
