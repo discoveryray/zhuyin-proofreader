@@ -813,10 +813,20 @@ class ManualReviewGuiTests(unittest.TestCase):
         app = self.app
         first = app.current()
         before = (self.output / "人工判定資料庫.json").read_bytes()
-        for failing in ("prepare_review_ledger", "json_save"):
-            with self.subTest(failing=failing), patch.object(sp, failing, side_effect=OSError("isolated save failure")), patch.object(gui.messagebox, "showerror") as error, patch.object(gui.messagebox, "showinfo") as success:
+        for failing in ("prepare_review_ledger", "_capture", "json_save"):
+            # Resume now warms the service. Exercise a cold rebuild failure
+            # explicitly, plus dependency-read and write failures when warm.
+            app.reload_records()
+            app.show()
+            service = app._save_service
+            self.assertIsNotNone(service._ledger)
+            if failing == "prepare_review_ledger":
+                service.invalidate()
+            target = service if failing == "_capture" else sp
+            with self.subTest(failing=failing), patch.object(target, failing, side_effect=OSError("isolated save failure")) as injected, patch.object(gui.messagebox, "showerror") as error, patch.object(gui.messagebox, "showinfo") as success:
                 app.primary.invoke()
                 wait_for_save(app)
+                injected.assert_called_once()
                 error.assert_called_once()
                 success.assert_not_called()
             self.assertEqual(app.current(), first)
