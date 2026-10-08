@@ -49,7 +49,7 @@ class ResponsiveReviewTests(unittest.TestCase):
         self.stack.enter_context(patch.object(gui, "create_scrollable_body", return_value=(widget(), widget())))
         return root
 
-    def pump_loading(self, app):
+    def pump_loading(self, app, *, finish_staging=True):
         deadline = time.monotonic() + 10
         while app._startup_in_progress:
             self.assertLess(time.monotonic(), deadline)
@@ -57,6 +57,10 @@ class ResponsiveReviewTests(unittest.TestCase):
             time.sleep(.001)
         app._startup_worker.join(10)
         app.root.update()
+        if finish_staging and hasattr(app, "_staging_worker"):
+            app._staging_worker.join(10)
+            self.assertFalse(app._staging_worker.is_alive())
+            app.root.update()
 
     def test_constructor_returns_while_loading_and_publishes_only_on_ui_thread(self):
         root = self.fake_shell()
@@ -89,9 +93,41 @@ class ResponsiveReviewTests(unittest.TestCase):
                 release.set()
                 self.pump_loading(app)
         self.assertEqual(app.manifest, self.manifest)
-        self.assertEqual(ui_ids, [threading.get_ident()])
+        self.assertEqual(ui_ids, [threading.get_ident(), threading.get_ident()])
         self.assertNotEqual(worker_ids[0], threading.get_ident())
         self.assertFalse(app._save_busy())
+        self.assertEqual(app._async_after_ids, set())
+
+    def test_startup_publishes_queue_before_staging_without_duplicate_materialization(self):
+        row = self.manifest["records"][2]
+        sp.stage_manual_actual_correction(self.output, row["review_id"], "ㄎㄢ")
+        entered, release = threading.Event(), threading.Event()
+        validate = ReviewSaveService.validate_resume_staging
+        def held(service, snapshot, **kwargs):
+            entered.set()
+            if not release.wait(10):
+                raise AssertionError("staging not released")
+            return validate(service, snapshot, **kwargs)
+        with patch.object(ReviewSaveService, "validate_resume_staging", held), \
+                patch.object(sp, "prepare_review_ledger", wraps=sp.prepare_review_ledger) as prepare:
+            app = gui.ReviewApp(self.fake_shell(), self.output)
+            app.show = Mock()
+            try:
+                self.pump_loading(app, finish_staging=False)
+                self.assertTrue(entered.wait(5))
+                self.assertEqual(prepare.call_count, 1)
+                self.assertTrue(app.records)
+                self.assertTrue(app.staging_summary["staging_validation_pending"])
+                self.assertFalse(app.staged_checked_occurrence_ids)
+                app.next()
+                current = app.current()["review_id"]
+            finally:
+                release.set()
+                app._staging_worker.join(10)
+                self.assertFalse(app._staging_worker.is_alive())
+                app.root.update()
+        self.assertEqual(app.current()["review_id"], current)
+        self.assertIn(row["occurrence_id"], app.staged_checked_occurrence_ids)
         self.assertEqual(app._async_after_ids, set())
 
     def test_loader_replays_bound_expected_and_preserves_actual(self):
@@ -125,6 +161,26 @@ class ResponsiveReviewTests(unittest.TestCase):
         self.assertFalse(app._startup_failed)
         self.assertEqual(app.exit_code, 0)
         self.assertEqual(app.manifest, self.manifest)
+
+    def test_startup_source_error_retains_only_committed_recovery_entry(self):
+        artifact = Path(self.manifest["pdfs"][0]["actual_workbook"])
+        artifact.write_bytes(b"synthetic corrupted actual")
+        with patch.object(gui, "committed_project_recovery", return_value=("existing-token", {})):
+            app = gui.ReviewApp(self.fake_shell(), self.output)
+            app.show = Mock()
+            self.pump_loading(app)
+            self.assertTrue(app._startup_failed)
+            self.assertTrue(app._save_busy())
+            self.assertEqual(app.records, [])
+            self.assertTrue(app.staging_summary["actual_recovery_pending"])
+            with patch.object(gui.messagebox, "askyesno", return_value=True), \
+                    patch.object(app, "_start_staged_actual_apply") as start:
+                app.apply_staged_actuals()
+                start.assert_called_once_with(0, recovery_only=True)
+                app._start_review_loading()
+                self.assertFalse(app._startup_in_progress)
+            app._apply_in_progress = False
+        # This is command routing only: no recovery transaction or Tk runs.
 
     def test_close_loading_cancels_owned_poll_and_ignores_late_result(self):
         entered, release = threading.Event(), threading.Event()

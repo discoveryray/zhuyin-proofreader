@@ -104,6 +104,7 @@ from actual_review import (
     apply_staged_manual_actual_batch,
     build_actual_review_groups,
     build_actual_group_for_entry,
+    index_actual_group_members,
     apply_verified_actual_group,
     apply_direct_visual_actual_batch,
     export_actual_review_package,
@@ -3939,6 +3940,9 @@ def _manual_actual_snapshot_ledger(manifest, db, ledger, *, base_ledger=None):
     base = {row["review_id"]: row for row in (
         materialize_ledger(manifest, normalize_db({})) if base_ledger is None else base_ledger
     )}
+    context = None
+    if any("expected_resolution_binding" in event for event in expected_events.values()):
+        _, context = _validated_expected_manifest(manifest)
     projected = []
     for row in ledger:
         event = expected_events.get(row["review_id"])
@@ -3948,7 +3952,7 @@ def _manual_actual_snapshot_ledger(manifest, db, ledger, *, base_ledger=None):
                 and row.get("blocking_state") not in HARD_BLOCKING_STATES
                 and original.get("blocking_state") not in HARD_BLOCKING_STATES
                 and not row.get("review_event_replay_status")):
-            replayed = _apply_review_event(original, event, expected_manifest=manifest)
+            replayed = _apply_review_event_in_context(original, event, context)
             if replayed != row or actual_confirmation_snapshot(original) != actual_confirmation_snapshot(row):
                 raise ValueError("manual actual snapshot 無法證明是獨立 expected 變更")
             # The whole source record (PDF/identity/coordinates/exact metadata)
@@ -3998,7 +4002,7 @@ def _manual_actual_staging_inventory(staging):
 
 
 def _manual_actual_summary_from_verified_snapshot(output_dir, staging, manifest, db, ledger,
-                                                *, base_ledger=None, source_hashes=None):
+                                                *, base_ledger=None, source_hashes=None, cancelled=None):
     """Internal save path: all arguments belong to one content-verified snapshot.
 
     This shares group/source validators with the ordinary read path. It never
@@ -4010,9 +4014,10 @@ def _manual_actual_summary_from_verified_snapshot(output_dir, staging, manifest,
         summary["actual_recovery_pending"] = committed_project_recovery(project_actual_evidence_root(output_dir)) is not None
         if groups:
             projected = _manual_actual_snapshot_ledger(manifest, db, ledger, base_ledger=base_ledger)
-            live_groups = _current_live_groups_for_staged_manual_actual(ledger, groups, snapshot_ledger=projected)
-            for staged, live in zip(sorted(groups, key=lambda item: item["group_id"]), live_groups):
-                _revalidate_staged_manual_actual_group(staged, live)
+            live_groups = _current_live_groups_for_staged_manual_actual(
+                ledger, groups, snapshot_ledger=projected, cancelled=cancelled)
+            # Supplying snapshot_ledger makes the group builder validate each
+            # live (or proven expected-only projected) group before returning.
             _validate_manual_actual_group_sources(output_dir, live_groups, source_hashes=source_hashes)
     except Exception as exc:
         summary["staging_error"] = str(exc)
@@ -4360,7 +4365,7 @@ def apply_manual_actual_correction(
 def _current_live_groups_for_staged_manual_actual(
     ledger: list[dict[str, Any]],
     staged_decisions: list[Mapping[str, Any]],
-    *, snapshot_ledger=None,
+    *, snapshot_ledger=None, cancelled=None,
 ) -> list[dict[str, Any]]:
     """Rebuild every Phase 2A live group from the current materialized ledger."""
     by_occurrence_id: dict[str, dict[str, Any]] = {}
@@ -4372,8 +4377,13 @@ def _current_live_groups_for_staged_manual_actual(
             raise DuplicateIdError(f"manual actual batch current ledger occurrence_id 重複：{occurrence_id}")
         by_occurrence_id[occurrence_id] = entry
 
+    member_index = index_actual_group_members(ledger)
+    projected_index = None
+    projected_by_id = None
     live_groups: list[dict[str, Any]] = []
     for staged in sorted(staged_decisions, key=lambda item: str(item.get("group_id") or "")):
+        if cancelled is not None and cancelled():
+            raise InterruptedError("actual 暫存核對已由新操作取代")
         current_member = next(
             (
                 by_occurrence_id.get(str(occurrence_id or ""))
@@ -4387,14 +4397,17 @@ def _current_live_groups_for_staged_manual_actual(
                 "manual actual batch staged group 在目前 ledger 找不到任何 member："
                 f"{staged.get('group_id') or ''}；整批拒絕"
             )
-        live = build_actual_group_for_entry(ledger, current_member)
+        live = build_actual_group_for_entry(ledger, current_member, member_index=member_index)
         if snapshot_ledger is not None:
             try:
                 _revalidate_staged_manual_actual_group(staged, live)
             except ValueError:
-                projected_member = next(row for row in snapshot_ledger
-                                        if row["occurrence_id"] == current_member["occurrence_id"])
-                projected = build_actual_group_for_entry(snapshot_ledger, projected_member)
+                if projected_index is None:
+                    projected_index = index_actual_group_members(snapshot_ledger)
+                    projected_by_id = {row["occurrence_id"]: row for row in snapshot_ledger}
+                projected_member = projected_by_id[current_member["occurrence_id"]]
+                projected = build_actual_group_for_entry(
+                    snapshot_ledger, projected_member, member_index=projected_index)
                 _revalidate_staged_manual_actual_group(staged, projected)
                 live = projected
         live_groups.append(live)

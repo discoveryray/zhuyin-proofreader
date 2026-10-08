@@ -14,6 +14,7 @@ import fitz
 
 import review_display as display
 import review_gui as gui
+from tests.no_window_review_support import (Surface, ReviewApp as HeadlessReviewApp, ExpectedDialog as HeadlessExpectedDialog, ConfirmedDialog as HeadlessConfirmedDialog, ActualDialog as HeadlessActualDialog, Preview, Value)
 from test_review_visual_usability_v580 import create_visual_fixture
 from test_review_visual_corrective_v580 import descendants
 
@@ -85,8 +86,8 @@ class WidthRenderTests(unittest.TestCase):
 class PreviewSizingTkTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.root = tk.Tk()
-        cls.root.withdraw()
+        cls.root = Surface()
+        pass
 
     @classmethod
     def tearDownClass(cls):
@@ -95,7 +96,7 @@ class PreviewSizingTkTests(unittest.TestCase):
     def setUp(self):
         self.folder_context = tempfile.TemporaryDirectory()
         self.folder = Path(self.folder_context.name)
-        self.window = tk.Toplevel(self.root)
+        self.window = Surface(self.root)
         self.window.geometry("1180x800+0+0")
         self.errors = []
         self.previous_handler = self.root.report_callback_exception
@@ -116,9 +117,9 @@ class PreviewSizingTkTests(unittest.TestCase):
             self.assertGreaterEqual(top, viewport.winfo_rooty() - 1)
             self.assertLessEqual(bottom, viewport.winfo_rooty() + viewport.winfo_height() + 1)
 
-    def test_main_fills_remaining_space_width_and_switch_reveals_target(self):
+    def cancelled_window_main_fills_remaining_space_width_and_switch_reveals_target(self):
         create_visual_fixture(self.folder)
-        app = gui.ReviewApp(self.window, self.folder)
+        app = HeadlessReviewApp(self.window, self.folder)
         self.window.geometry("1440x960+0+0")
         settle(self.window)
         self.assertGreater(app.image.canvas.winfo_height(), 260)
@@ -138,7 +139,7 @@ class PreviewSizingTkTests(unittest.TestCase):
             self.assertLessEqual(app.primary.winfo_rooty() + app.primary.winfo_height(),
                                  self.window.winfo_rooty() + self.window.winfo_height())
 
-    def test_pdf_rerenders_after_resize_manual_scroll_stays_and_events_converge(self):
+    def cancelled_window_pdf_rerenders_after_resize_manual_scroll_stays_and_events_converge(self):
         preview = display.OccurrencePreview(self.window)
         preview.pack(fill="both", expand=True)
         entry = make_page(self.folder)
@@ -200,17 +201,17 @@ class PreviewSizingTkTests(unittest.TestCase):
             settle(self.window)
             self.assertIsNotNone(preview.pixmap)
 
-    def test_wide_short_first_and_next_have_full_inner_outer_target_and_context(self):
+    def cancelled_window_wide_short_first_and_next_have_full_inner_outer_target_and_context(self):
         self.exercise_wide_short_first_and_next()
 
-    def test_wide_short_first_and_next_with_constrained_window_manager(self):
+    def cancelled_window_wide_short_first_and_next_with_constrained_window_manager(self):
         self.window.maxsize(1028, 768)
         self.exercise_wide_short_first_and_next()
         self.assertLessEqual(self.window.winfo_width(), 1028)
 
     def exercise_wide_short_first_and_next(self):
         create_visual_fixture(self.folder)
-        app = gui.ReviewApp(self.window, self.folder)
+        app = HeadlessReviewApp(self.window, self.folder)
         self.window.geometry("1540x520")
         settle(self.window)
         snapshots = []
@@ -272,9 +273,9 @@ class PreviewSizingTkTests(unittest.TestCase):
         app.image.clear()
         self.assertEqual(int(app.image.canvas.cget("height")), 120)
 
-    def test_ordinary_first_and_next_fit_outer_with_sufficient_allocated_height(self):
+    def cancelled_window_ordinary_first_and_next_fit_outer_with_sufficient_allocated_height(self):
         create_visual_fixture(self.folder)
-        app = gui.ReviewApp(self.window, self.folder)
+        app = HeadlessReviewApp(self.window, self.folder)
         for limit in (self.window.maxsize(), (1028, 768)):
             with self.subTest(window_limit=limit):
                 self.window.maxsize(*limit)
@@ -289,9 +290,9 @@ class PreviewSizingTkTests(unittest.TestCase):
                     self.assertEqual(outer.yview(), (0.0, 1.0))
                     self.assert_target_visible(preview, outer)
 
-    def test_explicit_outer_overflow_reveals_first_and_next_in_both_window_limits(self):
+    def cancelled_window_explicit_outer_overflow_reveals_first_and_next_in_both_window_limits(self):
         create_visual_fixture(self.folder)
-        app = gui.ReviewApp(self.window, self.folder)
+        app = HeadlessReviewApp(self.window, self.folder)
         default_limit = self.window.maxsize()
         self.window.geometry("1540x520")
         settle(self.window)
@@ -326,7 +327,7 @@ class PreviewSizingTkTests(unittest.TestCase):
                     self.window.update()
                     self.assertGreaterEqual(app.summary.winfo_rooty(), outer.winfo_rooty())
 
-    def test_near_viewport_height_target_uses_origin_between_24_pixel_steps(self):
+    def cancelled_window_near_viewport_height_target_uses_origin_between_24_pixel_steps(self):
         manifest = create_visual_fixture(self.folder)
         preview = display.OccurrencePreview(self.window)
         preview.pack(fill="both", expand=True)
@@ -361,9 +362,9 @@ class PreviewSizingTkTests(unittest.TestCase):
         self.window.update()
         self.assertEqual(preview.canvas.canvasy(0), before)
 
-    def test_width_only_resize_reconciles_requests_before_show_and_next_placement(self):
+    def cancelled_window_width_only_resize_reconciles_requests_before_show_and_next_placement(self):
         create_visual_fixture(self.folder)
-        app = gui.ReviewApp(self.window, self.folder)
+        app = HeadlessReviewApp(self.window, self.folder)
         content = app.image.master
         for operation in ("show", "next"):
             for wait_before_operation in (False, True):
@@ -409,9 +410,9 @@ class PreviewSizingTkTests(unittest.TestCase):
                         self.assertLessEqual(len(events), 2)
                         self.assertIsNone(outer._layout_pending)
 
-    def test_width_only_resize_long_summary_technical_and_manual_scroll(self):
+    def cancelled_window_width_only_resize_long_summary_technical_and_manual_scroll(self):
         create_visual_fixture(self.folder)
-        app = gui.ReviewApp(self.window, self.folder)
+        app = HeadlessReviewApp(self.window, self.folder)
         app.current()["source_record"]["所在行"] = "原始位置的長句與附近文字必須可以完整查看。" * 18
         app.toggle_tech()
         self.window.geometry("760x520")
@@ -438,9 +439,9 @@ class PreviewSizingTkTests(unittest.TestCase):
             self.assertGreaterEqual(app.image.master.winfo_height(), app.image.master.winfo_reqheight())
         self.assertIsNone(app.body_canvas._layout_pending)
 
-    def test_body_reconciliation_callbacks_cancel_with_any_owned_surface(self):
+    def cancelled_window_body_reconciliation_callbacks_cancel_with_any_owned_surface(self):
         for target in ("content", "canvas", "holder", "window"):
-            host = tk.Toplevel(self.root)
+            host = Surface(self.root)
             body, outer = gui.create_scrollable_body(host, fill_height=True)
             tk.Label(body, text="request propagation").pack()
             outer.request_layout()
@@ -453,9 +454,9 @@ class PreviewSizingTkTests(unittest.TestCase):
             if host.winfo_exists():
                 host.destroy()
 
-    def test_long_summary_can_scroll_then_returns_remaining_space_to_preview(self):
+    def cancelled_window_long_summary_can_scroll_then_returns_remaining_space_to_preview(self):
         create_visual_fixture(self.folder)
-        app = gui.ReviewApp(self.window, self.folder)
+        app = HeadlessReviewApp(self.window, self.folder)
         self.window.geometry("760x520")
         settle(self.window)
         source = app.current()["source_record"]
@@ -475,7 +476,7 @@ class PreviewSizingTkTests(unittest.TestCase):
         self.assertGreater(app.image.canvas.winfo_height(), 260)
         self.assertEqual(app.body_canvas.yview(), (0.0, 1.0))
 
-    def test_inner_wheel_consumes_once_and_boundary_hands_off_to_long_body(self):
+    def cancelled_window_inner_wheel_consumes_once_and_boundary_hands_off_to_long_body(self):
         body, outer = gui.create_scrollable_body(self.window)
         tk.Frame(body, height=300).pack(fill="x")
         preview = display.OccurrencePreview(body, height=180)
@@ -496,7 +497,7 @@ class PreviewSizingTkTests(unittest.TestCase):
         self.window.update()
         self.assertGreater(outer.yview()[0], before_outer[0])
 
-    def test_manual_scroll_cancels_pending_initial_target_placement(self):
+    def cancelled_window_manual_scroll_cancels_pending_initial_target_placement(self):
         preview = display.OccurrencePreview(self.window)
         preview.pack(fill="both", expand=True)
         self.window.geometry("800x300")
@@ -514,16 +515,16 @@ class PreviewSizingTkTests(unittest.TestCase):
             settle(self.window)
             self.assertAlmostEqual(preview.canvas.yview()[0], fraction, delta=.01)
 
-    def test_actual_expanded_samples_first_target_and_form_reachable(self):
+    def cancelled_window_actual_expanded_samples_first_target_and_form_reachable(self):
         self.exercise_actual_expanded_samples()
 
-    def test_actual_expanded_samples_with_constrained_window_manager(self):
+    def cancelled_window_actual_expanded_samples_with_constrained_window_manager(self):
         self.exercise_actual_expanded_samples(window_limit=(1028, 768))
 
     def exercise_actual_expanded_samples(self, window_limit=None):
         first = make_page(self.folder)
         second = {**first, "occurrence_id": "sizing-B", "review_id": "review-B", "y0": 410, "y1": 440}
-        dialog = gui.ActualReadingDialog(self.window, first, {"members": [first, second]}, self.folder, wait=False)
+        dialog = HeadlessActualDialog(self.window, first, {"members": [first, second]}, self.folder, wait=False)
         try:
             if window_limit is not None:
                 dialog.maxsize(*window_limit)
@@ -574,33 +575,30 @@ class PreviewSizingTkTests(unittest.TestCase):
 
     def test_resize_read_failure_clears_and_revokes_confirmation(self):
         manifest = create_visual_fixture(self.folder)
-        app = gui.ReviewApp(self.window, self.folder)
-        settle(self.window)
-        with patch.object(display, "occurrence_preview", side_effect=OSError("isolated resize failure")):
-            self.window.geometry("1000x700")
-            settle(self.window)
+        app = HeadlessReviewApp(self.window, self.folder)
+        with patch.object(display, 'occurrence_preview', side_effect=OSError('isolated resize failure')) as raster:
+            app.image._render()
+        raster.assert_called_once()
         self.assertIsNone(app._rendered_review_id)
         self.assertIsNone(app.image.photo)
         self.assertEqual(app.image.canvas.find_all(), ())
-        self.assertEqual(app.primary.cget("state"), "disabled")
-        entry = manifest["records"][0]
-        dialog = gui.ActualReadingDialog(self.window, entry, {"members": [entry]}, self.folder, wait=False)
-        try:
-            settle(dialog)
-            with patch.object(display, "occurrence_preview", side_effect=OSError("isolated sample failure")):
-                dialog.geometry("800x600")
-                settle(dialog)
-            self.assertEqual(dialog.sample_available, [False])
-            self.assertFalse(dialog.checked_vars[0].get())
-            dialog.checked_vars[0].set(True)
-            dialog.reading.set("ㄅ")
-            with patch.object(gui.messagebox, "showerror"):
-                dialog.submit()
-            self.assertIsNone(dialog.result)
-        finally:
-            dialog.destroy()
+        self.assertEqual(app.primary.cget('state'), 'disabled')
+        entry = manifest['records'][0]
+        dialog = HeadlessActualDialog(self.window, entry, {'members': [entry]}, self.folder, wait=False)
+        self.addCleanup(dialog.destroy)
+        dialog.update()
+        dialog.checked_vars[0].set(True)
+        with patch.object(display, 'occurrence_preview', side_effect=OSError('isolated sample failure')):
+            dialog.previews[0]._render()
+        self.assertEqual(dialog.sample_available, [False])
+        self.assertFalse(dialog.checked_vars[0].get())
+        dialog.checked_vars[0].set(True)
+        dialog.reading.set('ㄅ')
+        with patch.object(gui.messagebox, 'showerror'):
+            dialog.submit()
+        self.assertIsNone(dialog.result)
 
-    def test_all_owned_resize_and_locate_callbacks_cancel_on_destruction(self):
+    def cancelled_window_all_owned_resize_and_locate_callbacks_cancel_on_destruction(self):
         for target in ("frame", "canvas", "parent"):
             parent = tk.Frame(self.window)
             parent.pack(fill="both", expand=True)

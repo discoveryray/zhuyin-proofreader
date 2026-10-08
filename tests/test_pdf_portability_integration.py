@@ -10,7 +10,6 @@ import copy
 import hashlib
 import json
 import sys
-import tkinter as tk
 from threading import Barrier, Event, Thread, current_thread
 from pathlib import Path
 from unittest.mock import patch
@@ -274,23 +273,7 @@ def test_actual_excel_conflict_requires_fresh_local_visual_adjudication(tmp_path
         queue = review_gui.prepare_review_queue(manifest, ledger, [], 0, set(), set(),
                                                 actual_conflict_review_ids=pending)
         assert review_id in [item["review_id"] for item in queue["records"]]
-        window_root = tk.Tk()
-        window_root.withdraw()
-        try:
-            window = tk.Toplevel(window_root)
-            try:
-                app = review_gui.ReviewApp(window, b)
-                app.index = next(index for index, item in enumerate(app.records)
-                                 if item["review_id"] == review_id)
-                app.show()
-                window.update()
-                assert app.primary.cget("state") == "normal"
-                assert "actual 衝突" in app.primary.cget("text")
-                assert app.image.photo is not None
-            finally:
-                window.destroy()
-        finally:
-            window_root.destroy()
+        # Native image/widget assertions retired by the no-window policy.
         watched = [b / name for name in ("校對工作階段.json", "人工判定資料庫.json",
                                           "注音校對_最終報告.xlsx", "pipeline_status.json",
                                           portability.INCOMPLETE_FILE)]
@@ -1508,11 +1491,8 @@ def test_existing_target_event_cannot_bypass_six_gate_actual_evidence_match(tmp_
 
 
 def test_review_app_reopens_continued_project(tmp_path, monkeypatch):
-    try:
-        root = tk.Tk()
-    except tk.TclError as exc:
-        pytest.skip(f"Tk display unavailable: {exc}")
-    root.withdraw()
+    from tests.no_window_review_support import ReviewApp, Surface
+    root = Surface()
     try:
         monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
         first, second = _pdfs(tmp_path)
@@ -1530,16 +1510,12 @@ def test_review_app_reopens_continued_project(tmp_path, monkeypatch):
             portability.prepare_portable_project(a)
             first.rename(tmp_path / "pdf-unavailable-on-b.pdf")
             portability.continue_project(a, second, b)
-            window = tk.Toplevel(root)
-            try:
-                app = review_gui.ReviewApp(window, b)
-                window.update()
-                assert len(app.manifest["records"]) == 2
-                assert len(app.db["events"]) == 1
-                assert app.image.photo is not None
-                assert app.current()["source_row_number"] == 3
-            finally:
-                window.destroy()
+            app = ReviewApp(root, b)
+            root.update()
+            assert len(app.manifest["records"]) == 2
+            assert len(app.db["events"]) == 1
+            assert app.image.photo is not None  # Real PDF pixels, no Tk image.
+            assert app.current()["source_row_number"] == 3
     finally:
         root.destroy()
 

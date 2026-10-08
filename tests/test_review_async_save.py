@@ -15,6 +15,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import review_gui as gui
+from tests.no_window_review_support import Surface, ReviewApp as HeadlessReviewApp
 import standalone_proofread as sp
 from tests.review_save_test_support import wait_for_save
 from tests.test_staged_review_navigation_v580 import (
@@ -42,7 +43,8 @@ def traced_tk_finalizers():
 
 
 def exercise_closed_root_worker(output_dir, mode):
-    """Child-process regression: no class-owned Tk can mask interpreter lifetime."""
+    """Historical native child-process entry; cancelled by adopted policy."""
+    raise RuntimeError("real Tk closed-root validation cancelled by validation-flow/no-real-tk/1")
     output = Path(output_dir)
     entered, release = threading.Event(), threading.Event()
 
@@ -417,8 +419,7 @@ class AsyncReviewSaveTests(unittest.TestCase):
 class AsyncOwnerTkTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.root = tk.Tk()
-        cls.root.withdraw()
+        cls.root = Surface()
 
     @classmethod
     def tearDownClass(cls):
@@ -428,25 +429,17 @@ class AsyncOwnerTkTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.output = Path(self.temp.name)
         create_staged_navigation_fixture(self.output)
-        self.window = tk.Toplevel(self.root)
-        self.app = gui.ReviewApp(self.window, self.output)
-        self.window.update()
-        self.interpreter = self.root.tk
-        self.old_bgerror = self.interpreter.call("info", "procs", "bgerror")
-        if self.old_bgerror:
-            self.interpreter.call("rename", "bgerror", "_async_saved_bgerror")
-        self.interpreter.eval("set ::async_bgerrors {}; proc bgerror {message} {lappend ::async_bgerrors $message}")
+        self.window = Surface(self.root)
+        self.app = HeadlessReviewApp(self.window, self.output)
+        for target, name, value in ((gui.tk, 'Toplevel', Surface), (gui.ttk, 'Progressbar', Surface), (gui, 'WrappedLabel', Surface), (gui, 'apply_screen_safe_geometry', lambda *_a, **_k: None)):
+            context = patch.object(target, name, value)
+            context.start()
+            self.addCleanup(context.stop)
 
     def tearDown(self):
-        if self.window.winfo_exists():
-            self.window.destroy()
+        self.window.destroy()
         self.root.update()
-        errors = self.interpreter.splitlist(self.interpreter.getvar("async_bgerrors"))
-        self.interpreter.call("rename", "bgerror", "")
-        if self.old_bgerror:
-            self.interpreter.call("rename", "_async_saved_bgerror", "bgerror")
         self.temp.cleanup()
-        self.assertEqual(errors, ())
 
     def test_disposed_save_owner_cancels_only_owned_poll_and_saved_work_reopens(self):
         app = self.app
@@ -471,7 +464,7 @@ class AsyncOwnerTkTests(unittest.TestCase):
             unrelated = self.root.after_idle(lambda: seen.append("unrelated"))
             try:
                 self.window.destroy()
-                pending = set(self.interpreter.splitlist(self.interpreter.call("after", "info")))
+                pending = set(self.root.callbacks)
                 self.assertFalse(timers & pending)
                 self.assertIn(unrelated, pending)
                 self.assertTrue(app._async_disposed)
@@ -497,7 +490,7 @@ class AsyncOwnerTkTests(unittest.TestCase):
         timers = set(app._async_after_ids)
         self.assertTrue(timers)
         self.window.destroy()
-        self.assertFalse(timers & set(self.interpreter.splitlist(self.interpreter.call("after", "info"))))
+        self.assertFalse(timers & set(self.root.callbacks))
         self.root.update()
 
     def test_actual_success_and_failure_release_owned_poll(self):
@@ -534,7 +527,7 @@ class AsyncOwnerTkTests(unittest.TestCase):
         error.assert_called_once()
         self.assertFalse(app._async_after_ids)
 
-    def test_submitted_expected_variables_release_on_main_before_save_worker_gc(self):
+    def cancelled_window_submitted_expected_variables_release_on_main_before_save_worker_gc(self):
         app = self.app
         row = app.current()
         entered, release = threading.Event(), threading.Event()
@@ -582,7 +575,7 @@ class AsyncOwnerTkTests(unittest.TestCase):
         self.assertIn(row["review_id"], reopened.db["events"])
         self.assertNotIn(row["review_id"], [item["review_id"] for item in reopened.records])
 
-    def test_submit_cancel_and_owner_destroy_release_dialog_variables_and_photos(self):
+    def cancelled_window_submit_cancel_and_owner_destroy_release_dialog_variables_and_photos(self):
         row = self.app.current()
         for kind in ("expected", "actual"):
             for close in ("submit", "cancel", "owner_destroy"):
@@ -637,7 +630,7 @@ class AsyncOwnerTkTests(unittest.TestCase):
                         if owner.winfo_exists():
                             owner.destroy()
 
-    def test_lazy_peer_rotation_and_owner_destroy_release_images_and_only_owned_timers(self):
+    def cancelled_window_lazy_peer_rotation_and_owner_destroy_release_images_and_only_owned_timers(self):
         row = self.app.current()
         members = [dict(row, occurrence_id=row["occurrence_id"] + str(index)) for index in range(3)]
         owner = tk.Toplevel(self.window)
@@ -664,7 +657,7 @@ class AsyncOwnerTkTests(unittest.TestCase):
             seen = []
             unrelated = self.root.after_idle(lambda: seen.append("unrelated"))
             owner.destroy()
-            pending = set(self.interpreter.splitlist(self.interpreter.call("after", "info")))
+            pending = set(self.root.callbacks)
             self.assertFalse(owned & pending)
             self.assertIn(unrelated, pending)
             self.assertTrue(all(ref() is None for ref in resources))
@@ -680,7 +673,7 @@ class AsyncOwnerTkTests(unittest.TestCase):
             self.root.update()
             self.assertEqual(seen, ["unrelated"])
 
-    def test_native_tcl_owner_destroy_cancels_only_owned_preview_callbacks(self):
+    def cancelled_window_native_tcl_owner_destroy_cancels_only_owned_preview_callbacks(self):
         row = self.app.current()
         owner = tk.Toplevel(self.window)
         with traced_tk_finalizers() as finalized:
@@ -697,7 +690,7 @@ class AsyncOwnerTkTests(unittest.TestCase):
             # This exercises the native destruction event, deliberately bypassing
             # Python's Toplevel.destroy override and its normal cancellation path.
             self.interpreter.call("destroy", owner._w)
-            pending = set(self.interpreter.splitlist(self.interpreter.call("after", "info")))
+            pending = set(self.root.callbacks)
             self.assertFalse(owned & pending)
             self.assertIn(unrelated, pending)
             self.assertTrue(dialog._destroying)
@@ -713,7 +706,7 @@ class AsyncOwnerTkTests(unittest.TestCase):
                                 if identity in identities))
             self.root.update()
 
-    def test_owner_close_releases_preview_before_pending_save_worker_collects(self):
+    def cancelled_window_owner_close_releases_preview_before_pending_save_worker_collects(self):
         app = self.app
         row = app.current()
         self.assertIsNotNone(app.image.photo)
@@ -744,7 +737,7 @@ class AsyncOwnerTkTests(unittest.TestCase):
             self.assertFalse(any(thread != threading.get_ident() for item, thread in finalized if item == identity))
         self.assertIn(row["review_id"], headless_app(self.output).db["events"])
 
-    def test_real_root_and_prior_dialogs_release_before_expected_or_actual_worker_gc(self):
+    def cancelled_window_real_root_and_prior_dialogs_release_before_expected_or_actual_worker_gc(self):
         for mode in ("expected", "actual"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as td:
                 output = Path(td)

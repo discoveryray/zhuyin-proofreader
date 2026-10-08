@@ -16,6 +16,7 @@ import zipfile
 
 SCHEMA = "zhuyin-pr-review-gate/3"
 STAGED_SCHEMA = "zhuyin-pr-review-gate/4"
+NO_WINDOW_POLICY = "validation-flow/no-real-tk/1"
 REPOSITORY = "discoveryray/zhuyin-proofreader"
 WORKFLOW = ".github/workflows/ci.yml"
 PYTHONS = ("3.13",)
@@ -389,7 +390,10 @@ def validate_state(state):
     staged = type(state) is dict and state.get("schema") == STAGED_SCHEMA
     fields = "schema task authorization current implementers corrections reviews unavailable_review_rounds pr pr_ci merge push_ci handoffs"
     _fields(state, fields + (" execution coverage short_validation" if staged else "")
-            + (" correction_exception" if type(state) is dict and "correction_exception" in state else ""), "state")
+            + (" correction_exception" if type(state) is dict and "correction_exception" in state else "")
+            + (" validation_policy" if type(state) is dict and "validation_policy" in state else ""), "state")
+    if "validation_policy" in state:
+        _require(state["validation_policy"] == NO_WINDOW_POLICY, "unknown validation policy")
     _require(state["schema"] in (SCHEMA, STAGED_SCHEMA), "unsupported schema")
     if staged:
         _fields(state["execution"], "mode validation_authorization_ref", "execution")
@@ -642,7 +646,7 @@ def _review_problem(state, review, number):
     return None
 
 
-def _ci_problem(ci, event, branch, head, parents):
+def _ci_problem(ci, event, branch, head, parents, *, no_window=False):
     if ci["workflow"] != WORKFLOW or ci["event"] != event or ci["branch"] != branch:
         return "REFRESH_EVIDENCE", "wrong CI workflow, event, or branch"
     if ci["head_sha"] != head or ci["parents"] != parents:
@@ -670,7 +674,9 @@ def _ci_problem(ci, event, branch, head, parents):
         if (job["run_id"], job["attempt"], job["tested_sha"]) != (
                 ci["run_id"], ci["attempt"], ci["tested_sha"]):
             return "REFRESH_EVIDENCE", f"job is from another run attempt or checkout: {name}"
-        required = (*COMMON_STEPS, f"Check committed whitespace ({'pull request' if event == 'pull_request' else 'push'})")
+        required = (*(step for step in COMMON_STEPS if not no_window or step != "Verify GUI test execution"),
+                    *(('Verify active test execution',) if no_window else ()),
+                    f"Check committed whitespace ({'pull request' if event == 'pull_request' else 'push'})")
         if any(step not in job["steps"] for step in required):
             return "REFRESH_EVIDENCE", f"required step evidence is missing: {name}"
         if any(job["steps"].get(step) != "success" for step in required):
@@ -741,7 +747,7 @@ def next_action(state):
             ci = state["pr_ci"]
             if ci is None or ci["status"] in ("queued", "in_progress"):
                 return _decision(state, "WAIT_PR_CI", "matching completed PR CI evidence is required")
-            problem = _ci_problem(ci, "pull_request", state["task"]["head_branch"], head, [base, head])
+            problem = _ci_problem(ci, "pull_request", state["task"]["head_branch"], head, [base, head], no_window=state.get("validation_policy") == NO_WINDOW_POLICY)
             if problem:
                 return _decision(state, "STOP", problem[1]) if merged else _decision(state, *problem)
         if review is None:
@@ -758,7 +764,7 @@ def next_action(state):
         ci = state["push_ci"]
         if ci is None or ci["status"] in ("queued", "in_progress"):
             return _decision(state, "WAIT_PUSH_CI", "actual merge SHA requires its own develop push CI")
-        problem = _ci_problem(ci, "push", "develop", merge["sha"], [base, head])
+        problem = _ci_problem(ci, "push", "develop", merge["sha"], [base, head], no_window=state.get("validation_policy") == NO_WINDOW_POLICY)
         if problem or ci["tree"] != merge["tree"]:
             return _decision(state, "STOP", problem[1] if problem else "push CI tree does not match the actual merge")
         return _decision(state, "COMPLETE", "both reviews, PR CI, actual merge and post-merge CI verified",
@@ -770,7 +776,7 @@ def next_action(state):
                      expected_base_sha=base)
 
 
-def _staged_ci_problem(ci, event, branch, head, parents):
+def _staged_ci_problem(ci, event, branch, head, parents, *, no_window=False):
     """v4 checks the required summary plus file-backed group/short evidence."""
     if ci["workflow"] != WORKFLOW or ci["event"] != event or ci["branch"] != branch:
         return "wrong CI workflow, event, or branch"
@@ -798,8 +804,8 @@ def _staged_ci_problem(ci, event, branch, head, parents):
             return "job metadata belongs to a different run/attempt/checkout"
     if not summary["runner"].startswith("windows-") or summary["python_version"] != "3.13.0":
         return "summary lacks the supported Windows Python environment"
-    required_steps = ["Configure same-installation Tcl/Tk"]
-    if event == "pull_request":
+    required_steps = [] if no_window else ["Configure same-installation Tcl/Tk"]
+    if event == "pull_request" and not no_window:
         required_steps.append("Early hosted Tk preflight")
     for required_step in required_steps:
         if jobs[required_name]["steps"].get(required_step) != "success":
@@ -856,7 +862,8 @@ def _next_action_staged(state):
     ci = state["pr_ci"]
     if ci is None or ci["status"] in ("queued", "in_progress"):
         return _decision(state, "WAIT_PR_CI", "formal functional coverage is pending")
-    problem = _staged_ci_problem(ci, "pull_request", state["task"]["head_branch"], head, [base, head])
+    no_window = state.get("validation_policy") == NO_WINDOW_POLICY
+    problem = _staged_ci_problem(ci, "pull_request", state["task"]["head_branch"], head, [base, head], no_window=no_window)
     if problem:
         return _decision(state, "STOP" if merged else "REFRESH_EVIDENCE", problem)
     try:
@@ -867,6 +874,8 @@ def _next_action_staged(state):
         if state["coverage"] is None:
             raise ValueError("missing PR coverage bundle")
         coverage = verify_coverage(Path(state["coverage"]))
+        if no_window != (coverage.get("policy") == NO_WINDOW_POLICY):
+            raise ValueError("coverage policy differs from adopted task policy")
         if coverage["candidate"] != {"head": ci["tested_sha"], "tree": ci["tree"], "parents": [base, head]}:
             raise ValueError("coverage candidate differs from current PR integration")
         coverage_ci = coverage["ci"]
@@ -891,7 +900,7 @@ def _next_action_staged(state):
         push = state["push_ci"]
         if push is None or push["status"] in ("queued", "in_progress"):
             return _decision(state, "WAIT_PUSH_CI", "actual merge requires its own short push validation")
-        problem = _staged_ci_problem(push, "push", "develop", merge["sha"], [base, head])
+        problem = _staged_ci_problem(push, "push", "develop", merge["sha"], [base, head], no_window=no_window)
         if problem or push["tree"] != merge["tree"]:
             return _post_merge_blocked(state, problem or "push tree mismatch", code=False)
         try:

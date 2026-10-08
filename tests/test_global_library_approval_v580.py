@@ -9,6 +9,7 @@ import tempfile
 import threading
 import time
 import tkinter as tk
+from tests.no_window_review_support import Surface, inspector_views
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -360,13 +361,13 @@ class LegacyApprovalTests(ApprovalFixture):
 
 class ApprovalTkTests(ApprovalFixture):
     def setUp(self):
+        views = inspector_views()
+        views.__enter__()
+        self.addCleanup(views.__exit__, None, None, None)
         super().setUp()
         self.ready()
-        try:
-            self.root = tk.Tk()
-        except tk.TclError as exc:
-            raise unittest.SkipTest(f"Tk display unavailable: {exc}")
-        self.root.withdraw()
+        self.root = Surface()
+        pass
         self.errors = []
         self.root.report_callback_exception = lambda *args: self.errors.append(args)
         self.addCleanup(self.destroy_root)

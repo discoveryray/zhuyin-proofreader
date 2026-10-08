@@ -1,4 +1,4 @@
-"""Immutable grouped pytest evidence and bounded, retained GUI retries.
+"""Immutable non-window pytest evidence; legacy GUI evidence remains read-only.
 
 This runner never grants review/merge authorization. Formal invocations require
 an explicitly supplied validation mode, a clean frozen source and fd capture.
@@ -31,10 +31,12 @@ if __package__ in {None, ""}:
 from scripts import test_entrypoint_audit as audit
 
 ROOT = Path(__file__).resolve().parents[1]
-SCHEMA = "zhuyin-validation-run/1"
-COVERAGE_SCHEMA = "zhuyin-validation-coverage/1"
+SCHEMA = "zhuyin-validation-run/2"
+COVERAGE_SCHEMA = "zhuyin-validation-coverage/2"
+LEGACY_SCHEMA = "zhuyin-validation-run/1"
+POLICY = audit.POLICY
 ENV_KEYS = ("PYTHONUTF8", "PYTHONIOENCODING", "PYTEST_ADDOPTS", "TCL_LIBRARY", "TK_LIBRARY")
-DEFAULT_TIMEOUTS = {"core": 5400, "gui": 1200, "preflight": 60}
+DEFAULT_TIMEOUTS = {"core": 5400}
 
 
 def utc_now():
@@ -170,12 +172,19 @@ def artifact_entry(path, folder):
 def read_verified_manifest(path):
     path = Path(path).resolve()
     data = read_json(path)
-    if data.get("schema") != SCHEMA:
+    if data.get("schema") not in {SCHEMA, LEGACY_SCHEMA}:
         raise ValueError("unknown execution manifest")
+    current = data["schema"] == SCHEMA
     required = {"schema", "execution_id", "group", "candidate", "command", "environment",
                 "inventory_sha256", "started_at", "finished_at", "exit_code", "outcome",
                 "verification", "ci", "retry_of", "artifacts", "retry_key", "retry_eligible",
                 "preflight", "runner_start_error", "code_blockers"}
+    if current:
+        required.update(("policy", "window_validation"))
+        if (data.get("policy") != POLICY or data.get("window_validation") != audit.WINDOW_NOTICE
+                or data["group"] != "core" or data["preflight"] is not None
+                or data["retry_of"] is not None or data["retry_eligible"] is not False):
+            raise ValueError("invalid no-window execution policy")
     if set(data) != required or data["group"] not in {"core", "gui"}:
         raise ValueError("invalid execution manifest contract")
     allowed_artifacts = {"inventory": "inventory.json", "started": "started.json", "history_context": "history-context.json",
@@ -183,6 +192,8 @@ def read_verified_manifest(path):
                          "preflight_log": "preflight.log", "preflight_junit": "preflight.xml", "preflight_result": "preflight.json"}
     if not set(data["artifacts"]) <= allowed_artifacts.keys():
         raise ValueError("unknown execution artifact")
+    if current and any(name.startswith("preflight") for name in data["artifacts"]):
+        raise ValueError("no-window execution contains retired preflight artifacts")
     for name, item in data["artifacts"].items():
         if set(item) != {"path", "sha256"} or item["path"] != allowed_artifacts[name]:
             raise ValueError("unexpected execution artifact filename")
@@ -209,11 +220,13 @@ def read_verified_manifest(path):
     if digest(inventory_path) != data["inventory_sha256"]:
         raise ValueError("inventory digest mismatch")
     inventory = audit.validate_groups(read_json(inventory_path))
+    if current and inventory["schema"] != "zhuyin-test-groups/2":
+        raise ValueError("no-window execution requires current active inventory")
     started = read_json(path.parent / artifacts["started"]["path"])
     for key in ("execution_id", "candidate", "environment", "inventory_sha256", "retry_key", "retry_of", "ci", "command"):
         if started[key] != data[key]:
             raise ValueError("execution start/finish metadata mismatch: " + key)
-    if data["retry_eligible"] != (data["group"] == "gui" and retry_eligible(
+    if not current and data["retry_eligible"] != (data["group"] == "gui" and retry_eligible(
             path.parent, {"runner_start_error": data["runner_start_error"]}, data["preflight"])):
         raise ValueError("retry eligibility differs from original raw evidence")
     if data["outcome"] == "success":
@@ -522,6 +535,8 @@ def validate_history_context(root, candidate):
 
 
 def _run_group(group, evidence_root, *, timeout=None, tests=None, mode=None, code_blockers=False, local_context=None):
+    if group != "core":
+        raise ValueError(audit.WINDOW_NOTICE)
     if mode != "validation":
         raise ValueError("explicit --mode validation is required for formal grouped execution")
     if git("status", "--porcelain"):
@@ -540,21 +555,13 @@ def _run_group(group, evidence_root, *, timeout=None, tests=None, mode=None, cod
         key = canonical_digest({"task": context["task_id"], "tree": candidate["tree"]})
         matching = [(path, value) for path, value in previous
                     if value["retry_key"] == key and value["group"] == group]
-        if group == "gui":
-            matching = retry_history(previous, key)
-        elif any(value["outcome"] != "success" for _, value in matching):
+        if any(value["outcome"] != "success" for _, value in matching):
             raise ValueError("same-candidate core failure remains unresolved; no automatic core retry")
-        if matching and matching[-1][1]["outcome"] == "success" and matching[-1][1]["candidate"] == candidate and ((matching[-1][1]["ci"]["event"] == "local") == (local_context is not None)):
+        if matching and matching[-1][1]["schema"] == SCHEMA and matching[-1][1]["outcome"] == "success" and matching[-1][1]["candidate"] == candidate and ((matching[-1][1]["ci"]["event"] == "local") == (local_context is not None)):
             if matching[-1][1]["environment"] != env:
                 raise ValueError("successful execution environment changed")
             return matching[-1][0]
         retry_of = None
-        if group == "gui" and matching:
-            if any(value["environment"] != env for _, value in matching):
-                raise ValueError("same-candidate GUI retry settings changed")
-            if len(matching) >= 2 or not matching[0][1]["retry_eligible"] or matching[0][1]["code_blockers"] or code_blockers:
-                raise ValueError("GUI retry is not authorized by retained failure evidence or budget")
-            retry_of = matching[0][1]["execution_id"]
         if code_blockers:
             raise ValueError("confirmed code blocker prevents execution/retry")
         execution_id = uuid.uuid4().hex
@@ -566,18 +573,18 @@ def _run_group(group, evidence_root, *, timeout=None, tests=None, mode=None, cod
         folder.mkdir()
         inventory = collect_inventory(folder, tests)
         inventory_hash = digest(folder / "inventory.json")
-        if group == "gui" and any(value["inventory_sha256"] != inventory_hash for _, value in matching):
-            raise ValueError("same-candidate GUI retry inventory changed")
+        if inventory["schema"] != "zhuyin-test-groups/2":
+            raise ValueError("current execution requires no-window inventory")
         temporary = folder / "temp"
         temporary.mkdir()
         child_env = os.environ.copy()
-        child_env.update(VALIDATION_PREFLIGHT_OUTPUT=str(folder / "preflight.json"), VALIDATION_TEMP=str(temporary))
         command = [sys.executable, str(Path(__file__).resolve()), "_pytest", str(folder), group]
         ci = {"run_id": int(os.environ["GITHUB_RUN_ID"]) if os.environ.get("GITHUB_RUN_ID") else None, "attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]) if os.environ.get("GITHUB_RUN_ATTEMPT") else None,
               "job": os.environ.get("GITHUB_JOB"), "event": os.environ.get("GITHUB_EVENT_NAME")}
         if local_context is not None:
             ci = {"run_id": None, "attempt": None, "job": None, "event": "local"}
-        data = {"schema": SCHEMA, "execution_id": execution_id, "group": group,
+        data = {"schema": SCHEMA, "policy": POLICY, "window_validation": audit.WINDOW_NOTICE,
+                "execution_id": execution_id, "group": group,
                 "candidate": candidate, "command": command, "environment": env,
                 "inventory_sha256": inventory_hash, "started_at": utc_now(), "finished_at": None,
                 "exit_code": None, "outcome": "interrupted", "verification": {"top_level": 0, "subtests": 0, "error": "unfinished"},
@@ -586,20 +593,8 @@ def _run_group(group, evidence_root, *, timeout=None, tests=None, mode=None, cod
         write_json(folder / "history-context.json", context)
         write_json(folder / "started.json", data)
         try:
-            result = None
-            if group == "gui":
-                preflight_command = [sys.executable, "-m", "pytest", str(ROOT / "scripts/gui_preflight.py"),
-                                     "-q", "-rs", "--capture=fd", f"--junitxml={folder / 'preflight.xml'}",
-                                     f"--basetemp={temporary / 'preflight'}"]
-                data["preflight"] = run_process(preflight_command, folder, "preflight.log", DEFAULT_TIMEOUTS["preflight"], child_env)
-                data["preflight"]["command"] = preflight_command
-                if data["preflight"]["outcome"] != "success":
-                    result = {**data["preflight"], "outcome": "blocked"}
-                    (folder / "raw.log").write_text("GUI not started: preflight failed. See preflight.log.\n", encoding="utf-8")
-            if result is None:
-                result = run_process(command, folder, "raw.log", timeout or DEFAULT_TIMEOUTS[group], child_env)
+            result = run_process(command, folder, "raw.log", timeout or DEFAULT_TIMEOUTS[group], child_env)
             data.update(exit_code=result["exit_code"], outcome=result["outcome"], runner_start_error=result["runner_start_error"])
-            data["retry_eligible"] = group == "gui" and retry_eligible(folder, result, data["preflight"])
             if result["outcome"] == "success":
                 if snapshot() != candidate or git("status", "--porcelain"):
                     raise ValueError("tested source changed during execution")
@@ -627,6 +622,8 @@ def _run_group(group, evidence_root, *, timeout=None, tests=None, mode=None, cod
 
 
 def run_group(group, evidence_root, *, task_id=None, **kwargs):
+    if group != "core":
+        raise ValueError(audit.WINDOW_NOTICE)
     if os.environ.get("GITHUB_ACTIONS") == "true":
         return _run_group(group, evidence_root, **kwargs)
     if kwargs.get("mode") != "validation":
@@ -647,11 +644,15 @@ def run_group(group, evidence_root, *, task_id=None, **kwargs):
 
 
 def pytest_child(folder, group):
+    if group != "core":
+        raise ValueError(audit.WINDOW_NOTICE)
     import pytest
     folder = Path(folder).resolve()
     inventory = audit.validate_groups(read_json(folder / "inventory.json"))
+    if inventory["schema"] != "zhuyin-test-groups/2":
+        raise ValueError("retired inventory cannot be executed by the current runner")
     selected = {record["nodeid"] for record in inventory["records"] if record["group"] == group}
-    records = inventory["records"]
+    records = [record for record in inventory["records"] if record["group"] == "core"]
     paths = sorted({record["nodeid"].split("::")[0] for record in records})
 
     class Evidence:
@@ -686,16 +687,17 @@ def pytest_child(folder, group):
                         f"--basetemp={folder / 'temp' / 'pytest'}"], plugins=[Evidence()])
 
 
-def aggregate(evidence_root, head=None, ci=None):
+def aggregate(evidence_root, head=None, ci=None, *, legacy=False):
     root = Path(evidence_root).resolve()
     values = history(root)
     if not values:
         raise ValueError("no execution evidence")
     by_group = {}
-    for group in ("core", "gui"):
+    for group in (("core", "gui") if legacy else ("core",)):
         matching = [(path, value) for path, value in values if value["group"] == group
                     and value["ci"]["event"] != "local"
-                    and (head is None or value["candidate"]["head"] == head)]
+                    and (head is None or value["candidate"]["head"] == head)
+                    and value["schema"] == (LEGACY_SCHEMA if legacy else SCHEMA)]
         if not matching:
             raise ValueError("missing " + group + " evidence")
         matching.sort(key=lambda pair: pair[1]["started_at"])
@@ -705,20 +707,27 @@ def aggregate(evidence_root, head=None, ci=None):
         if group == "gui":
             retry_history(values, latest["retry_key"])
         by_group[group] = (path, latest)
-    core, gui = by_group["core"][1], by_group["gui"][1]
+    core = by_group["core"][1]
+    gui = by_group["gui"][1] if legacy else core
+    if any(value["retry_key"] == core["retry_key"] and value["code_blockers"] for _, value in values):
+        raise ValueError("retained same-candidate code blocker remains unresolved")
     if any(value["group"] == "core" and value["retry_key"] == core["retry_key"]
            and value["outcome"] != "success" for _, value in values):
         raise ValueError("earlier same-candidate core failure remains unresolved")
     for key in ("candidate", "environment", "inventory_sha256", "retry_key"):
         if core[key] != gui[key]:
             raise ValueError("mixed group evidence: " + key)
-    return {"schema": COVERAGE_SCHEMA, "candidate": core["candidate"], "environment": core["environment"],
+    result = {"schema": "zhuyin-validation-coverage/1" if legacy else COVERAGE_SCHEMA, "candidate": core["candidate"], "environment": core["environment"],
             "inventory_sha256": core["inventory_sha256"], "core_manifest": by_group["core"][0].relative_to(root).as_posix(),
-            "gui_manifest": by_group["gui"][0].relative_to(root).as_posix(),
+            "gui_manifest": by_group["gui"][0].relative_to(root).as_posix() if legacy else None,
             "history_manifests": [path.relative_to(root).as_posix() for path, _ in values],
             "ci": (ci if ci is not None else {"run_id": int(os.environ["GITHUB_RUN_ID"]), "attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
                     "job": os.environ["GITHUB_JOB"], "event": os.environ["GITHUB_EVENT_NAME"]}
                    if ci is not None or os.environ.get("GITHUB_RUN_ID") else gui["ci"]), "status": "success"}
+    if not legacy:
+        result.pop("gui_manifest")
+        result.update(policy=POLICY, window_validation=audit.WINDOW_NOTICE)
+    return result
 
 
 def restore_history(root):

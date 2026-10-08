@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import tkinter as tk
+from tests.no_window_review_support import Surface, inspector_views
 import types
 import unittest
 from unittest.mock import patch
@@ -364,11 +365,11 @@ class MigrationReaderTests(unittest.TestCase):
 
 class MigrationTkTests(unittest.TestCase):
     def setUp(self):
-        try:
-            self.tk = tk.Tk()
-        except tk.TclError as exc:
-            self.skipTest(f"Tk display unavailable: {exc}")
-        self.tk.withdraw()
+        views = inspector_views()
+        views.__enter__()
+        self.addCleanup(views.__exit__, None, None, None)
+        self.tk = Surface()
+        pass
         self.addCleanup(self.tk.destroy)
 
     def pump(self, window):
