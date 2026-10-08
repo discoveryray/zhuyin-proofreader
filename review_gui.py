@@ -319,6 +319,8 @@ def guarded_review_action(method):
     def run(self, *args, **kwargs):
         if (getattr(self, "_review_action_in_progress", False)
                 or self._save_busy()
+                or (getattr(self, "staging_summary", {}).get("staging_validation_pending")
+                    and method.__name__ != "resolve_expected")
                 or getattr(self, "_apply_in_progress", False)
                 or time.monotonic() < getattr(self, "_review_action_cooldown_until", 0)):
             return
@@ -863,8 +865,9 @@ class ReviewApp:
         if (output_dir / "跨電腦接續未完成.json").exists():
             raise ValueError("跨電腦接續未完成：不能在部分建立的目標專案保存判定")
         self.manifest = json_load_strict(output_dir / "校對工作階段.json")
+        # Keep the seal check before the durable DB initializer. Full source
+        # and artifact hashing is shared by queue/staging in reload_records.
         validate_manifest_integrity(self.manifest)
-        validate_output_artifact_hashes(self.manifest)
         self.db = load_or_initialize_db(output_dir)
         from pdf_portability import validate_conflict_state
         self.unresolved_portability_conflicts = validate_conflict_state(output_dir, self.manifest, self.db)
@@ -962,7 +965,7 @@ class ReviewApp:
         )
         self.staging_status.pack(fill="x")
 
-        self.reload_records()
+        self.reload_records(defer_staging=True)
         self.show()
         if (output_dir / "來源actual待重新核對.json").exists():
             messagebox.showwarning(
@@ -982,18 +985,101 @@ class ReviewApp:
             title, detail, _primary_text = self._empty_actionable_state()
             messagebox.showinfo(title, detail, parent=self.root)
 
-    def reload_records(self, *, advance_from=None):
+    def reload_records(self, *, advance_from=None, defer_staging=None):
         if getattr(self, "_save_in_progress", False):
             return
+        if defer_staging is None:
+            defer_staging = getattr(self, "staging_summary", {}).get("staging_validation_pending", False)
         self.focused_entry = None
         self._focused_from_undo = False
         self._invalidate_save_snapshot()
         if getattr(self, "_character_order_manifest", None) is not self.manifest:
             self.__dict__.pop("_character_order", None)
             self._character_order_manifest = self.manifest
-        ledger = materialize_ledger(self.manifest, self.db)
-        self.reload_staging_summary(ledger)
+        try:
+            snapshot = self._save_service.load_resume_snapshot(
+                expected_manifest=self.manifest, expected_db=self.db)
+        except Exception as exc:
+            # Keep the historical diagnostic roster visible, with no trusted
+            # staged checks or actionable source claim. Saves still revalidate
+            # durable bytes and reject drift; no snapshot cache is accepted.
+            self._resume_source_error = str(exc)
+            self._publish_staging_summary({"staging_error": str(exc)})
+            ledger = materialize_ledger(self.manifest, self.db)
+            self._set_actionable_records_from_ledger(ledger, advance_from=advance_from)
+            return
+        self._resume_source_error = None
+        ledger = copy.deepcopy(snapshot.ledger)
+        if defer_staging:
+            self._publish_staging_summary({"staging_validation_pending": True})
+        else:
+            self._publish_staging_summary(self._save_service.validate_resume_staging(snapshot))
         self._set_actionable_records_from_ledger(ledger, advance_from=advance_from)
+        self.last_resume_timings = dict(snapshot.timings)
+        if defer_staging:
+            self._start_staging_validation(snapshot)
+
+    def _cancel_staging_validation(self):
+        request = getattr(self, "_staging_request", None)
+        if request is not None:
+            request["cancelled"].set()
+        self._staging_request = None
+
+    def _start_staging_validation(self, snapshot):
+        self._cancel_staging_validation()
+        request = {"generation": getattr(self, "_project_generation", 0),
+                   "manifest": self.manifest, "db": self.db, "output_dir": self.output_dir,
+                   "cancelled": threading.Event()}
+        self._staging_request = request
+        completed = queue.Queue(maxsize=1)
+        service = self._save_service
+
+        def worker():
+            try:
+                summary = service.validate_resume_staging(snapshot, cancelled=request["cancelled"].is_set)
+            except Exception as exc:
+                summary = {"staging_error": str(exc), "staged_checked_occurrence_ids": []}
+            completed.put((summary, snapshot.ledger, snapshot.timings))
+
+        try:
+            self._staging_worker = threading.Thread(target=worker, daemon=True)
+            self._schedule_async_poll(self._poll_staging_validation, request, completed)
+            self._staging_worker.start()
+        except Exception as exc:
+            self._cancel_staging_validation()
+            self._publish_staging_summary({"staging_error": str(exc)})
+            self._show_staging_status()
+
+    def _poll_staging_validation(self, request, completed):
+        if (getattr(self, "_staging_request", None) is not request
+                or getattr(self, "_async_disposed", False)):
+            return
+        if getattr(self, "_review_action_in_progress", False):
+            # A modal expected editor owns its current occurrence until submit
+            # or cancel. Do not switch its queue while its nested event loop runs.
+            self._schedule_async_poll(self._poll_staging_validation, request, completed)
+            return
+        try:
+            summary, ledger, timings = completed.get_nowait()
+        except queue.Empty:
+            self._schedule_async_poll(self._poll_staging_validation, request, completed)
+            return
+        self._staging_request = None
+        if (request["generation"] != getattr(self, "_project_generation", 0)
+                or request["manifest"] is not self.manifest or request["db"] is not self.db
+                or request["output_dir"] != self.output_dir):
+            return
+        self._publish_staging_summary(summary)
+        # Preserve the selection as it exists now, not the startup selection.
+        current = self.current()
+        current_id = current.get("review_id") if current else None
+        focused = getattr(self, "focused_entry", None)
+        self._set_actionable_records_from_ledger(copy.deepcopy(ledger))
+        if focused is None and current_id is not None:
+            self.index = next((n for n, row in enumerate(self.records)
+                               if row.get("review_id") == current_id), self.index)
+        self.last_resume_timings = dict(timings)
+        self.show()
 
     def _queue_inputs(self):
         return (self.manifest, self.records, self.index,
@@ -1058,7 +1144,7 @@ class ReviewApp:
         self.staging_summary = dict(summary)
         # An error-bearing summary cannot authorize hiding any pending row,
         # even if it also carries an obsolete checked roster.
-        trusted = not summary.get("staging_error")
+        trusted = not (summary.get("staging_error") or summary.get("staging_validation_pending"))
         if not trusted:
             self.staging_summary.update(
                 staged_group_count=0,
@@ -1070,7 +1156,8 @@ class ReviewApp:
         count = int(self.staging_summary.get("staged_group_count") or 0)
         self.apply_actual_button.config(
             text="繼續 actual 更新（已提交）" if summary.get("actual_recovery_pending") else f"套用 actual 修正（{count}）",
-            state="normal" if count > 0 or summary.get("actual_recovery_pending") else "disabled",
+            state="normal" if (not summary.get("staging_validation_pending")
+                               and (count > 0 or summary.get("actual_recovery_pending"))) else "disabled",
         )
         if hasattr(self, "batch_actions"):
             self.batch_actions.refresh()
@@ -1084,6 +1171,8 @@ class ReviewApp:
         checked = len(self.staged_checked_occurrence_ids)
         waiting = len(getattr(self, "waiting_actual_occurrence_ids", set()))
         self.staging_status.config(text=(
+            "actual 暫存仍在核對；可先依原文輸入應標注音。尚未將任何暫存位置視為已核對或完成。"
+            if self.staging_summary.get("staging_validation_pending") else
             f"actual 暫存無法驗證：{error}。未將任何項目視為已處理；請修復來源／暫存後重新開啟。"
             if error else
             "actual 已提交，後續更新尚未完成。請按「繼續 actual 更新（已提交）」；不會重複套用暫存。"
@@ -1093,6 +1182,8 @@ class ReviewApp:
         ))
 
     def _empty_actionable_state(self):
+        if self.staging_summary.get("staging_validation_pending"):
+            return ("actual 暫存仍在核對", "尚未完成暫存驗證，未將任何位置視為已核對或完成。", "請等候 actual 核對")
         if self.staging_summary.get("staging_error"):
             return ("actual 暫存無法驗證", f"尚未完成：{self.staging_summary['staging_error']}。請修復後重新開啟。", "請先處理暫存阻擋")
         if self.staging_summary.get("actual_recovery_pending"):
@@ -1193,6 +1284,7 @@ class ReviewApp:
         if event.widget is not self.root:
             return
         self._async_disposed = True
+        self._cancel_staging_validation()
         self._project_generation = getattr(self, "_project_generation", 0) + 1
         self._save_request = None
         for timer_id in self._async_after_ids:
@@ -1218,6 +1310,7 @@ class ReviewApp:
             self._async_after_ids.add(timer_id)
 
     def _invalidate_save_snapshot(self):
+        self._cancel_staging_validation()
         self._project_generation = getattr(self, "_project_generation", 0) + 1
         # Evict computation only. A rejected evidence change remains rejected
         # across retry, queue reload and defer/revisit of the same session.
@@ -1229,6 +1322,7 @@ class ReviewApp:
         if getattr(self, "_save_in_progress", False) or getattr(self, "_apply_in_progress", False):
             self.status.config(text="人工判定儲存中，完成後即可關閉。")
             return
+        self._cancel_staging_validation()
         self._project_generation = getattr(self, "_project_generation", 0) + 1
         self.root.destroy()
 
@@ -1268,6 +1362,12 @@ class ReviewApp:
         current = self.current()
         if not focus_after_save and (not current or current.get("review_id") != entry.get("review_id")):
             return False
+        pending_staging = getattr(self, "staging_summary", {}).get("staging_validation_pending", False)
+        if pending_staging:
+            decision = event.get("manual_expected_decision", {}) if isinstance(event, dict) else {}
+            if not isinstance(decision, dict) or decision.get("operation") != "ENTER_EXPECTED":
+                return False
+        self._cancel_staging_validation()
         self._save_in_progress = True
         self._last_event_saved = self._last_event_refreshed = False
         if not hasattr(self, "_save_service"):
@@ -1282,6 +1382,7 @@ class ReviewApp:
                        getattr(self, "focused_entry", None) is not None
                        and not getattr(self, "_focused_from_undo", False)),
                    "return_after_undo": focus_after_save,
+                   "pending_staging": pending_staging,
                    "started": started}
         self._save_request = request
         completed = queue.Queue(maxsize=1)
@@ -1293,7 +1394,8 @@ class ReviewApp:
             result = prepared = error = None
             try:
                 result = service.save_event(request["review_id"], event,
-                                            expected_manifest=manifest, expected_db=request["db"])
+                                            expected_manifest=manifest, expected_db=request["db"],
+                                            **({"defer_staging_validation": True} if pending_staging else {}))
                 queue_started = time.perf_counter()
                 prepared = prepare_review_queue(
                     manifest, result.ledger, previous, index,
@@ -1316,6 +1418,9 @@ class ReviewApp:
             self._save_in_progress = False
             self._restore_save_controls()
             messagebox.showerror("無法開始儲存人工判定", str(exc), parent=self.root)
+            if pending_staging:
+                self.reload_records(defer_staging=True)
+                self.show()
             return False
         return True
 
@@ -1385,6 +1490,8 @@ class ReviewApp:
                 self.show()
                 self.last_save_timings["preview_and_show"] = time.perf_counter() - render_started
                 self._last_event_refreshed = True
+                if getattr(result, "resume_snapshot", None) is not None:
+                    self._start_staging_validation(result.resume_snapshot)
                 if request["explain_expected"]:
                     self._explain_saved_expected(request["entry"])
             except Exception as exc:
@@ -1404,6 +1511,12 @@ class ReviewApp:
             self.last_save_timings["operation_total"] = time.perf_counter() - request["started"]
             self.last_save_timings["cooldown_seconds"] = 0.5 if result is not None else 0.0
             self._save_in_progress = False
+            if result is None and applies and request.get("pending_staging"):
+                # The old worker was cancelled before saving. Restart from
+                # freshly checked bytes rather than leave a permanent pending
+                # label after an I/O failure.
+                self.reload_records(defer_staging=True)
+                self.show()
 
     def prev(self):
         if self._save_busy() or getattr(self, "_apply_in_progress", False):
@@ -1426,6 +1539,8 @@ class ReviewApp:
 
     @guarded_review_action
     def confirm_current_expected(self, review_id=None):
+        if getattr(self, "staging_summary", {}).get("staging_validation_pending"):
+            return
         if time.monotonic() < getattr(self, "_shortcut_cooldown_until", 0):
             return
         entry = self.current()
@@ -1574,6 +1689,8 @@ class ReviewApp:
 
     @guarded_review_action
     def correct_actual(self):
+        if getattr(self, "staging_summary", {}).get("staging_validation_pending"):
+            return
         entry = self.current()
         if not entry:
             return
@@ -1638,6 +1755,8 @@ class ReviewApp:
         )
 
     def apply_staged_actuals(self):
+        if getattr(self, "staging_summary", {}).get("staging_validation_pending"):
+            return
         if self._save_busy() or getattr(self, "_apply_in_progress", False) or getattr(self, "_review_action_in_progress", False):
             return
         self._apply_in_progress = True
@@ -1812,6 +1931,8 @@ class ReviewApp:
         self.save_event(entry, None)
 
     def report(self):
+        if getattr(self, "staging_summary", {}).get("staging_validation_pending"):
+            return
         if self._save_busy() or getattr(self, "_apply_in_progress", False):
             return
         try:
@@ -1865,6 +1986,13 @@ class ReviewApp:
             secondary_command = self.resolve_expected
         elif state == "REVIEW_PENDING":
             primary_command = self.resolve_expected
+        if getattr(self, "_resume_source_error", None):
+            primary_text = "來源尚未通過驗證"
+            primary_command = secondary_text = secondary_command = None
+        elif getattr(self, "staging_summary", {}).get("staging_validation_pending"):
+            primary_text = "輸入其他應標注音" if lane == "expected" else "actual 暫存仍在核對"
+            primary_command = self.resolve_expected if lane == "expected" else None
+            secondary_text = secondary_command = None
         self.primary.config(text=primary_text, width=0, state="normal" if primary_command else "disabled", command=primary_command or (lambda: None))
         buttons = [self.primary]
         if secondary_text and secondary_command:
