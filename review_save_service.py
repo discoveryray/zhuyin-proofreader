@@ -53,6 +53,19 @@ class SaveResult:
     staging_summary: dict[str, Any]
     timings: dict[str, float]
     version_token: str
+    resume_snapshot: ReviewResumeSnapshot | None = None
+
+
+@dataclass(frozen=True)
+class ReviewResumeSnapshot:
+    """Private operation-owned data, never mutated by the GUI or persisted."""
+    manifest: dict[str, Any]
+    db: dict[str, Any]
+    baseline: list[dict[str, Any]]
+    ledger: list[dict[str, Any]]
+    content: dict[Path, bytes | None]
+    hashes: dict[str, str]
+    timings: dict[str, float]
 
 
 def _digest(raw: bytes | None) -> str:
@@ -87,6 +100,7 @@ class ReviewSaveService:
     def __init__(self, output_dir: Path, *, evidence_anchor: ReviewEvidenceAnchor | None = None):
         self.output_dir = Path(output_dir).resolve()
         self._lock = threading.Lock()
+        self._save_lock = threading.Lock()
         self._evidence_anchor = evidence_anchor
         self.invalidate()
 
@@ -189,22 +203,24 @@ class ReviewSaveService:
         timings["dependency_hashing"] = timings.get("dependency_hashing", 0.0) + time.perf_counter() - started
         return content, hashes
 
-    def save_event(self, review_id, event, *, expected_manifest=None, expected_db=None):
-        if not self._lock.acquire(blocking=False):
+    def save_event(self, review_id, event, *, expected_manifest=None, expected_db=None,
+                   defer_staging_validation=False):
+        # Reject a second save, but allow the admitted worker to wait for a
+        # read-only staging capture. Cancellation does not release that lock.
+        if not self._save_lock.acquire(blocking=False):
             raise RuntimeError("人工判定正在保存中，請勿重複操作")
         try:
             # Use the same project lock as actual apply/recovery. It prevents
             # those transactions racing a save of a now-obsolete expected row.
-            with sp.project_delivery_lock(sp.project_actual_evidence_root(self.output_dir)):
-                return self._save(review_id, event, expected_manifest, expected_db)
+            with self._lock, sp.project_delivery_lock(sp.project_actual_evidence_root(self.output_dir)):
+                return self._save(review_id, event, expected_manifest, expected_db,
+                                  defer_staging_validation=defer_staging_validation)
         finally:
-            self._lock.release()
+            self._save_lock.release()
 
-    def _save(self, review_id, event, expected_manifest, expected_db):
+    def _prepare_snapshot(self, timings, expected_manifest, expected_db):
         if (self.output_dir / "跨電腦接續未完成.json").exists():
             raise StaleReviewProjectError("跨電腦接續未完成；未保存人工判定")
-        started = time.perf_counter()
-        timings = {}
         manifest_path = self.output_dir / "校對工作階段.json"
         db_path = self.output_dir / "人工判定資料庫.json"
         manifest_raw = _read(manifest_path)
@@ -260,6 +276,67 @@ class ReviewSaveService:
         else:
             baseline, ledger, index = self._baseline, self._ledger, self._index
         timings["ledger_full_rebuild"] = time.perf_counter() - phase if full else 0.0
+        return manifest, db, baseline, ledger, index, content, hashes, candidate_anchor
+
+    def load_resume_snapshot(self, *, expected_manifest=None, expected_db=None):
+        """Verify once, retaining content for queue and staging in this operation.
+
+        The second capture proves input stability after ledger preparation. It
+        is a boundary check, not another parse/materialization. No staging
+        checked IDs are trusted until validate_resume_staging succeeds.
+        """
+        timings = {}
+        with self._lock, sp.project_delivery_lock(sp.project_actual_evidence_root(self.output_dir)):
+            values = self._prepare_snapshot(timings, expected_manifest, expected_db)
+            manifest, db, baseline, ledger, index, content, hashes, anchor = values
+            _, final_hashes = self._capture(timings)
+            if final_hashes != hashes:
+                raise StaleReviewProjectError("載入期間專案來源或暫存已變更；請重新載入")
+            # Reload verifies the candidate without replacing an established
+            # anchor. A subsequent verified save retains the existing reanchor
+            # boundary for a newly sealed actual/rule refresh.
+            if self._evidence_anchor is None:
+                self._evidence_anchor = anchor
+            self._manifest, self._db = manifest, db
+            self._baseline, self._ledger, self._index = baseline, ledger, index
+            self._manifest_sha = hashes[str(self.output_dir / "校對工作階段.json")]
+            self._db_sha = hashes[str(self.output_dir / "人工判定資料庫.json")]
+            self._dependencies = hashes
+        # The worker owns these objects; the GUI receives separate plain data.
+        return ReviewResumeSnapshot(manifest, db, baseline, ledger, content, hashes, timings)
+
+    def validate_resume_staging(self, snapshot, *, cancelled=None):
+        """Reuse verified bytes/ledger, then reject drift before publication."""
+        phase = time.perf_counter()
+        staging_path = sp.project_actual_evidence_root(self.output_dir) / "manual_actual_staging.json"
+        try:
+            if cancelled is not None and cancelled():
+                raise InterruptedError("actual 暫存核對已由新操作取代")
+            raw = snapshot.content[staging_path]
+            staging = (ar._validate_manual_actual_staging_document(_json(raw, staging_path))
+                       if raw is not None else ar._empty_manual_actual_staging())
+            summary = sp._manual_actual_summary_from_verified_snapshot(
+                self.output_dir, staging, snapshot.manifest, snapshot.db, snapshot.ledger,
+                base_ledger=snapshot.baseline, source_hashes=snapshot.hashes, cancelled=cancelled)
+            if cancelled is not None and cancelled():
+                raise InterruptedError("actual 暫存核對已由新操作取代")
+            with self._lock, sp.project_delivery_lock(sp.project_actual_evidence_root(self.output_dir)):
+                _, final_hashes = self._capture(snapshot.timings)
+            if final_hashes != snapshot.hashes:
+                raise StaleReviewProjectError("actual 暫存核對期間專案內容已變更；請重新載入")
+        except Exception as exc:
+            summary = {"staging_error": str(exc), "staged_checked_occurrence_ids": []}
+        snapshot.timings["actual_staging_validation"] = time.perf_counter() - phase
+        return summary
+
+    def _save(self, review_id, event, expected_manifest, expected_db, *, defer_staging_validation=False):
+        started = time.perf_counter()
+        timings = {}
+        (manifest, db, baseline, ledger, index, content, hashes,
+         candidate_anchor) = self._prepare_snapshot(timings, expected_manifest, expected_db)
+        manifest_sha = hashes[str(self.output_dir / "校對工作階段.json")]
+        db_path = self.output_dir / "人工判定資料庫.json"
+        db_sha = hashes[str(db_path)]
         if review_id not in index:
             raise ValueError("找不到目前 review_id；已取消寫入")
         phase = time.perf_counter()
@@ -316,15 +393,26 @@ class ReviewSaveService:
         staged_ledger[index[review_id]] = resolved
         timings["ledger_incremental"] = time.perf_counter() - phase
         phase = time.perf_counter()
-        try:
-            staging_path = sp.project_actual_evidence_root(self.output_dir) / "manual_actual_staging.json"
-            staging = (ar._validate_manual_actual_staging_document(_json(content[staging_path], staging_path))
-                       if content[staging_path] is not None else ar._empty_manual_actual_staging())
-            summary = sp._manual_actual_summary_from_verified_snapshot(
-                self.output_dir, staging, manifest, staged_db, staged_ledger, base_ledger=baseline,
-                source_hashes=hashes)
-        except Exception as exc:
-            summary = {"staging_error": str(exc), "staged_checked_occurrence_ids": []}
+        if defer_staging_validation:
+            # Only an independent explicit expected decision may commit while
+            # actual staging is pending. All write-boundary checks still run.
+            decision = event.get("manual_expected_decision", {}) if isinstance(event, dict) else {}
+            if (not isinstance(decision, dict) or decision.get("operation") != "ENTER_EXPECTED"
+                    or event.get("action") not in sp.EXPECTED_RESOLUTION_ACTIONS
+                    or not sp.valid_manual_expected_decision(resolved)
+                    or resolved.get("review_event_replay_status")):
+                raise ValueError("actual 暫存核對中只可保存獨立輸入的應標判定")
+            summary = {"staging_validation_pending": True, "staged_checked_occurrence_ids": []}
+        else:
+            try:
+                staging_path = sp.project_actual_evidence_root(self.output_dir) / "manual_actual_staging.json"
+                staging = (ar._validate_manual_actual_staging_document(_json(content[staging_path], staging_path))
+                           if content[staging_path] is not None else ar._empty_manual_actual_staging())
+                summary = sp._manual_actual_summary_from_verified_snapshot(
+                    self.output_dir, staging, manifest, staged_db, staged_ledger, base_ledger=baseline,
+                    source_hashes=hashes)
+            except Exception as exc:
+                summary = {"staging_error": str(exc), "staged_checked_occurrence_ids": []}
         timings["actual_staging_validation"] = time.perf_counter() - phase
         # Recheck every dependency immediately before the atomic replacement;
         # no side effect has happened yet if any input changed during validation.
@@ -347,4 +435,6 @@ class ReviewSaveService:
         self._manifest_sha, self._db_sha, self._dependencies = manifest_sha, saved_sha, hashes
         token = hashlib.sha256(json.dumps(sorted(hashes.items())).encode("utf-8")).hexdigest()
         timings["backend_total"] = time.perf_counter() - started
-        return SaveResult(staged_db, staged_ledger, resolved, summary, timings, token)
+        resume = (ReviewResumeSnapshot(manifest, staged_db, baseline, staged_ledger, content, hashes, {})
+                  if defer_staging_validation else None)
+        return SaveResult(staged_db, staged_ledger, resolved, summary, timings, token, resume)

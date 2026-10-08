@@ -2,14 +2,14 @@
   "schema": "zhuyin-test-group-registry/2",
   "source_scope": "repository",
   "source_review": {
-    "basis": "Correction 3: retain correction1 independently reviewed GUI classification basis, explicitly source-review original cases and nine added non-window classifier regressions. Products and existing test expectations are unchanged. Finite registration is authoritative; positive bounded Tk guard rejects proven core conflicts. Correction 4: source-reviewed only same-installation Tcl/Tk helper/preflight and task-bound gate wiring with 13 explicit non-window regressions (mocked probe, exact paths/resources, pure gate fixtures, tiny synthetic runner groups); existing classification and classifier code unchanged. Correction 5: source-reviewed four changed helper/gate/test files and seven explicitly enumerated non-window regressions. Real isolated CLI/history/core execution uses one marker testcase, synthetic Git/CI context and only a stub Tk child; task-bound fifth exception retains original fourth contract. Existing registrations, product logic, classifier, runner and auditor unchanged. Correction 6: source-reviewed ExpectedResolutionGuiTests scoped owner-thread cleanup; two new real-Tk object-retirement/error-cleanup regressions explicitly GUI, two exact sixth-round gate regressions pure core. No product/classifier/other GUI class changes; historical identities unchanged. Correction 7: reviewed actual workflow routing/PowerShell summary regression sources and exact seventh task-bound adapter; four new non-window identities explicit core. The regression evaluator consumes real job/step expressions, real run/uses and summary body on isolated event/outcome fixtures. No GUI tests/product/classifier/provenance helper changes. Correction 8: only unittest step metadata order changed (if then same id); unchanged PR29 predicate assertions and actual workflow readers remain authoritative. Exact eighth task-bound adapter introduces two pure authorization/history core regressions; source registration updated only changed gate/test hashes. No product/GUI/classifier/dependency/capture changes or order-mirror tests. No-window policy: explicit user adoption retires native validation, preserves legacy readers and exact active identity coverage. Reclassify fourteen original expected binding/replay cases, two sentinel audit subprocess fixtures and the portability conflict transaction case. New core-only evidence/runner regressions replace retired launcher/capability fixtures; cancellation is not GUI PASS. Mixed per-case source review is preserved in no-real-tk-validation/static-window-inventory.json and mixed-tests/dispositions.json. Retired native methods renamed cancelled_window_; retained handler/data logic executes using simple local UI doubles. Tk retry/initialization coverage retired explicitly.",
+    "basis": "Correction 3: retain correction1 independently reviewed GUI classification basis, explicitly source-review original cases and nine added non-window classifier regressions. Products and existing test expectations are unchanged. Finite registration is authoritative; positive bounded Tk guard rejects proven core conflicts. Correction 4: source-reviewed only same-installation Tcl/Tk helper/preflight and task-bound gate wiring with 13 explicit non-window regressions (mocked probe, exact paths/resources, pure gate fixtures, tiny synthetic runner groups); existing classification and classifier code unchanged. Correction 5: source-reviewed four changed helper/gate/test files and seven explicitly enumerated non-window regressions. Real isolated CLI/history/core execution uses one marker testcase, synthetic Git/CI context and only a stub Tk child; task-bound fifth exception retains original fourth contract. Existing registrations, product logic, classifier, runner and auditor unchanged. Correction 6: source-reviewed ExpectedResolutionGuiTests scoped owner-thread cleanup; two new real-Tk object-retirement/error-cleanup regressions explicitly GUI, two exact sixth-round gate regressions pure core. No product/classifier/other GUI class changes; historical identities unchanged. Correction 7: reviewed actual workflow routing/PowerShell summary regression sources and exact seventh task-bound adapter; four new non-window identities explicit core. The regression evaluator consumes real job/step expressions, real run/uses and summary body on isolated event/outcome fixtures. No GUI tests/product/classifier/provenance helper changes. Correction 8: only unittest step metadata order changed (if then same id); unchanged PR29 predicate assertions and actual workflow readers remain authoritative. Exact eighth task-bound adapter introduces two pure authorization/history core regressions; source registration updated only changed gate/test hashes. No product/GUI/classifier/dependency/capture changes or order-mirror tests. No-window policy: explicit user adoption retires native validation, preserves legacy readers and exact active identity coverage. Reclassify fourteen original expected binding/replay cases, two sentinel audit subprocess fixtures and the portability conflict transaction case. New core-only evidence/runner regressions replace retired launcher/capability fixtures; cancellation is not GUI PASS. Mixed per-case source review is preserved in no-real-tk-validation/static-window-inventory.json and mixed-tests/dispositions.json. Retired native methods renamed cancelled_window_; retained handler/data logic executes using simple local UI doubles. Tk retry/initialization coverage retired explicitly. Review-resume-performance: source-reviewed operation-owned content snapshots, cancellable non-window staging worker publication, independently validated ENTER_EXPECTED saves, unchanged exact group identities and one sealed projection context. Ten explicit non-window regressions execute real snapshot/save/group/projection handlers using isolated files and an event-queue UI double; no Tk root, Global DB, runtime asset edits, existing case reclassification or identity removal. Review-resume-performance corrective 1: source-reviewed GUI-only strict committed-recovery availability under retained source/anchor errors and pending reusable-rule command gating. Two exact added non-window handler regressions cover same-session local commit/failed refresh, malformed or removed recovery plan, recovery without staging reapply, and delayed staging plus independent expected save/rule command. Existing source identities and classifications retained; native progress widgets only are replaced by finite local doubles. Review-resume-performance corrective 2: reviewed seven existing batch handler fixtures at the new verified snapshot boundary, with temporary project paths, finite messagebox doubles and real durable staging validation for the two persistence cases. Original queue/count/navigation/truth assertions retained; obsolete helper-call assertion replaced by published staging state. Existing save-failure case now proves cold ledger preparation and warm dependency/write failures actually execute and leave memory/navigation/durable bytes unchanged. Reviewed 23 exact async/busy callable dependencies and updated only 12 changed fingerprints; exact path, qualname, owner, callsite, closure, busy guard and real-service recursion checks remain unchanged. No product source, runtime asset, active/cancelled identity or classification changes. Review-resume-performance corrective 3: source-reviewed two deterministic non-window thread/barrier regressions at the real final staging capture and real expected save boundaries. Existing pure isolated fixture, actual transaction lock, byte hashing, ledger replay and durable DB are retained; no Tk initialization or live data. A second save while the first is admitted must be refused; source drift must still preserve the DB. The product change separates nonblocking save admission from the unchanged cache/project-lock serialization, so the admitted background save can wait for a reader. Existing reentrancy case now invokes a real nested save instead of manually taking the reader lock; unchanged runtime corruption assertion remains. Reviewed and refreshed only save_service and save_target exact callable hashes, retaining all bounded adapter checks.",
     "prior_classification_ref": "correction1-fa6d3b724cfb46f982bddbd7b9131141/inventory.json",
     "prior_classification_head": "16cac994bf44fb4f9a278ce851d6f0848416987e",
     "prior_classification_tree": "8495c003e66f39561cda42016e09a58b7ce48b8a",
     "prior_classification_sha256": "267696312155583d8fd606cfafbc5dc0c8e09b6aad94250080b2e3149fcbdc4b",
     "normalization": "SHA256 of file bytes with CRLF replaced by LF; physical bytes are retained separately in execution evidence",
     "normalized_source_sha256": {
-      "actual_review.py": "d882b4ae42bb02c69cdda0016a8d0eaff94227584b8e49c022e6e99602b80dae",
+      "actual_review.py": "161a9e8809870326cb4e18c4c68d651e669a2b737ec4cc3f13d7c607fc202c6a",
       "build_handbook_rules.py": "62056a0a617f399423800ef04e9dfb2c6a88d8a026f2184c071f78942debb9c0",
       "cff_unseen_family_bootstrap.py": "69d680451647d7cb61685d860af5e81339e40f313186a78fabdfb50a0258ee66",
       "cff_zero_map_batch.py": "a78e5256885b3cab8f5d7ea157bd8a3c7f375b266c77b926409b2fb2ead5fa22",
@@ -34,8 +34,8 @@
       "pdf_portability.py": "b9143b309e67ce8aa411c5f559d70cbfd701060e7365bd3df51b2c765c54614a",
       "pronunciation_rule_engine.py": "27fadd760c509546f59c042d1fb48fb4e076c9aba1c4d1834365f9d09baf4fc4",
       "review_display.py": "577b6b5912134921c9f7ab11c93e1ae8ee81fc528a06170ca5c51720aa674b9b",
-      "review_gui.py": "1b43f61f837d634cfe823003c93603f5486023d19f99c15dd1176f3925bb32e9",
-      "review_save_service.py": "177c9639f396a5516d37804ec2ba2bcdb4e824e6360f5366c25fd803843eca04",
+      "review_gui.py": "5706f79d23dcfa9aaeb1f103376bf71948dc096757f86f6b5b432262df8b6ee4",
+      "review_save_service.py": "3b45e7b081e452b0e70cb7355646f7cef7314483c0c3aa496e9d500a73abed5f",
       "revision_diff.py": "5062e986de7728ca523d5825f00a467206525cf8150fda9630101615c8776b3d",
       "runtime_regression_gate.py": "a9c1064eb573690a9df61566c3eaebd5b352cb6b65be0b9e38a33e6809443a66",
       "runtime_source_validation.py": "560e75a651b67cbef034d780d20cc005aaa6e4f65674eb8a79e59cabd54b5704",
@@ -43,12 +43,12 @@
       "scripts/gui_preflight.py": "4338c5689f98efcc6a05de2b3bf2d10d5f4310f6e77deb2b2848665814043cd5",
       "scripts/pr29_review_gate.py": "63ddb7ce48dbc3a8a9ddd121742efab8831b1976041c2e85594996879b79b7cd",
       "scripts/pr_review_gate.py": "29f11684780e2c8f10fcefbc1330b593986f499022520411299175fc04221f39",
-      "scripts/test_entrypoint_audit.py": "d11857c6b881d3800536bca88d6b5a83a3b3b6bc90e500cd1778efa448c43937",
+      "scripts/test_entrypoint_audit.py": "8db6c8108171db053f88dfc5ba4cbfeaf9404848dd3f8e0018cea6650c3dd444",
       "scripts/validation_evidence.py": "65722edfef9e34c4b222eb0d3ed44d877d20bfa07bc7d33b82f57b7c5f434059",
       "scripts/validation_runner.py": "cd294fa31a9181ee72019595b9040b57f00c95472e092f105a32b9b30dd70346",
       "scripts/validation_tk_environment.py": "be340d4225fcb9e1eac2b82f1ac2c1924c8b292b3f4d77fc5dcad8eca6d837d7",
       "standalone_gui.py": "99dd840ca050478763e75b0444ca241c9a109a2e0ab2fc7af907e34c48c9bc63",
-      "standalone_proofread.py": "9a0eff7ffaee0aa6c7182925a3feabe19b584cfa9c0e960b2a9ea2a4b1c55993",
+      "standalone_proofread.py": "6311e0dc5495566d3f9d618b20b8a8ffcff06c10941fca6ba8cc29976123d0cf",
       "tests/review_save_test_support.py": "7d39422c637eda60506103c8c087a2fcb872be31c779472a7e1378f3961ea357",
       "tests/test_actual_post_commit_recovery_v580.py": "5b8d129c5148ee6e0ad0b328b4709a5f089c7c4cef7863a289d07a523ba1677f",
       "tests/test_actual_review_v540.py": "cc1d60e408a9a5e63311365f53691abf5c5d2e2fa15b21f0e067e4bbed164498",
@@ -80,9 +80,9 @@
       "tests/test_legacy_migration_inspector_v580.py": "259078513f199bc6a4da24f3ab29b4f317220062e28d051542f85319244ca99d",
       "tests/test_mandatory_resolver_integration.py": "e40ab925e2a12bf05b6901cde09972b5aa4c06f2547b414f4e0c9678649d5ea7",
       "tests/test_manual_actual_batch_apply_v570.py": "d3a9ed5a5e5c08adeef7bb721ba2b38f481c06239fe4a6d4c4ed41ddf30d859f",
-      "tests/test_manual_actual_gui_batch_v570.py": "42b4326650f79c99871e5b927fdb0aa76757a3d998a91206c3ed690f0fcddc19",
+      "tests/test_manual_actual_gui_batch_v570.py": "44fe27e2a1c72a0e7c554e2f9e1c9347319e99c9de7ba62ec1b90d1096d6718d",
       "tests/test_manual_actual_staging_v570.py": "14f3ccc744c4e1b5dfd327b07ec6165781414a5e1fac921a5b95b0542e2b4155",
-      "tests/test_manual_review_usability_v580.py": "43f39f8b9904f560a13aac9d46a5318fe2e2fe935bf74e23f24b69d19e619a46",
+      "tests/test_manual_review_usability_v580.py": "cf1aaf9752cb51a2783fbcfb39a26834bcca14def8a5ebbfca94e70559d075ba",
       "tests/test_pdf_portability.py": "ddbe3fb655355233b5312f7316e8a060a252640b2e6eda9e60588b3766d43939",
       "tests/test_pdf_portability_actual_receipt.py": "d1ea6b1de211005a604e433d27b55aabc50761e72cfc9f7dcfd62308322499db",
       "tests/test_pdf_portability_actual_schema.py": "dd135a31b581d4de770f6c6ec846894fb6d287b59efde51528660d091efadaca",
@@ -104,7 +104,7 @@
       "tests/test_review_async_save.py": "553085e6caf7a7921df38b799380fe44a6519aff724d1e01bc55ac1b9d85bced",
       "tests/test_review_gui_layout_v531.py": "ff372fcf8025362ed0fcf0cfa70ac28db79fd49ebf59ddee4c5f1f48304dab20",
       "tests/test_review_preview_sizing_v580.py": "32839ad439e46145ade2e56a93eccd9e2e4f03fa6e57c61c7d89734de0f24b66",
-      "tests/test_review_save_service.py": "07903b175c3d108bd23d7efc3ee0a3c4e84042903b1e9f99bfc6ed9f4fb07fa0",
+      "tests/test_review_save_service.py": "058b8a7d7f765748a4f13590df96f860002365f885ecb57aa7d909ed9bfcc258",
       "tests/test_review_visual_corrective_v580.py": "8dbf45f753d093eb33096024397c75f5c99405828bed799ccb38170128275a6d",
       "tests/test_review_visual_usability_v580.py": "5a57d7dd0216f669846986b7ae63404f517d50592f1c3d5bb5205026a9de607d",
       "tests/test_runtime_asset_manifest_integrity_v562.py": "1a5a416d5c1c4ba1cc2e958476c35e636bee9eb11d8930e1ba1e82dbdc55dd91",
@@ -122,7 +122,8 @@
       "ttf_symbol_recombination.py": "58f4156cab507c81690775e1b8c94449b808b63f74fc0637f0fc72ce061fc091",
       "ttf_zhuyin_shape_decoder.py": "612dfb13c2be1ffa2ba32ae5d47136ef207180361c7785c2e6dc205cb45f07c5",
       "tests/conftest.py": "63b33911fa964a94d1c968604655e138f6c13979d7c25f05b5c22bdfb3d6ba56",
-      "tests/no_window_review_support.py": "a5530cc3b612a8e71b675aa4931f8cb901f9de28af5b174d6368dcb77fdd1cc6"
+      "tests/no_window_review_support.py": "a5530cc3b612a8e71b675aa4931f8cb901f9de28af5b174d6368dcb77fdd1cc6",
+      "tests/test_review_resume_performance.py": "205b9dd02049128bc3452a1a43d98bef28394d6ad6bd9893600a2fbcfa6e2071"
     }
   },
   "entries": [
@@ -2156,6 +2157,26 @@
         "test_adopted_gate_cancels_window_steps_only_and_rejects_unknown_policy",
         "test_current_short_reuse_binds_policy_and_keeps_provenance_checks",
         "test_cancelled_gui_does_not_clear_retained_code_blocker"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_review_resume_performance.ReviewResumeTests",
+      "core": [
+        "test_deferred_save_rejects_other_actions_invalid_decision_and_source_drift",
+        "test_expected_save_finishes_before_staging_and_old_result_is_discarded",
+        "test_expected_save_waits_for_final_staging_capture_without_duplicate_save",
+        "test_external_changes_during_validation_never_publish_checked_ids",
+        "test_failed_staging_and_expected_save_remain_independent",
+        "test_group_index_preserves_exact_groups_and_checks_cancellation",
+        "test_pending_expected_rule_command_keeps_worker_until_validation_finishes",
+        "test_pending_save_and_worker_start_failures_leave_no_orphan_pending_state",
+        "test_projection_validates_one_immutable_context_and_every_binding",
+        "test_queue_precedes_staging_and_actual_actions_are_gated",
+        "test_reload_and_disposal_cancel_stale_workers",
+        "test_resume_reuses_one_preparation_and_original_staging_bytes",
+        "test_same_session_source_error_keeps_strict_committed_recovery_only",
+        "test_waiting_expected_save_still_rejects_source_drift"
       ],
       "gui": []
     }
