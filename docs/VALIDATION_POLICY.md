@@ -156,3 +156,36 @@ CI 僅在 `pull_request`、上述精確 head branch 且 base SHA 恰等於固定
 ## PR41 第 7 輪限定接續
 
 [第7輪原task授權摘要](VALIDATION_FLOW_CORRECTION7.md) 只限main push routing及實際summary直接回歸，保留前六輪，追加至7/7。先有限定向workflow事件資料／真PowerShell summary，不啟本機全套／GUI或真mainpush；原first完整累積review後新候選一次正式CI。舊成功不冒充新HEAD、CI失敗STOP不retry、仍需兩輪完整適用PASS才能merge/actual短驗證。其他task一般3輪及所有歷史adapter不變。
+
+## PR42 精確原 producer 失敗讀取例外
+
+2026-10-08 人類明確採納兩份 CFF 限定提案及唯一第四輪，採納原 bytes
+SHA256 `7bf99a4fa2ef4446fb8c0490af60ab0ca8014fe35ddf1025329d3ca6fdc5624b`。
+`cff-legacy-failure-read/1` 僅允許新無視窗政策的歷史讀取保留一份原 producer
+合法產生的失敗，不以後來 classifier 追認原 eligibility。唯一 manifest SHA256
+為 `9b0635cbcb149cf4c272c0c51d28478d66c07d355ffc57117cb0d90b32c0793a`；
+它綁定完整 artifact map、原 task/context、PR42、run37293413665/attempt1、
+execution `0a56d940d31c4b48865cbda948494a7a`、原 baseline、feature、producer
+candidate/parents/tree、命令及原 started。原 producer 為
+`4453a35dc7d66b9d9a2f0cca43f49087b4a4cdbc`，runner Git blob
+`3d33f83055c2c1cff366a1cee415cb81ef609c8d`，blob SHA256
+`30452368f477dfafb093b0c8d93f3b340ce57a3b80a785ae75f4caa53bab75e5`。
+這是凍結原件例外，不執行下載的歷史 source，也不新增通用版本 dispatcher。
+
+`read_verified_manifest` 預設仍 strict；只有 `history_policy` 等於現行政策且
+`task_id=cff-batch-fingerprint` 才可接受唯一原件。完整常規欄位、時間、command、
+retry key、inventory、start/finish 和每份 raw artifact hash 驗證仍先執行；
+相同 execution 在新政策下改 bytes／身份／eligibility 即拒絕。
+`restore_history` 另核 repository、branch、PR42 與 handoff task；history
+拒絕跨 task 混入，`validate_history_context`、PR core 前的 history 及新 `/2`
+aggregate 傳遞選取。`verify_coverage` 依真 `/2` policy 重算該 aggregate；舊 `/1`
+aggregate、未 opt-in reader、本機 ledger 不取得例外。只有原 failed history
+或舊 `/1` core 仍因缺當前 `/2` core 而拒絕 coverage。
+
+返回原字典仍是 `failed / exit_code=1 / retry_eligible=false / retry_of=null`，
+不得修改 bytes、重啟 Tk、使用新 retry、充當新 coverage 或 PASS。同 execution
+跨 bundle 原样保留且只計一次；全部其他歷史、unfinished、raw corruption、
+同候選 code/core failure 仍核對。原 run37763361887/attempt1 restore-history
+失敗永久保留，不能因這次 reader 修正宣稱該次已通過。原未知 Tk 根因未解決。
+本例外與 [精確 gate 第四輪規則](PR_REVIEW_GATE.md) 同屬原任務唯一 4/4；
+新 HEAD 必須兩輪完整獨立審查，正式 CI、coverage、merge 仍有原門檻。
