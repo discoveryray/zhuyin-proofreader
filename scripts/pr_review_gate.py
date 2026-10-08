@@ -785,6 +785,16 @@ def _pr46_history_pairs(state):
              "PR46 original five-report/zero-correction checkpoint differs")
     _require(state["reviews"][:5] == original["reviews"],
              "PR46 original five-report prefix must remain unchanged")
+    corrections = state["corrections"]
+    candidate = pr.get("head_sha") if pr.get("state") == "merged" else state["current"]["head"]
+    if corrections:
+        _require(corrections[0]["from_head"] == PR46_HISTORY_HEAD,
+                 "PR46 first correction must start at the original blocked HEAD")
+        _require(corrections[-1]["to_head"] == candidate,
+                 "PR46 final correction must identify the feature candidate")
+    else:
+        _require(candidate == PR46_HISTORY_HEAD,
+                 "PR46 zero corrections must retain the original blocked HEAD")
     _require(code["verdict"] == "CODE_REVIEWED" and blocked["verdict"] == "BLOCKED"
              and blocked["blocker_kind"] == "code" and bool(blocked["findings"])
              and code["reviewer"] == blocked["reviewer"]

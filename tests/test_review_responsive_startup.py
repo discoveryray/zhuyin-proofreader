@@ -33,13 +33,19 @@ class ResponsiveReviewTests(unittest.TestCase):
         for name in ("showinfo", "showerror", "showwarning"):
             self.stack.enter_context(patch.object(gui.messagebox, name))
 
-    def fake_shell(self):
+    def fake_shell(self, *, stateful=False):
         root = QueuedRoot()
         root.protocol, root.title, root.destroy = Mock(), Mock(), Mock()
         def widget(*args, **kwargs):
             item = Mock()
             item.cget.return_value = "normal"
             item.winfo_children.return_value = []
+            if stateful:
+                options = {"state": "normal", "text": "", **kwargs}
+                item.cget.side_effect = options.get
+                item.config.side_effect = lambda **updates: options.update(updates)
+                if args and hasattr(args[0], "winfo_children"):
+                    args[0].winfo_children().append(item)
             return item
         for name in ("Frame", "Button", "LabelFrame", "Text", "Menubutton", "Menu"):
             self.stack.enter_context(patch.object(gui.tk, name, side_effect=widget))
@@ -129,6 +135,15 @@ class ResponsiveReviewTests(unittest.TestCase):
         self.assertEqual(app.current()["review_id"], current)
         self.assertIn(row["occurrence_id"], app.staged_checked_occurrence_ids)
         self.assertEqual(app._async_after_ids, set())
+
+    def test_startup_restores_confirmed_button_shared_with_navigation(self):
+        app = gui.ReviewApp(self.fake_shell(stateful=True), self.output)
+        app.show = Mock()
+        self.assertIn(app.confirmed_button, app.navigation.winfo_children())
+        self.assertEqual(app.confirmed_button.cget("state"), "disabled")
+        self.pump_loading(app)
+        self.assertEqual(app.confirmed_button.cget("state"), "normal")
+        self.assertEqual(app._saved_control_states, [])
 
     def test_loader_replays_bound_expected_and_preserves_actual(self):
         row = self.manifest["records"][0]

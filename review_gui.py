@@ -1475,13 +1475,19 @@ class ReviewApp:
         navigation = getattr(self, "navigation", None)
         if navigation is not None:
             widgets.extend(navigation.winfo_children())
-        self._saved_control_states = []
+        saved = getattr(self, "_saved_control_states", [])
+        first_snapshot = not saved
+        seen = {id(widget) for widget, _state in saved}
+        self._saved_control_states = saved
         for widget in widgets:
             if widget is not None and hasattr(widget, "cget"):
-                self._saved_control_states.append((widget, widget.cget("state")))
+                if id(widget) not in seen:
+                    saved.append((widget, widget.cget("state")))
+                    seen.add(id(widget))
                 widget.config(state="disabled")
         if hasattr(self, "status"):
-            self._saved_status_text = self.status.cget("text")
+            if first_snapshot:
+                self._saved_status_text = self.status.cget("text")
             self.status.config(text="正在儲存人工判定與更新待辦，請稍候…")
 
     def _restore_save_controls(self):

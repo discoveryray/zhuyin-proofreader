@@ -156,3 +156,51 @@ class PR46HistoryAdapterTests(unittest.TestCase):
                     s["reviews"].append(extra)
                     with self.assertRaises(gate.EvidenceError):
                         gate.validate_state(s)
+
+    def test_correction_chain_binds_zero_first_and_terminal_heads(self):
+        with patch.object(gate, "PR46_HISTORY_DIGESTS", self.digests):
+            invalid = deepcopy(self.state)
+            invalid["current"]["head"] = invalid["pr"]["head_sha"] = "f" * 40
+            with self.assertRaisesRegex(gate.EvidenceError, "zero corrections"):
+                gate.validate_state(invalid)
+            previous = gate.PR46_HISTORY_HEAD
+            valid = deepcopy(self.state)
+            for number, head in enumerate(("f" * 40, "9" * 40, "8" * 40), 1):
+                valid["corrections"].append({"number": number, "from_head": previous,
+                                             "to_head": head, "evidence_ref": "fixture://correction"})
+                valid["current"]["head"] = valid["pr"]["head_sha"] = head
+                with self.subTest(round=number):
+                    gate.validate_state(valid)
+                    self.assertEqual(gate.next_action(valid)["action"], "REQUEST_REVIEW_1")
+                    for position, field, message in ((0, "from_head", "first correction"),
+                                                      (-1, "to_head", "final correction")):
+                        invalid = deepcopy(valid)
+                        invalid["corrections"][position][field] = "1" * 40
+                        with self.assertRaisesRegex(gate.EvidenceError, message):
+                            gate.validate_state(invalid)
+                previous = head
+            invalid = deepcopy(valid)
+            invalid["corrections"][1]["from_head"] = "1" * 40
+            with self.assertRaisesRegex(gate.EvidenceError, "discontinuous"):
+                gate.validate_state(invalid)
+            # A stale remote still requires refresh, not an invented correction.
+            valid["pr"]["head_sha"] = gate.PR46_HISTORY_HEAD
+            self.assertEqual(gate.next_action(valid)["action"], "REFRESH_EVIDENCE")
+
+    def test_merged_history_binds_retained_pr_feature_not_develop_head(self):
+        with patch.object(gate, "PR46_HISTORY_DIGESTS", self.digests):
+            state = deepcopy(self.state)
+            state["pr"]["state"] = "merged"
+            state["current"].update(head="a" * 40, base="a" * 40)
+            gate.validate_state(state)
+            self.assertEqual(gate.next_action(state)["action"], "STOP")
+            state["pr"]["head_sha"] = "f" * 40
+            with self.assertRaisesRegex(gate.EvidenceError, "zero corrections"):
+                gate.validate_state(state)
+            state["corrections"] = [{"number": 1, "from_head": gate.PR46_HISTORY_HEAD,
+                                      "to_head": "f" * 40, "evidence_ref": "fixture://first"}]
+            gate.validate_state(state)
+            self.assertEqual(gate.next_action(state)["action"], "STOP")
+            state["corrections"][0]["to_head"] = state["current"]["head"]
+            with self.assertRaisesRegex(gate.EvidenceError, "final correction"):
+                gate.validate_state(state)

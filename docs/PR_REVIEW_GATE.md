@@ -462,3 +462,9 @@ base `1417ac7`、head `2afa2b7`，由原作者 projection 逐值核對；原四�
 仍須完整兩輪審查與必要 CI，不能沿用舊 PASS。一般三輪上限不變，本次正常
 第一輪修正不新增額度。未知 task／報告、第三筆同 key、重複 PASS、跨 scope、
 原件或 prefix 漂移均拒絕；不借用 CFF 或其他 PR 的例外。
+
+Correction chain 必須綁定原 blocked HEAD：零筆修正只能保留 `2afa2b7`；
+非空 chain 的第一筆 `from_head` 必須為該 HEAD，末筆 `to_head` 必須等於
+當前 feature candidate。未合併時取 `current.head`；已合併時取保留的
+`pr.head_sha`，不把 actual merge／後續 develop SHA 當成 corrective HEAD。
+既有連續編號、相鄰 chain 及三輪上限照常驗證，不能以換 HEAD 重設計數。
