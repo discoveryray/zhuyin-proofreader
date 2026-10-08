@@ -8,6 +8,7 @@ import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
+import shutil
 from unittest.mock import patch
 
 from scripts import test_entrypoint_audit as audit
@@ -51,6 +52,58 @@ class RegisteredGroupsTests(unittest.TestCase):
         command = [sys.executable, str(ROOT / "scripts/test_entrypoint_audit.py"),
                    "collect-groups", str(output), "--tests", str(self.folder), "--registry", str(declaration)]
         return subprocess.run(command, cwd=ROOT, capture_output=True, timeout=30), output
+
+    def test_default_pytest_and_unittest_retire_native_and_execute_headless_logic(self):
+        """Execute the actual selection hook with a native creation tripwire."""
+        scripts = self.folder / "scripts"
+        scripts.mkdir()
+        tests = self.folder / "tests"
+        tests.mkdir()
+        shutil.copyfile(ROOT / "scripts/test_entrypoint_audit.py", scripts / "test_entrypoint_audit.py")
+        shutil.copyfile(ROOT / "tests/conftest.py", tests / "conftest.py")
+        marker = self.folder / "executed.txt"
+        source = (
+            "import _tkinter, unittest\nfrom pathlib import Path\n"
+            "def no_native(*args, **kwargs): raise AssertionError('native Tk construction reached')\n"
+            "_tkinter.create = no_native\n"
+            "class Cases(unittest.TestCase):\n"
+            f"    def test_logic(self): Path({str(marker)!r}).write_text('real logic executed')\n"
+            "    def cancelled_window_native(self):\n"
+            "        import tkinter as tk\n        tk.Tk()\n"
+        )
+        (tests / "test_fixture.py").write_text(source, encoding="utf-8")
+        registry = declared_registry(tests, [{"prefix": "test_fixture.Cases", "core": ["test_logic"], "gui": ["test_native"]}])
+        registry.update(schema="zhuyin-test-group-registry/2", policy=audit.POLICY)
+        (scripts / "test_group_registry.json").write_text(json.dumps(registry), encoding="utf-8")
+        for command in ([sys.executable, "-m", "pytest", "tests", "-q"],
+                        [sys.executable, "-m", "unittest", "discover", "-s", "tests", "-p", "test_*.py"]):
+            result = subprocess.run(command, cwd=self.folder, capture_output=True, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(marker.read_text(), "real logic executed")
+            marker.unlink()
+        result = subprocess.run([sys.executable, "-m", "pytest", "tests", "--audit-window-inventory", "-q"],
+                                cwd=self.folder, capture_output=True, timeout=30)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"never executed", result.stderr)
+
+    def test_cancelled_native_source_identity_cannot_vanish_or_stay_discoverable(self):
+        tests = self.folder / "tests"
+        tests.mkdir()
+        source = tests / "test_native.py"
+        source.write_text("class Cases:\n    def test_logic(self): return 5\n    def cancelled_window_native(self): raise AssertionError('retired')\n")
+        registry = declared_registry(self.folder, [{"prefix": "test_native.Cases", "core": ["test_logic"], "gui": ["test_native"]}])
+        registry.update(schema="zhuyin-test-group-registry/2", source_scope="repository", policy=audit.POLICY,
+                        cancelled_window_cases={"test_native.Cases.test_native": {
+                            "source_path": "tests/test_native.py", "callable": "Cases.cancelled_window_native", "reason": "native view cancelled"}})
+        audit.validate_registry_sources(registry, self.folder)
+        for target in ("Cases.test_native", "Cases.missing", "Cases.test_logic"):
+            changed = copy.deepcopy(registry)
+            changed["cancelled_window_cases"]["test_native.Cases.test_native"]["callable"] = target
+            with self.assertRaises(ValueError):
+                audit.validate_registry_sources(changed, self.folder)
+        registry["cancelled_window_cases"] = {}
+        with self.assertRaises(ValueError):
+            audit.validate_registry_sources(registry, self.folder)
 
     def test_original_f1_instance_and_returned_call_are_gui_with_independent_sentinel(self):
         source = self.folder / "test_f1.py"

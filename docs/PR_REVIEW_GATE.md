@@ -1,5 +1,11 @@
 # 兩輪審查流程的證據 gate
 
+2026-10-07 使用者明確採納 `validation-flow/no-real-tk/1`，完全取消所有自動化入口的真視窗驗證（含 hidden root、虛擬顯示器、fixture／import／子程序）、Tcl/Tk configure／preflight／初始化能力門檻及 GUI retry／補驗。新政策適用本身與後續驗證；尚未結案任務只遷移 window 義務，其餘凍結契約、baseline、修正計數、原 Tk 失敗及 retry 額度保留，其他 blocker 不自動解除。產品 GUI／Tk／launcher 保留；有效非視窗資料／交易／恢復與功能測試、Python 3.13.0、runtime／compile／diff、兩輪審查與 actual merge 短驗證仍必要。詳見 [驗證政策](VALIDATION_POLICY.md)。
+
+舊 v3／PR29／PR41 schema、原授權及判定保留；下列原 GUI／preflight 歷史 contract 不授權未來再執行真視窗，也不追認舊 PASS。新政策證據與舊原件必須明確區分。
+
+新政策採納使用有限 optional 頂層 `validation_policy: "validation-flow/no-real-tk/1"`，適用 v3／v4；未填時舊 snapshot 保持原 contract 與原判定，不自動遷移。旗標只表示已有人類明確採納的 window 義務遷移，不創造 write／merge 授權、不新增正式 CI 時段或 retry 額度、不清除其他 blocker。只有該精確值可取消 GUI／configure／preflight 必要成功條件；有效 non-window gates 仍全部必須成功，main／legacy 改核對 `Verify active test execution`。v4 新採納旗標必須同時使用精確新 policy 的 `/2` coverage，舊 `/1` GUI 成功不能冒充新正式 coverage。
+
 `scripts/pr_review_gate.py` 是 Codex 執行期間使用的純 Python、唯讀決策工具。
 它不啟動代理、不連網、不持有 credentials、不修改 Git、不建立 PR、不執行 merge，
 也不建立 GitHub Actions 背景 AI 工作。協調者負責取得真實證據、執行已授權下一步，
@@ -288,19 +294,22 @@ coverage file SHA-256。中間報告不改寫；append 的報告以 `finalizes_r
 
 ### 原始功能證據與短驗證
 
-`scripts/validation_runner.py` 產生 `zhuyin-validation-run/1` execution 與
-`zhuyin-validation-coverage/1` bundle。Gate 透過 `scripts/validation_evidence.py`
+`scripts/validation_runner.py` 現行產生 `zhuyin-validation-run/2` execution 與
+`zhuyin-validation-coverage/2` bundle，inventory 為 `zhuyin-test-groups/2`，
+policy=`validation-flow/no-real-tk/1`，明列「真視窗驗證已依政策取消」，
+只要求全部 active core；沒有 gui_manifest 或 GUI PASS。舊 `/1` reader
+保留全部 raw 原件與原 GUI 判定，不允許改標新 policy、洗掉 failures 或 retry 額度。Gate 透過 `scripts/validation_evidence.py`
 重新讀取所有 retained manifests、SHA-256 核對的 raw log／inventory／JUnit／events，
-重新計算 group identity coverage、環境一致性與 GUI retry history，不接受一個
+重新計算全部有效非視窗 identity coverage、環境一致性及適用原始歷史，不接受一個
 `status: success` 或上傳成功就代替實際執行。每組原 run/attempt/job/tested SHA
-保留在各自 manifest；不得把沿用 core 宣稱在後續 GUI 或 merge SHA 重跑。
+保留在各自 manifest；不得把沿用 core 宣稱在後續 run 或 merge SHA 重跑。
 
 coverage 的 exact candidate、ordered parents、tree、原 run/attempt 必須符合當前 PR CI。
 Windows Python 3.13.0、完整實際 installed dependencies、default fd capture、必要
 環境與 test inventory 必須可核對。必要 job `Grouped validation`、required summary
 `Python 3.13` 及 `Verify required validation results` 必須成功；summary 只彙總真實
 必要結果。失敗／skip／cancel／缺失不變成功。非本 event 的精確 conditional job
-可 skip，不能把適用的核心或 GUI 作為 skip 例外。
+可 skip，不能把適用的非視窗 core 作為 skip 例外。所有適用 active case failure／missing／skip／error、artifact 損毀仍 fail closed。
 
 `post-merge` 是真正 push CI 入口，從實際 merge SHA 找唯一已 merge PR、精確 feature
 head 最新 PR run/attempt 與未過期 `validation-evidence-<run>-<attempt>` artifact，
@@ -338,6 +347,8 @@ metadata；不對 runtime assets 自行 normalize、不重算 truth、不修改 
 所有短命令完成後另重新核對 SHA/tree/parents 與實際環境，執行期漂移會保留 failure，
 不能產生 success。
 
+以下保存歷史契約原文；其中 window 義務已依 `validation-flow/no-real-tk/1` 取消，不再執行 configure／preflight／GUI／retry。原失敗、baseline、count、其他精確 adapter／授權／正式額度與所有 non-window 門檻保持。
+
 ## PR41 task-bound 第 4 輪例外
 
 一般上限仍為三輪；僅 [限定授權摘要](VALIDATION_FLOW_CORRECTION4.md) 的原 task 可在 v3／v4 加入 optional `correction_exception`，沒有此欄位的舊 snapshots 保持原義。欄位存在時不可為 null，closed object 恰含 `schema`、`task_id`、`baseline`、`starting_head`、`head_branch`、`pr_number`、`extra_rounds`、`limit`、`scope`、`authorization_ref`、`authorization_sha256`。
@@ -372,3 +383,16 @@ Fixed 值為 task `validation-flow-reduction`、原 baseline/base `457707b4c4109
 ## validation-flow-reduction 第八輪精確例外
 
 [第8輪限定摘要](VALIDATION_FLOW_CORRECTION8.md) 保留新原人類授權及原第7 formal code BLOCKED。Optional `correction_exception` schema `validation-flow-correction-exception/5` closed fields 恰為 `CORRECTION8_EXCEPTION` 加 `authorization_ref`、`previous_authorization_ref`、`sixth_authorization_ref`、`fifth_authorization_ref`、`fourth_authorization_ref`；固定task/B/branch/PR41/starting d974ec5c/scope/hashes/extra1/limit8全核對。實讀第8原文hash `c156319030dc54f549e6479b369ef718fecdd494aee1817fee515e683032e05a` 及原7/6/5/4字節，nested原7validator重驗連續前七輪；原所有舊adapter与general3不改。Len7 current須起始；len8第8from须起始/current等於to。原contiguous/newcommit／未知closedfields检查不變；錯identity/ref/hash/history/scope或limit9拒絕；8用完correction与postmergecode handoff STOP，保留actualmerge/history/count，不产生9。Gate不創造來源scope、操作權限、審查PASS或同HEAD清code finding。
+
+
+## PR43 原任務第五輪 closed gate
+
+2026-10-08 明確採納限定補充（原件 SHA256 `5519099dd0d20aefe752bf7fec2cfa85998e0c70850617a8b7949a5a79219f10`），僅支援 `actual-gpt-bbox-export`／PR43／`codex/actual-gpt-bbox-export`／原 baseline `8eab9a1de34b59115658a2c7d3565adb347e59ab`。不改一般三輪或 PR41，不增加第六輪。
+
+Optional `correction_exception` 恰含 `schema: pr43-correction-exception/1`、整數 `limit`（4 或 5）、`sources`、`integration_commits`、`corrective_head`。`sources` 的每個 key 必須恰等於程式 `PR43_SOURCES`，value 為可讀原件路徑，逐 bytes 核對固定 SHA256；limit5 另要求 `fifth_authorization`，固定原採納 hash `7bf99a4fa2ef4446fb8c0490af60ab0ca8014fe35ddf1025329d3ca6fdc5624b`。保留 canonical ledger、第四輪兩份人類授權及收據、原 two-round BLOCKED gate、舊二輪 projection proposal/adoption，以及本次完整 proposal/adoption，不修改原件。
+
+Operational correction1 保留原區間；correction2 僅採已核准 a951→d593 累積區間，evidence_ref 指原 projection proposal；correction3 為 d593→7b5，evidence_ref 指本次 closed gate proposal；correction4 保留 7b5→6ce 與原 receipt reference。canonical 實際第二／三輪起點仍為 f4／ea944，原非corrective transitions、classification、parents 和全部 reports 留在 hash-bound ledger，不冒稱 operational 起點是 direct parent。四筆狀態只接受原 base／6ce、空 integration list、corrective_head=null，limit4 保留4/4；limit5 表示明確第五輪授權已讀，不表示候選已固定。
+
+第五筆只能是 6ce→固定 final candidate；`integration_commits` 保存實際 first-parent 順序的 `{sha, object_ref}`（原始 `git cat-file commit` bytes，無換行轉換），gate 重算 Git commit object SHA1 並讀 ordered parents。每筆 ordinary merge 的 first parent 接前一筆；corrective_head 精確指定鏈中唯一第五輪實作 commit，可與 merge 合一，或在先前 integration 後是單 parent commit。第五輪之後只准已授權 ordinary merge，例如保留現有 6ce＋476 merge 作第五輪，再 merge 新 develop；其餘單 parent code commit 拒絕，不偷算成 noncorrective。不接受獨立無 integration 修正、octopus、缺件、錯序、改 bytes。最後一次 integration 的第二 parent 必須等於本次 PR base，末端必須等於 current／PR head；第五筆 evidence_ref 指該末端 object_ref。base 不硬鎖舊 develop 或未存在的未來 SHA，協調者仍須從真實 Git／遠端核對每筆 integration 的授權、scope 與來源，commit bytes 本身不認證其人類授權。PR 已 merge 時保留原 reviewed pair，current develop 可前進，仍走既有 actual merge 門檻。
+
+本 adapter 只處理 count／有限表示與實際父代綁定，不清除 BLOCKED、不產生 PASS、不更動 supersedes／finalizes。第五輪用盡遇 code finding 必須 STOP；non-code 仍按原分類補證據或 STOP。新 HEAD／base 仍須兩輪完整適用獨立審查、正式 coverage／CI、保護規則及實際 merge 短驗證。

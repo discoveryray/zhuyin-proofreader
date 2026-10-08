@@ -16,6 +16,7 @@ import zipfile
 
 SCHEMA = "zhuyin-pr-review-gate/3"
 STAGED_SCHEMA = "zhuyin-pr-review-gate/4"
+NO_WINDOW_POLICY = "validation-flow/no-real-tk/1"
 REPOSITORY = "discoveryray/zhuyin-proofreader"
 WORKFLOW = ".github/workflows/ci.yml"
 PYTHONS = ("3.13",)
@@ -332,10 +333,136 @@ def _correction8_limit(state):
     return 8
 
 
+PR43_CORRECTION_SCHEMA = "pr43-correction-exception/1"
+PR43_TASK = "actual-gpt-bbox-export"
+PR43_BASELINE = "8eab9a1de34b59115658a2c7d3565adb347e59ab"
+PR43_BRANCH = "codex/actual-gpt-bbox-export"
+PR43_PREFIX = (
+    ("569385728c9c6fa4c6172c0f38220b176941112b", "a95172c194642e059025171128289ca5ab4ae2ef"),
+    ("f4b8962214f5a46c12cd18aa35d15b4e78c43a81", "d59358cd45cc65a73b1d4dcb0aa228ffe7233435"),
+    ("ea944524a9001ee452e36fefd32df97d0b850456", "7b5e3a599d87e9ddd77719921fda190a2fe66499"),
+    ("7b5e3a599d87e9ddd77719921fda190a2fe66499", "6ce3cd5c9c3b2b02f4ab690c717ce1c122871c82"),
+)
+# Original bytes, including the canonical noncontiguous intervals and reports.
+PR43_SOURCES = {
+    "canonical_ledger": "f2ce7c1fbdb12a1f05745b0b355be029c6b1f0bf02943f87914cef81cbe05376",
+    "fourth_authorization": "0cda45fc1ab970b320d2cd763d598f782821a97a55537c641f3857fd5cb8bda8",
+    "fourth_followup": "c96af1170207fbb6b1e4c2114722235471869f59aaa2609930f719d7b32a5e7c",
+    "fourth_receipt": "e301da8f04951bf7a9018f0578d4ce01c4f341db3f64bd9839fee34bdd266290",
+    "original_gate": "845360bea58979cbe69d8e01070bb670042f5d7feff25691f9fea24e34df85f2",
+    "projection_proposal": "7a39493ce0031fa3edf487f799b317cb857650c592870bb7c34761e6087d9374",
+    "projection_adoption": "b6c9adccf24ceb50f3a79bf9faa91f750bf552b1304b7c6bdf29e62968fc6d1c",
+    "closed_gate_proposal": "1f878c8e9026e29cdb4c195c2f932a9e96781846024c1366750c27d414fba0be",
+    "closed_gate_adoption": "5519099dd0d20aefe752bf7fec2cfa85998e0c70850617a8b7949a5a79219f10",
+}
+PR43_FIFTH_AUTHORIZATION = "7bf99a4fa2ef4446fb8c0490af60ab0ca8014fe35ddf1025329d3ca6fdc5624b"
+
+
+def _pr43_saved_bytes(ref):
+    _text(ref, "PR43 original evidence reference")
+    try:
+        return Path(ref).read_bytes()
+    except OSError as error:
+        raise EvidenceError("PR43 original evidence unavailable") from error
+
+
+def _pr43_correction_limit(state):
+    """Closed historical projection; never edits the canonical ledger or reviews."""
+    ex = state["correction_exception"]
+    _fields(ex, "schema limit sources integration_commits corrective_head", "PR43 correction exception")
+    _require(type(ex["limit"]) is int and ex["limit"] in (4, 5), "PR43 permits no sixth round")
+    task, pr, corrections = state["task"], state["pr"], state["corrections"]
+    _require(task == {"id": PR43_TASK, "repository": REPOSITORY, "baseline": PR43_BASELINE,
+                      "base_branch": "develop", "head_branch": PR43_BRANCH}, "PR43 identity differs")
+    _require(type(pr) is dict and type(pr.get("number")) is int and pr["number"] == 43
+             and pr.get("head_branch") == PR43_BRANCH and pr.get("base_branch") == "develop",
+             "PR43 original PR/branch required")
+    pins = dict(PR43_SOURCES)
+    if ex["limit"] == 5:
+        pins["fifth_authorization"] = PR43_FIFTH_AUTHORIZATION
+    _fields(ex["sources"], " ".join(pins), "PR43 pinned sources")
+    saved = {}
+    for key, digest in pins.items():
+        raw = _pr43_saved_bytes(ex["sources"][key])
+        _require(hashlib.sha256(raw).hexdigest() == digest, "PR43 source hash differs: " + key)
+        saved[key] = raw
+    try:
+        canonical = json.loads(saved["canonical_ledger"])["corrections"]
+    except (ValueError, KeyError, TypeError) as error:
+        raise EvidenceError("PR43 canonical ledger malformed") from error
+    _require(type(corrections) is list and len(corrections) in (4, ex["limit"]),
+             "PR43 must retain four canonical corrections")
+    # Operational endpoints are cumulative checkpoints, NOT actual commit parents.
+    for index, (start, end) in enumerate(PR43_PREFIX):
+        original = canonical[index]
+        _require((original["from_head"], original["to_head"]) == (start, end),
+                 "PR43 canonical prefix differs")
+        projected_start = PR43_PREFIX[index - 1][1] if index else start
+        expected_ref = (ex["sources"]["projection_proposal"] if index == 1 else
+                        ex["sources"]["closed_gate_proposal"] if index == 2 else original["evidence_ref"])
+        _require(corrections[index] == {"number": index + 1, "from_head": projected_start,
+                                       "to_head": end, "evidence_ref": expected_ref},
+                 "PR43 operational prefix differs")
+    records = ex["integration_commits"]
+    _require(type(records) is list, "PR43 integration commits must be a list")
+    if len(corrections) == 4:
+        _require(ex["corrective_head"] is None and not records
+                 and state["current"]["head"] == PR43_PREFIX[-1][1]
+                 and pr.get("head_sha") == PR43_PREFIX[-1][1]
+                 and pr.get("base_sha") == PR43_BASELINE
+                 and state["current"]["base"] == PR43_BASELINE,
+                 "PR43 retained fourth state must keep exact original scope")
+        return ex["limit"]
+    fifth = corrections[4]
+    _require(type(fifth) is dict and fifth.get("number") == 5
+             and fifth.get("from_head") == PR43_PREFIX[-1][1]
+             and fifth.get("to_head") == state["current"]["head"] == pr.get("head_sha"),
+             "PR43 fifth interval must bind the fixed candidate")
+    _require(bool(records), "PR43 fifth candidate requires actual ordinary integration")
+    _sha(ex["corrective_head"], "PR43 actual fifth corrective HEAD")
+    previous, integration_base = PR43_PREFIX[-1][1], None
+    correction_seen = False
+    for record in records:
+        _fields(record, "sha object_ref", "PR43 integration commit")
+        _sha(record["sha"], "PR43 integration SHA")
+        raw = _pr43_saved_bytes(record["object_ref"])
+        digest = hashlib.sha1(b"commit " + str(len(raw)).encode("ascii") + b"\0" + raw).hexdigest()
+        _require(digest == record["sha"], "PR43 commit object hash differs")
+        headers = raw.split(b"\n\n", 1)[0].split(b"\n")
+        try:
+            parents = [line[7:].decode("ascii") for line in headers if line.startswith(b"parent ")]
+        except UnicodeError as error:
+            raise EvidenceError("PR43 malformed commit parents") from error
+        for parent in parents:
+            _sha(parent, "PR43 actual parent")
+        _require(len(parents) in (1, 2) and parents[0] == previous
+                 and len(set(parents)) == len(parents), "PR43 ordinary ordered parents differ")
+        if len(parents) == 1:
+            _require(record["sha"] == ex["corrective_head"] and not correction_seen
+                     and integration_base is not None,
+                     "PR43 only the fifth corrective commit may be single-parent after integration")
+        else:
+            integration_base = parents[1]
+        if record["sha"] == ex["corrective_head"]:
+            _require(not correction_seen, "PR43 duplicate corrective commit")
+            correction_seen = True
+        previous = record["sha"]
+    _require(correction_seen, "PR43 actual fifth corrective commit is missing")
+    _require(previous == fifth["to_head"] and previous != PR43_PREFIX[-1][1]
+             and integration_base == pr.get("base_sha"), "PR43 candidate/integration base differs")
+    _require(pr.get("state") == "merged" or state["current"]["base"] == integration_base,
+             "PR43 current base differs from actual integration")
+    _require(fifth.get("evidence_ref") == records[-1]["object_ref"],
+             "PR43 fifth evidence must reference actual final commit bytes")
+    return 5
+
+
 def _correction_limit(state):
     if "correction_exception" not in state:
         return 3
     exception = state["correction_exception"]
+    if type(exception) is dict and exception.get("schema") == PR43_CORRECTION_SCHEMA:
+        return _pr43_correction_limit(state)
     if type(exception) is dict and exception.get("schema") == CORRECTION8_EXCEPTION["schema"]:
         return _correction8_limit(state)
     if type(exception) is dict and exception.get("schema") == CORRECTION7_EXCEPTION["schema"]:
@@ -389,7 +516,10 @@ def validate_state(state):
     staged = type(state) is dict and state.get("schema") == STAGED_SCHEMA
     fields = "schema task authorization current implementers corrections reviews unavailable_review_rounds pr pr_ci merge push_ci handoffs"
     _fields(state, fields + (" execution coverage short_validation" if staged else "")
-            + (" correction_exception" if type(state) is dict and "correction_exception" in state else ""), "state")
+            + (" correction_exception" if type(state) is dict and "correction_exception" in state else "")
+            + (" validation_policy" if type(state) is dict and "validation_policy" in state else ""), "state")
+    if "validation_policy" in state:
+        _require(state["validation_policy"] == NO_WINDOW_POLICY, "unknown validation policy")
     _require(state["schema"] in (SCHEMA, STAGED_SCHEMA), "unsupported schema")
     if staged:
         _fields(state["execution"], "mode validation_authorization_ref", "execution")
@@ -642,7 +772,7 @@ def _review_problem(state, review, number):
     return None
 
 
-def _ci_problem(ci, event, branch, head, parents):
+def _ci_problem(ci, event, branch, head, parents, *, no_window=False):
     if ci["workflow"] != WORKFLOW or ci["event"] != event or ci["branch"] != branch:
         return "REFRESH_EVIDENCE", "wrong CI workflow, event, or branch"
     if ci["head_sha"] != head or ci["parents"] != parents:
@@ -670,7 +800,9 @@ def _ci_problem(ci, event, branch, head, parents):
         if (job["run_id"], job["attempt"], job["tested_sha"]) != (
                 ci["run_id"], ci["attempt"], ci["tested_sha"]):
             return "REFRESH_EVIDENCE", f"job is from another run attempt or checkout: {name}"
-        required = (*COMMON_STEPS, f"Check committed whitespace ({'pull request' if event == 'pull_request' else 'push'})")
+        required = (*(step for step in COMMON_STEPS if not no_window or step != "Verify GUI test execution"),
+                    *(('Verify active test execution',) if no_window else ()),
+                    f"Check committed whitespace ({'pull request' if event == 'pull_request' else 'push'})")
         if any(step not in job["steps"] for step in required):
             return "REFRESH_EVIDENCE", f"required step evidence is missing: {name}"
         if any(job["steps"].get(step) != "success" for step in required):
@@ -741,7 +873,7 @@ def next_action(state):
             ci = state["pr_ci"]
             if ci is None or ci["status"] in ("queued", "in_progress"):
                 return _decision(state, "WAIT_PR_CI", "matching completed PR CI evidence is required")
-            problem = _ci_problem(ci, "pull_request", state["task"]["head_branch"], head, [base, head])
+            problem = _ci_problem(ci, "pull_request", state["task"]["head_branch"], head, [base, head], no_window=state.get("validation_policy") == NO_WINDOW_POLICY)
             if problem:
                 return _decision(state, "STOP", problem[1]) if merged else _decision(state, *problem)
         if review is None:
@@ -758,7 +890,7 @@ def next_action(state):
         ci = state["push_ci"]
         if ci is None or ci["status"] in ("queued", "in_progress"):
             return _decision(state, "WAIT_PUSH_CI", "actual merge SHA requires its own develop push CI")
-        problem = _ci_problem(ci, "push", "develop", merge["sha"], [base, head])
+        problem = _ci_problem(ci, "push", "develop", merge["sha"], [base, head], no_window=state.get("validation_policy") == NO_WINDOW_POLICY)
         if problem or ci["tree"] != merge["tree"]:
             return _decision(state, "STOP", problem[1] if problem else "push CI tree does not match the actual merge")
         return _decision(state, "COMPLETE", "both reviews, PR CI, actual merge and post-merge CI verified",
@@ -770,7 +902,7 @@ def next_action(state):
                      expected_base_sha=base)
 
 
-def _staged_ci_problem(ci, event, branch, head, parents):
+def _staged_ci_problem(ci, event, branch, head, parents, *, no_window=False):
     """v4 checks the required summary plus file-backed group/short evidence."""
     if ci["workflow"] != WORKFLOW or ci["event"] != event or ci["branch"] != branch:
         return "wrong CI workflow, event, or branch"
@@ -798,8 +930,8 @@ def _staged_ci_problem(ci, event, branch, head, parents):
             return "job metadata belongs to a different run/attempt/checkout"
     if not summary["runner"].startswith("windows-") or summary["python_version"] != "3.13.0":
         return "summary lacks the supported Windows Python environment"
-    required_steps = ["Configure same-installation Tcl/Tk"]
-    if event == "pull_request":
+    required_steps = [] if no_window else ["Configure same-installation Tcl/Tk"]
+    if event == "pull_request" and not no_window:
         required_steps.append("Early hosted Tk preflight")
     for required_step in required_steps:
         if jobs[required_name]["steps"].get(required_step) != "success":
@@ -856,7 +988,8 @@ def _next_action_staged(state):
     ci = state["pr_ci"]
     if ci is None or ci["status"] in ("queued", "in_progress"):
         return _decision(state, "WAIT_PR_CI", "formal functional coverage is pending")
-    problem = _staged_ci_problem(ci, "pull_request", state["task"]["head_branch"], head, [base, head])
+    no_window = state.get("validation_policy") == NO_WINDOW_POLICY
+    problem = _staged_ci_problem(ci, "pull_request", state["task"]["head_branch"], head, [base, head], no_window=no_window)
     if problem:
         return _decision(state, "STOP" if merged else "REFRESH_EVIDENCE", problem)
     try:
@@ -867,6 +1000,8 @@ def _next_action_staged(state):
         if state["coverage"] is None:
             raise ValueError("missing PR coverage bundle")
         coverage = verify_coverage(Path(state["coverage"]))
+        if no_window != (coverage.get("policy") == NO_WINDOW_POLICY):
+            raise ValueError("coverage policy differs from adopted task policy")
         if coverage["candidate"] != {"head": ci["tested_sha"], "tree": ci["tree"], "parents": [base, head]}:
             raise ValueError("coverage candidate differs from current PR integration")
         coverage_ci = coverage["ci"]
@@ -891,7 +1026,7 @@ def _next_action_staged(state):
         push = state["push_ci"]
         if push is None or push["status"] in ("queued", "in_progress"):
             return _decision(state, "WAIT_PUSH_CI", "actual merge requires its own short push validation")
-        problem = _staged_ci_problem(push, "push", "develop", merge["sha"], [base, head])
+        problem = _staged_ci_problem(push, "push", "develop", merge["sha"], [base, head], no_window=no_window)
         if problem or push["tree"] != merge["tree"]:
             return _post_merge_blocked(state, problem or "push tree mismatch", code=False)
         try:

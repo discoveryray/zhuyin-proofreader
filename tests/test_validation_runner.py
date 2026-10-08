@@ -98,7 +98,7 @@ class Pr43GuiSupplementTests(unittest.TestCase):
             runner.write_json(self.old / name, value)
         (self.old / "preflight.log").write_text("fixture preflight")
         (self.old / "preflight.xml").write_text('<testsuite><testcase name="probe"/></testsuite>')
-        value = dict(schema=runner.SCHEMA, execution_id=self.spec["execution_id"], group="gui",
+        value = dict(schema=runner.LEGACY_SCHEMA, execution_id=self.spec["execution_id"], group="gui",
                      candidate={"head": "4" * 40, "tree": "5" * 40, "parents": [self.spec["baseline"], self.spec["starting_head"]]},
                      command=[sys.executable, str(ROOT / "scripts/validation_runner.py"), "_pytest", str(self.old), "gui"],
                      environment=self.environment, inventory_sha256=invhash,
@@ -154,6 +154,15 @@ class Pr43GuiSupplementTests(unittest.TestCase):
         self.preflight_ok = True
         self.launches = []
         for item in self.patches: item.start(); self.addCleanup(item.stop)
+        # Current execution has exactly one real non-window test, independently
+        # from the synthetic legacy archive: no stub can authorize new GUI runs.
+        core_module = self.folder / "test_pr43_current.py"
+        core_module.write_text("def test_core(): assert 2 + 3 == 5\n")
+        identity = "test_pr43_current.test_core"
+        self.core_inventory = {"schema": "zhuyin-test-groups/2", "policy": runner.POLICY,
+            "window_validation": audit.WINDOW_NOTICE, "pytest_ids": [identity], "core_ids": [identity],
+            "cancelled_window_ids": [], "records": [{"identity": identity, "group": "core",
+            "nodeid": core_module.relative_to(ROOT).as_posix() + "::test_core"}]}
         self.restore()
 
     def api(self, endpoint):
@@ -179,114 +188,177 @@ class Pr43GuiSupplementTests(unittest.TestCase):
             runner.restore_history(self.root)
         indexes = list(self.root.glob("history-index-*.json"))
         self.context = runner.read_json(indexes[0])
+        # Materialize a synthetic PAST declaration, without executing its GUI.
+        side = self.root / "pr43-gui-once"; side.mkdir()
+        (side / "pr-artifact.zip").write_bytes(self.zipbytes)
+        declaration = json.loads(self.block.split("<!-- pr43-gui-once\n", 1)[1].split("\n-->", 1)[0])
+        runner.write_json(side / "declaration.json", declaration)
+        self.legacy_context = {**self.context, "pr43_gui_once": {
+            "declaration": runner.artifact_entry(side / "declaration.json", self.root)}}
         item = patch.object(runner, "validate_history_context", return_value=self.context)
         item.start(); self.addCleanup(item.stop)
 
     def collect(self, folder, tests=None):
-        runner.write_json(folder / "inventory.json", self.inventory)
+        runner.write_json(folder / "inventory.json", self.core_inventory)
         (folder / "collection.log").write_text("finite source fixture inventory")
-        return self.inventory
+        return self.core_inventory
 
     def process(self, command, folder, name, timeout, env=None):
         self.launches.append(name)
-        if name != "preflight.log": return self.real_process(command, folder, name, timeout, env)
-        (folder / name).write_text("no Tk: independent preflight result fixture")
-        runner.write_json(folder / "preflight.json", {"stage": "complete" if self.preflight_ok else "unknown"})
-        root = ET.Element("testsuite"); case = ET.SubElement(root, "testcase", name="probe")
-        if not self.preflight_ok: ET.SubElement(case, "failure", message="AssertionError: fixture")
-        ET.ElementTree(root).write(folder / "preflight.xml")
-        return dict(exit_code=0 if self.preflight_ok else 1, outcome="success" if self.preflight_ok else "failed",
-                    started_at=runner.utc_now(), finished_at=runner.utc_now(), runner_start_error=None)
+        self.assertNotEqual(name, "preflight.log", "current runner must never launch preflight")
+        return self.real_process(command, folder, name, timeout, env)
+
+    def historical_claim(self, execution="7" * 32):
+        """Synthetic legacy evidence only; never a real task ledger/receipt."""
+        claim = self.root / "pr43-gui-once/claim.json"
+        runner.write_json(claim, dict(execution_id=execution, candidate=self.candidate,
+            environment=self.environment, declaration_sha256=self.legacy_context["pr43_gui_once"]["declaration"]["sha256"],
+            declared_at="2026-10-06T00:01:00+00:00"))
+        context = copy.deepcopy(self.legacy_context)
+        context["pr43_gui_once"]["claim"] = runner.artifact_entry(claim, self.root)
+        folder = self.root / execution; folder.mkdir()
+        runner.write_json(folder / "history-context.json", context)
+        return folder, context
+
+    def historical_execution(self, group, folder=None, context=None, blocked=False):
+        """Construct bounded past metadata; no retired runner/GUI is executed."""
+        import shutil
+        if folder is None:
+            folder = self.root / ("8" * 32); folder.mkdir()
+        context = context or self.legacy_context
+        old = runner.read_json(self.old / "manifest.json")
+        inventory = runner.read_json(self.old / "inventory.json")
+        for name in ("inventory.json", "preflight.json", "preflight.log", "preflight.xml"):
+            shutil.copyfile(self.old / name, folder / name)
+        if not (folder / "history-context.json").exists(): runner.write_json(folder / "history-context.json", context)
+        selected = [row for row in inventory["records"] if row["group"] == group]
+        xml = ET.Element("testsuites"); suite = ET.SubElement(xml, "testsuite")
+        props = ET.SubElement(suite, "properties")
+        for key, value in (("validation_execution_id", folder.name), ("validation_inventory_sha256", old["inventory_sha256"])):
+            ET.SubElement(props, "property", name=key, value=value)
+        events = []
+        for row in selected:
+            cls, name = row["nodeid"].split("::")[1:]
+            ET.SubElement(suite, "testcase", classname="tests.test_manual_actual_gui_batch_v570." + cls, name=name)
+            events.extend(dict(nodeid=row["nodeid"], when=phase, outcome="passed", subtest=False, traceback=None)
+                          for phase in ("setup", "call", "teardown"))
+        ET.ElementTree(xml).write(folder / "junit.xml", encoding="utf-8")
+        (folder / "events.jsonl").write_text("\n".join(json.dumps(x) for x in events), encoding="utf-8")
+        (folder / "raw.log").write_text("SYNTHETIC HISTORICAL CONTRACT FIXTURE; not an execution receipt")
+        data = {**old, "execution_id": folder.name, "group": group, "candidate": self.candidate,
+            "command": [sys.executable, str(ROOT / "scripts/validation_runner.py"), "_pytest", str(folder), group],
+            "started_at": "2026-10-06T00:01:00+00:00", "finished_at": "2026-10-06T00:01:01+00:00",
+            "retry_key": runner.canonical_digest({"task": self.spec["task_id"], "tree": self.candidate["tree"]}),
+            "retry_of": self.spec["execution_id"] if group == "gui" else None,
+            "outcome": "blocked" if blocked else "success", "exit_code": 1 if blocked else 0,
+            "verification": {"top_level": len(selected), "subtests": 0, "error": None}, "artifacts": {}}
+        if blocked:
+            data["preflight"] = {"outcome": "failed", "exit_code": 1}
+            (folder / "preflight.log").write_text("AssertionError: synthetic historical preflight failure")
+        runner.write_json(folder / "started.json", data)
+        data["artifacts"] = {key: runner.artifact_entry(folder / item["path"], folder) for key, item in old["artifacts"].items()}
+        runner.write_json(folder / "manifest.json", data)
+        runner.read_verified_manifest(folder / "manifest.json")
+        return folder / "manifest.json"
+
+    def assert_current_gui_refused(self):
+        before = list(self.launches)
+        with patch.object(runner, "collect_inventory", side_effect=AssertionError("GUI collection forbidden")):
+            for call in (lambda: runner.run_group("gui", self.root, mode="validation"),
+                         lambda: runner._run_group("gui", self.root, mode="validation"),
+                         lambda: runner.pytest_child(self.root, "gui")):
+                with self.assertRaisesRegex(ValueError, "視窗|window|Tk"):
+                    call()
+        self.assertEqual(self.launches, before)
 
     def test_real_cli_child_history_aggregate_and_coverage_keep_legacy_false(self):
-        old = runner.history(self.root)[0][0]
-        original_bytes = old.read_bytes()
+        old = runner.history(self.root)[0][0]; original_bytes = old.read_bytes()
         self.assertFalse(runner.read_verified_manifest(old)["retry_eligible"])
         core = runner.run_group("core", self.root, mode="validation")
-        gui = runner.run_group("gui", self.root, mode="validation")
-        data = runner.read_verified_manifest(gui)
-        self.assertEqual(data["retry_of"], self.spec["execution_id"])
-        self.assertEqual(data["candidate"], self.candidate)
-        self.assertNotEqual(data["retry_key"], runner.read_verified_manifest(old)["retry_key"])
-        self.assertEqual(self.launches.count("raw.log"), 2)
-        self.assertEqual(old.read_bytes(), original_bytes)
+        self.assertEqual(runner.read_verified_manifest(core)["schema"], runner.SCHEMA)
+        original_core = core.read_bytes()
+        for field, value in (("group", "gui"), ("preflight", {"outcome": "success", "exit_code": 0}),
+                             ("retry_of", self.spec["execution_id"]), ("retry_eligible", True)):
+            with self.subTest(current_rejects=field):
+                changed = json.loads(original_core); changed[field] = value
+                core.write_text(json.dumps(changed), encoding="utf-8")
+                try:
+                    with self.assertRaisesRegex(ValueError, "no-window"):
+                        runner.read_verified_manifest(core)
+                finally: core.write_bytes(original_core)
         self.assertEqual(runner.main(["aggregate", "--evidence-root", str(self.root), "--output", str(self.root / "coverage.json")]), 0)
         self.assertEqual(self.evidence_module.verify_coverage(self.root / "coverage.json")["status"], "success")
-        self.assertEqual(runner.run_group("gui", self.root, mode="validation"), gui)
-        self.assertEqual(self.launches.count("raw.log"), 2)
-        claim = self.root / "pr43-gui-once/claim.json"
-        claim.unlink()
+        self.assertEqual(runner.run_group("core", self.root, mode="validation"), core)
+        self.assert_current_gui_refused()
+        self.assertEqual(self.launches.count("raw.log"), 1)
+        self.assertEqual(old.read_bytes(), original_bytes)
         with self.assertRaisesRegex(ValueError, "claim"):
-            self.evidence_module.verify_coverage(self.root / "coverage.json")
+            runner.validate_pr43_gui_once(self.root, self.legacy_context, self.candidate, require_claim=True)
 
     def test_claim_before_collection_failure_consumes_final_budget(self):
-        def broken(folder, tests=None):
-            self.assertTrue((self.root / "pr43-gui-once/claim.json").is_file())
-            raise ValueError("fixture collection failure")
-        with patch.object(runner, "collect_inventory", side_effect=broken), self.assertRaisesRegex(ValueError, "collection"):
-            runner.run_group("gui", self.root, mode="validation")
-        with self.assertRaisesRegex(ValueError, "unfinished|budget"):
-            runner.run_group("gui", self.root, mode="validation")
+        folder, context = self.historical_claim()
+        supplement = runner.validate_pr43_gui_once(self.root, context, self.candidate, require_claim=True)
+        self.assertEqual(len(supplement["claims"]), 1)
+        key = runner.canonical_digest({"task": self.spec["task_id"], "tree": self.candidate["tree"]})
+        with self.assertRaisesRegex(ValueError, "unfinished.*budget"):
+            runner.retry_history(runner.history(self.root), key, supplement)
+        self.assert_current_gui_refused()
+        self.assertTrue((self.root / "pr43-gui-once/claim.json").is_file())
         self.assertEqual(self.launches, [])
 
     def test_uploaded_restored_side_refs_recompute_coverage_and_reject_corrupt_claim(self):
         import shutil
-        runner.run_group("core", self.root, mode="validation")
-        runner.run_group("gui", self.root, mode="validation")
-        restored = self.folder / "restored"
-        bundle = restored / "downloaded"
-        # Exact existing workflow upload contract; no additional ZIP wildcard.
+        folder, context = self.historical_claim()
+        self.historical_execution("gui", folder, context)
+        self.historical_execution("core")
+        restored = self.folder / "restored"; bundle = restored / "downloaded"
         for path in self.root.rglob("*"):
-            if path.is_file() and (path.suffix in {".json", ".jsonl", ".xml", ".log"}
-                                   or path.name == "pr-artifact.zip"):
-                target = bundle / path.relative_to(self.root)
-                target.parent.mkdir(parents=True, exist_ok=True)
+            if path.is_file() and (path.suffix in {".json", ".jsonl", ".xml", ".log"} or path.name == "pr-artifact.zip"):
+                target = bundle / path.relative_to(self.root); target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(path, target)
         self.assertTrue((bundle / "pr43-gui-once/pr-artifact.zip").is_file())
         self.assertFalse((restored / "pr43-gui-once").exists())
-        coverage = runner.aggregate(restored)
+        coverage = runner.aggregate(restored, legacy=True)
         runner.write_json(restored / "coverage.json", coverage)
         self.assertEqual(self.evidence_module.verify_coverage(restored / "coverage.json")["status"], "success")
-        claim = bundle / "pr43-gui-once/claim.json"
-        claim.write_bytes(claim.read_bytes() + b"corruption")
-        with self.assertRaises(ValueError):
-            self.evidence_module.verify_coverage(restored / "coverage.json")
-        self.assertEqual(self.launches.count("raw.log"), 2)
+        claim = bundle / "pr43-gui-once/claim.json"; claim.write_bytes(claim.read_bytes() + b"corruption")
+        with self.assertRaises(ValueError): self.evidence_module.verify_coverage(restored / "coverage.json")
+        self.assertEqual(self.launches, [])
 
     def test_missing_marker_stops_new_tree_gui_before_first_launch(self):
-        values = runner.history(self.root)
-        key = runner.canonical_digest({"task": self.spec["task_id"], "tree": self.candidate["tree"]})
-        self.assertEqual([value for _, value in values if value["retry_key"] == key], [])
-        missing = copy.deepcopy(self.context)
-        missing.pop("pr43_gui_once")
-        with patch.object(runner, "validate_history_context", return_value=missing), self.assertRaisesRegex(ValueError, "missing"):
-            runner.run_group("gui", self.root, mode="validation")
+        with self.assertRaisesRegex(ValueError, "missing"):
+            runner.validate_pr43_gui_once(self.root, self.context, self.candidate)
+        self.assert_current_gui_refused()
         self.assertEqual(self.launches, [])
         self.assertFalse((self.root / "pr43-gui-once/claim.json").exists())
 
     def test_normal_legacy_fresh_groups_and_success_reuse_stay_separate(self):
-        root = self.folder / "legacy"
-        with patch.object(runner, "validate_history_context", return_value={"task_id": "independent-legacy-fixture"}):
+        root = self.folder / "ordinary"
+        with patch.object(runner, "validate_history_context", return_value={"task_id": "independent-fixture"}):
             core = runner.run_group("core", root, mode="validation")
             self.assertEqual(runner.run_group("core", root, mode="validation"), core)
-            gui = runner.run_group("gui", root, mode="validation")
-        self.assertIsNone(runner.read_verified_manifest(gui)["retry_of"])
+        self.assertIsNone(runner.read_verified_manifest(core)["retry_of"])
         self.assertEqual(runner.aggregate(root)["status"], "success")
         self.assertFalse((root / "pr43-gui-once/claim.json").exists())
-        self.assertEqual(self.launches.count("raw.log"), 2)
+        self.assertEqual(self.launches.count("raw.log"), 1)
+        self.assert_current_gui_refused()
 
     def test_preflight_failure_has_real_claim_and_no_third_attempt(self):
-        self.preflight_ok = False
-        path = runner.run_group("gui", self.root, mode="validation")
+        folder, context = self.historical_claim()
+        path = self.historical_execution("gui", folder, context, blocked=True)
         self.assertEqual(runner.read_verified_manifest(path)["outcome"], "blocked")
-        with self.assertRaisesRegex(ValueError, "budget|authorized"):
-            runner.run_group("gui", self.root, mode="validation")
-        self.assertEqual(self.launches, ["preflight.log"])
+        supplement = runner.validate_pr43_gui_once(self.root, context, self.candidate, require_claim=True)
+        values = runner.history(self.root); key = runner.read_json(path)["retry_key"]
+        self.assertEqual(len(runner.retry_history(values, key, supplement)), 2)
+        with self.assertRaisesRegex(ValueError, "budget"):
+            runner.retry_history([*values, (path, {**runner.read_json(path), "execution_id": "9" * 32})], key, supplement)
+        self.assert_current_gui_refused()
+        self.assertEqual(self.launches, [])
 
     def test_binding_head_environment_gui_identity_and_corruption_refuse(self):
         for kind in ("missing", "sha", "candidate", "environment", "identities", "archive", "initializer", "authorization"):
             with self.subTest(kind=kind):
-                context = copy.deepcopy(self.context); candidate = copy.deepcopy(self.candidate)
+                context = copy.deepcopy(self.legacy_context); candidate = copy.deepcopy(self.candidate)
                 env = copy.deepcopy(self.environment); inventory = copy.deepcopy(self.inventory)
                 patches = []
                 if kind == "missing": context.pop("pr43_gui_once")
@@ -307,8 +379,24 @@ class Pr43GuiSupplementTests(unittest.TestCase):
         original = archive.read_bytes()
         archive.write_bytes(original + b"corruption")
         with self.assertRaisesRegex(ValueError, "binary artifact"):
-            runner.validate_pr43_gui_once(self.root, self.context, self.candidate)
+            runner.validate_pr43_gui_once(self.root, self.legacy_context, self.candidate)
         archive.write_bytes(original)
+
+    def test_archived_initializer_requires_full_blob_and_ast_without_execution(self):
+        # Real pinned git object; AST only, no old module import/initializer call.
+        runner._pr43_setup_source()
+        command = ["git", "show", "d59358cd45cc65a73b1d4dcb0aa228ffe7233435:tests/test_manual_actual_gui_batch_v570.py"]
+        raw = subprocess.check_output(command, cwd=ROOT)
+        import hashlib
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), "1373c00997ca98db7562a39b1b0370b818bc9302c1e2c3a9ef7bc915ade416da")
+        with patch.object(runner.subprocess, "check_output", return_value=raw + b"\n") as read:
+            with self.assertRaisesRegex(ValueError, "full source changed"): runner._pr43_setup_source()
+            read.assert_called_once_with(command, cwd=ROOT)
+        with patch.dict(runner.PR43_GUI_ONCE, setup_sha256="0" * 64):
+            with self.assertRaisesRegex(ValueError, "initializer source changed"): runner._pr43_setup_source()
+        with patch.object(runner.subprocess, "check_output", side_effect=subprocess.CalledProcessError(128, command)):
+            with self.assertRaises(subprocess.CalledProcessError): runner._pr43_setup_source()
+        self.assertEqual(self.launches, [])
 
     def test_original_general_skip_unknown_wrapper_mixed_and_noninitialization_refuse(self):
         old = runner.history(self.root)[0]
@@ -674,8 +762,8 @@ class RunnerCliTests(unittest.TestCase):
     def execute(self, body):
         self.test_path.write_text(body, encoding="utf-8")
         relative = self.test_path.relative_to(ROOT).as_posix()
-        inventory = {"schema": "zhuyin-test-groups/1", "pytest_ids": ["test_isolated.Case.test_probe"],
-                     "core_ids": ["test_isolated.Case.test_probe"], "gui_ids": [],
+        inventory = {"schema": "zhuyin-test-groups/2", "policy": runner.POLICY, "window_validation": audit.WINDOW_NOTICE, "pytest_ids": ["test_isolated.Case.test_probe"],
+                     "core_ids": ["test_isolated.Case.test_probe"], "cancelled_window_ids": [],
                      "records": [{"identity": "test_isolated.Case.test_probe", "nodeid": relative + "::Case::test_probe", "group": "core"}]}
         runner.write_json(self.execution / "inventory.json", inventory)
         result = subprocess.run([sys.executable, str(ROOT / "scripts/validation_runner.py"), "_pytest",
@@ -781,16 +869,19 @@ class RunnerOrchestrationTests(unittest.TestCase):
         self.folder = Path(self.temp.name)
         self.evidence = self.folder / "evidence"
         test_path = self.folder / "test_pair.py"
-        test_path.write_text("import unittest\nclass Case(unittest.TestCase):\n    def test_core(self): self.assertTrue(True)\n    def test_gui(self): self.assertTrue(True)\n")
+        test_path.write_text("def test_core(): assert 2 + 3 == 5\n")
         relative = test_path.relative_to(ROOT).as_posix()
-        self.inventory = {"schema": "zhuyin-test-groups/1", "pytest_ids": ["test_pair.Case.test_core", "test_pair.Case.test_gui"],
-                          "core_ids": ["test_pair.Case.test_core"], "gui_ids": ["test_pair.Case.test_gui"],
-                          "records": [{"identity": "test_pair.Case.test_" + group, "nodeid": relative + "::Case::test_" + group, "group": group} for group in ("core", "gui")]}
+        self.inventory = {"schema": "zhuyin-test-groups/2", "policy": runner.POLICY,
+                          "window_validation": audit.WINDOW_NOTICE,
+                          "pytest_ids": ["test_pair.test_core"], "core_ids": ["test_pair.test_core"],
+                          "cancelled_window_ids": ["test_pair.test_native"],
+                          "records": [{"identity": "test_pair.test_core", "nodeid": relative + "::test_core", "group": "core"}]}
         self.candidate = {"head": "a" * 40, "tree": "b" * 40, "parents": ["c" * 40, "d" * 40]}
         self.real_run = ORIGINAL_RUN_PROCESS
-        self.preflight_success = False
         self.calls = []
+        # These are explicit isolated fixture boundaries, never formal Windows CI.
         self.patches = [patch.dict("os.environ", {"GITHUB_ACTIONS": "true"}),
+                        patch.object(runner, "validate_environment"),
                         patch.object(runner, "validate_history_context", return_value={"task_id": "fixture-task"}),
                         patch.object(runner, "snapshot", return_value=self.candidate),
                         patch.object(runner, "git", return_value=""),
@@ -807,90 +898,51 @@ class RunnerOrchestrationTests(unittest.TestCase):
 
     def process(self, command, folder, name, timeout, env=None):
         self.calls.append(name)
-        if name != "preflight.log":
-            return self.real_run(command, folder, name, timeout, env)
-        (folder / name).write_text("isolated preflight injection, no Tk created\n")
-        runner.write_json(folder / "preflight.json", {"stage": "complete" if self.preflight_success else "tk_initialization"})
-        root = ET.Element("testsuite")
-        case = ET.SubElement(root, "testcase", name="test_gui_environment")
-        if not self.preflight_success:
-            ET.SubElement(case, "failure", message="_tkinter.TclError: couldn't read file \"C:/Tk/combobox.tcl\": permission denied")
-        ET.ElementTree(root).write(folder / "preflight.xml")
-        return {"exit_code": 0 if self.preflight_success else 1,
-                "outcome": "success" if self.preflight_success else "failed",
-                "started_at": runner.utc_now(), "finished_at": runner.utc_now(), "runner_start_error": None}
+        self.assertNotIn("gui_preflight.py", " ".join(command))
+        return self.real_run(command, folder, name, timeout, env)
 
-    def test_preflight_failure_retains_core_and_retry_uses_full_gui_only(self):
+    def test_core_only_run_and_aggregate_need_no_gui_or_preflight(self):
         core = runner.run_group("core", self.evidence, mode="validation")
-        core_digest = runner.digest(core)
-        self.assertEqual(runner.read_verified_manifest(core)["outcome"], "success")
-        gui1 = runner.run_group("gui", self.evidence, mode="validation")
-        self.assertEqual(runner.read_verified_manifest(gui1)["outcome"], "blocked")
-        self.assertFalse((gui1.parent / "junit.xml").exists())
-        self.assertEqual(self.calls.count("raw.log"), 1)
-        with self.assertRaises(ValueError):
-            runner.aggregate(self.evidence)
-        self.assertEqual(runner.run_group("core", self.evidence, mode="validation"), core)
-        self.assertEqual(self.calls.count("raw.log"), 1)
-        self.preflight_success = True
-        gui2 = runner.run_group("gui", self.evidence, mode="validation")
-        self.assertEqual(runner.read_verified_manifest(gui2)["retry_of"], gui1.parent.name)
-        self.assertEqual(runner.digest(core), core_digest)
+        original = core.read_bytes()
         combined = runner.aggregate(self.evidence)
-        self.assertEqual(combined["status"], "success")
-        self.assertEqual(len(combined["history_manifests"]), 3)
-        output = self.evidence / "coverage.json"
-        self.assertEqual(runner.main(["aggregate", "--evidence-root", str(self.evidence), "--output", str(output)]), 0)
-        self.assertEqual(runner.main(["aggregate", "--evidence-root", str(self.evidence), "--output", str(output)]), 2)
+        self.assertEqual(combined["schema"], "zhuyin-validation-coverage/2")
+        self.assertEqual(combined["window_validation"], audit.WINDOW_NOTICE)
+        self.assertNotIn("gui_manifest", combined)
+        self.assertEqual(runner.run_group("core", self.evidence, mode="validation"), core)
+        self.assertEqual(self.calls, ["raw.log"])
+        self.assertEqual(core.read_bytes(), original)
+        self.assertFalse(list(self.evidence.rglob("preflight*")))
 
-    def test_again_failed_gui_does_not_allow_third_attempt(self):
-        runner.run_group("core", self.evidence, mode="validation")
-        runner.run_group("gui", self.evidence, mode="validation")
-        runner.run_group("gui", self.evidence, mode="validation")
-        with self.assertRaisesRegex(ValueError, "retry"):
+    def test_gui_launcher_and_child_refuse_before_any_process(self):
+        with self.assertRaisesRegex(ValueError, "取消"):
             runner.run_group("gui", self.evidence, mode="validation")
-        self.assertEqual(self.calls.count("raw.log"), 1)
-        self.assertEqual(self.calls.count("preflight.log"), 2)
+        with self.assertRaisesRegex(ValueError, "取消"):
+            runner.pytest_child(self.folder, "gui")
+        self.assertEqual(self.calls, [])
+        self.assertFalse(self.evidence.exists())
 
-    def test_new_candidate_preserves_old_core_and_blocked_gui_without_adoption(self):
+    def test_new_candidate_preserves_old_evidence_without_relabelling(self):
         old_core = runner.run_group("core", self.evidence, mode="validation")
-        old_gui = runner.run_group("gui", self.evidence, mode="validation")
-        original = {path: path.read_bytes() for path in (old_core, old_gui)}
+        original = old_core.read_bytes()
         self.candidate.update(head="e" * 40, tree="f" * 40)
-        self.preflight_success = True
         new_core = runner.run_group("core", self.evidence, mode="validation")
-        new_gui = runner.run_group("gui", self.evidence, mode="validation")
         bundle = runner.aggregate(self.evidence, head="e" * 40)
         self.assertEqual(bundle["core_manifest"], new_core.relative_to(self.evidence).as_posix())
-        self.assertEqual(bundle["gui_manifest"], new_gui.relative_to(self.evidence).as_posix())
-        self.assertEqual(len(bundle["history_manifests"]), 4)
-        self.assertEqual(self.calls.count("raw.log"), 3)  # old core, new core, new GUI exactly once
-        for path, payload in original.items(): self.assertEqual(path.read_bytes(), payload)
-        self.assertEqual(runner.read_verified_manifest(old_gui)["outcome"], "blocked")
-        # Inject a separately validated synthetic environment difference at the
-        # aggregation boundary; never rewrite durable execution artifacts.
-        history = runner.history(self.evidence)
-        foreign = copy.deepcopy(history)
-        for path, value in foreign:
-            if path == new_gui:
-                value["environment"]["environment"]["TCL_LIBRARY"] = "foreign-installation"
-        with patch.object(runner, "history", return_value=foreign), self.assertRaisesRegex(ValueError, "mixed group evidence: environment"):
-            runner.aggregate(self.evidence, head="e" * 40)
+        self.assertEqual(old_core.read_bytes(), original)
+        self.assertEqual(len(bundle["history_manifests"]), 2)
 
     def test_core_failure_cannot_be_cleared_by_same_candidate_rerun(self):
-        original = ORIGINAL_RUN_PROCESS
         def fail(command, folder, name, timeout, env=None):
-            if name == "raw.log":
-                (folder / "raw.log").write_text("AssertionError: isolated code failure")
-                return {"exit_code": 1, "outcome": "failed", "started_at": runner.utc_now(),
-                        "finished_at": runner.utc_now(), "runner_start_error": None}
-            return original(command, folder, name, timeout, env)
+            (folder / "raw.log").write_text("AssertionError: isolated code failure")
+            return {"exit_code": 1, "outcome": "failed", "started_at": runner.utc_now(),
+                    "finished_at": runner.utc_now(), "runner_start_error": None}
         self.real_run = fail
         failed = runner.run_group("core", self.evidence, mode="validation")
         self.assertEqual(runner.read_verified_manifest(failed)["outcome"], "failed")
-        self.real_run = original
         with self.assertRaisesRegex(ValueError, "core failure remains unresolved"):
             runner.run_group("core", self.evidence, mode="validation")
+        with self.assertRaisesRegex(ValueError, "unresolved"):
+            runner.aggregate(self.evidence)
 
     def test_incomplete_history_and_corrupt_artifact_fail_closed(self):
         core = runner.run_group("core", self.evidence, mode="validation")
@@ -903,15 +955,16 @@ class RunnerOrchestrationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unfinished"):
             runner.history(self.evidence)
 
-    def test_mixed_candidate_and_later_failure_reject_aggregate(self):
-        runner.run_group("core", self.evidence, mode="validation")
-        self.preflight_success = True
-        self.candidate["head"] = "e" * 40
-        gui = runner.run_group("gui", self.evidence, mode="validation")
-        with self.assertRaisesRegex(ValueError, "mixed"):
-            runner.aggregate(self.evidence)
-        self.assertEqual(runner.read_verified_manifest(gui)["outcome"], "success")
-
+    def test_current_manifest_cannot_claim_preflight_or_gui_success(self):
+        core = runner.run_group("core", self.evidence, mode="validation")
+        data = runner.read_json(core)
+        for field, value in (("group", "gui"), ("preflight", {"outcome": "success"}),
+                             ("policy", "future"), ("retry_eligible", True)):
+            changed = dict(data, **{field: value})
+            core.write_text(json.dumps(changed), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "policy"):
+                runner.read_verified_manifest(core)
+        core.write_text(json.dumps(data), encoding="utf-8")
 
 class HistoryRetrievalTests(unittest.TestCase):
     def test_prior_attempt_missing_artifact_fails_cli_without_reset(self):

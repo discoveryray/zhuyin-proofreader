@@ -1211,7 +1211,16 @@ def build_actual_review_groups(entries: Sequence[Mapping[str, Any]]) -> list[dic
 
 
 
-def build_actual_group_for_entry(entries: Sequence[Mapping[str, Any]], target: Mapping[str, Any]) -> dict[str, Any]:
+def index_actual_group_members(entries: Sequence[Mapping[str, Any]]) -> dict:
+    """Operation-local index; callers must use the same verified ledger."""
+    groups = {}
+    for entry in entries:
+        groups.setdefault(actual_group_match_key(actual_group_identity(entry)), []).append(entry)
+    return groups
+
+
+def build_actual_group_for_entry(entries: Sequence[Mapping[str, Any]], target: Mapping[str, Any],
+                                 *, member_index=None) -> dict[str, Any]:
     """Build one review group for a user-flagged actual misread.
 
     Unlike the automatic pending queue, this may start from any ledger state.
@@ -1221,7 +1230,8 @@ def build_actual_group_for_entry(entries: Sequence[Mapping[str, Any]], target: M
     ident = actual_group_identity(target)
     kind, exact_key = ident["kind"], ident["exact_key"]
     group_key = actual_group_match_key(ident)
-    members = [dict(e) for e in entries if actual_group_match_key(actual_group_identity(e)) == group_key]
+    members = ([dict(e) for e in member_index.get(group_key, ())] if member_index is not None else
+               [dict(e) for e in entries if actual_group_match_key(actual_group_identity(e)) == group_key])
     if not members:
         members = [dict(target)]
     members.sort(key=lambda e: (_text(e.get("pdf_name")), int(e.get("physical_page") or 0), float(e.get("y0") or 0), float(e.get("x0") or 0)))

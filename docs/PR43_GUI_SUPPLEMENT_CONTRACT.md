@@ -1,3 +1,18 @@
+> 2026-10-08 歷史適用範圍：以下原 GUI-once 契約保留供 immutable 歷史查核，
+> 不授權任何新的 GUI、preflight、Tk initializer 或 retry 執行。現行
+> `validation-flow/no-real-tk/1` 只執行有效非視窗 core；原 manifest、失敗、
+> retry_eligible=false、claim／已消耗額度、ZIP 與 skip 語法原樣保留。
+>
+> 同第五輪限定採納（原問答 SHA256
+> `5519099dd0d20aefe752bf7fec2cfa85998e0c70850617a8b7949a5a79219f10`）
+> 允許 `_pr43_setup_source` 唯讀固定 d59358cd 原 git blob，完整 source SHA256
+> `1373c00997ca98db7562a39b1b0370b818bc9302c1e2c3a9ef7bc915ade416da`，
+> 再以 AST 核對下列原 initializer pin；絕不 import／execute 舊 Tk。
+> 缺 git object、錯 full-source／AST hash 均拒絕，沒有 current-source fallback。
+> 一般 `read_verified_manifest`、`retry_eligible` 及原 claim／ZIP 約束不變。
+> 八項歷史安全測試使用明示 LEGACY_SCHEMA 合成歷史資料，不能作正式 GUI PASS；
+> current GUI 入口即使套用不開窗 stub 也拒絕。兩輪 review／CI 與原四輪紀錄保留。
+
 # PR43 限定一次 GUI 補驗契約
 
 此附約只適用 `discoveryray/zhuyin-proofreader` PR43、task

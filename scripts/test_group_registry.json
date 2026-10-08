@@ -1,16 +1,15 @@
 {
-  "schema": "zhuyin-test-group-registry/1",
+  "schema": "zhuyin-test-group-registry/2",
   "source_scope": "repository",
   "source_review": {
-    "basis": "Correction 3: retain correction1 independently reviewed GUI classification basis, explicitly source-review original cases and nine added non-window classifier regressions. Products and existing test expectations are unchanged. Finite registration is authoritative; positive bounded Tk guard rejects proven core conflicts. Correction 4: source-reviewed only same-installation Tcl/Tk helper/preflight and task-bound gate wiring with 13 explicit non-window regressions (mocked probe, exact paths/resources, pure gate fixtures, tiny synthetic runner groups); existing classification and classifier code unchanged. Correction 5: source-reviewed four changed helper/gate/test files and seven explicitly enumerated non-window regressions. Real isolated CLI/history/core execution uses one marker testcase, synthetic Git/CI context and only a stub Tk child; task-bound fifth exception retains original fourth contract. Existing registrations, product logic, classifier, runner and auditor unchanged. Correction 6: source-reviewed ExpectedResolutionGuiTests scoped owner-thread cleanup; two new real-Tk object-retirement/error-cleanup regressions explicitly GUI, two exact sixth-round gate regressions pure core. No product/classifier/other GUI class changes; historical identities unchanged. Correction 7: reviewed actual workflow routing/PowerShell summary regression sources and exact seventh task-bound adapter; four new non-window identities explicit core. The regression evaluator consumes real job/step expressions, real run/uses and summary body on isolated event/outcome fixtures. No GUI tests/product/classifier/provenance helper changes. Correction 8: only unittest step metadata order changed (if then same id); unchanged PR29 predicate assertions and actual workflow readers remain authoritative. Exact eighth task-bound adapter introduces two pure authorization/history core regressions; source registration updated only changed gate/test hashes. No product/GUI/classifier/dependency/capture changes or order-mirror tests. actual-gpt-bbox-export: source-reviewed bounded directory/ZIP staging and recoverable publication, exact adjacent PDF SHA relocation and exact-PDF vertical-CFF crop-only geometry adapter. Existing identity, actual/expected, CFF decoder and GUI classification unchanged. Eight explicit non-window export/relocation/recovery regressions and four explicit non-window geometry regressions use isolated temp files, synthetic contours and real matrix projection; no Tk setup/helpers or live DB. Same initial implementation: source-reviewed short unique .ag- sibling stage prefix after exact native/Python MAX_PATH diagnostics. Added one non-window actual PDF export at the staging-induced path boundary, comparing both renderer PNG bytes to unstaged references; no renderer/mock/helper or Tk behavior change. Deeper unsupported paths still fail closed with old output preservation. actual-gpt-bbox-export corrective round 1: reuse the existing output-root project_delivery_lock across the complete bounded directory/ZIP backup, publish and rollback region. Two explicitly enumerated non-window subprocess tests pause real Windows renames in publication and rollback, reject a concurrent second writer before backups, verify complete pairs and permit the later writer only after lock release. No lock-service, GUI, geometry, identity or Global data changes. actual-gpt-bbox-export approved bounded delivery contract extension: source-reviewed exact two source-drawing clipped bindings sealed by actual PDF SHA and duplicated source tuple; actual GPT package 1.2 preserves selected IDs/snapshots while carrying mandatory chunked source profile and UNRESOLVED unavailable rows. Forty-one finite non-window source/profile/export/import regressions use generated PDFs, real raster/PNG/ZIP/renames and actual-byte guards, with only the fixed PDF digest substituted for isolated binding fixtures and read-only synthetic manifest loaders where noted. Existing normal/manual/quorum/expected and GUI classification remain unchanged. Genuine historical 1.1 fixture conversion changes only actual proofless helpers in binding/integration tests; current 1.2 proof deletion is rejected. No runtime, identity, fingerprint, epoch or shared expected mapping changes. PR43 explicitly adopted finite GUI supplement: source-reviewed only the runner and eight enumerated non-window regressions. Real tiny pytest child/history/aggregate/coverage paths use independent CI/authorization fixtures, retained original false eligibility, durable one-use claims and exact uploaded artifact restoration. External GitHub, candidate/environment/inventory and preflight are finite fixtures; no Tk window, GUI classification, workflow, capture or bbox production changes. actual-gpt-bbox-export corrective 3: source-reviewed finite deferred actual refresh staging, strict owned publication/acknowledgement journal and exact source-context reuse; three CFF batch stable identity writes removed. New non-window native rename/process-crash/lock/rollback/hash/ack regressions and seven embedded-CFF fingerprint regressions preserve real publisher, fingerprint and identity checks. Direct controller fixtures consume staged DB-clear status and portable owner acknowledgement keeps marker guards. Existing GUI identities unchanged; no Tk setup or live DB. actual-gpt-bbox-export explicitly authorized corrective 4: source-reviewed only sealed PDF binding at deferred publication, durable restart, acknowledgement and token consumption. Thirty-two finite non-window regressions use generated one-page PDFs, the existing small byte producer and native manifest/journal/token/rename paths; missing, changed, same-size/same-mtime and unreadable source bytes fail closed with retained recovery bytes, restored and moved exact-SHA sources succeed, repeated requests preserve consumed transaction/evidence. Existing controller-only source-less fixtures now contain real sealed PDFs and bounded output bytes; no guard is mocked away. No renderer, decoder, GUI setup/classification, identities, actual/expected, fingerprint/schema/epoch, gate, runtime assets or live DB changes.",
+    "basis": "Correction 3: retain correction1 independently reviewed GUI classification basis, explicitly source-review original cases and nine added non-window classifier regressions. Products and existing test expectations are unchanged. Finite registration is authoritative; positive bounded Tk guard rejects proven core conflicts. Correction 4: source-reviewed only same-installation Tcl/Tk helper/preflight and task-bound gate wiring with 13 explicit non-window regressions (mocked probe, exact paths/resources, pure gate fixtures, tiny synthetic runner groups); existing classification and classifier code unchanged. Correction 5: source-reviewed four changed helper/gate/test files and seven explicitly enumerated non-window regressions. Real isolated CLI/history/core execution uses one marker testcase, synthetic Git/CI context and only a stub Tk child; task-bound fifth exception retains original fourth contract. Existing registrations, product logic, classifier, runner and auditor unchanged. Correction 6: source-reviewed ExpectedResolutionGuiTests scoped owner-thread cleanup; two new real-Tk object-retirement/error-cleanup regressions explicitly GUI, two exact sixth-round gate regressions pure core. No product/classifier/other GUI class changes; historical identities unchanged. Correction 7: reviewed actual workflow routing/PowerShell summary regression sources and exact seventh task-bound adapter; four new non-window identities explicit core. The regression evaluator consumes real job/step expressions, real run/uses and summary body on isolated event/outcome fixtures. No GUI tests/product/classifier/provenance helper changes. Correction 8: only unittest step metadata order changed (if then same id); unchanged PR29 predicate assertions and actual workflow readers remain authoritative. Exact eighth task-bound adapter introduces two pure authorization/history core regressions; source registration updated only changed gate/test hashes. No product/GUI/classifier/dependency/capture changes or order-mirror tests. No-window policy: explicit user adoption retires native validation, preserves legacy readers and exact active identity coverage. Reclassify fourteen original expected binding/replay cases, two sentinel audit subprocess fixtures and the portability conflict transaction case. New core-only evidence/runner regressions replace retired launcher/capability fixtures; cancellation is not GUI PASS. Mixed per-case source review is preserved in no-real-tk-validation/static-window-inventory.json and mixed-tests/dispositions.json. Retired native methods renamed cancelled_window_; retained handler/data logic executes using simple local UI doubles. Tk retry/initialization coverage retired explicitly. Review-resume-performance: source-reviewed operation-owned content snapshots, cancellable non-window staging worker publication, independently validated ENTER_EXPECTED saves, unchanged exact group identities and one sealed projection context. Ten explicit non-window regressions execute real snapshot/save/group/projection handlers using isolated files and an event-queue UI double; no Tk root, Global DB, runtime asset edits, existing case reclassification or identity removal. Review-resume-performance corrective 1: source-reviewed GUI-only strict committed-recovery availability under retained source/anchor errors and pending reusable-rule command gating. Two exact added non-window handler regressions cover same-session local commit/failed refresh, malformed or removed recovery plan, recovery without staging reapply, and delayed staging plus independent expected save/rule command. Existing source identities and classifications retained; native progress widgets only are replaced by finite local doubles. Review-resume-performance corrective 2: reviewed seven existing batch handler fixtures at the new verified snapshot boundary, with temporary project paths, finite messagebox doubles and real durable staging validation for the two persistence cases. Original queue/count/navigation/truth assertions retained; obsolete helper-call assertion replaced by published staging state. Existing save-failure case now proves cold ledger preparation and warm dependency/write failures actually execute and leave memory/navigation/durable bytes unchanged. Reviewed 23 exact async/busy callable dependencies and updated only 12 changed fingerprints; exact path, qualname, owner, callsite, closure, busy guard and real-service recursion checks remain unchanged. No product source, runtime asset, active/cancelled identity or classification changes. Review-resume-performance corrective 3: source-reviewed two deterministic non-window thread/barrier regressions at the real final staging capture and real expected save boundaries. Existing pure isolated fixture, actual transaction lock, byte hashing, ledger replay and durable DB are retained; no Tk initialization or live data. A second save while the first is admitted must be refused; source drift must still preserve the DB. The product change separates nonblocking save admission from the unchanged cache/project-lock serialization, so the admitted background save can wait for a reader. Existing reentrancy case now invokes a real nested save instead of manually taking the reader lock; unchanged runtime corruption assertion remains. Reviewed and refreshed only save_service and save_target exact callable hashes, retaining all bounded adapter checks. PR43 integration preserves the original crop/publication/sealed-PDF implementation and current no-window policy; exact merged sources require separate finite review. Finite reviewed merge set: actual_review preserves exact crop and member indexing; standalone_proofread preserves staged publication/sealed PDF guards and expected-only projection/cancellation; audit retains both exact forwarding and save adapters; manual/portability tests retain no-window handlers plus staged refresh/source fixtures; runner keeps historical readers and policy-bound new-core routing. Existing PR43 legacy supplement tests remain unchanged and may expose retained contract blockers, not suppressed failures. PR43 explicitly authorized fifth round: only shared synthetic staged navigation fixture uses legal workbook locators and saved real refresh callable with exact plan/status forwarding; synthetic decoder writes only the true stage from committed actual overrides. Three explicit non-window contract cases preserve nonzero real event clearing, independent expected data, mismatched-plan refusal, stage-write failure recovery and actual acknowledgment without reapply. No product safety/legacy reader changes. PR43 same authorized correction 5: preserve all eight historical non-window safeguards; current GUI/preflight remains forbidden, synthetic legacy schema explicitly read-only. Add one exact non-window archived full-blob/AST pin and missing-object regression; general reader/retry classifier unchanged. PR43 same authorized correction 5 closed gate: six exact synthetic metadata-only regressions, no product/Tk imports, preserve original four corrections and existing default/PR41 gates.",
     "prior_classification_ref": "correction1-fa6d3b724cfb46f982bddbd7b9131141/inventory.json",
     "prior_classification_head": "16cac994bf44fb4f9a278ce851d6f0848416987e",
     "prior_classification_tree": "8495c003e66f39561cda42016e09a58b7ce48b8a",
     "prior_classification_sha256": "267696312155583d8fd606cfafbc5dc0c8e09b6aad94250080b2e3149fcbdc4b",
     "normalization": "SHA256 of file bytes with CRLF replaced by LF; physical bytes are retained separately in execution evidence",
     "normalized_source_sha256": {
-      "actual_render_geometry.py": "2a0462b99f323374e611effa5c1a6bb56a909c131c55918031e07a22479ff2d4",
-      "actual_review.py": "681dfa5ad557eb0e260eac89a8bc6c302613d25f988b8deb14b6c3f32019d4e9",
+      "actual_review.py": "031e155f0938dd70b375eb9a125039f1936eca35f726db52cf14bde760d7ddbf",
       "build_handbook_rules.py": "62056a0a617f399423800ef04e9dfb2c6a88d8a026f2184c071f78942debb9c0",
       "cff_unseen_family_bootstrap.py": "69d680451647d7cb61685d860af5e81339e40f313186a78fabdfb50a0258ee66",
       "cff_zero_map_batch.py": "e660d6d65e4df996c8f0051a925b83be4cb75b78f37696a7babb3cbc1a9c3765",
@@ -35,41 +34,40 @@
       "pdf_portability.py": "9386c98a83d2ee12fba8918285eba146150edad919204408f1f7c3dbcd235463",
       "pronunciation_rule_engine.py": "27fadd760c509546f59c042d1fb48fb4e076c9aba1c4d1834365f9d09baf4fc4",
       "review_display.py": "577b6b5912134921c9f7ab11c93e1ae8ee81fc528a06170ca5c51720aa674b9b",
-      "review_gui.py": "1b43f61f837d634cfe823003c93603f5486023d19f99c15dd1176f3925bb32e9",
-      "review_save_service.py": "177c9639f396a5516d37804ec2ba2bcdb4e824e6360f5366c25fd803843eca04",
+      "review_gui.py": "5706f79d23dcfa9aaeb1f103376bf71948dc096757f86f6b5b432262df8b6ee4",
+      "review_save_service.py": "3b45e7b081e452b0e70cb7355646f7cef7314483c0c3aa496e9d500a73abed5f",
       "revision_diff.py": "5062e986de7728ca523d5825f00a467206525cf8150fda9630101615c8776b3d",
       "runtime_regression_gate.py": "a9c1064eb573690a9df61566c3eaebd5b352cb6b65be0b9e38a33e6809443a66",
       "runtime_source_validation.py": "560e75a651b67cbef034d780d20cc005aaa6e4f65674eb8a79e59cabd54b5704",
-      "scripts/benchmark_review_confirm.py": "c8e2b5e92c50f3e3a890ff9d1760a054e2e6992b30340795202ed5d7ccb92b0d",
-      "scripts/gui_preflight.py": "cf47709e2512c22c9fbf6cfe1621b561a8d1db312355309a4467f57561c9951f",
+      "scripts/benchmark_review_confirm.py": "249b45487e2bdc27ecfee39d50f79358961ab740840393abbbea9788124ed796",
+      "scripts/gui_preflight.py": "4338c5689f98efcc6a05de2b3bf2d10d5f4310f6e77deb2b2848665814043cd5",
       "scripts/pr29_review_gate.py": "63ddb7ce48dbc3a8a9ddd121742efab8831b1976041c2e85594996879b79b7cd",
-      "scripts/pr_review_gate.py": "83c73aa9c72fd0090ebab36f8afc7a4913bcffcea7dff84b63d898fcee0961bc",
-      "scripts/test_entrypoint_audit.py": "f82fb06a2481493d81dfe1b756286cb24216d69794f2cbbb0a68d7bf19ee469e",
-      "scripts/validation_evidence.py": "ac6d497338a9e99fdac68e0cf187c195f9e78d928cc0e13210e4a98c7b56a3e0",
-      "scripts/validation_runner.py": "08b44056d3b8657401dfc0f42c0e9be32fdced733d80596afebd3402b09079fa",
-      "scripts/validation_tk_environment.py": "bb170657551942c7e70c59fc29d8e08a562f671c20a9066f67311916feab658e",
+      "scripts/pr_review_gate.py": "861d401218aba919daa6b5fbe8f8919e12dff8d73deb477cea00bc2d889974c0",
+      "scripts/test_entrypoint_audit.py": "611d60f0b6961e6867ceb7e97bcf7aeed744cf1a0ab091a9d60f4990fabac172",
+      "scripts/validation_evidence.py": "65722edfef9e34c4b222eb0d3ed44d877d20bfa07bc7d33b82f57b7c5f434059",
+      "scripts/validation_runner.py": "20dc156f59a7b50180fc41d246a5f16f1ec3bce050bf08ff66cff5162176b2cb",
+      "scripts/validation_tk_environment.py": "be340d4225fcb9e1eac2b82f1ac2c1924c8b292b3f4d77fc5dcad8eca6d837d7",
       "standalone_gui.py": "99dd840ca050478763e75b0444ca241c9a109a2e0ab2fc7af907e34c48c9bc63",
-      "standalone_proofread.py": "227bc3b67fdf1600d059561423ef3e24c8682361339165383b19d495b9d5980b",
+      "standalone_proofread.py": "e1df3af0b84670def4eb902a07794c374c9fd726fd3567982bc0ba1dff215181",
       "tests/review_save_test_support.py": "7d39422c637eda60506103c8c087a2fcb872be31c779472a7e1378f3961ea357",
       "tests/test_actual_post_commit_recovery_v580.py": "b0fb53d531ab13f273e9ec71196bcf9dc42c23bf23492bc6efa9cd78322ce41e",
-      "tests/test_actual_render_geometry.py": "f6ba623097c2a2b8e1ae97057f0fc232f8e50c39b8f9abf9eede98f7408c0d5e",
       "tests/test_actual_review_v540.py": "4d5abb393895e582b349f717c4e989c95790e62a73e79febf358f4c8efa7d2f5",
       "tests/test_architecture.py": "41132266b15d802170d905052f275a99d9127e9b52f94577f6708bdf7fdda65f",
-      "tests/test_ci_validation_workflow.py": "0e95c7a061ece985bbad6c390feab05dbc8ff13e7513dda7f03c856b84f52199",
+      "tests/test_ci_validation_workflow.py": "c31f5033cf5412386b617f96e15627f96eab4437d0824e67b098a434e01754f0",
       "tests/test_company_semantic_rules_v522.py": "65666976d0478a5fac2d382d1a0d60900ea0e86a577e6312aa72d5b82148117f",
       "tests/test_completion_repair_v562.py": "f36c9d645320ed686a15100b500880a40fe6b77801ab617082aece21ad6b2e83",
       "tests/test_cross_version_compat_v560.py": "a2fb3fa2dd1e0c819f36fb63856885222d8a7f44c5d4a2c9f6e607ee24eaf5f1",
-      "tests/test_delivery_recovery_inspector_v580.py": "f8f6cd29ff9939e7be2b11637031b01378029390e8d813c0e2e292c6111202aa",
+      "tests/test_delivery_recovery_inspector_v580.py": "cd3558d219b95a361c0cac2a1e496ba2c509eceb5d342fbe50b12e20ea1b5081",
       "tests/test_dual_evidence_architecture_v550.py": "a82b5dc8a156e39a1527e5512353183eee93d16dbbd590eebb5d9f55a4e86c87",
       "tests/test_exact_glyph_identity_v580.py": "9154931ab73889367a876ce993a99ff60613765c401ae758b88a736e8cf65c3a",
-      "tests/test_expected_resolution_binding.py": "a55b2f488bafec03069697324509bfe199caba664dae61b6c76bf0c5f1d3909f",
+      "tests/test_expected_resolution_binding.py": "e044840257fdf2adaedd1f7d63724bc716bc5f2aec5f9686dc442b5326e9fae8",
       "tests/test_fingerprint_compat_contract.py": "94cba0e1602e22618a344460d48e6092da57cfbd7cabe0f6fc2d30e95e70fa63",
       "tests/test_global_exact_glyph_read_reuse_v580.py": "428d8414e5c0f35df538ea80f56e7e91d16fbeb64ca9af7862d6f4f0bd4b647a",
       "tests/test_global_exact_glyph_repository_v580.py": "a198389de6f4901a77ba85f02a18772c1ae9a9395c76b42558ca7b383eac6d62",
       "tests/test_global_legacy_migration_review_v580.py": "090adc235072b89aebec57483bc31c1c2f986a78b661e30a7e74e8942f8b3d17",
       "tests/test_global_legacy_migration_v580.py": "a174d9fcd25cce198070145b4e4ea1bb130fe0146786ce8dc0f085191ec791e0",
-      "tests/test_global_library_approval_v580.py": "a213d90c2d87f2773dbf20b959d9a8a6b044ae84fe9e2bc6cba2bb489ea4d17e",
-      "tests/test_global_library_inspector_v580.py": "eb53d949070f5ed7e1303f73b71171f28e35cb7722e3c9c16418370f06dc77ee",
+      "tests/test_global_library_approval_v580.py": "9591808af08abace1f57e27eff693937abc95f46b60380e704a3939facb56055",
+      "tests/test_global_library_inspector_v580.py": "f6aa40873105a0841054f69d45826736be0cc2eb75a5e31c19b21024f47106bf",
       "tests/test_global_promotion_v580.py": "e9118f6429fa0cd671054167c31727ae7bdaf916a5d5d0acf4c9d1c0aa3c7739",
       "tests/test_glyph_truth_conflict_v551.py": "034c6443945114142a6c8225beb9400522c20cfc5ead77aa4c055cb8331e0155",
       "tests/test_gpt_import_autodetect_v541.py": "febfaf0cd51a10a2f50913da8c33bd6d91eacd9d0ff3a82c2b5bf7ac59af2f3e",
@@ -79,23 +77,23 @@
       "tests/test_hotfix_tone_and_followup_v531.py": "59eefb39e25f39b20a05b8372c775eb1fa63c6300f591df6d48f2ce3e848b2c6",
       "tests/test_import_transaction.py": "f6faf8a832db551e290d15736e038723f715edf4db70ed6685d850533138dfa2",
       "tests/test_incremental_actual_v541.py": "2ce06f43e51417722422268aafebdf3841c661d80be3234c3a14db3b7da85d88",
-      "tests/test_legacy_migration_inspector_v580.py": "f1619caa042d9b9b00a9f608de59a62bd34384971371bb60b6b210b2d8eab6f8",
+      "tests/test_legacy_migration_inspector_v580.py": "259078513f199bc6a4da24f3ab29b4f317220062e28d051542f85319244ca99d",
       "tests/test_mandatory_resolver_integration.py": "e40ab925e2a12bf05b6901cde09972b5aa4c06f2547b414f4e0c9678649d5ea7",
       "tests/test_manual_actual_batch_apply_v570.py": "d3a9ed5a5e5c08adeef7bb721ba2b38f481c06239fe4a6d4c4ed41ddf30d859f",
-      "tests/test_manual_actual_gui_batch_v570.py": "48040d91e52a69ba7ac69d7155880a9b96f50827b09043b187d1ddafaaa6b868",
+      "tests/test_manual_actual_gui_batch_v570.py": "93cd7331b4811e64cbb0c8dcd99f80405f79b87d92e2b227df6a2e8db3b75402",
       "tests/test_manual_actual_staging_v570.py": "14f3ccc744c4e1b5dfd327b07ec6165781414a5e1fac921a5b95b0542e2b4155",
-      "tests/test_manual_review_usability_v580.py": "e167e72f15dad5319a82ad19ecf855b512b216f9c728d45ae6dd2dab9f6b7bd2",
+      "tests/test_manual_review_usability_v580.py": "cf1aaf9752cb51a2783fbcfb39a26834bcca14def8a5ebbfca94e70559d075ba",
       "tests/test_pdf_portability.py": "ddbe3fb655355233b5312f7316e8a060a252640b2e6eda9e60588b3766d43939",
       "tests/test_pdf_portability_actual_receipt.py": "d1ea6b1de211005a604e433d27b55aabc50761e72cfc9f7dcfd62308322499db",
       "tests/test_pdf_portability_actual_schema.py": "dd135a31b581d4de770f6c6ec846894fb6d287b59efde51528660d091efadaca",
       "tests/test_pdf_portability_binding.py": "26d6580e296697c78e0e34b72183f6f6e78b9ef1f0ba844d49dcdc8d7fe7a94f",
       "tests/test_pdf_portability_expected_schema.py": "ef2ca4b3ff00032f8f5ca3ac5781fcefa95a9753353b7121510e185302367b47",
-      "tests/test_pdf_portability_integration.py": "a2bc216131de6fe0087e39f9754a75c56b6d1bebefbed64db31367529c116a43",
+      "tests/test_pdf_portability_integration.py": "b2de538ed9123e501e05006d7d88c489692593a44ef914201e6344b673143269",
       "tests/test_pdf_portability_presentation.py": "cf5b40a41c187ebb16ff334a9ab181c37649143741aaab0e40118ae01c4431f3",
       "tests/test_pdf_portability_prewrite.py": "510a342b0ae0a0fa5bf0cfcca5c356831b7df14b98e458dd1f7899699f80d1e5",
       "tests/test_pdf_portability_replay.py": "7926253b9ac063131318fbb101bb159d1bdd5c48dbdc4d3a3eefd0f6c8ad2949",
-      "tests/test_pr29_review_gate.py": "41ec6a934f220e2dbec0e2a898fdab679f9a11d0fc8658be6e87824d47c05206",
-      "tests/test_pr_review_gate.py": "f5cb3117482596ae7cea6748df4b672712128494fd1db6b39a96b47a44b3569e",
+      "tests/test_pr29_review_gate.py": "f353ccd1ae1a202d920b470301dc449a6dcd43f9b67afd4ba020be3dfd61d6bd",
+      "tests/test_pr_review_gate.py": "7cd7c14462140e65400205fb554ab8e1936711968db9d4493594266b0ae8cdaa",
       "tests/test_project_path_recovery_v541.py": "3c9519b4bfe328a0a9e09f51fd979ef98459766d7373d547daa363dd9248ea6e",
       "tests/test_project_repair_integration_v562.py": "d41fd27cabcf3673bd2f7c42da99b95ef6e75d1108ab48dbcfb5b847b15fdd69",
       "tests/test_regression_applicability_v562.py": "16076b803604f6009a319b51a9f528950213809c77d3c8f3865d02aa336432e7",
@@ -103,29 +101,35 @@
       "tests/test_release_version_v570.py": "e1971ff37e1043133c77d9910b0825ea2ec4681a7e0f4430423704eff2eda29e",
       "tests/test_report_integrity.py": "fbfccf49a2738f966376160c2e8d3bddabc125ada383b8312c8978705a23b592",
       "tests/test_reusable_expected_rule_preservation.py": "0d2a564f5c2d13e673d70abe25a48cf39841ac5db30fd643feb25d037aaece8f",
-      "tests/test_review_async_save.py": "3b6ea842f701f290c73bbab4f8a6b4b938b0c727d1f877cd7d21d1cbf0b96441",
-      "tests/test_review_gui_layout_v531.py": "f439e60905979f1cdac0f78f795baed29cc5b246cb44c6faa7888a7dfd081e14",
-      "tests/test_review_preview_sizing_v580.py": "966e9187f9f6c45217ecc31c0fa48d2736e153d0ce9ebff55a8368464ba474b0",
-      "tests/test_review_save_service.py": "07903b175c3d108bd23d7efc3ee0a3c4e84042903b1e9f99bfc6ed9f4fb07fa0",
-      "tests/test_review_visual_corrective_v580.py": "6631a99729d2d8da13cb32c4eef35cfdda746364bcf7fb87b8a2e6c26f6b00d3",
-      "tests/test_review_visual_usability_v580.py": "16d8875021557717b4d0399b3668923fa69d6913c7a94ef4a757b9f2c3a01bc2",
+      "tests/test_review_async_save.py": "553085e6caf7a7921df38b799380fe44a6519aff724d1e01bc55ac1b9d85bced",
+      "tests/test_review_gui_layout_v531.py": "ff372fcf8025362ed0fcf0cfa70ac28db79fd49ebf59ddee4c5f1f48304dab20",
+      "tests/test_review_preview_sizing_v580.py": "32839ad439e46145ade2e56a93eccd9e2e4f03fa6e57c61c7d89734de0f24b66",
+      "tests/test_review_save_service.py": "058b8a7d7f765748a4f13590df96f860002365f885ecb57aa7d909ed9bfcc258",
+      "tests/test_review_visual_corrective_v580.py": "8dbf45f753d093eb33096024397c75f5c99405828bed799ccb38170128275a6d",
+      "tests/test_review_visual_usability_v580.py": "5a57d7dd0216f669846986b7ae63404f517d50592f1c3d5bb5205026a9de607d",
       "tests/test_runtime_asset_manifest_integrity_v562.py": "1a5a416d5c1c4ba1cc2e958476c35e636bee9eb11d8930e1ba1e82dbdc55dd91",
       "tests/test_semantics_epoch_contract.py": "263f543b6d2ca5b0f69b2b59bd292992a52a9724b90980819d8de9a9e2f51294",
-      "tests/test_staged_review_navigation_v580.py": "4af5f9d591a93cefe427c8fefb7478dbde60802de175b43e536bd06e4dc344b3",
-      "tests/test_test_entrypoint_audit.py": "00c74efb18da82322b0210f43a7011411120b93f061aa5ebcc56dc821ceee995",
-      "tests/test_test_group_registry.py": "6d4556b63b72d47e3b1b0391f1c4882b7d45a9383af9d5f1b0833c94dc36716f",
-      "tests/test_validation_evidence.py": "38ae2e499ceecda1ff5768b136a37cb5ccc935f7e806f190045b012692b8786e",
-      "tests/test_validation_local_history.py": "1e79b1ed7bb5f5eb92ac8c73948850511e73d17059bf87c5231fd0091eda5d9c",
-      "tests/test_validation_runner.py": "224b83dbe9fd1d41bdb7933a48f62d4521e7ef0216407029766d06fc8bb56102",
-      "tests/test_validation_tk_environment.py": "06dcd6f712bf16a9d49e5e15042a1e4d6ba0ed940a59fb45b30ff27fb1669bec",
+      "tests/test_staged_review_navigation_v580.py": "47162852ebe71f390aafe498071712267ed7ca94205ab9e4e67c57fe24568cf0",
+      "tests/test_test_entrypoint_audit.py": "beecba6bd6efbec4b77e461c38b1e6d5b2363fc11dbf8371cc1307dc541c31c8",
+      "tests/test_test_group_registry.py": "88799fb9ea2ad20ba57fb8c12d72c79aae890ade12054e50fc886a0bb445614d",
+      "tests/test_validation_evidence.py": "c5570e0932d942d13b519bb6addfed9c711189f633f52c43cde25deaeb5ca941",
+      "tests/test_validation_local_history.py": "c9fec5bc0edd537cb796096cc764aad95d28e26d3e1112fb85fb34a4c8eb4ae7",
+      "tests/test_validation_runner.py": "0450a93cebe544490cf59b01ccbff95ba998f243b3efc559dc1e6963f8724762",
+      "tests/test_validation_tk_environment.py": "d756e16c97cb3638e84ae2005385cb06a160b1c710f495c21680ed84a6fa216f",
       "tests/test_visual_context_repairs_v521.py": "53c869e48900c2fa24616a9afad6c12b4f831c4ea054d6d8c4a6af7baa9b9741",
       "tests/test_zero_occurrence_pdf_v541.py": "ac5c123a1e57a56e574b23bc12be7a270346c5cd05af13f5a3ceda3953505666",
       "tests/test_zero_summary_and_project_status_v541.py": "90ee2ac9a16db64ea2379eb12286b25da24883fee93b7a33cae5402c80517dd1",
       "ttf_symbol_recombination.py": "58f4156cab507c81690775e1b8c94449b808b63f74fc0637f0fc72ce061fc091",
       "ttf_zhuyin_shape_decoder.py": "612dfb13c2be1ffa2ba32ae5d47136ef207180361c7785c2e6dc205cb45f07c5",
+      "tests/conftest.py": "63b33911fa964a94d1c968604655e138f6c13979d7c25f05b5c22bdfb3d6ba56",
+      "tests/no_window_review_support.py": "a5530cc3b612a8e71b675aa4931f8cb901f9de28af5b174d6368dcb77fdd1cc6",
+      "tests/test_review_resume_performance.py": "205b9dd02049128bc3452a1a43d98bef28394d6ad6bd9893600a2fbcfa6e2071",
+      "actual_render_geometry.py": "2a0462b99f323374e611effa5c1a6bb56a909c131c55918031e07a22479ff2d4",
+      "tests/test_actual_render_geometry.py": "f6ba623097c2a2b8e1ae97057f0fc232f8e50c39b8f9abf9eede98f7408c0d5e",
       "tests/test_actual_sample_profile.py": "ff3bd9c23e3e46c7fac86a3381d72a043727f8abe1bef5d2ae1bf383e86fe1a4",
       "tests/test_actual_refresh_publication.py": "589915bd07484359e25b9b346ac0de9088a122c2ef9f67788c54c868232e8fe9",
-      "tests/test_cff_batch_fingerprint.py": "0fffe680054d0cc483ee23d80cb5524c73619a9fa3eda7c23f0f516f18072385"
+      "tests/test_cff_batch_fingerprint.py": "0fffe680054d0cc483ee23d80cb5524c73619a9fa3eda7c23f0f516f18072385",
+      "tests/test_pr43_correction_gate.py": "95ad0c6df299a07a8b580a77e8eda29dfd292f057e3b4f1bde381a3b02ff0ea6"
     }
   },
   "entries": [
@@ -332,11 +336,11 @@
     },
     {
       "prefix": "test_delivery_recovery_inspector_v580.DeliveryTkTests",
-      "core": [],
-      "gui": [
+      "core": [
         "test_no_project_and_main_entry_forward_only_selected_project",
         "test_real_widgets_selection_filter_refresh_failure_and_destroy"
-      ]
+      ],
+      "gui": []
     },
     {
       "prefix": "test_dual_evidence_architecture_v550",
@@ -391,29 +395,29 @@
     },
     {
       "prefix": "test_expected_resolution_binding.ExpectedResolutionGuiTests",
-      "core": [],
-      "gui": [
+      "core": [
         "test_real_tk_imported_expected_confirm_saves_reopens_and_advances",
-        "test_real_tk_invalid_unbound_confirmation_reports_failure_and_keeps_current_row",
+        "test_real_tk_invalid_unbound_confirmation_reports_failure_and_keeps_current_row"
+      ],
+      "gui": [
         "test_real_tk_owner_cleanup_retires_objects_and_pending_poll",
         "test_real_tk_mid_body_failure_retires_objects_and_finishes_save"
       ]
     },
     {
       "prefix": "test_expected_resolution_binding.ExpectedResolutionMaterializationTests",
-      "core": [],
-      "gui": [
+      "core": [
         "test_later_event_integrity_source_and_gui_checks_are_not_skipped",
         "test_reloaded_changed_manifest_is_revalidated_and_stale_event_invalidated",
         "test_standalone_validation_never_reuses_previous_manifest_trust",
         "test_validation_and_replay_use_one_detached_nested_snapshot",
         "test_whole_manifest_hash_is_once_for_one_or_many_bound_events"
-      ]
+      ],
+      "gui": []
     },
     {
       "prefix": "test_expected_resolution_binding.ExpectedResolutionReplayTests",
-      "core": [],
-      "gui": [
+      "core": [
         "test_actual_drift_revokes_confirmation_but_retains_independent_resolution",
         "test_binding_contains_no_actual_and_confirmation_cannot_mint_or_drop_it",
         "test_direct_baseline_gui_confirmation_without_binding_saves_and_reopens",
@@ -423,7 +427,8 @@
         "test_missing_unknown_tampered_or_noncanonical_binding_is_rejected",
         "test_same_reading_baseline_source_context_or_fingerprint_drift_is_not_overwritten",
         "test_unbound_legacy_resolution_invalid_confirmation_never_replaces_durable_source"
-      ]
+      ],
+      "gui": []
     },
     {
       "prefix": "test_fingerprint_compat_contract",
@@ -788,8 +793,7 @@
     },
     {
       "prefix": "test_global_library_approval_v580.ApprovalTkTests",
-      "core": [],
-      "gui": [
+      "core": [
         "test_actual_cancel_selection_and_refresh_never_write",
         "test_close_reopen_during_submit_uses_same_request_and_only_one_write",
         "test_custom_loader_alone_cannot_fall_through_to_live_database",
@@ -798,7 +802,8 @@
         "test_initial_failure_in_each_required_tab_blocks_handler_until_complete_new_confirmation",
         "test_late_preview_after_selection_change_never_updates_or_submits_other_row",
         "test_success_then_read_or_renderer_failure_preserves_commit"
-      ]
+      ],
+      "gui": []
     },
     {
       "prefix": "test_global_library_approval_v580.LegacyApprovalTests",
@@ -835,12 +840,12 @@
     },
     {
       "prefix": "test_global_library_inspector_v580.InspectorTkTests",
-      "core": [],
-      "gui": [
+      "core": [
         "test_actual_widgets_filter_select_refresh_fail_and_close",
         "test_destroy_root_during_read_does_not_leave_tk_callbacks",
         "test_standalone_entry_needs_no_project_and_reuses_open_window"
-      ]
+      ],
+      "gui": []
     },
     {
       "prefix": "test_global_library_inspector_v580.LegacyInspectionTests",
@@ -1031,11 +1036,11 @@
     },
     {
       "prefix": "test_legacy_migration_inspector_v580.MigrationTkTests",
-      "core": [],
-      "gui": [
+      "core": [
         "test_main_entry_uses_only_explicit_project_and_open_or_cancel_never_loads",
         "test_widgets_filters_details_failed_clear_source_switch_duplicate_and_destroy"
-      ]
+      ],
+      "gui": []
     },
     {
       "prefix": "test_mandatory_resolver_integration.MandatoryResolverIntegrationTests",
@@ -1117,19 +1122,20 @@
     },
     {
       "prefix": "test_manual_actual_gui_batch_v570.ManualActualGuiVisibleLayoutTests",
-      "core": [],
+      "core": [
+        "test_lazy_preview_requires_successful_image_and_explicit_check",
+        "test_previously_staged_peer_does_not_require_a_new_view_or_checkbox",
+        "test_real_tk_check_waits_for_drawn_page_and_target",
+        "test_target_without_drawn_photo_times_out_and_cannot_be_checked",
+        "test_two_member_dialog_preloads_b_without_accepting_an_implicit_check",
+        "test_unseen_b_cannot_be_submitted_by_setting_checkbox_variable"
+      ],
       "gui": [
         "test_actual_dialog_lists_all_locations_and_marks_staged_peers",
         "test_actual_dialog_uses_staging_label_and_explains_no_immediate_refresh",
         "test_exact_glyph_group_includes_distinct_char_but_marks_it_for_review",
-        "test_lazy_preview_requires_successful_image_and_explicit_check",
         "test_main_batch_button_is_visible_and_not_clipped_at_screen_safe_size",
-        "test_previously_staged_peer_does_not_require_a_new_view_or_checkbox",
-        "test_real_tk_check_waits_for_drawn_page_and_target",
-        "test_scroll_visibility_callback_is_cancelled_during_dialog_teardown",
-        "test_target_without_drawn_photo_times_out_and_cannot_be_checked",
-        "test_two_member_dialog_preloads_b_without_accepting_an_implicit_check",
-        "test_unseen_b_cannot_be_submitted_by_setting_checkbox_variable"
+        "test_scroll_visibility_callback_is_cancelled_during_dialog_teardown"
       ]
     },
     {
@@ -1175,8 +1181,7 @@
     },
     {
       "prefix": "test_manual_review_usability_v580.ManualReviewGuiTests",
-      "core": [],
-      "gui": [
+      "core": [
         "test_browsing_older_confirmation_keeps_last_undo_target",
         "test_confirmed_lookup_reopens_with_filters_and_corrects_one_item",
         "test_correction_undo_restores_previous_manual_decision",
@@ -1197,11 +1202,13 @@
         "test_returning_from_older_confirmation_keeps_last_undo_target",
         "test_reusable_failure_after_saved_item_does_not_undo_judgment",
         "test_saved_event_survives_native_show_failure_and_reopens",
-        "test_shortcut_full_label_and_staged_batch_footer_remain_visible",
         "test_staged_actual_does_not_hide_expected_or_integrity_and_defer_is_finite",
         "test_undo_reenter_expected_continues_to_next_pending_item",
         "test_undo_reenter_last_pending_item_shows_empty_state",
         "test_undo_reentry_keeps_difference_pending_in_queue"
+      ],
+      "gui": [
+        "test_shortcut_full_label_and_staged_batch_footer_remain_visible"
       ]
     },
     {
@@ -1417,12 +1424,11 @@
         "test_parallel_actual_excel_imports_preserve_marker_and_recovery[True]",
         "test_partial_portable_publication_requires_bound_repair_or_new_success",
         "test_real_pipeline_actual_override_refresh_publishes_current_manifest",
-        "test_real_pipeline_conflict_stays_pending_until_new_local_adjudication"
-      ],
-      "gui": [
+        "test_real_pipeline_conflict_stays_pending_until_new_local_adjudication",
         "test_actual_excel_conflict_requires_fresh_local_visual_adjudication",
         "test_review_app_reopens_continued_project"
-      ]
+      ],
+      "gui": []
     },
     {
       "prefix": "test_pdf_portability_presentation",
@@ -1713,16 +1719,17 @@
     },
     {
       "prefix": "test_review_async_save.AsyncOwnerTkTests",
-      "core": [],
-      "gui": [
+      "core": [
         "test_actual_poll_owner_disposal_cancels_pending_timer",
         "test_actual_success_and_failure_release_owned_poll",
         "test_disposed_save_owner_cancels_only_owned_poll_and_saved_work_reopens",
+        "test_save_completion_and_failure_release_owned_poll"
+      ],
+      "gui": [
         "test_lazy_peer_rotation_and_owner_destroy_release_images_and_only_owned_timers",
         "test_native_tcl_owner_destroy_cancels_only_owned_preview_callbacks",
         "test_owner_close_releases_preview_before_pending_save_worker_collects",
         "test_real_root_and_prior_dialogs_release_before_expected_or_actual_worker_gc",
-        "test_save_completion_and_failure_release_owned_poll",
         "test_submit_cancel_and_owner_destroy_release_dialog_variables_and_photos",
         "test_submitted_expected_variables_release_on_main_before_save_worker_gc"
       ]
@@ -1761,7 +1768,9 @@
     },
     {
       "prefix": "test_review_preview_sizing_v580.PreviewSizingTkTests",
-      "core": [],
+      "core": [
+        "test_resize_read_failure_clears_and_revokes_confirmation"
+      ],
       "gui": [
         "test_actual_expanded_samples_first_target_and_form_reachable",
         "test_actual_expanded_samples_with_constrained_window_manager",
@@ -1775,7 +1784,6 @@
         "test_near_viewport_height_target_uses_origin_between_24_pixel_steps",
         "test_ordinary_first_and_next_fit_outer_with_sufficient_allocated_height",
         "test_pdf_rerenders_after_resize_manual_scroll_stays_and_events_converge",
-        "test_resize_read_failure_clears_and_revokes_confirmation",
         "test_wide_short_first_and_next_have_full_inner_outer_target_and_context",
         "test_wide_short_first_and_next_with_constrained_window_manager",
         "test_width_only_resize_long_summary_technical_and_manual_scroll",
@@ -1859,13 +1867,14 @@
     },
     {
       "prefix": "test_review_visual_usability_v580.VisualGuiTests",
-      "core": [],
-      "gui": [
+      "core": [
         "test_main_occurrence_switch_failure_resize_and_source_invariance",
-        "test_page_change_and_fractional_resize_clear_previous_frame",
         "test_real_save_only_current_row_and_same_character_navigation",
         "test_responsive_buttons_wrapped_labels_and_complete_path_copy",
         "test_sample_positions_are_individual_failed_sample_cannot_be_checked"
+      ],
+      "gui": [
+        "test_page_change_and_fractional_resize_clear_previous_frame"
       ]
     },
     {
@@ -1952,12 +1961,11 @@
         "test_identity_comparison_catches_equal_count_substitution",
         "test_inherited_gui_cases_are_mandatory_across_modules",
         "test_module_load_tests_bindings_rejected_before_hook_even_with_same_ids",
-        "test_wildcard_tk_import_requires_inventory_review"
-      ],
-      "gui": [
+        "test_wildcard_tk_import_requires_inventory_review",
         "test_cross_module_tk_helper_skip_cannot_escape_junit_gate",
         "test_pytest_only_tk_functions_are_mandatory_even_when_skipped"
-      ]
+      ],
+      "gui": []
     },
     {
       "prefix": "test_test_group_registry.RegisteredGroupsTests",
@@ -1968,7 +1976,9 @@
         "test_inherited_cases_and_fixture_requirements_reject_core_then_expand_gui",
         "test_original_f1_instance_and_returned_call_are_gui_with_independent_sentinel",
         "test_real_cli_rejects_unregistered_missing_duplicate_and_conflicting_registration",
-        "test_source_drift_and_new_source_cannot_reuse_registration"
+        "test_source_drift_and_new_source_cannot_reuse_registration",
+        "test_default_pytest_and_unittest_retire_native_and_execute_headless_logic",
+        "test_cancelled_native_source_identity_cannot_vanish_or_stay_discoverable"
       ],
       "gui": []
     },
@@ -2045,20 +2055,6 @@
       "gui": []
     },
     {
-      "prefix": "test_validation_runner.Pr43GuiSupplementTests",
-      "core": [
-        "test_binding_head_environment_gui_identity_and_corruption_refuse",
-        "test_claim_before_collection_failure_consumes_final_budget",
-        "test_missing_marker_stops_new_tree_gui_before_first_launch",
-        "test_normal_legacy_fresh_groups_and_success_reuse_stay_separate",
-        "test_original_general_skip_unknown_wrapper_mixed_and_noninitialization_refuse",
-        "test_preflight_failure_has_real_claim_and_no_third_attempt",
-        "test_real_cli_child_history_aggregate_and_coverage_keep_legacy_false",
-        "test_uploaded_restored_side_refs_recompute_coverage_and_reject_corrupt_claim"
-      ],
-      "gui": []
-    },
-    {
       "prefix": "test_validation_runner.RunnerCliTests",
       "core": [
         "test_cli_setup_error_and_failure_leave_raw_events",
@@ -2077,12 +2073,12 @@
     {
       "prefix": "test_validation_runner.RunnerOrchestrationTests",
       "core": [
-        "test_again_failed_gui_does_not_allow_third_attempt",
+        "test_core_only_run_and_aggregate_need_no_gui_or_preflight",
+        "test_gui_launcher_and_child_refuse_before_any_process",
+        "test_new_candidate_preserves_old_evidence_without_relabelling",
         "test_core_failure_cannot_be_cleared_by_same_candidate_rerun",
         "test_incomplete_history_and_corrupt_artifact_fail_closed",
-        "test_mixed_candidate_and_later_failure_reject_aggregate",
-        "test_new_candidate_preserves_old_core_and_blocked_gui_without_adoption",
-        "test_preflight_failure_retains_core_and_retry_uses_full_gui_only"
+        "test_current_manifest_cannot_claim_preflight_or_gui_success"
       ],
       "gui": []
     },
@@ -2119,12 +2115,10 @@
     {
       "prefix": "test_validation_tk_environment.TkEnvironmentTests",
       "core": [
-        "test_configuration_writes_only_current_job_environment_and_retains_failure",
-        "test_early_probe_does_not_accept_incomplete_success",
-        "test_early_probe_is_fd_same_interpreter_bounded_and_preserves_failed_raw_evidence",
         "test_exact_installation_resources_accept_venv_base_prefix_and_patchlevels",
+        "test_missing_resource_and_incompatible_or_ambiguous_versions_fail_closed",
         "test_foreign_extension_and_loaded_dll_are_rejected_without_disk_search",
-        "test_missing_resource_and_incompatible_or_ambiguous_versions_fail_closed"
+        "test_retired_configuration_preflight_and_probe_never_launch"
       ],
       "gui": []
     },
@@ -2135,15 +2129,6 @@
         "test_fifth_round_missing_history_and_cross_head_are_rejected",
         "test_post_merge_handoff_retains_four_used_rounds_and_actual_merge",
         "test_wrong_task_baseline_branch_pr_start_hash_limit_and_reference_fail_closed"
-      ],
-      "gui": []
-    },
-    {
-      "prefix": "test_validation_tk_environment.EarlyPreflightCliTests",
-      "core": [
-        "test_successful_producer_real_history_and_core_create_marker_events_junit_manifest",
-        "test_failed_incomplete_and_abrupt_child_cli_stop_sequence_before_core_marker",
-        "test_genuine_group_start_without_manifest_still_blocks_next_core_and_marker"
       ],
       "gui": []
     },
@@ -2178,6 +2163,53 @@
       "core": [
         "test_exact_eighth_exception_retains_seven_and_stops_ninth",
         "test_wrong_identity_history_authorization_and_scope_fail_closed"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_validation_evidence.NoWindowEvidenceTests",
+      "core": [
+        "test_current_coverage_needs_only_active_non_window_success",
+        "test_active_failure_skip_missing_and_corrupt_raw_evidence_reject",
+        "test_old_policy_original_bundle_keeps_gui_requirement",
+        "test_adopted_gate_cancels_window_steps_only_and_rejects_unknown_policy",
+        "test_current_short_reuse_binds_policy_and_keeps_provenance_checks",
+        "test_cancelled_gui_does_not_clear_retained_code_blocker"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_review_resume_performance.ReviewResumeTests",
+      "core": [
+        "test_deferred_save_rejects_other_actions_invalid_decision_and_source_drift",
+        "test_expected_save_finishes_before_staging_and_old_result_is_discarded",
+        "test_expected_save_waits_for_final_staging_capture_without_duplicate_save",
+        "test_external_changes_during_validation_never_publish_checked_ids",
+        "test_failed_staging_and_expected_save_remain_independent",
+        "test_group_index_preserves_exact_groups_and_checks_cancellation",
+        "test_pending_expected_rule_command_keeps_worker_until_validation_finishes",
+        "test_pending_save_and_worker_start_failures_leave_no_orphan_pending_state",
+        "test_projection_validates_one_immutable_context_and_every_binding",
+        "test_queue_precedes_staging_and_actual_actions_are_gated",
+        "test_reload_and_disposal_cancel_stale_workers",
+        "test_resume_reuses_one_preparation_and_original_staging_bytes",
+        "test_same_session_source_error_keeps_strict_committed_recovery_only",
+        "test_waiting_expected_save_still_rejects_source_drift"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_validation_runner.Pr43GuiSupplementTests",
+      "core": [
+        "test_archived_initializer_requires_full_blob_and_ast_without_execution",
+        "test_binding_head_environment_gui_identity_and_corruption_refuse",
+        "test_claim_before_collection_failure_consumes_final_budget",
+        "test_missing_marker_stops_new_tree_gui_before_first_launch",
+        "test_normal_legacy_fresh_groups_and_success_reuse_stay_separate",
+        "test_original_general_skip_unknown_wrapper_mixed_and_noninitialization_refuse",
+        "test_preflight_failure_has_real_claim_and_no_third_attempt",
+        "test_real_cli_child_history_aggregate_and_coverage_keep_legacy_false",
+        "test_uploaded_restored_side_refs_recompute_coverage_and_reject_corrupt_claim"
       ],
       "gui": []
     },
@@ -2306,6 +2338,215 @@
         "test_single_decode_seal_real_batch_then_candidate_accepts_unchanged_reading"
       ],
       "gui": []
+    },
+    {
+      "prefix": "test_staged_review_navigation_v580.ControlledRefreshContractTests",
+      "core": [
+        "test_real_plan_status_nonzero_clear_preserves_independent_expected_and_ack_once",
+        "test_mismatched_committed_plan_refuses_before_producer_and_preserves_all_bytes",
+        "test_stage_producer_failure_preserves_committed_then_recovers_without_reapply"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_pr43_correction_gate.Pr43CorrectionGateTests",
+      "core": [
+        "test_actual_objects_ordered_parents_base_and_standalone_refuse",
+        "test_default_and_pr41_dispatch_remain_separate",
+        "test_every_original_source_missing_or_changed_refuses",
+        "test_exhaustion_and_noncode_blockers_keep_original_decisions",
+        "test_retained_fourth_and_fifth_require_fresh_reviews_without_mutation",
+        "test_wrong_identity_prefix_count_and_sixth_round_refuse"
+      ],
+      "gui": []
     }
-  ]
+  ],
+  "policy": "validation-flow/no-real-tk/1",
+  "cancelled_window_cases": {
+    "test_expected_resolution_binding.ExpectedResolutionGuiTests.test_real_tk_owner_cleanup_retires_objects_and_pending_poll": {
+      "source_path": "tests/test_expected_resolution_binding.py",
+      "callable": "ExpectedResolutionGuiTests.cancelled_window_real_tk_owner_cleanup_retires_objects_and_pending_poll",
+      "reason": "Native layout/widget/image/finalizer coverage; preserve existing non-window backend contracts and applicable state coverage listed in notes."
+    },
+    "test_expected_resolution_binding.ExpectedResolutionGuiTests.test_real_tk_mid_body_failure_retires_objects_and_finishes_save": {
+      "source_path": "tests/test_expected_resolution_binding.py",
+      "callable": "ExpectedResolutionGuiTests.cancelled_window_real_tk_mid_body_failure_retires_objects_and_finishes_save",
+      "reason": "Native layout/widget/image/finalizer coverage; preserve existing non-window backend contracts and applicable state coverage listed in notes."
+    },
+    "test_manual_actual_gui_batch_v570.ManualActualGuiVisibleLayoutTests.test_actual_dialog_lists_all_locations_and_marks_staged_peers": {
+      "source_path": "tests/test_manual_actual_gui_batch_v570.py",
+      "callable": "ManualActualGuiVisibleLayoutTests.cancelled_window_actual_dialog_lists_all_locations_and_marks_staged_peers",
+      "reason": "Native layout/widget/image/finalizer coverage; preserve existing non-window backend contracts and applicable state coverage listed in notes."
+    },
+    "test_manual_actual_gui_batch_v570.ManualActualGuiVisibleLayoutTests.test_actual_dialog_uses_staging_label_and_explains_no_immediate_refresh": {
+      "source_path": "tests/test_manual_actual_gui_batch_v570.py",
+      "callable": "ManualActualGuiVisibleLayoutTests.cancelled_window_actual_dialog_uses_staging_label_and_explains_no_immediate_refresh",
+      "reason": "Native layout/widget/image/finalizer coverage; preserve existing non-window backend contracts and applicable state coverage listed in notes."
+    },
+    "test_manual_actual_gui_batch_v570.ManualActualGuiVisibleLayoutTests.test_exact_glyph_group_includes_distinct_char_but_marks_it_for_review": {
+      "source_path": "tests/test_manual_actual_gui_batch_v570.py",
+      "callable": "ManualActualGuiVisibleLayoutTests.cancelled_window_exact_glyph_group_includes_distinct_char_but_marks_it_for_review",
+      "reason": "Native layout/widget/image/finalizer coverage; preserve existing non-window backend contracts and applicable state coverage listed in notes."
+    },
+    "test_manual_actual_gui_batch_v570.ManualActualGuiVisibleLayoutTests.test_main_batch_button_is_visible_and_not_clipped_at_screen_safe_size": {
+      "source_path": "tests/test_manual_actual_gui_batch_v570.py",
+      "callable": "ManualActualGuiVisibleLayoutTests.cancelled_window_main_batch_button_is_visible_and_not_clipped_at_screen_safe_size",
+      "reason": "Native layout/widget/image/finalizer coverage; preserve existing non-window backend contracts and applicable state coverage listed in notes."
+    },
+    "test_manual_actual_gui_batch_v570.ManualActualGuiVisibleLayoutTests.test_scroll_visibility_callback_is_cancelled_during_dialog_teardown": {
+      "source_path": "tests/test_manual_actual_gui_batch_v570.py",
+      "callable": "ManualActualGuiVisibleLayoutTests.cancelled_window_scroll_visibility_callback_is_cancelled_during_dialog_teardown",
+      "reason": "Native layout/widget/image/finalizer coverage; preserve existing non-window backend contracts and applicable state coverage listed in notes."
+    },
+    "test_manual_review_usability_v580.ManualReviewGuiTests.test_shortcut_full_label_and_staged_batch_footer_remain_visible": {
+      "source_path": "tests/test_manual_review_usability_v580.py",
+      "callable": "ManualReviewGuiTests.cancelled_window_shortcut_full_label_and_staged_batch_footer_remain_visible",
+      "reason": "Native layout/widget/image/finalizer coverage; preserve existing non-window backend contracts and applicable state coverage listed in notes."
+    },
+    "test_review_async_save.AsyncOwnerTkTests.test_lazy_peer_rotation_and_owner_destroy_release_images_and_only_owned_timers": {
+      "source_path": "tests/test_review_async_save.py",
+      "callable": "AsyncOwnerTkTests.cancelled_window_lazy_peer_rotation_and_owner_destroy_release_images_and_only_owned_timers",
+      "reason": "Native layout/widget/image/finalizer coverage; preserve existing non-window backend contracts and applicable state coverage listed in notes."
+    },
+    "test_review_async_save.AsyncOwnerTkTests.test_native_tcl_owner_destroy_cancels_only_owned_preview_callbacks": {
+      "source_path": "tests/test_review_async_save.py",
+      "callable": "AsyncOwnerTkTests.cancelled_window_native_tcl_owner_destroy_cancels_only_owned_preview_callbacks",
+      "reason": "Native layout/widget/image/finalizer coverage; preserve existing non-window backend contracts and applicable state coverage listed in notes."
+    },
+    "test_review_async_save.AsyncOwnerTkTests.test_owner_close_releases_preview_before_pending_save_worker_collects": {
+      "source_path": "tests/test_review_async_save.py",
+      "callable": "AsyncOwnerTkTests.cancelled_window_owner_close_releases_preview_before_pending_save_worker_collects",
+      "reason": "Native layout/widget/image/finalizer coverage; preserve existing non-window backend contracts and applicable state coverage listed in notes."
+    },
+    "test_review_async_save.AsyncOwnerTkTests.test_real_root_and_prior_dialogs_release_before_expected_or_actual_worker_gc": {
+      "source_path": "tests/test_review_async_save.py",
+      "callable": "AsyncOwnerTkTests.cancelled_window_real_root_and_prior_dialogs_release_before_expected_or_actual_worker_gc",
+      "reason": "Native layout/widget/image/finalizer coverage; preserve existing non-window backend contracts and applicable state coverage listed in notes."
+    },
+    "test_review_async_save.AsyncOwnerTkTests.test_submit_cancel_and_owner_destroy_release_dialog_variables_and_photos": {
+      "source_path": "tests/test_review_async_save.py",
+      "callable": "AsyncOwnerTkTests.cancelled_window_submit_cancel_and_owner_destroy_release_dialog_variables_and_photos",
+      "reason": "Native layout/widget/image/finalizer coverage; preserve existing non-window backend contracts and applicable state coverage listed in notes."
+    },
+    "test_review_async_save.AsyncOwnerTkTests.test_submitted_expected_variables_release_on_main_before_save_worker_gc": {
+      "source_path": "tests/test_review_async_save.py",
+      "callable": "AsyncOwnerTkTests.cancelled_window_submitted_expected_variables_release_on_main_before_save_worker_gc",
+      "reason": "Native layout/widget/image/finalizer coverage; preserve existing non-window backend contracts and applicable state coverage listed in notes."
+    },
+    "test_review_gui_layout_v531.ReviewGuiVisibleFooterTests.test_difference_uses_main_action_label": {
+      "source_path": "tests/test_review_gui_layout_v531.py",
+      "callable": "ReviewGuiVisibleFooterTests.cancelled_window_difference_uses_main_action_label",
+      "reason": "Native layout/widget/image/finalizer coverage; preserve existing non-window backend contracts and applicable state coverage listed in notes."
+    },
+    "test_review_gui_layout_v531.ReviewGuiVisibleFooterTests.test_expected_dialog_submit_and_cancel_are_visible": {
+      "source_path": "tests/test_review_gui_layout_v531.py",
+      "callable": "ReviewGuiVisibleFooterTests.cancelled_window_expected_dialog_submit_and_cancel_are_visible",
+      "reason": "Native layout/widget/image/finalizer coverage; preserve existing non-window backend contracts and applicable state coverage listed in notes."
+    },
+    "test_review_preview_sizing_v580.PreviewSizingTkTests.test_actual_expanded_samples_first_target_and_form_reachable": {
+      "source_path": "tests/test_review_preview_sizing_v580.py",
+      "callable": "PreviewSizingTkTests.cancelled_window_actual_expanded_samples_first_target_and_form_reachable",
+      "reason": "Native allocation/viewport/render/scroll/callback lifecycle coverage; WidthRenderTests stays active."
+    },
+    "test_review_preview_sizing_v580.PreviewSizingTkTests.test_actual_expanded_samples_with_constrained_window_manager": {
+      "source_path": "tests/test_review_preview_sizing_v580.py",
+      "callable": "PreviewSizingTkTests.cancelled_window_actual_expanded_samples_with_constrained_window_manager",
+      "reason": "Native allocation/viewport/render/scroll/callback lifecycle coverage; WidthRenderTests stays active."
+    },
+    "test_review_preview_sizing_v580.PreviewSizingTkTests.test_all_owned_resize_and_locate_callbacks_cancel_on_destruction": {
+      "source_path": "tests/test_review_preview_sizing_v580.py",
+      "callable": "PreviewSizingTkTests.cancelled_window_all_owned_resize_and_locate_callbacks_cancel_on_destruction",
+      "reason": "Native allocation/viewport/render/scroll/callback lifecycle coverage; WidthRenderTests stays active."
+    },
+    "test_review_preview_sizing_v580.PreviewSizingTkTests.test_body_reconciliation_callbacks_cancel_with_any_owned_surface": {
+      "source_path": "tests/test_review_preview_sizing_v580.py",
+      "callable": "PreviewSizingTkTests.cancelled_window_body_reconciliation_callbacks_cancel_with_any_owned_surface",
+      "reason": "Native allocation/viewport/render/scroll/callback lifecycle coverage; WidthRenderTests stays active."
+    },
+    "test_review_preview_sizing_v580.PreviewSizingTkTests.test_explicit_outer_overflow_reveals_first_and_next_in_both_window_limits": {
+      "source_path": "tests/test_review_preview_sizing_v580.py",
+      "callable": "PreviewSizingTkTests.cancelled_window_explicit_outer_overflow_reveals_first_and_next_in_both_window_limits",
+      "reason": "Native allocation/viewport/render/scroll/callback lifecycle coverage; WidthRenderTests stays active."
+    },
+    "test_review_preview_sizing_v580.PreviewSizingTkTests.test_inner_wheel_consumes_once_and_boundary_hands_off_to_long_body": {
+      "source_path": "tests/test_review_preview_sizing_v580.py",
+      "callable": "PreviewSizingTkTests.cancelled_window_inner_wheel_consumes_once_and_boundary_hands_off_to_long_body",
+      "reason": "Native allocation/viewport/render/scroll/callback lifecycle coverage; WidthRenderTests stays active."
+    },
+    "test_review_preview_sizing_v580.PreviewSizingTkTests.test_long_summary_can_scroll_then_returns_remaining_space_to_preview": {
+      "source_path": "tests/test_review_preview_sizing_v580.py",
+      "callable": "PreviewSizingTkTests.cancelled_window_long_summary_can_scroll_then_returns_remaining_space_to_preview",
+      "reason": "Native allocation/viewport/render/scroll/callback lifecycle coverage; WidthRenderTests stays active."
+    },
+    "test_review_preview_sizing_v580.PreviewSizingTkTests.test_main_fills_remaining_space_width_and_switch_reveals_target": {
+      "source_path": "tests/test_review_preview_sizing_v580.py",
+      "callable": "PreviewSizingTkTests.cancelled_window_main_fills_remaining_space_width_and_switch_reveals_target",
+      "reason": "Native allocation/viewport/render/scroll/callback lifecycle coverage; WidthRenderTests stays active."
+    },
+    "test_review_preview_sizing_v580.PreviewSizingTkTests.test_manual_scroll_cancels_pending_initial_target_placement": {
+      "source_path": "tests/test_review_preview_sizing_v580.py",
+      "callable": "PreviewSizingTkTests.cancelled_window_manual_scroll_cancels_pending_initial_target_placement",
+      "reason": "Native allocation/viewport/render/scroll/callback lifecycle coverage; WidthRenderTests stays active."
+    },
+    "test_review_preview_sizing_v580.PreviewSizingTkTests.test_near_viewport_height_target_uses_origin_between_24_pixel_steps": {
+      "source_path": "tests/test_review_preview_sizing_v580.py",
+      "callable": "PreviewSizingTkTests.cancelled_window_near_viewport_height_target_uses_origin_between_24_pixel_steps",
+      "reason": "Native allocation/viewport/render/scroll/callback lifecycle coverage; WidthRenderTests stays active."
+    },
+    "test_review_preview_sizing_v580.PreviewSizingTkTests.test_ordinary_first_and_next_fit_outer_with_sufficient_allocated_height": {
+      "source_path": "tests/test_review_preview_sizing_v580.py",
+      "callable": "PreviewSizingTkTests.cancelled_window_ordinary_first_and_next_fit_outer_with_sufficient_allocated_height",
+      "reason": "Native allocation/viewport/render/scroll/callback lifecycle coverage; WidthRenderTests stays active."
+    },
+    "test_review_preview_sizing_v580.PreviewSizingTkTests.test_pdf_rerenders_after_resize_manual_scroll_stays_and_events_converge": {
+      "source_path": "tests/test_review_preview_sizing_v580.py",
+      "callable": "PreviewSizingTkTests.cancelled_window_pdf_rerenders_after_resize_manual_scroll_stays_and_events_converge",
+      "reason": "Native allocation/viewport/render/scroll/callback lifecycle coverage; WidthRenderTests stays active."
+    },
+    "test_review_preview_sizing_v580.PreviewSizingTkTests.test_wide_short_first_and_next_have_full_inner_outer_target_and_context": {
+      "source_path": "tests/test_review_preview_sizing_v580.py",
+      "callable": "PreviewSizingTkTests.cancelled_window_wide_short_first_and_next_have_full_inner_outer_target_and_context",
+      "reason": "Native allocation/viewport/render/scroll/callback lifecycle coverage; WidthRenderTests stays active."
+    },
+    "test_review_preview_sizing_v580.PreviewSizingTkTests.test_wide_short_first_and_next_with_constrained_window_manager": {
+      "source_path": "tests/test_review_preview_sizing_v580.py",
+      "callable": "PreviewSizingTkTests.cancelled_window_wide_short_first_and_next_with_constrained_window_manager",
+      "reason": "Native allocation/viewport/render/scroll/callback lifecycle coverage; WidthRenderTests stays active."
+    },
+    "test_review_preview_sizing_v580.PreviewSizingTkTests.test_width_only_resize_long_summary_technical_and_manual_scroll": {
+      "source_path": "tests/test_review_preview_sizing_v580.py",
+      "callable": "PreviewSizingTkTests.cancelled_window_width_only_resize_long_summary_technical_and_manual_scroll",
+      "reason": "Native allocation/viewport/render/scroll/callback lifecycle coverage; WidthRenderTests stays active."
+    },
+    "test_review_preview_sizing_v580.PreviewSizingTkTests.test_width_only_resize_reconciles_requests_before_show_and_next_placement": {
+      "source_path": "tests/test_review_preview_sizing_v580.py",
+      "callable": "PreviewSizingTkTests.cancelled_window_width_only_resize_reconciles_requests_before_show_and_next_placement",
+      "reason": "Native allocation/viewport/render/scroll/callback lifecycle coverage; WidthRenderTests stays active."
+    },
+    "test_review_visual_corrective_v580.CorrectiveTkTests.test_actual_apply_progress_constructor_keeps_bar_visible_and_text_readable": {
+      "source_path": "tests/test_review_visual_corrective_v580.py",
+      "callable": "CorrectiveTkTests.cancelled_window_actual_apply_progress_constructor_keeps_bar_visible_and_text_readable",
+      "reason": "Native layout/widget/image/finalizer coverage; preserve existing non-window backend contracts and applicable state coverage listed in notes."
+    },
+    "test_review_visual_corrective_v580.CorrectiveTkTests.test_owned_idle_callbacks_cancel_on_child_parent_and_canvas_destruction": {
+      "source_path": "tests/test_review_visual_corrective_v580.py",
+      "callable": "CorrectiveTkTests.cancelled_window_owned_idle_callbacks_cancel_on_child_parent_and_canvas_destruction",
+      "reason": "Native layout/widget/image/finalizer coverage; preserve existing non-window backend contracts and applicable state coverage listed in notes."
+    },
+    "test_review_visual_corrective_v580.CorrectiveTkTests.test_real_expected_and_actual_form_labels_converge_at_narrow_and_wide_sizes": {
+      "source_path": "tests/test_review_visual_corrective_v580.py",
+      "callable": "CorrectiveTkTests.cancelled_window_real_expected_and_actual_form_labels_converge_at_narrow_and_wide_sizes",
+      "reason": "Native layout/widget/image/finalizer coverage; preserve existing non-window backend contracts and applicable state coverage listed in notes."
+    },
+    "test_review_visual_corrective_v580.CorrectiveTkTests.test_unallocated_wrapped_label_does_not_erode_its_own_width": {
+      "source_path": "tests/test_review_visual_corrective_v580.py",
+      "callable": "CorrectiveTkTests.cancelled_window_unallocated_wrapped_label_does_not_erode_its_own_width",
+      "reason": "Native layout/widget/image/finalizer coverage; preserve existing non-window backend contracts and applicable state coverage listed in notes."
+    },
+    "test_review_visual_usability_v580.VisualGuiTests.test_page_change_and_fractional_resize_clear_previous_frame": {
+      "source_path": "tests/test_review_visual_usability_v580.py",
+      "callable": "VisualGuiTests.cancelled_window_page_change_and_fractional_resize_clear_previous_frame",
+      "reason": "Native layout/widget/image/finalizer coverage; preserve existing non-window backend contracts and applicable state coverage listed in notes."
+    }
+  }
 }

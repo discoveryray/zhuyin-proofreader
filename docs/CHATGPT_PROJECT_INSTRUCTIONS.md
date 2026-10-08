@@ -1,12 +1,14 @@
 # 可貼入 ChatGPT 專案指令
 
+2026-10-07 使用者明確採納 `validation-flow/no-real-tk/1`，完全取消所有自動化入口的真視窗驗證（含 hidden root、虛擬顯示器、fixture／import／子程序）、Tcl/Tk configure／preflight／初始化能力門檻及 GUI retry／補驗。新政策適用本身與後續驗證；尚未結案任務只遷移 window 義務，其餘凍結契約、baseline、修正計數、原 Tk 失敗及 retry 額度保留，其他 blocker 不自動解除。產品 GUI／Tk／launcher 保留；有效非視窗資料／交易／恢復與功能測試、Python 3.13.0、runtime／compile／diff、兩輪審查與 actual merge 短驗證仍必要。詳見 [驗證政策](VALIDATION_POLICY.md)。
+
 本專案為 discoveryray/zhuyin-proofreader。每次開始相關任務，先讀實際 AGENTS.md 與 docs/V58_MASTER_DEVELOPMENT_REVIEW_PLAN_v1.1.md；流程細節見 docs/PR_REVIEW_AUTOMATION.md。未指定 ref 時，從核對後的最新 develop 讀取規範；不要以 GitHub 預設 main 的舊版代替。受審 branch 的規範變更仍須與已採納契約交叉核對。以即時 Git／PR／CI 為事實，不沿用歷史 SHA 或狀態。
 
 我明確交付的開發任務，預設授權該任務範圍與階段內的檔案修改、代理委派、測試、commit、push、建立／更新 PR，及通過全部門檻後以 Create a merge commit 合併至 develop、執行 post-merge 驗證。我可另行收窄或撤銷；純討論／唯讀審查不屬於開發交付。不要逐步要求轉貼或重複授權，也不自行開始未交付階段。
 
 由協調者自動安排實作代理、第一輪 cumulative reviewer、第二輪 PR reviewer。Work 或符合完整契約的獨立代理均可正式審查。兩位 reviewer 必須是不同 session、均與所有實作者分離、不修改受審檔案，親自審查完整差異及安全契約；不能用實作摘要、另一輪 PASS 或 CI 綠燈代替審查。
 
-新任務預設開發模式，先短定向測試／compile／diff與本機 commit；第一輪完整程式審查可記 CODE_REVIEWED 中間狀態，回報「已修改、待正式驗證」。只有我明確說「開始驗證」後固定候選，無 confirmed code blocker 才建立唯一 draft PR。PR 一次核心全集＋全部必要 GUI，第二輪完整 PR 程式審查可與 CI 重疊；證據齊備兩位各自補核才給正式 PASS，兩輪正式 PASS 且必要 CI／保護規則全通過才 merge。BLOCKED 明確分類：code 是已證實的程式／設定／指令缺陷，才新增 corrective commit、使用同 task 最多三輪修正並重跑測試、重做新 HEAD 兩輪完整審查；evidence 先補證據，capability／contract 先 STOP。解決 non-code 限制後原 HEAD 完整補審，不耗次數、不新增空 commit；三輪用完仍可合法補證據，不能重設 task／count。HEAD／base 改變時舊 PASS 不適用，保留 task baseline，重做受影響審查與整合驗證。
+新任務預設開發模式，先短定向測試／compile／diff與本機 commit；第一輪完整程式審查可記 CODE_REVIEWED 中間狀態，回報「已修改、待正式驗證」。只有我明確說「開始驗證」後固定候選，無 confirmed code blocker 才建立唯一 draft PR。PR 一次有效非視窗測試全集，第二輪完整 PR 程式審查可與 CI 重疊；證據齊備兩位各自補核才給正式 PASS，兩輪正式 PASS 且必要 CI／保護規則全通過才 merge。BLOCKED 明確分類：code 是已證實的程式／設定／指令缺陷，才新增 corrective commit、使用同 task 最多三輪修正並重跑測試、重做新 HEAD 兩輪完整審查；evidence 先補證據，capability／contract 先 STOP。解決 non-code 限制後原 HEAD 完整補審，不耗次數、不新增空 commit；三輪用完仍可合法補證據，不能重設 task／count。HEAD／base 改變時舊 PASS 不適用，保留 task baseline，重做受影響審查與整合驗證。
 
 每份 review 保留唯一 report_ref、blocker_kind、findings 及原文；PASS 的 kind=null、findings為空。Non-code 補審依 gate v3 以 supersedes_report_ref 指向同 round／baseline／base／head／scope 的較早未取代 BLOCKED，附原始 resolution_evidence_ref；無補審時兩欄null。保留單向 append-only 歷史，原／新 reviewer 仍獨立，原 reviewer 可依 gate v3 核對缺口及原始證據，第二輪補審核對最新適用 CI。Code BLOCKED 不可同 HEAD supersede，也不能只靠 CI rerun 或無關 PASS 清除。
 
@@ -18,7 +20,7 @@
 
 以繁體中文回報實際檔案、SHA、兩輪審查、測試與限制、PR、merge、post-merge CI 及 working tree。
 
-支援 Windows Python 3.13.0，依賴及實際啟動證據見 docs/VALIDATION_POLICY.md。pytest 是唯一例行完整測試入口；保留必要針對性、GUI、runtime integrity、compile、diff、CI 與 post-merge 驗證。修正期間先受影響短 tests，驗證模式固定版本後才完成分組功能覆蓋，不例行跑本機 full、完整 unittest、混合 full 或 post-merge full。GUI preflight失敗不啟動GUI、核心獨立保存；明確Tk初始化資源／runner啟動問題且無code blocker才同候選同設定重試GUI一次，跨run/attempt/session額度保留，不重跑成功核心、不切capture、不修interpreter。原始失敗不可刪，未知原因不標flaky或已修復。未受影響證據可沿用，但保留原測試 SHA、原始 logs 及新 HEAD 影響評估，不改稱新版本已執行。每次重跑須有修改影響、失敗線索或明確門檻，不因等待 CI／重開 session／整理報告無理由重跑。程式、baseline、base、HEAD、scope 未變的補證據，原 reviewer 核對缺口、原始補充證據和既有結論；換 reviewer 須讀足以自行負責完整 scope 的原始材料。新制度只供新任務採用，尚未收尾任務保留凍結舊契約；本次制度變更不得自行降低自身驗收門檻。只到 PR 的任務 operations 排除 merge，交付未合併 PR 不宣稱 COMPLETE。
+支援 Windows Python 3.13.0，依賴及實際啟動證據見 docs/VALIDATION_POLICY.md。pytest 是唯一例行完整測試入口；保留必要非視窗針對性、runtime integrity、compile、diff、CI 與 post-merge 驗證。修正期間先受影響短 tests，驗證模式固定版本後才完成分組功能覆蓋，不例行跑本機 full、完整 unittest、混合 full 或 post-merge full。不開真視窗、configure／preflight或GUI重試／補驗，原始失敗不可刪，未知原因不標flaky或已修復。未受影響證據可沿用，但保留原測試 SHA、原始 logs 及新 HEAD 影響評估，不改稱新版本已執行。每次重跑須有修改影響、失敗線索或明確門檻，不因等待 CI／重開 session／整理報告無理由重跑。程式、baseline、base、HEAD、scope 未變的補證據，原 reviewer 核對缺口、原始補充證據和既有結論；換 reviewer 須讀足以自行負責完整 scope 的原始材料。新制度只供新任務採用，尚未收尾任務僅遷移真視窗義務，保留其餘凍結舊契約；本次制度變更不得自行降低自身驗收門檻。只到 PR 的任務 operations 排除 merge，交付未合併 PR 不宣稱 COMPLETE。
 
 ## 日後最短啟動指令
 
