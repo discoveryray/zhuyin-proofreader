@@ -383,3 +383,64 @@ Fixed 值為 task `validation-flow-reduction`、原 baseline/base `457707b4c4109
 ## validation-flow-reduction 第八輪精確例外
 
 [第8輪限定摘要](VALIDATION_FLOW_CORRECTION8.md) 保留新原人類授權及原第7 formal code BLOCKED。Optional `correction_exception` schema `validation-flow-correction-exception/5` closed fields 恰為 `CORRECTION8_EXCEPTION` 加 `authorization_ref`、`previous_authorization_ref`、`sixth_authorization_ref`、`fifth_authorization_ref`、`fourth_authorization_ref`；固定task/B/branch/PR41/starting d974ec5c/scope/hashes/extra1/limit8全核對。實讀第8原文hash `c156319030dc54f549e6479b369ef718fecdd494aee1817fee515e683032e05a` 及原7/6/5/4字節，nested原7validator重驗連續前七輪；原所有舊adapter与general3不改。Len7 current須起始；len8第8from须起始/current等於to。原contiguous/newcommit／未知closedfields检查不變；錯identity/ref/hash/history/scope或limit9拒絕；8用完correction与postmergecode handoff STOP，保留actualmerge/history/count，不产生9。Gate不創造來源scope、操作權限、審查PASS或同HEAD清code finding。
+
+## PR42 的限定歷史並存 adapter
+
+使用者明確採納 `cff-review-history/1`，只處理原 `cff-batch-fingerprint` 的
+兩對同 scope `CODE_REVIEWED`／後續 evidence `BLOCKED`。v4 可選欄位
+`cff_review_history_adapter` 恰含 `contract` 與 `sources`；後者以
+`scripts/pr_review_gate.py` 的 `CFF_HISTORY_DIGESTS` 六個精確 keys 指向
+保留的 snapshot、授權及四份原文。逐件實讀原 bytes 並核對有限 SHA allowlist；
+原件放本機證據，不能為 CI 把私人報告／session／路徑公開加入 fixture。
+
+適用 task／repository／branch／baseline／歷史 HEAD／report_ref 均封閉核對，
+原八份 review 與兩輪 corrections 必須仍為原樣 ordered prefix。只在歷史
+duplicate-key 判斷區分程式審查中間紀錄與後續證據阻擋；兩者原文、null relations、
+findings 與 BLOCKED 效力不變，不偽造 supersedes／finalizes，不產生 PASS。
+未知 task／future contract／損毀原件／cross-scope／第三份重複或 duplicate PASS
+仍拒絕。原 code finding、兩輪審查、CI、教材驗收、三輪上限與合併門檻不放寬。
+本修正屬原 CFF 第三輪，不建立另一本 task 或額外額度。
+
+CI 僅使用明確 synthetic 技術資料測結構與故障路徑，替換 fixture digest allowlist
+的測試不宣稱驗過原件；另有未替換真實 allowlist 拒絕假原件的測試。本機保存
+六份真原件 hash 與實際 gate 核對證據。缺少 adapter 欄位仍按舊歧義判定拒絕。
+
+
+## PR42 唯一第四輪：明示 R1 投影及 v2 並存
+
+2026-10-08 人類採納原 decision-proposal 及 gate addendum，授權原 CFF
+任務一次第四輪。採納原 bytes SHA256 為
+`7bf99a4fa2ef4446fb8c0490af60ab0ca8014fe35ddf1025329d3ca6fdc5624b`。
+`cff-review-history/1` 原六原件及通用三輪規則保持原義；不從舊授權推定新例外。
+
+`cff-review-history/2` 的 closed `sources` 為原六 keys 加上
+`CFF_HISTORY_V2_DIGESTS` 的七 keys：`snapshot3`、`authorization4`、
+`code_md`、`code_json`、`blocked_md`、`blocked_json`、`projection`。
+逐件實讀固定 hash 的原件，包括原不合 schema 的 R1 JSON；原 JSON 不可直接
+放入 reviews。另存明示 projection 的唯一差異是 `ci=null`，其 SHA256 為
+`2daef874f07da9421e3b7aabe2b989fb127c6d5dcb63d78c6af7755a14f0d331`。
+Projection 並非原件，也不是 CI attestation；全域 round1 ci 必须 null 不變。
+所有其他欄位必須逐欄等於原 JSON。原 CI 原件及報告敘述的格式錯誤仍保留。
+
+僅增認固定 ec40c510 R1 CODE_REVIEWED／contract BLOCKED 這一對，
+原 snapshot 全部 reviews 以該一欄投影為明示例外保持 ordered prefix，前三輪
+corrections 也必須完全相同。原六原件、八 review／兩 corrections prefix
+仍重驗。原 findings、reviewer、scope、null relations、BLOCKED 效力不變；
+`_review` 仍選 BLOCKED，沒有 supersedes、finalizes 或 PASS。第三 duplicate、
+非法 relation、改 hash／report／scope／identity、缺新授權、未知 future contract
+仍拒絕。原件與 private sessions 只存本機；CI fixtures 明示 synthetic。
+
+Optional `correction_exception` 可選 `cff-correction-exception/1`，closed
+fields 恰為 `CFF_CORRECTION4_EXCEPTION` 加 `authorization_ref`。
+固定 task/repository/branch/baseline、PR42、base
+`476a9823e7ad512f5aa62e388a88fd2b15c357ed`、starting HEAD
+`ec40c51057caa75983d2c3d6948d8b7d9ef8cd18`、extra1/limit4/scope/授權
+hash 均精確核對，實讀原採納 bytes。必須搭配 v2 原件及前三輪 prefix。
+Len3 current/PR HEAD 必須 starting HEAD；len4 的第四輪 from 必須 starting
+HEAD、to 必須 current/PR HEAD，仍需 contiguous/new-commit schema。
+開工 base 漂移拒絕；actual merge 後 current base 依既有 merge 語義核對。
+第五輪、其他 task／PR43／PR41 例外冒用、變更 prefix 或授權均拒絕。
+
+本例外只承載原任務同一第四輪，不自動解除原 BLOCKED、不增加正式 CI 或
+retry 額度、不提供獨立審查或 merge 授權。第四輪新 HEAD 仍需兩輪完整適用
+獨立審查與必要原始證據；4/4 後再有 confirmed code finding 必須 STOP。
