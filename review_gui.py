@@ -25,12 +25,15 @@ from standalone_proofread import (
     build_gui_confirmation,
     build_reusable_rule,
     build_manual_expected_event,
+    committed_project_recovery,
     friendly_state,
     json_load,
     json_load_strict,
     load_or_initialize_db,
     manual_actual_staging_summary,
     materialize_ledger,
+    project_actual_evidence_root,
+    recover_committed_actual_project,
     regenerate_report,
     save_reusable_expected_rule,
     stage_manual_actual_correction,
@@ -1004,7 +1007,7 @@ class ReviewApp:
             # staged checks or actionable source claim. Saves still revalidate
             # durable bytes and reject drift; no snapshot cache is accepted.
             self._resume_source_error = str(exc)
-            self._publish_staging_summary({"staging_error": str(exc)})
+            self._publish_staging_summary(self._source_error_staging_summary(exc))
             ledger = materialize_ledger(self.manifest, self.db)
             self._set_actionable_records_from_ledger(ledger, advance_from=advance_from)
             return
@@ -1018,6 +1021,16 @@ class ReviewApp:
         self.last_resume_timings = dict(snapshot.timings)
         if defer_staging:
             self._start_staging_validation(snapshot)
+
+    def _source_error_staging_summary(self, error):
+        """Recovery availability is independent of accepting a resume snapshot."""
+        summary = {"staging_error": str(error)}
+        try:
+            summary["actual_recovery_pending"] = committed_project_recovery(
+                project_actual_evidence_root(self.output_dir)) is not None
+        except Exception as recovery_error:
+            summary["staging_error"] += f"；actual 復原紀錄無法驗證：{recovery_error}"
+        return summary
 
     def _cancel_staging_validation(self):
         request = getattr(self, "_staging_request", None)
@@ -1601,6 +1614,11 @@ class ReviewApp:
                 )
 
     def create_reusable_expected_rule(self):
+        if getattr(self, "staging_summary", {}).get("staging_validation_pending"):
+            messagebox.showinfo(
+                "actual 暫存仍在核對", "請等暫存核對結束後，再建立可重用規則。核對期間仍可輸入個別位置的應標注音。",
+                parent=self.root)
+            return
         if self._save_busy() or getattr(self, "_apply_in_progress", False):
             return
         # A separate explicit operation, available even after the saved row left
@@ -1760,8 +1778,10 @@ class ReviewApp:
         if self._save_busy() or getattr(self, "_apply_in_progress", False) or getattr(self, "_review_action_in_progress", False):
             return
         self._apply_in_progress = True
+        recovery_only = bool(getattr(self, "_resume_source_error", None))
         try:
-            summary = self.reload_staging_summary()
+            summary = (self._publish_staging_summary(self._source_error_staging_summary(self._resume_source_error))
+                       if recovery_only else self.reload_staging_summary())
         except Exception as exc:
             self._apply_in_progress = False
             messagebox.showerror("無法讀取 actual 暫存清單", str(exc), parent=self.root)
@@ -1790,7 +1810,10 @@ class ReviewApp:
             return
 
         try:
-            self._start_staged_actual_apply(count)
+            if recovery_only:
+                self._start_staged_actual_apply(count, recovery_only=True)
+            else:
+                self._start_staged_actual_apply(count)
         except Exception as exc:
             self._apply_in_progress = False
             progress = getattr(self, "_actual_progress_window", None)
@@ -1801,7 +1824,7 @@ class ReviewApp:
                     pass
             messagebox.showerror("無法開始套用 actual 修正", str(exc), parent=self.root)
 
-    def _start_staged_actual_apply(self, count):
+    def _start_staged_actual_apply(self, count, *, recovery_only=False):
         progress = tk.Toplevel(self.root)
         self._actual_progress_window = progress
         progress.title("批次套用 actual")
@@ -1828,7 +1851,14 @@ class ReviewApp:
 
         def worker():
             try:
-                result = apply_staged_manual_actual_corrections(output_dir)
+                if recovery_only:
+                    # Re-read the strict durable plan at the recovery boundary.
+                    # A removed plan must not fall through to applying staging.
+                    result = recover_committed_actual_project(output_dir)
+                    if result is None:
+                        raise ValueError("已提交 actual 復原紀錄已變更；未套用任何新暫存，請重新載入")
+                else:
+                    result = apply_staged_manual_actual_corrections(output_dir)
                 completed.put((result, None))
             except Exception as exc:
                 completed.put((None, exc))

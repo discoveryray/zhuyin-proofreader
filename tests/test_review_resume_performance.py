@@ -15,10 +15,12 @@ from unittest.mock import patch
 
 import actual_review as ar
 import review_gui as gui
+import global_glyph_promotion as promotion
 import review_save_service as rs
 import standalone_proofread as sp
 from tests.review_save_test_support import wait_for_save
-from tests.test_staged_review_navigation_v580 import create_staged_navigation_fixture, headless_app
+from tests.test_staged_review_navigation_v580 import create_staged_navigation_fixture, headless_app, controlled_refresh
+from tests.test_manual_actual_gui_batch_v570 import FakeProgressWidget, ImmediateThread
 
 
 def finish_staging(app):
@@ -304,3 +306,133 @@ class ReviewResumeTests(unittest.TestCase):
         self.assertEqual(identity.call_count, len(ledger) + len(staged))
         with self.assertRaises(InterruptedError):
             sp._current_live_groups_for_staged_manual_actual(ledger, staged, cancelled=lambda: True)
+
+
+    def test_same_session_source_error_keeps_strict_committed_recovery_only(self):
+        app = headless_app(self.output)
+        row = app.current()
+        sp.stage_manual_actual_correction(self.output, row["review_id"], "ㄎㄢ")
+        app.reload_records()
+        event = sp.build_manual_expected_event(row, operation="ENTER_EXPECTED", expected_set="ㄎㄢ")
+        self.assertTrue(app.save_event(row, event))
+        wait_for_save(app)
+        anchor = app._save_service.evidence_anchor
+        expected_bytes = (self.output / "人工判定資料庫.json").read_bytes()
+        root = sp.project_actual_evidence_root(self.output)
+        journal = root / promotion.PROJECT_TRANSACTION_FILE
+        with patch.object(gui.tk, "Toplevel", FakeProgressWidget), \
+                patch.object(gui.ttk, "Progressbar", FakeProgressWidget), \
+                patch.object(gui, "WrappedLabel", FakeProgressWidget), \
+                patch.object(gui, "apply_screen_safe_geometry"), \
+                patch.object(gui.threading, "Thread", ImmediateThread), \
+                patch.object(gui.messagebox, "askyesno", return_value=True), \
+                patch.object(gui.messagebox, "showerror") as errors, \
+                patch.object(gui.messagebox, "showinfo") as success, \
+                patch.object(sp, "deliver_pending_promotion_outbox", return_value={"status": "ISOLATED_NO_GLOBAL"}):
+            with patch.object(sp, "refresh_actual_project", side_effect=OSError("isolated refresh failure")):
+                app.apply_staged_actuals()
+                app.root.update()
+            self.assertTrue(errors.called)
+            self.assertIsNotNone(sp.committed_project_recovery(root))
+            self.assertTrue(app.staging_summary.get("staging_error"))
+            self.assertTrue(app.staging_summary["actual_recovery_pending"])
+            self.assertEqual(app.apply_actual_button.options["state"], "normal")
+            self.assertFalse(app.staged_checked_occurrence_ids)
+            self.assertIs(app._save_service.evidence_anchor, anchor)
+            self.assertEqual((self.output / "人工判定資料庫.json").read_bytes(), expected_bytes)
+            raw = journal.read_bytes()
+            # A malformed plan is not a trusted recovery entry, nor a reason
+            # to clear the original evidence anchor or accept staged checks.
+            journal.write_bytes(b'{"state":"COMMITTED","recovery_plan":{}}')
+            app.reload_records()
+            self.assertFalse(app.staging_summary.get("actual_recovery_pending"))
+            self.assertEqual(app.apply_actual_button.options["state"], "disabled")
+            self.assertFalse(app.staged_checked_occurrence_ids)
+            self.assertIs(app._save_service.evidence_anchor, anchor)
+            journal.write_bytes(raw)
+            app.reload_records()
+            # Remove the journal after the strict availability check but while
+            # the user is confirming. The worker must not apply new staging.
+            success.reset_mock()
+            with patch.object(gui.messagebox, "askyesno", side_effect=lambda *a, **k: (journal.unlink() or True)), \
+                    patch.object(gui, "apply_staged_manual_actual_corrections") as ordinary_apply:
+                app.apply_staged_actuals()
+                app.root.update()
+            ordinary_apply.assert_not_called()
+            success.assert_not_called()
+            self.assertIn("復原紀錄已變更", errors.call_args.args[1])
+            self.assertFalse(app.staging_summary.get("actual_recovery_pending"))
+            self.assertIs(app._save_service.evidence_anchor, anchor)
+            journal.write_bytes(raw)
+            app.reload_records()
+            with patch.object(gui, "recover_committed_actual_project", wraps=sp.recover_committed_actual_project) as recover, \
+                    patch.object(gui, "apply_staged_manual_actual_corrections") as ordinary_apply, \
+                    patch.object(sp, "apply_staged_manual_actual_batch") as batch, \
+                    patch.object(sp, "refresh_actual_project", side_effect=controlled_refresh):
+                app.apply_staged_actuals()
+                app.root.update()
+            recover.assert_called_once_with(self.output)
+            ordinary_apply.assert_not_called()
+            batch.assert_not_called()
+            self.assertIsNone(sp.committed_project_recovery(root))
+            self.assertFalse(app.staging_summary.get("staging_error"))
+            self.assertFalse(app.staging_summary.get("actual_recovery_pending"))
+            self.assertIs(app._save_service.evidence_anchor, anchor)
+            self.assertEqual((self.output / "人工判定資料庫.json").read_bytes(), expected_bytes)
+        self.assertFalse((Path(self.tmp.name) / "isolated-local").exists())
+
+    def test_pending_expected_rule_command_keeps_worker_until_validation_finishes(self):
+        app = headless_app(self.output)
+        entered, release = threading.Event(), threading.Event()
+        validate = rs.ReviewSaveService.validate_resume_staging
+        workers = []
+        def delayed(service, snapshot, **kwargs):
+            entered.set()
+            if not release.wait(10):
+                raise AssertionError("test did not release staging validator")
+            return validate(service, snapshot, **kwargs)
+        rules_path = Path(self.tmp.name) / "isolated-reusable-rules.json"
+        with patch.object(rs.ReviewSaveService, "validate_resume_staging", delayed):
+            app.reload_records(defer_staging=True)
+            self.assertTrue(entered.wait(5))
+            workers.append(app._staging_worker)
+            try:
+                row = app.current()
+                event = sp.build_manual_expected_event(row, operation="ENTER_EXPECTED", expected_set="ㄎㄢ")
+                self.assertTrue(app.save_event(row, event))
+                wait_for_save(app)
+                self.assertTrue(app._last_event_saved)
+                workers.append(app._staging_worker)
+                request = app._staging_request
+                anchor = app._save_service.evidence_anchor
+                with patch.object(gui.simpledialog, "askstring") as prompt, \
+                        patch.object(gui, "save_reusable_expected_rule") as save_rule, \
+                        patch.object(gui.messagebox, "showinfo") as notice:
+                    app.create_reusable_expected_rule()
+                prompt.assert_not_called()
+                save_rule.assert_not_called()
+                self.assertIn("仍在核對", notice.call_args.args[0])
+                self.assertIs(app._staging_request, request)
+                self.assertFalse(request["cancelled"].is_set())
+                self.assertIs(app._save_service.evidence_anchor, anchor)
+                self.assertTrue(app.staging_summary["staging_validation_pending"])
+                self.assertEqual(sp.load_or_initialize_db(self.output), app.db)
+            finally:
+                release.set()
+                for worker in workers:
+                    worker.join(15)
+                    self.assertFalse(worker.is_alive())
+            app.root.update()
+        self.assertIsNone(app._staging_request)
+        self.assertFalse(app.staging_summary.get("staging_validation_pending"))
+        self.assertFalse(app.staging_summary.get("staging_error"))
+        with patch.object(gui.simpledialog, "askstring", side_effect=["看", "independent dictionary source"]), \
+                patch.object(gui.messagebox, "showinfo"), patch.object(gui.messagebox, "showerror") as errors, \
+                patch.object(gui, "save_reusable_expected_rule", side_effect=lambda rule: sp.save_reusable_expected_rule(rule, path=rules_path)) as save_rule:
+            app.create_reusable_expected_rule()
+        errors.assert_not_called()
+        save_rule.assert_called_once()
+        self.assertTrue(rules_path.is_file())
+        self.assertFalse(app.staging_summary.get("staging_validation_pending"))
+        self.assertIs(app._save_service.evidence_anchor, anchor)
+        self.assertFalse((Path(self.tmp.name) / "isolated-local").exists())
