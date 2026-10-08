@@ -383,3 +383,24 @@ Fixed 值為 task `validation-flow-reduction`、原 baseline/base `457707b4c4109
 ## validation-flow-reduction 第八輪精確例外
 
 [第8輪限定摘要](VALIDATION_FLOW_CORRECTION8.md) 保留新原人類授權及原第7 formal code BLOCKED。Optional `correction_exception` schema `validation-flow-correction-exception/5` closed fields 恰為 `CORRECTION8_EXCEPTION` 加 `authorization_ref`、`previous_authorization_ref`、`sixth_authorization_ref`、`fifth_authorization_ref`、`fourth_authorization_ref`；固定task/B/branch/PR41/starting d974ec5c/scope/hashes/extra1/limit8全核對。實讀第8原文hash `c156319030dc54f549e6479b369ef718fecdd494aee1817fee515e683032e05a` 及原7/6/5/4字節，nested原7validator重驗連續前七輪；原所有舊adapter与general3不改。Len7 current須起始；len8第8from须起始/current等於to。原contiguous/newcommit／未知closedfields检查不變；錯identity/ref/hash/history/scope或limit9拒絕；8用完correction与postmergecode handoff STOP，保留actualmerge/history/count，不产生9。Gate不創造來源scope、操作權限、審查PASS或同HEAD清code finding。
+
+## PR42 的限定歷史並存 adapter
+
+使用者明確採納 `cff-review-history/1`，只處理原 `cff-batch-fingerprint` 的
+兩對同 scope `CODE_REVIEWED`／後續 evidence `BLOCKED`。v4 可選欄位
+`cff_review_history_adapter` 恰含 `contract` 與 `sources`；後者以
+`scripts/pr_review_gate.py` 的 `CFF_HISTORY_DIGESTS` 六個精確 keys 指向
+保留的 snapshot、授權及四份原文。逐件實讀原 bytes 並核對有限 SHA allowlist；
+原件放本機證據，不能為 CI 把私人報告／session／路徑公開加入 fixture。
+
+適用 task／repository／branch／baseline／歷史 HEAD／report_ref 均封閉核對，
+原八份 review 與兩輪 corrections 必須仍為原樣 ordered prefix。只在歷史
+duplicate-key 判斷區分程式審查中間紀錄與後續證據阻擋；兩者原文、null relations、
+findings 與 BLOCKED 效力不變，不偽造 supersedes／finalizes，不產生 PASS。
+未知 task／future contract／損毀原件／cross-scope／第三份重複或 duplicate PASS
+仍拒絕。原 code finding、兩輪審查、CI、教材驗收、三輪上限與合併門檻不放寬。
+本修正屬原 CFF 第三輪，不建立另一本 task 或額外額度。
+
+CI 僅使用明確 synthetic 技術資料測結構與故障路徑，替換 fixture digest allowlist
+的測試不宣稱驗過原件；另有未替換真實 allowlist 拒絕假原件的測試。本機保存
+六份真原件 hash 與實際 gate 核對證據。缺少 adapter 欄位仍按舊歧義判定拒絕。

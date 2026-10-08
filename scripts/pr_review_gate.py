@@ -391,7 +391,8 @@ def validate_state(state):
     fields = "schema task authorization current implementers corrections reviews unavailable_review_rounds pr pr_ci merge push_ci handoffs"
     _fields(state, fields + (" execution coverage short_validation" if staged else "")
             + (" correction_exception" if type(state) is dict and "correction_exception" in state else "")
-            + (" validation_policy" if type(state) is dict and "validation_policy" in state else ""), "state")
+            + (" validation_policy" if type(state) is dict and "validation_policy" in state else "")
+            + (" cff_review_history_adapter" if type(state) is dict and "cff_review_history_adapter" in state else ""), "state")
     if "validation_policy" in state:
         _require(state["validation_policy"] == NO_WINDOW_POLICY, "unknown validation policy")
     _require(state["schema"] in (SCHEMA, STAGED_SCHEMA), "unsupported schema")
@@ -564,8 +565,67 @@ def _review_scope(review):
     return tuple(review[field] for field in ("round", "baseline", "base", "head", "scope"))
 
 
+# Only technical identities/digests are public; original reports stay local.
+CFF_HISTORY_TASK = {"id": "cff-batch-fingerprint", "repository": REPOSITORY,
+                    "baseline": "8eab9a1de34b59115658a2c7d3565adb347e59ab",
+                    "base_branch": "develop", "head_branch": "codex/cff-batch-fingerprint"}
+CFF_HISTORY_HEAD = "431b43be38d655b51e58a81ceaa2caff141672e7"
+CFF_HISTORY_DIGESTS = {
+    "snapshot": "f6a0b2c3b4fb3b8efc6d24e599bf44b93f0f8492788b9fc1f0b817e177e046b2",
+    "authorization": "0f83d8b663012b89b490447cb548d86563348e5294cabe954732ad452dff6b40",
+    "review-1-code-431b43b-cumulative-review": "54934e6c9d329f1c453800029bd40bb87f4468bb0a9f97da007f3d5d3b41c0cd",
+    "review-2-code-431b43b-pr42-pr-review-20261005": "8ebd6d06df21e691fff4e5ae9520492ff13d28f0803720994c2209c1309d4abf",
+    "review-1-evidence-431b43b-pr42-20261005t101653z": "f7dc3d31401d1c593a2886d4280a73e50d3bc3eb00f81ead26fc4d173f48a16a",
+    "review-2-blocked-evidence-431b43b-pr42-pr-review-20261005": "5fdd1bfff0bc204a17e438fc279fb18ae1aa696a1f8689e926d5194940b793e3",
+}
+
+
+def _cff_history_pairs(state):
+    adapter = state.get("cff_review_history_adapter")
+    if adapter is None:
+        _require("cff_review_history_adapter" not in state, "CFF adapter cannot be null")
+        return set()
+    _require(state["schema"] == STAGED_SCHEMA and state["task"] == CFF_HISTORY_TASK,
+             "CFF history adapter belongs to its exact original task")
+    _require(state["pr"] is None or state["pr"]["number"] == 42, "CFF history adapter belongs to PR42")
+    _fields(adapter, "contract sources", "cff_review_history_adapter")
+    _require(adapter["contract"] == "cff-review-history/1", "unknown CFF history contract")
+    sources = adapter["sources"]
+    _require(type(sources) is dict and sources.keys() == CFF_HISTORY_DIGESTS.keys(),
+             "CFF history sources must be the exact retained originals")
+    payloads = {}
+    for name, expected in CFF_HISTORY_DIGESTS.items():
+        _text(sources[name], "CFF original source path")
+        try:
+            raw = Path(sources[name]).read_bytes()
+        except OSError as exc:
+            raise EvidenceError("CFF original source unavailable: " + name) from exc
+        _require(hashlib.sha256(raw).hexdigest() == expected, "CFF original source hash differs: " + name)
+        payloads[name] = raw
+    original = json.loads(payloads["snapshot"].decode("utf-8-sig"), object_pairs_hook=_unique_object,
+                          parse_constant=lambda value: (_ for _ in ()).throw(EvidenceError(value)))
+    _require(original["task"] == CFF_HISTORY_TASK and len(original["reviews"]) == 8
+             and len(original["corrections"]) == 2, "CFF original history identity differs")
+    _require(state["reviews"][:8] == original["reviews"]
+             and state["corrections"][:2] == original["corrections"],
+             "CFF original review/correction history must remain an unchanged ordered prefix")
+    pairs = set()
+    for number in (1, 2):
+        code, blocked = original["reviews"][number - 1], original["reviews"][number + 1]
+        _require(code["verdict"] == "CODE_REVIEWED" and blocked["verdict"] == "BLOCKED"
+                 and blocked["blocker_kind"] == "evidence"
+                 and _review_scope(code) == _review_scope(blocked)
+                 and code["round"] == number and code["head"] == CFF_HISTORY_HEAD
+                 and code["baseline"] == code["base"] == CFF_HISTORY_TASK["baseline"]
+                 and code["report_ref"] in sources and blocked["report_ref"] in sources,
+                 "CFF original pair identity differs")
+        pairs.add(frozenset((code["report_ref"], blocked["report_ref"])))
+    return pairs
+
+
 def _validate_review_history(state):
     """Resolve only explicit, append-only supplements backed by retained evidence."""
+    allowed_pairs = _cff_history_pairs(state)
     reports, superseded = {}, set()
     for review in state["reviews"]:
         ref, prior = review["report_ref"], review["supersedes_report_ref"]
@@ -595,14 +655,17 @@ def _validate_review_history(state):
                 _require(problem is None, "invalid supersession review: " + str(problem))
             superseded.add(prior)
         reports[ref] = review
-    seen = set()
+    seen = {}
     for ref, review in reports.items():
         if ref not in superseded:
             key = (*_review_scope(review), json.dumps(review["ci"], sort_keys=True))
             if state["schema"] == STAGED_SCHEMA:
                 key += (review["coverage_sha256"],)
-            _require(key not in seen, "ambiguous unlinked review for the same scope")
-            seen.add(key)
+            previous = seen.setdefault(key, [])
+            _require(not previous or (len(previous) == 1 and
+                     frozenset((previous[0], ref)) in allowed_pairs),
+                     "ambiguous unlinked review for the same scope")
+            previous.append(ref)
 
 
 def _review(state, number, base, head):

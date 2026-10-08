@@ -719,45 +719,7 @@ class RunnerOrchestrationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unfinished"):
             runner.history(self.evidence)
 
-<<<<<<< HEAD
-    def test_mixed_candidate_and_later_failure_reject_aggregate(self):
-        runner.run_group("core", self.evidence, mode="validation")
-        self.preflight_success = True
-        self.candidate["head"] = "e" * 40
-        gui = runner.run_group("gui", self.evidence, mode="validation")
-        with self.assertRaisesRegex(ValueError, "mixed"):
-            runner.aggregate(self.evidence)
-        self.assertEqual(runner.read_verified_manifest(gui)["outcome"], "success")
 
-    def test_original_false_manifest_rejects_new_classifier_without_rewriting_history(self):
-        self.preflight_success = True
-        def failed_suite(_command, folder, name, _timeout, _env=None):
-            self.assertEqual(name, "raw.log")
-            (folder / name).write_text("synthetic original Tk initializer failure; no Tk created\n")
-            nodeid = next(record["nodeid"] for record in self.inventory["records"] if record["group"] == "gui")
-            write_retry_suite(folder, tk_initializer_wrapper(), nodeid)
-            return {"exit_code": 1, "outcome": "failed", "started_at": runner.utc_now(),
-                    "finished_at": runner.utc_now(), "runner_start_error": None}
-        self.real_run = failed_suite
-        # Explicit synthetic environment for this manifest-contract fixture;
-        # it does not execute Tk or certify the installed Python/dependencies.
-        environment = runner.environment()
-        environment["python"] = "3.13.0"
-        environment["dependencies"] = {name.replace("_", "-").lower(): version for name, version in
-            (line.split("==") for line in (ROOT / "requirements-ci-lock.txt").read_text().splitlines()
-             if line and not line.startswith("#"))}
-        with patch.object(runner, "environment", return_value=environment), \
-                patch.object(runner, "retry_eligible", return_value=False):
-            manifest = runner.run_group("gui", self.evidence, mode="validation")
-            self.assertFalse(runner.read_verified_manifest(manifest)["retry_eligible"])
-        original = {path: path.read_bytes() for path in manifest.parent.iterdir() if path.is_file()}
-        self.assertTrue(runner.retry_eligible(manifest.parent, {}, {"outcome": "success"}))
-        with self.assertRaisesRegex(ValueError, "retry eligibility differs from original raw evidence"):
-            runner.read_verified_manifest(manifest)
-        for path, payload in original.items():
-            self.assertEqual(path.read_bytes(), payload)
-
-=======
     def test_current_manifest_cannot_claim_preflight_or_gui_success(self):
         core = runner.run_group("core", self.evidence, mode="validation")
         data = runner.read_json(core)
@@ -768,7 +730,27 @@ class RunnerOrchestrationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "policy"):
                 runner.read_verified_manifest(core)
         core.write_text(json.dumps(data), encoding="utf-8")
->>>>>>> origin/develop
+
+    def test_original_false_manifest_rejects_new_classifier_without_rewriting_history(self):
+        # Construct retained raw files only. Never invoke the retired GUI launcher.
+        from test_validation_evidence import raw_bundle, ref, write
+        raw_bundle(self.folder)
+        folder = self.folder / "gui"
+        manifest = folder / "manifest.json"
+        data = runner.read_json(manifest)
+        write_retry_suite(folder, tk_initializer_wrapper(), "tests/test_small.py::test_gui")
+        data.update(outcome="failed", exit_code=1, retry_eligible=False)
+        for key in ("junit", "events"):
+            data["artifacts"][key] = ref(folder / data["artifacts"][key]["path"])
+        write(manifest, data)
+        original = {path: path.read_bytes() for path in folder.iterdir() if path.is_file()}
+        with patch.object(runner, "retry_eligible", return_value=False):
+            self.assertFalse(runner.read_verified_manifest(manifest)["retry_eligible"])
+        self.assertTrue(runner.retry_eligible(folder, {}, {"outcome": "success"}))
+        with self.assertRaisesRegex(ValueError, "retry eligibility differs from original raw evidence"):
+            runner.read_verified_manifest(manifest)
+        self.assertEqual(original, {path: path.read_bytes() for path in folder.iterdir() if path.is_file()})
+
 
 class HistoryRetrievalTests(unittest.TestCase):
     def test_prior_attempt_missing_artifact_fails_cli_without_reset(self):

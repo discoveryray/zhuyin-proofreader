@@ -2,11 +2,7 @@
   "schema": "zhuyin-test-group-registry/2",
   "source_scope": "repository",
   "source_review": {
-<<<<<<< HEAD
-    "basis": "Correction 3: retain correction1 independently reviewed GUI classification basis, explicitly source-review original cases and nine added non-window classifier regressions. Products and existing test expectations are unchanged. Finite registration is authoritative; positive bounded Tk guard rejects proven core conflicts. Correction 4: source-reviewed only same-installation Tcl/Tk helper/preflight and task-bound gate wiring with 13 explicit non-window regressions (mocked probe, exact paths/resources, pure gate fixtures, tiny synthetic runner groups); existing classification and classifier code unchanged. Correction 5: source-reviewed four changed helper/gate/test files and seven explicitly enumerated non-window regressions. Real isolated CLI/history/core execution uses one marker testcase, synthetic Git/CI context and only a stub Tk child; task-bound fifth exception retains original fourth contract. Existing registrations, product logic, classifier, runner and auditor unchanged. Correction 6: source-reviewed ExpectedResolutionGuiTests scoped owner-thread cleanup; two new real-Tk object-retirement/error-cleanup regressions explicitly GUI, two exact sixth-round gate regressions pure core. No product/classifier/other GUI class changes; historical identities unchanged. Correction 7: reviewed actual workflow routing/PowerShell summary regression sources and exact seventh task-bound adapter; four new non-window identities explicit core. The regression evaluator consumes real job/step expressions, real run/uses and summary body on isolated event/outcome fixtures. No GUI tests/product/classifier/provenance helper changes. Correction 8: only unittest step metadata order changed (if then same id); unchanged PR29 predicate assertions and actual workflow readers remain authoritative. Exact eighth task-bound adapter introduces two pure authorization/history core regressions; source registration updated only changed gate/test hashes. No product/GUI/classifier/dependency/capture changes or order-mirror tests. CFF batch fingerprint task: source-reviewed cff_zero_map_batch._patch_workbook and seven new bounded non-window regressions. Acquisition uses synthetic PDF/font surfaces and an existing real CFF recording inspector; decoder bootstrap, batch maps/workbook writes, per-PDF dependencies, fingerprints and analyzer execute unchanged. Temp-only PDFs/workbooks/evidence, explicit snapshot, no Tk or live DB. Exact finite core registration; existing classifications unchanged. PR42 bounded retry correction 1: source-reviewed only validation_runner initializer error parsing and changed non-window runner fixtures. Five finite classifier cases cover known SourceLibFile wrapper and direct read errors, matched initialization/JUnit/events, missing/unknown causes, mixed assertions/skips and corrupt evidence. One synthetic retained-manifest case proves old false eligibility is not retroactively accepted. Its explicit environment and process results are fixture-only; no Tk, Tcl repair, formal core/GUI, schema/history adapter or capture change. Existing classifications and retry budget unchanged. PR42 bounded retry correction 2: source-reviewed only single-failure traceback structure rejection and one finite non-window regression. Both standard Python chain separators and extra qualified/bare exception blocks are rejected with fully matched JUnit/events; ordinary frame source mentioning exception names remains valid. Existing direct/wrapper positives, classification, budget and immutable history contract retained; no Tk or formal coverage.",
-=======
-    "basis": "Correction 3: retain correction1 independently reviewed GUI classification basis, explicitly source-review original cases and nine added non-window classifier regressions. Products and existing test expectations are unchanged. Finite registration is authoritative; positive bounded Tk guard rejects proven core conflicts. Correction 4: source-reviewed only same-installation Tcl/Tk helper/preflight and task-bound gate wiring with 13 explicit non-window regressions (mocked probe, exact paths/resources, pure gate fixtures, tiny synthetic runner groups); existing classification and classifier code unchanged. Correction 5: source-reviewed four changed helper/gate/test files and seven explicitly enumerated non-window regressions. Real isolated CLI/history/core execution uses one marker testcase, synthetic Git/CI context and only a stub Tk child; task-bound fifth exception retains original fourth contract. Existing registrations, product logic, classifier, runner and auditor unchanged. Correction 6: source-reviewed ExpectedResolutionGuiTests scoped owner-thread cleanup; two new real-Tk object-retirement/error-cleanup regressions explicitly GUI, two exact sixth-round gate regressions pure core. No product/classifier/other GUI class changes; historical identities unchanged. Correction 7: reviewed actual workflow routing/PowerShell summary regression sources and exact seventh task-bound adapter; four new non-window identities explicit core. The regression evaluator consumes real job/step expressions, real run/uses and summary body on isolated event/outcome fixtures. No GUI tests/product/classifier/provenance helper changes. Correction 8: only unittest step metadata order changed (if then same id); unchanged PR29 predicate assertions and actual workflow readers remain authoritative. Exact eighth task-bound adapter introduces two pure authorization/history core regressions; source registration updated only changed gate/test hashes. No product/GUI/classifier/dependency/capture changes or order-mirror tests. No-window policy: explicit user adoption retires native validation, preserves legacy readers and exact active identity coverage. Reclassify fourteen original expected binding/replay cases, two sentinel audit subprocess fixtures and the portability conflict transaction case. New core-only evidence/runner regressions replace retired launcher/capability fixtures; cancellation is not GUI PASS. Mixed per-case source review is preserved in no-real-tk-validation/static-window-inventory.json and mixed-tests/dispositions.json. Retired native methods renamed cancelled_window_; retained handler/data logic executes using simple local UI doubles. Tk retry/initialization coverage retired explicitly. Review-resume-performance: source-reviewed operation-owned content snapshots, cancellable non-window staging worker publication, independently validated ENTER_EXPECTED saves, unchanged exact group identities and one sealed projection context. Ten explicit non-window regressions execute real snapshot/save/group/projection handlers using isolated files and an event-queue UI double; no Tk root, Global DB, runtime asset edits, existing case reclassification or identity removal. Review-resume-performance corrective 1: source-reviewed GUI-only strict committed-recovery availability under retained source/anchor errors and pending reusable-rule command gating. Two exact added non-window handler regressions cover same-session local commit/failed refresh, malformed or removed recovery plan, recovery without staging reapply, and delayed staging plus independent expected save/rule command. Existing source identities and classifications retained; native progress widgets only are replaced by finite local doubles. Review-resume-performance corrective 2: reviewed seven existing batch handler fixtures at the new verified snapshot boundary, with temporary project paths, finite messagebox doubles and real durable staging validation for the two persistence cases. Original queue/count/navigation/truth assertions retained; obsolete helper-call assertion replaced by published staging state. Existing save-failure case now proves cold ledger preparation and warm dependency/write failures actually execute and leave memory/navigation/durable bytes unchanged. Reviewed 23 exact async/busy callable dependencies and updated only 12 changed fingerprints; exact path, qualname, owner, callsite, closure, busy guard and real-service recursion checks remain unchanged. No product source, runtime asset, active/cancelled identity or classification changes. Review-resume-performance corrective 3: source-reviewed two deterministic non-window thread/barrier regressions at the real final staging capture and real expected save boundaries. Existing pure isolated fixture, actual transaction lock, byte hashing, ledger replay and durable DB are retained; no Tk initialization or live data. A second save while the first is admitted must be refused; source drift must still preserve the DB. The product change separates nonblocking save admission from the unchanged cache/project-lock serialization, so the admitted background save can wait for a reader. Existing reentrancy case now invokes a real nested save instead of manually taking the reader lock; unchanged runtime corruption assertion remains. Reviewed and refreshed only save_service and save_target exact callable hashes, retaining all bounded adapter checks.",
->>>>>>> origin/develop
+    "basis": "Correction 3: retain correction1 independently reviewed GUI classification basis, explicitly source-review original cases and nine added non-window classifier regressions. Products and existing test expectations are unchanged. Finite registration is authoritative; positive bounded Tk guard rejects proven core conflicts. Correction 4: source-reviewed only same-installation Tcl/Tk helper/preflight and task-bound gate wiring with 13 explicit non-window regressions (mocked probe, exact paths/resources, pure gate fixtures, tiny synthetic runner groups); existing classification and classifier code unchanged. Correction 5: source-reviewed four changed helper/gate/test files and seven explicitly enumerated non-window regressions. Real isolated CLI/history/core execution uses one marker testcase, synthetic Git/CI context and only a stub Tk child; task-bound fifth exception retains original fourth contract. Existing registrations, product logic, classifier, runner and auditor unchanged. Correction 6: source-reviewed ExpectedResolutionGuiTests scoped owner-thread cleanup; two new real-Tk object-retirement/error-cleanup regressions explicitly GUI, two exact sixth-round gate regressions pure core. No product/classifier/other GUI class changes; historical identities unchanged. Correction 7: reviewed actual workflow routing/PowerShell summary regression sources and exact seventh task-bound adapter; four new non-window identities explicit core. The regression evaluator consumes real job/step expressions, real run/uses and summary body on isolated event/outcome fixtures. No GUI tests/product/classifier/provenance helper changes. Correction 8: only unittest step metadata order changed (if then same id); unchanged PR29 predicate assertions and actual workflow readers remain authoritative. Exact eighth task-bound adapter introduces two pure authorization/history core regressions; source registration updated only changed gate/test hashes. No product/GUI/classifier/dependency/capture changes or order-mirror tests. No-window policy: explicit user adoption retires native validation, preserves legacy readers and exact active identity coverage. Reclassify fourteen original expected binding/replay cases, two sentinel audit subprocess fixtures and the portability conflict transaction case. New core-only evidence/runner regressions replace retired launcher/capability fixtures; cancellation is not GUI PASS. Mixed per-case source review is preserved in no-real-tk-validation/static-window-inventory.json and mixed-tests/dispositions.json. Retired native methods renamed cancelled_window_; retained handler/data logic executes using simple local UI doubles. Tk retry/initialization coverage retired explicitly. Review-resume-performance: source-reviewed operation-owned content snapshots, cancellable non-window staging worker publication, independently validated ENTER_EXPECTED saves, unchanged exact group identities and one sealed projection context. Ten explicit non-window regressions execute real snapshot/save/group/projection handlers using isolated files and an event-queue UI double; no Tk root, Global DB, runtime asset edits, existing case reclassification or identity removal. Review-resume-performance corrective 1: source-reviewed GUI-only strict committed-recovery availability under retained source/anchor errors and pending reusable-rule command gating. Two exact added non-window handler regressions cover same-session local commit/failed refresh, malformed or removed recovery plan, recovery without staging reapply, and delayed staging plus independent expected save/rule command. Existing source identities and classifications retained; native progress widgets only are replaced by finite local doubles. Review-resume-performance corrective 2: reviewed seven existing batch handler fixtures at the new verified snapshot boundary, with temporary project paths, finite messagebox doubles and real durable staging validation for the two persistence cases. Original queue/count/navigation/truth assertions retained; obsolete helper-call assertion replaced by published staging state. Existing save-failure case now proves cold ledger preparation and warm dependency/write failures actually execute and leave memory/navigation/durable bytes unchanged. Reviewed 23 exact async/busy callable dependencies and updated only 12 changed fingerprints; exact path, qualname, owner, callsite, closure, busy guard and real-service recursion checks remain unchanged. No product source, runtime asset, active/cancelled identity or classification changes. Review-resume-performance corrective 3: source-reviewed two deterministic non-window thread/barrier regressions at the real final staging capture and real expected save boundaries. Existing pure isolated fixture, actual transaction lock, byte hashing, ledger replay and durable DB are retained; no Tk initialization or live data. A second save while the first is admitted must be refused; source drift must still preserve the DB. The product change separates nonblocking save admission from the unchanged cache/project-lock serialization, so the admitted background save can wait for a reader. Existing reentrancy case now invokes a real nested save instead of manually taking the reader lock; unchanged runtime corruption assertion remains. Reviewed and refreshed only save_service and save_target exact callable hashes, retaining all bounded adapter checks. CFF integration: retain original CFF batch regressions and six raw-file retry classifier cases. Legacy false-manifest regression now builds retained v1 files directly; no retired GUI launch. No-window launcher/policy regressions remain. Source-reviewed only combined runner/test and original CFF files; all current active/cancelled identities preserved. CFF corrective 3: narrowly reviewed exact original history coexistence adapter, with finite source bytes and unchanged BLOCKED selection. Three non-window tests use explicitly synthetic files and a substituted fixture-only digest map for structural cases; real allowlist must reject those fixtures. No Tk/native, network, runtime assets or authentic review report contents in fixtures. Local original-byte verification remains separate evidence.",
     "prior_classification_ref": "correction1-fa6d3b724cfb46f982bddbd7b9131141/inventory.json",
     "prior_classification_head": "16cac994bf44fb4f9a278ce851d6f0848416987e",
     "prior_classification_tree": "8495c003e66f39561cda42016e09a58b7ce48b8a",
@@ -46,31 +42,18 @@
       "scripts/benchmark_review_confirm.py": "249b45487e2bdc27ecfee39d50f79358961ab740840393abbbea9788124ed796",
       "scripts/gui_preflight.py": "4338c5689f98efcc6a05de2b3bf2d10d5f4310f6e77deb2b2848665814043cd5",
       "scripts/pr29_review_gate.py": "63ddb7ce48dbc3a8a9ddd121742efab8831b1976041c2e85594996879b79b7cd",
-<<<<<<< HEAD
-      "scripts/pr_review_gate.py": "83c73aa9c72fd0090ebab36f8afc7a4913bcffcea7dff84b63d898fcee0961bc",
-      "scripts/test_entrypoint_audit.py": "38d62ac9e3c0f32266cb68cc7ca60a3ba9c6dea45693f951901ce00ba27d0054",
-      "scripts/validation_evidence.py": "ac6d497338a9e99fdac68e0cf187c195f9e78d928cc0e13210e4a98c7b56a3e0",
-      "scripts/validation_runner.py": "67bd8e20291b395059c6a4239c878d0977430968a0249db088d1c97ad2def18d",
-      "scripts/validation_tk_environment.py": "bb170657551942c7e70c59fc29d8e08a562f671c20a9066f67311916feab658e",
-=======
-      "scripts/pr_review_gate.py": "29f11684780e2c8f10fcefbc1330b593986f499022520411299175fc04221f39",
+      "scripts/pr_review_gate.py": "ff9ef3406a0f0ee5272a55290902f79ad1260d3416263c207498455f5b611787",
       "scripts/test_entrypoint_audit.py": "8db6c8108171db053f88dfc5ba4cbfeaf9404848dd3f8e0018cea6650c3dd444",
       "scripts/validation_evidence.py": "65722edfef9e34c4b222eb0d3ed44d877d20bfa07bc7d33b82f57b7c5f434059",
-      "scripts/validation_runner.py": "cd294fa31a9181ee72019595b9040b57f00c95472e092f105a32b9b30dd70346",
+      "scripts/validation_runner.py": "7ee3eb9e32c497bd31ff37f0c5c01637b33da9618bd9dd3c72bd21d830066106",
       "scripts/validation_tk_environment.py": "be340d4225fcb9e1eac2b82f1ac2c1924c8b292b3f4d77fc5dcad8eca6d837d7",
->>>>>>> origin/develop
       "standalone_gui.py": "99dd840ca050478763e75b0444ca241c9a109a2e0ab2fc7af907e34c48c9bc63",
       "standalone_proofread.py": "6311e0dc5495566d3f9d618b20b8a8ffcff06c10941fca6ba8cc29976123d0cf",
       "tests/review_save_test_support.py": "7d39422c637eda60506103c8c087a2fcb872be31c779472a7e1378f3961ea357",
       "tests/test_actual_post_commit_recovery_v580.py": "5b8d129c5148ee6e0ad0b328b4709a5f089c7c4cef7863a289d07a523ba1677f",
       "tests/test_actual_review_v540.py": "cc1d60e408a9a5e63311365f53691abf5c5d2e2fa15b21f0e067e4bbed164498",
       "tests/test_architecture.py": "41132266b15d802170d905052f275a99d9127e9b52f94577f6708bdf7fdda65f",
-<<<<<<< HEAD
-      "tests/test_cff_batch_fingerprint.py": "0fffe680054d0cc483ee23d80cb5524c73619a9fa3eda7c23f0f516f18072385",
-      "tests/test_ci_validation_workflow.py": "0e95c7a061ece985bbad6c390feab05dbc8ff13e7513dda7f03c856b84f52199",
-=======
       "tests/test_ci_validation_workflow.py": "c31f5033cf5412386b617f96e15627f96eab4437d0824e67b098a434e01754f0",
->>>>>>> origin/develop
       "tests/test_company_semantic_rules_v522.py": "65666976d0478a5fac2d382d1a0d60900ea0e86a577e6312aa72d5b82148117f",
       "tests/test_completion_repair_v562.py": "f36c9d645320ed686a15100b500880a40fe6b77801ab617082aece21ad6b2e83",
       "tests/test_cross_version_compat_v560.py": "a2fb3fa2dd1e0c819f36fb63856885222d8a7f44c5d4a2c9f6e607ee24eaf5f1",
@@ -127,21 +110,12 @@
       "tests/test_runtime_asset_manifest_integrity_v562.py": "1a5a416d5c1c4ba1cc2e958476c35e636bee9eb11d8930e1ba1e82dbdc55dd91",
       "tests/test_semantics_epoch_contract.py": "263f543b6d2ca5b0f69b2b59bd292992a52a9724b90980819d8de9a9e2f51294",
       "tests/test_staged_review_navigation_v580.py": "4af5f9d591a93cefe427c8fefb7478dbde60802de175b43e536bd06e4dc344b3",
-<<<<<<< HEAD
-      "tests/test_test_entrypoint_audit.py": "00c74efb18da82322b0210f43a7011411120b93f061aa5ebcc56dc821ceee995",
-      "tests/test_test_group_registry.py": "6d4556b63b72d47e3b1b0391f1c4882b7d45a9383af9d5f1b0833c94dc36716f",
-      "tests/test_validation_evidence.py": "38ae2e499ceecda1ff5768b136a37cb5ccc935f7e806f190045b012692b8786e",
-      "tests/test_validation_local_history.py": "1e79b1ed7bb5f5eb92ac8c73948850511e73d17059bf87c5231fd0091eda5d9c",
-      "tests/test_validation_runner.py": "eef6679dbef4c8c02698b68856addce5718344e0914cdf1eede9795b7eca31a4",
-      "tests/test_validation_tk_environment.py": "06dcd6f712bf16a9d49e5e15042a1e4d6ba0ed940a59fb45b30ff27fb1669bec",
-=======
       "tests/test_test_entrypoint_audit.py": "beecba6bd6efbec4b77e461c38b1e6d5b2363fc11dbf8371cc1307dc541c31c8",
       "tests/test_test_group_registry.py": "88799fb9ea2ad20ba57fb8c12d72c79aae890ade12054e50fc886a0bb445614d",
       "tests/test_validation_evidence.py": "c5570e0932d942d13b519bb6addfed9c711189f633f52c43cde25deaeb5ca941",
       "tests/test_validation_local_history.py": "c9fec5bc0edd537cb796096cc764aad95d28e26d3e1112fb85fb34a4c8eb4ae7",
-      "tests/test_validation_runner.py": "1e8d5c00a35eabd49ae7cfe33f8dac549c1753e0b00c452400bfdc9ed33b6ec2",
+      "tests/test_validation_runner.py": "7e0fe0d960a1128cefa10d71c9421f1ecacebdd0d26f0c1115ebad02587b04c3",
       "tests/test_validation_tk_environment.py": "d756e16c97cb3638e84ae2005385cb06a160b1c710f495c21680ed84a6fa216f",
->>>>>>> origin/develop
       "tests/test_visual_context_repairs_v521.py": "53c869e48900c2fa24616a9afad6c12b4f831c4ea054d6d8c4a6af7baa9b9741",
       "tests/test_zero_occurrence_pdf_v541.py": "ac5c123a1e57a56e574b23bc12be7a270346c5cd05af13f5a3ceda3953505666",
       "tests/test_zero_summary_and_project_status_v541.py": "90ee2ac9a16db64ea2379eb12286b25da24883fee93b7a33cae5402c80517dd1",
@@ -149,7 +123,9 @@
       "ttf_zhuyin_shape_decoder.py": "612dfb13c2be1ffa2ba32ae5d47136ef207180361c7785c2e6dc205cb45f07c5",
       "tests/conftest.py": "63b33911fa964a94d1c968604655e138f6c13979d7c25f05b5c22bdfb3d6ba56",
       "tests/no_window_review_support.py": "a5530cc3b612a8e71b675aa4931f8cb901f9de28af5b174d6368dcb77fdd1cc6",
-      "tests/test_review_resume_performance.py": "205b9dd02049128bc3452a1a43d98bef28394d6ad6bd9893600a2fbcfa6e2071"
+      "tests/test_review_resume_performance.py": "205b9dd02049128bc3452a1a43d98bef28394d6ad6bd9893600a2fbcfa6e2071",
+      "tests/test_cff_batch_fingerprint.py": "0fffe680054d0cc483ee23d80cb5524c73619a9fa3eda7c23f0f516f18072385",
+      "tests/test_cff_review_history_adapter.py": "45a280b798e6dec852a8cb1ff173d71b7ad193fc932cb0dd3940c525ca200d73"
     }
   },
   "entries": [
@@ -2086,14 +2062,8 @@
         "test_new_candidate_preserves_old_evidence_without_relabelling",
         "test_core_failure_cannot_be_cleared_by_same_candidate_rerun",
         "test_incomplete_history_and_corrupt_artifact_fail_closed",
-<<<<<<< HEAD
-        "test_mixed_candidate_and_later_failure_reject_aggregate",
-        "test_new_candidate_preserves_old_core_and_blocked_gui_without_adoption",
-        "test_preflight_failure_retains_core_and_retry_uses_full_gui_only",
+        "test_current_manifest_cannot_claim_preflight_or_gui_success",
         "test_original_false_manifest_rejects_new_classifier_without_rewriting_history"
-=======
-        "test_current_manifest_cannot_claim_preflight_or_gui_success"
->>>>>>> origin/develop
       ],
       "gui": []
     },
@@ -2182,17 +2152,6 @@
       "gui": []
     },
     {
-<<<<<<< HEAD
-      "prefix": "test_cff_batch_fingerprint.CFFBatchFingerprintTests",
-      "core": [
-        "test_conflicting_batch_retracts_reading_without_changing_dependency_or_seal",
-        "test_cross_file_addition_preserves_unknown_identity_and_unrelated_bytes",
-        "test_insufficient_batch_abstains_without_creating_reusable_identity",
-        "test_manual_occurrence_override_survives_conflicting_batch",
-        "test_non_unseen_rows_remain_unchanged_and_candidate_compatible",
-        "test_pdf_applicable_global_change_and_unprovable_roster_still_rejected",
-        "test_single_decode_seal_real_batch_then_candidate_accepts_unchanged_reading"
-=======
       "prefix": "test_validation_evidence.NoWindowEvidenceTests",
       "core": [
         "test_current_coverage_needs_only_active_non_window_success",
@@ -2201,21 +2160,10 @@
         "test_adopted_gate_cancels_window_steps_only_and_rejects_unknown_policy",
         "test_current_short_reuse_binds_policy_and_keeps_provenance_checks",
         "test_cancelled_gui_does_not_clear_retained_code_blocker"
->>>>>>> origin/develop
       ],
       "gui": []
     },
     {
-<<<<<<< HEAD
-      "prefix": "test_validation_runner.RunnerRetryClassificationTests",
-      "core": [
-        "test_direct_resource_read_still_needs_initializer_and_matching_failure",
-        "test_mixed_assertion_skip_and_corrupt_reports_are_rejected",
-        "test_original_wrapper_inner_resource_error_is_retryable",
-        "test_single_failure_exception_chains_and_extra_blocks_are_rejected",
-        "test_wrapper_non_initializer_identity_mismatch_and_extra_event_rejected",
-        "test_wrapper_unknown_inner_cause_and_missing_proof_are_rejected"
-=======
       "prefix": "test_review_resume_performance.ReviewResumeTests",
       "core": [
         "test_deferred_save_rejects_other_actions_invalid_decision_and_source_drift",
@@ -2232,7 +2180,40 @@
         "test_resume_reuses_one_preparation_and_original_staging_bytes",
         "test_same_session_source_error_keeps_strict_committed_recovery_only",
         "test_waiting_expected_save_still_rejects_source_drift"
->>>>>>> origin/develop
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_cff_batch_fingerprint.CFFBatchFingerprintTests",
+      "core": [
+        "test_conflicting_batch_retracts_reading_without_changing_dependency_or_seal",
+        "test_cross_file_addition_preserves_unknown_identity_and_unrelated_bytes",
+        "test_insufficient_batch_abstains_without_creating_reusable_identity",
+        "test_manual_occurrence_override_survives_conflicting_batch",
+        "test_non_unseen_rows_remain_unchanged_and_candidate_compatible",
+        "test_pdf_applicable_global_change_and_unprovable_roster_still_rejected",
+        "test_single_decode_seal_real_batch_then_candidate_accepts_unchanged_reading"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_validation_runner.RunnerRetryClassificationTests",
+      "core": [
+        "test_direct_resource_read_still_needs_initializer_and_matching_failure",
+        "test_mixed_assertion_skip_and_corrupt_reports_are_rejected",
+        "test_original_wrapper_inner_resource_error_is_retryable",
+        "test_single_failure_exception_chains_and_extra_blocks_are_rejected",
+        "test_wrapper_non_initializer_identity_mismatch_and_extra_event_rejected",
+        "test_wrapper_unknown_inner_cause_and_missing_proof_are_rejected"
+      ],
+      "gui": []
+    },
+    {
+      "prefix": "test_cff_review_history_adapter.CFFHistoryAdapterTests",
+      "core": [
+        "test_synthetic_structure_keeps_blocked_and_never_produces_pass",
+        "test_real_digest_allowlist_rejects_synthetic_and_corrupt_sources",
+        "test_unknown_scope_relations_code_blockers_and_duplicate_pass_stay_closed"
       ],
       "gui": []
     }
