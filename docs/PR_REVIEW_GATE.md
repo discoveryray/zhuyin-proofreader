@@ -444,3 +444,21 @@ HEAD、to 必須 current/PR HEAD，仍需 contiguous/new-commit schema。
 本例外只承載原任務同一第四輪，不自動解除原 BLOCKED、不增加正式 CI 或
 retry 額度、不提供獨立審查或 merge 授權。第四輪新 HEAD 仍需兩輪完整適用
 獨立審查與必要原始證據；4/4 後再有 confirmed code finding 必須 STOP。
+
+
+### PR46 原 R1 CODE／code BLOCKED 精確並存
+
+2026-10-09 明確採納的 `pr46_review_history_adapter` 僅接受
+`{"contract":"pr46-review-history/1","sources":{...}}`；sources 必須恰為
+`PR46_HISTORY_DIGESTS` 的全部名稱，指向可讀且 SHA256 完全相同的原件。
+限 `review-start-save-responsive`／PR46／原 branch／baseline，歷史 pair 固定
+base `1417ac7`、head `2afa2b7`，由原作者 projection 逐值核對；原四筆 CODE
+與後續 R1 BLOCKED 的五筆 prefix 必須原序保留。原 CI 失敗、授權、方案、
+來源清冊、原文及 projection 的 hashes 均固定；不公開本機來源路徑。
+
+唯一允許的歧義是該 R1 CODE 與後續 `BLOCKED/code`，不建立 supersession
+或 finalization，全部 null relations 保留。R2 的原 CI tuple 不同，依原規則
+保留，沒有 R2 pair 例外。原 HEAD 仍由 code BLOCKED 阻擋；新 corrective HEAD
+仍須完整兩輪審查與必要 CI，不能沿用舊 PASS。一般三輪上限不變，本次正常
+第一輪修正不新增額度。未知 task／報告、第三筆同 key、重複 PASS、跨 scope、
+原件或 prefix 漂移均拒絕；不借用 CFF 或其他 PR 的例外。
