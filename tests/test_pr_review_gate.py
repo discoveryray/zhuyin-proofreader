@@ -811,9 +811,16 @@ class ReviewGateTests(unittest.TestCase):
 
     def test_gate_required_step_names_still_match_repository_workflow(self):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        # Keep the immutable legacy snapshot reader while checking the
+        # current workflow selected by the explicit no-window policy.
+        self.assertIn("Verify GUI test execution", gate.COMMON_STEPS)
         for step in (*gate.COMMON_STEPS, "Check committed whitespace (pull request)",
                      "Check committed whitespace (push)"):
-            self.assertIn(f"- name: {step}\n", workflow)
+            current_step = "Verify active test execution" if step == "Verify GUI test execution" else step
+            self.assertIn(f"- name: {current_step}\n", workflow)
+        self.assertNotIn("- name: Verify GUI test execution\n", workflow)
+        self.assertIn("run: python scripts/test_entrypoint_audit.py verify-active "
+                      "tmp/ci-test-inventory.json --junit tmp/ci-pytest.xml\n", workflow)
         for version in gate.PYTHONS:
             self.assertIn(f"|| '[\"{version}\"]'", workflow)
         self.assertIn("&& '3.13.0'", workflow)

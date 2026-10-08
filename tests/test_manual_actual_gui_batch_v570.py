@@ -4,6 +4,7 @@ import copy
 import hashlib
 import tempfile
 import tkinter as tk
+from tests.no_window_review_support import Surface, ActualDialog as HeadlessActualDialog, Preview, Value
 import time
 import unittest
 from pathlib import Path
@@ -92,6 +93,19 @@ def attach_source_bytes(output_dir, ledger):
         path = output_dir / row["pdf_name"]
         path.write_bytes(b"isolated source hash fixture")
         row.update(pdf=str(path), pdf_sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+
+
+def seal_resume_fixture(output_dir, ledger):
+    """Give synthetic ledger samples the real resume reader's durable inputs."""
+    manifest = sp.seal_manifest({
+        "session_schema_version": sp.SESSION_SCHEMA_VERSION,
+        "ledger_schema_version": sp.LEDGER_SCHEMA_VERSION,
+        "workbook_schema_version": sp.WORKBOOK_SCHEMA_VERSION,
+        "review_id_schema_version": sp.REVIEW_ID_SCHEMA_VERSION,
+        "pdfs": [], "records": copy.deepcopy(ledger),
+    })
+    sp.json_save(output_dir / "校對工作階段.json", manifest)
+    return sp.json_load_strict(output_dir / "校對工作階段.json"), sp.load_or_initialize_db(output_dir)
 
 
 def group_for(ledger: list[dict], target_index: int = 0) -> dict:
@@ -729,6 +743,27 @@ class ImmediateThread:
 
 
 class ManualActualGuiBehaviorTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.output_dir = Path(self.temp.name) / "project"
+        # Handler failures must never enter native messagebox creation.
+        for name in ("showinfo", "showwarning", "showerror"):
+            self.enterContext(patch.object(review_gui.messagebox, name))
+
+    def resume_service(self, ledger, summary):
+        """Queue-only tests substitute verified inputs, not queue behavior."""
+        snapshot = SimpleNamespace(ledger=ledger, timings={})
+        service = MagicMock(spec=review_gui.ReviewSaveService)
+        service.load_resume_snapshot.return_value = snapshot
+        service.validate_resume_staging.return_value = summary
+        return service, snapshot
+
+    def assert_resume_loaded(self, app, service, snapshot):
+        service.load_resume_snapshot.assert_called_once_with(
+            expected_manifest=app.manifest, expected_db=app.db)
+        service.validate_resume_staging.assert_called_once_with(snapshot)
+
     def test_all_exact_group_occurrences_are_listed_with_checked_peers_last(self):
         ledger = [entry(name, "f" * 64) for name in "abcd"]
         group = group_for(ledger, 2)
@@ -752,7 +787,7 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
         app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
         ledger = [entry(name, "f" * 64) for name in "abc"]
         app.root = object()
-        app.output_dir = Path("project")
+        app.output_dir = self.output_dir
         app.manifest = {}
         app.db = {}
         app.records = ledger
@@ -777,7 +812,7 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
         ledger = [entry(name, "f" * 64) for name in "abc"]
         app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
         app.root = object()
-        app.output_dir = Path("project")
+        app.output_dir = self.output_dir
         app.manifest = {}
         app.db = {}
         app.records = [ledger[0], ledger[2]]  # B was hidden by an earlier valid check.
@@ -819,23 +854,22 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
     def test_reload_records_excludes_checked_occurrences_and_reduces_denominator(self):
         ledger = [entry(name, str(index) * 64) for index, name in enumerate("abcde", start=1)]
         app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
-        app.output_dir = Path("project")
+        app.output_dir = self.output_dir
         app.manifest = {}
         app.db = {}
         app.records = []
         app.index = 0
         app.apply_actual_button = DummyButton()
-        with (
-            patch.object(review_gui, "materialize_ledger", return_value=ledger),
-            patch.object(review_gui, "manual_actual_staging_summary", return_value={
-                "staged_group_count": 1,
-                "staged_group_ids": ["group-bc"],
-                "staged_member_occurrence_ids": ["b", "c"],
-                "staged_checked_occurrence_ids": ["b", "c"],
-            }),
-        ):
+        service, snapshot = self.resume_service(ledger, {
+            "staged_group_count": 1,
+            "staged_group_ids": ["group-bc"],
+            "staged_member_occurrence_ids": ["b", "c"],
+            "staged_checked_occurrence_ids": ["b", "c"],
+        })
+        with patch.object(review_gui, "ReviewSaveService", return_value=service):
             app.reload_records()
 
+        self.assert_resume_loaded(app, service, snapshot)
         self.assertEqual([item["occurrence_id"] for item in app.records], ["a", "d", "e"])
         self.assertEqual(len(app.records), 3)
         self.assertEqual(app.apply_actual_button.options["text"], "套用 actual 修正（1）")
@@ -846,6 +880,7 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
             checked = entry("checked-a", "9" * 64, pdf_name="a.pdf", x0=10.0)
             unchecked = entry("unchecked-b", "9" * 64, pdf_name="b.pdf", x0=30.0)
             attach_source_bytes(output_dir, [checked, unchecked])
+            manifest, db = seal_resume_fixture(output_dir, [checked, unchecked])
             group = group_for([checked, unchecked])
             stage_manual_actual_group(
                 actual_root(output_dir),
@@ -863,8 +898,8 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
             app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
             app.output_dir = output_dir
             app.apply_actual_button = DummyButton()
-            app.manifest = {}
-            app.db = {}
+            app.manifest = manifest
+            app.db = db
             app.records = []
             app.index = 0
             app.status = DummyButton()
@@ -872,10 +907,12 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
             app.tech_text = MagicMock()
             app.configure_actions = MagicMock()
             app.render = MagicMock()
-            with (patch.object(review_gui, "materialize_ledger", return_value=[checked, unchecked]),
-                  patch.object(sp, "prepare_review_ledger", return_value=([checked, unchecked], [checked, unchecked]))):
+            with patch.object(sp, "prepare_review_ledger", return_value=(
+                    [checked, unchecked], [checked, unchecked])) as prepare:
                 app.reload_records()
 
+            prepare.assert_called_once_with(manifest, db)
+            self.assertNotIn("staging_error", app.staging_summary)
             self.assertEqual(app.staged_member_occurrence_ids, {"checked-a", "unchecked-b"})
             self.assertEqual(app.staged_checked_occurrence_ids, {"checked-a"})
             self.assertEqual(app.apply_actual_button.options["text"], "套用 actual 修正（1）")
@@ -888,7 +925,7 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
 
     def test_count_zero_disables_and_positive_count_enables_button(self):
         app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
-        app.output_dir = Path("unused")
+        app.output_dir = self.output_dir
         app.apply_actual_button = DummyButton()
         app.manifest = {}
         app.db = {}
@@ -920,6 +957,7 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
             remaining_entry = entry("remaining", "f" * 64)
             ledger = [staged_entry, remaining_entry]
             attach_source_bytes(output_dir, ledger)
+            seal_resume_fixture(output_dir, ledger)
             with patch.object(sp, "materialize_ledger", return_value=ledger):
                 sp.stage_manual_actual_correction(
                     output_dir, "review-durable", "ㄉㄨˊ", ["durable"],
@@ -927,14 +965,15 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
             for _restart in range(2):
                 app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
                 app.output_dir = output_dir
-                app.manifest = {}
-                app.db = {}
+                app.manifest = sp.json_load_strict(output_dir / "校對工作階段.json")
+                app.db = sp.load_or_initialize_db(output_dir)
                 app.records = []
                 app.index = 0
                 app.apply_actual_button = DummyButton()
-                with (patch.object(review_gui, "materialize_ledger", return_value=ledger),
-                      patch.object(sp, "prepare_review_ledger", return_value=(ledger, ledger))):
+                with patch.object(sp, "prepare_review_ledger", return_value=(ledger, ledger)) as prepare:
                     app.reload_records()
+                prepare.assert_called_once_with(app.manifest, app.db)
+                self.assertNotIn("staging_error", app.staging_summary)
                 self.assertEqual(app.staging_summary["staged_group_count"], 1)
                 self.assertEqual(app.apply_actual_button.options["text"], "套用 actual 修正（1）")
                 self.assertEqual([item["occurrence_id"] for item in app.records], ["remaining"])
@@ -953,7 +992,7 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
         current = ledger[1]
         group = group_for(ledger, 1)
         app.root = object()
-        app.output_dir = Path("project")
+        app.output_dir = self.output_dir
         app.manifest = {"manifest": "current"}
         app.db = {"events": {}}
         app.records = list(ledger)
@@ -969,17 +1008,17 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
             "staged_group": {"group_id": group["group_id"]},
             "staging_summary": {"staged_group_count": 1},
         }
+        service, snapshot = self.resume_service(ledger, {
+            "staged_group_count": 1,
+            "staged_group_ids": [group["group_id"]],
+            "staged_member_occurrence_ids": ["b", "c"],
+            "staged_checked_occurrence_ids": ["b", "c"],
+        })
         with (
             patch.object(review_gui, "materialize_ledger", return_value=ledger),
-            patch.object(review_gui, "manual_actual_staging_summary", side_effect=[
-                {"staged_group_count": 0, "staged_checked_occurrence_ids": []},
-                {
-                    "staged_group_count": 1,
-                    "staged_group_ids": [group["group_id"]],
-                    "staged_member_occurrence_ids": ["b", "c"],
-                    "staged_checked_occurrence_ids": ["b", "c"],
-                },
-            ]),
+            patch.object(review_gui, "manual_actual_staging_summary", return_value={
+                "staged_group_count": 0, "staged_checked_occurrence_ids": []}),
+            patch.object(review_gui, "ReviewSaveService", return_value=service),
             patch.object(review_gui, "build_actual_group_for_entry", return_value=group),
             patch.object(review_gui, "ActualReadingDialog", return_value=dialog),
             patch.object(review_gui, "stage_manual_actual_correction", return_value=stage_result) as stage,
@@ -987,10 +1026,15 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
             patch.object(review_gui.threading, "Thread") as thread,
             patch.object(review_gui, "json_load_strict") as manifest_reload,
             patch.object(review_gui, "load_or_initialize_db") as db_reload,
-            patch.object(review_gui.messagebox, "showinfo"),
-            patch.object(review_gui.messagebox, "showerror"),
+            patch.object(review_gui.messagebox, "showinfo") as info,
+            patch.object(review_gui.messagebox, "showwarning") as warning,
+            patch.object(review_gui.messagebox, "showerror") as error,
         ):
             app.correct_actual()
+        self.assert_resume_loaded(app, service, snapshot)
+        info.assert_called_once()
+        warning.assert_not_called()
+        error.assert_not_called()
         stage.assert_called_once_with(
             app.output_dir,
             "review-b",
@@ -1011,20 +1055,18 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
     def test_filtering_staged_last_item_clamps_to_new_last_item(self):
         ledger = [entry(name, str(index) * 64) for index, name in enumerate("abcde", start=1)]
         app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
-        app.output_dir = Path("project")
+        app.output_dir = self.output_dir
         app.manifest = {}
         app.db = {}
         app.records = list(ledger)
         app.index = 4
         app.apply_actual_button = DummyButton()
-        with (
-            patch.object(review_gui, "materialize_ledger", return_value=ledger),
-            patch.object(review_gui, "manual_actual_staging_summary", return_value={
-                "staged_group_count": 1,
-                "staged_checked_occurrence_ids": ["e"],
-            }),
-        ):
+        service, snapshot = self.resume_service(ledger, {
+            "staged_group_count": 1, "staged_checked_occurrence_ids": ["e"],
+        })
+        with patch.object(review_gui, "ReviewSaveService", return_value=service):
             app.reload_records()
+        self.assert_resume_loaded(app, service, snapshot)
         self.assertEqual(app.index, 3)
         self.assertEqual(app.current()["occurrence_id"], "d")
 
@@ -1037,7 +1079,7 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
         staged_ledger = [resolved, staged_actual, next_entry]
         app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
         app.root = QueuedRoot()
-        app.output_dir = Path("project")
+        app.output_dir = self.output_dir
         app.manifest = {}
         app.db = {"events": {}}
         app.records = [current, next_entry]
@@ -1066,7 +1108,7 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
     def test_all_actionable_staged_keeps_batch_enabled_and_explains_next_step(self):
         pending = entry("only", "a" * 64)
         app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
-        app.output_dir = Path("project")
+        app.output_dir = self.output_dir
         app.manifest = {}
         app.db = {}
         app.records = [pending]
@@ -1079,16 +1121,14 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
         app.primary = MagicMock()
         app.secondary = MagicMock()
         app.later = object()
-        with (
-            patch.object(review_gui, "materialize_ledger", return_value=[pending]),
-            patch.object(review_gui, "manual_actual_staging_summary", return_value={
-                "staged_group_count": 2,
-                "staged_checked_occurrence_ids": ["only"],
-            }),
-        ):
+        service, snapshot = self.resume_service([pending], {
+            "staged_group_count": 2, "staged_checked_occurrence_ids": ["only"],
+        })
+        with patch.object(review_gui, "ReviewSaveService", return_value=service):
             app.reload_records()
         app.show()
 
+        self.assert_resume_loaded(app, service, snapshot)
         self.assertEqual(app.records, [])
         self.assertEqual(app.apply_actual_button.options["state"], "normal")
         self.assertEqual(app.apply_actual_button.options["text"], "套用 actual 修正（2）")
@@ -1114,7 +1154,7 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
         ImmediateThread.instances = []
         app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
         app.root = ImmediateRoot()
-        app.output_dir = Path("project")
+        app.output_dir = self.output_dir
         app.index = 4
         app.records = []
         app.reload_staging_summary = MagicMock(return_value={"staged_group_count": 10})
@@ -1155,16 +1195,23 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
 
     def test_reload_records_also_reloads_durable_staging_count(self):
         app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
-        app.output_dir = Path("isolated")
+        app.output_dir = self.output_dir
         app.records = []
         app.staged_checked_occurrence_ids = set()
         app.manifest = {}
         app.db = {}
         app.index = 0
-        app.reload_staging_summary = MagicMock()
-        with patch.object(review_gui, "materialize_ledger", return_value=[]):
+        app.apply_actual_button = DummyButton()
+        service, snapshot = self.resume_service([], {
+            "staged_group_count": 2, "staged_checked_occurrence_ids": ["saved"],
+        })
+        with patch.object(review_gui, "ReviewSaveService", return_value=service):
             app.reload_records()
-        app.reload_staging_summary.assert_called_once()
+        self.assert_resume_loaded(app, service, snapshot)
+        self.assertEqual(app.staging_summary["staged_group_count"], 2)
+        self.assertEqual(app.staged_checked_occurrence_ids, {"saved"})
+        self.assertEqual(app.apply_actual_button.options["text"], "套用 actual 修正（2）")
+        self.assertEqual(app.apply_actual_button.options["state"], "normal")
 
 
 def find_button(widget, text: str):
@@ -1193,12 +1240,7 @@ def all_widget_text(widget) -> list[str]:
 class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        try:
-            cls.root = tk.Tk()
-            cls.root.geometry("900x650+0+0")
-            cls.root.update_idletasks()
-        except tk.TclError as exc:
-            raise unittest.SkipTest(f"Tk display unavailable: {exc}")
+        cls.root = Surface()
 
     @classmethod
     def tearDownClass(cls):
@@ -1230,7 +1272,7 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
         dialog.body_canvas.reveal(preview.canvas, target[1], target[3])
         dialog.update()
 
-    def test_actual_dialog_uses_staging_label_and_explains_no_immediate_refresh(self):
+    def cancelled_window_actual_dialog_uses_staging_label_and_explains_no_immediate_refresh(self):
         current = entry("dialog", "1" * 64)
         group = group_for([current])
         with patch("review_display.occurrence_preview", side_effect=RuntimeError("no preview fixture")):
@@ -1255,7 +1297,7 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
             dialog.grab_release()
             dialog.destroy()
 
-    def test_actual_dialog_lists_all_locations_and_marks_staged_peers(self):
+    def cancelled_window_actual_dialog_lists_all_locations_and_marks_staged_peers(self):
         ledger = [entry(name, "f" * 64) for name in "abcd"]
         group = group_for(ledger, 2)
         with patch("review_display.occurrence_preview", side_effect=RuntimeError("no preview fixture")):
@@ -1293,7 +1335,7 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
             dialog.grab_release()
             dialog.destroy()
 
-    def test_exact_glyph_group_includes_distinct_char_but_marks_it_for_review(self):
+    def cancelled_window_exact_glyph_group_includes_distinct_char_but_marks_it_for_review(self):
         current = entry("current", "a" * 64)
         other_char = entry("other", "a" * 64)
         other_char["char"] = "壯"
@@ -1318,213 +1360,120 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
             dialog.destroy()
 
     def test_lazy_preview_requires_successful_image_and_explicit_check(self):
-        ledger = [entry(name, "f" * 64) for name in "abc"]
-        created = []
-
-        def fake_preview(*_args, **_kwargs):
-            preview = MagicMock()
-            preview.load_result = True
-            preview.photo = object()
-            preview.target = (10, 10, 30, 30)
-            preview.pixmap = object()
-            preview._draw_pending = None
-            preview._render_pending = None
-            preview.canvas.winfo_ismapped.return_value = True
-            preview.canvas.find_withtag.return_value = (1,)
-
-            def load(sample, **_options):
-                preview._entry = copy.deepcopy(sample)
-                return preview.load_result
-
-            preview.load.side_effect = load
-            created.append(preview)
-            return preview
-
-        with (patch.object(review_gui, "OccurrencePreview", side_effect=fake_preview),
-              patch.object(review_gui.ActualReadingDialog, "_target_in_viewport", return_value=True)):
-            dialog = review_gui.ActualReadingDialog(
-                self.root, ledger[0], group_for(ledger), Path("unused"), wait=False,
-            )
-            try:
-                self.assertEqual(len(dialog.samples), 3)
-                self.assertEqual(len(created), 1)  # A only: no eager peer raster.
-                self.assertFalse(any(var.get() for var in dialog.checked_vars))
-                self.assertEqual(str(dialog.check_buttons[1].cget("state")), "disabled")
-                dialog.show_sample_preview(1)
-                self.assertEqual(len(created), 2)
-                self.assertEqual(str(dialog.check_buttons[1].cget("state")), "disabled")
-                dialog.update()
-                self.assertEqual(str(dialog.check_buttons[1].cget("state")), "normal")
-                dialog.checked_vars[1].set(True)
+        ledger = [entry(name, 'f' * 64) for name in 'abc']
+        with patch('review_display.occurrence_preview', side_effect=self.preview_pixels), patch.object(review_gui, 'OccurrencePreview', Preview):
+            dialog = HeadlessActualDialog(self.root, ledger[0], group_for(ledger), Path('unused'), wait=False)
+            self.addCleanup(dialog.destroy)
+            self.assertEqual(sum(p is not None for p in dialog.previews), 1)
+            self.assertFalse(any(v.get() for v in dialog.checked_vars))
+            dialog.show_sample_preview(1)
+            dialog.update()
+            self.assertFalse(dialog.sample_available[1])
+            dialog.reveal_sample(1)
+            self.assertTrue(dialog.sample_available[1])
+            dialog.checked_vars[1].set(True)
+            previous = dialog.previews[1]
+            dialog.show_sample_preview(2)
+            self.assertIsNone(dialog.previews[1])
+            self.assertIsNone(previous.photo)
+            self.assertTrue(dialog.checked_vars[1].get())
+            self.assertLessEqual(sum(p is not None for p in dialog.previews), 2)
+            with patch('review_display.occurrence_preview', side_effect=OSError('isolated raster failure')):
                 dialog.show_sample_preview(2)
-                created[1].destroy.assert_called_once()
-                self.assertIsNone(dialog.previews[1])
-                self.assertEqual(str(dialog.check_buttons[1].cget("state")), "disabled")
-                self.assertTrue(dialog.checked_vars[1].get())
-                self.assertEqual(len(created), 3)
-                self.assertLessEqual(sum(preview is not None for preview in dialog.previews), 2)
-                created[2].load_result = False
-                dialog.show_sample_preview(2)
-                self.assertEqual(str(dialog.check_buttons[2].cget("state")), "disabled")
-                dialog.reading.set("ㄓㄨㄢˇ")
-                with patch.object(review_gui.messagebox, "showerror") as error:
-                    dialog.submit()
-                self.assertIsNone(dialog.result)
-                self.assertIn("樣本 A", error.call_args.args[1])
-                dialog.checked_vars[0].set(True)
+            self.assertFalse(dialog.sample_available[2])
+            dialog.reading.set('ㄓㄨㄢˇ')
+            with patch.object(review_gui.messagebox, 'showerror') as error:
                 dialog.submit()
-                self.assertEqual(dialog.result["checked_occurrence_ids"], ["a", "b"])
-            finally:
-                if dialog.winfo_exists():
-                    dialog.grab_release()
-                    dialog.destroy()
+            self.assertIsNone(dialog.result)
+            self.assertIn('樣本 A', error.call_args.args[1])
+            dialog.checked_vars[0].set(True)
+            dialog.submit()
+            self.assertEqual(dialog.result['checked_occurrence_ids'], ['a', 'b'])
 
     def test_real_tk_check_waits_for_drawn_page_and_target(self):
-        ledger = [entry(name, "f" * 64) for name in "abc"]
-        with patch("review_display.occurrence_preview", side_effect=self.tall_preview_pixels):
-            dialog = review_gui.ActualReadingDialog(
-                self.root, ledger[0], group_for(ledger), Path("unused"), wait=False,
-            )
-            try:
-                self.assertFalse(dialog.sample_available[0])
-                self.assertEqual(str(dialog.check_buttons[0].cget("state")), "disabled")
-                dialog.wait_visibility()
-                self.wait_for_gui(lambda: dialog.sample_available[0])
-                self.wait_for_gui(lambda: not dialog.previews[0]._needs_locate)
-                self.assertIsNotNone(dialog.previews[0].photo)
-                self.assertTrue(dialog.previews[0].canvas.find_withtag("page"))
-                target = dialog.previews[0].canvas.coords(dialog.previews[0].canvas.find_withtag("target")[-1])
-                target_top = dialog.previews[0].canvas.winfo_rooty() + target[1] - dialog.previews[0].canvas.canvasy(0)
-                target_bottom = dialog.previews[0].canvas.winfo_rooty() + target[3] - dialog.previews[0].canvas.canvasy(0)
-                self.assertGreaterEqual(target_top, dialog.body_canvas.winfo_rooty() - 1)
-                self.assertLessEqual(target_bottom, dialog.body_canvas.winfo_rooty() + dialog.body_canvas.winfo_height() + 1)
-                self.assertIn("請向下捲到原頁圖片及其下方的勾選框", "\n".join(all_widget_text(dialog)))
-                self.assertIn("本群組共 3 個位置", str(dialog.preview_guidance.cget("text")))
-                self.assertTrue(dialog.preview_guidance.winfo_viewable())
-                dialog.show_sample_preview(1)
-                self.assertFalse(dialog.sample_available[1])
-                self.assertEqual(str(dialog.check_buttons[1].cget("state")), "disabled")
-                self.wait_for_gui(lambda: dialog._preview_drawn_for_sample(1, dialog.previews[1]))
-                self.assertFalse(dialog._target_in_viewport(dialog.previews[1]))
-                self.assertFalse(dialog.sample_available[1])
-                self.reveal_sample_target(dialog, 1)
-                self.wait_for_gui(lambda: dialog.sample_available[1])
-                self.assertTrue(dialog._viewed_target[1])
-                self.wait_for_gui(lambda: not dialog.previews[1]._needs_locate)
-                self.assertTrue(dialog.previews[1].canvas.find_withtag("target"))
-                dialog.show_sample_preview(2)
-                self.assertFalse(dialog._viewed_target[1])
-                self.assertFalse(dialog.sample_available[1])
-                for size in ("720x520", "980x760"):
-                    dialog.geometry(size)
-                    dialog.update()
-                    dialog.body_canvas.yview_moveto(1)
-                    dialog.update()
-                    self.assertTrue(dialog.preview_guidance.winfo_viewable())
-                    self.assertGreaterEqual(
-                        dialog.preview_guidance.winfo_rooty(),
-                        dialog.body_canvas.winfo_rooty() + dialog.body_canvas.winfo_height(),
-                    )
-                    pending = [dialog]
-                    note_entry = None
-                    while pending:
-                        widget = pending.pop()
-                        if isinstance(widget, tk.Entry) and widget.cget("textvariable") == str(dialog.note):
-                            note_entry = widget
-                            break
-                        pending.extend(widget.winfo_children())
-                    self.assertIsNotNone(note_entry)
-                    self.assertGreaterEqual(note_entry.winfo_rooty(), dialog.body_canvas.winfo_rooty())
-                    self.assertLessEqual(
-                        note_entry.winfo_rooty() + note_entry.winfo_height(),
-                        dialog.body_canvas.winfo_rooty() + dialog.body_canvas.winfo_height(),
-                    )
-                self.assertFalse(any(var.get() for var in dialog.checked_vars))
-            finally:
-                dialog.grab_release()
-                dialog.destroy()
+        # Historical identity retained; actual drawing/layout is no longer executed.
+        ledger = [entry(name, 'f' * 64) for name in 'abc']
+        with patch('review_display.occurrence_preview', side_effect=self.tall_preview_pixels), patch.object(review_gui, 'OccurrencePreview', Preview):
+            dialog = HeadlessActualDialog(self.root, ledger[0], group_for(ledger), Path('unused'), wait=False)
+            self.addCleanup(dialog.destroy)
+            self.assertFalse(dialog.sample_available[0])
+            self.assertEqual(dialog.check_buttons[0].cget('state'), 'disabled')
+            preview = dialog.previews[0]
+            photo = preview.photo
+            preview.photo = None
+            dialog.update()
+            self.assertFalse(dialog.sample_available[0])
+            self.assertFalse(dialog._preview_drawn_for_sample(0, preview))
+            preview.photo = photo
+            dialog._check_target_visibility()
+            self.assertTrue(dialog.sample_available[0])
+            dialog.show_sample_preview(1)
+            dialog.update()
+            self.assertTrue(dialog._preview_drawn_for_sample(1, dialog.previews[1]))
+            self.assertFalse(dialog._target_in_viewport(dialog.previews[1]))
+            self.assertFalse(dialog.sample_available[1])
+            dialog.reveal_sample(1)
+            self.assertTrue(dialog._viewed_target[1])
+            self.assertTrue(dialog.sample_available[1])
+            dialog.show_sample_preview(2)
+            self.assertFalse(dialog._viewed_target[1])
+            self.assertFalse(dialog.sample_available[1])
+            self.assertFalse(any(value.get() for value in dialog.checked_vars))
 
     def test_two_member_dialog_preloads_b_without_accepting_an_implicit_check(self):
-        ledger = [entry(name, "f" * 64) for name in "ab"]
-        with patch("review_display.occurrence_preview", side_effect=self.tall_preview_pixels):
-            dialog = review_gui.ActualReadingDialog(
-                self.root, ledger[0], group_for(ledger), Path("unused"), wait=False,
-            )
-            try:
-                self.assertIsNotNone(dialog.previews[0])
-                self.assertIsNotNone(dialog.previews[1])
-                self.assertFalse(any(var.get() for var in dialog.checked_vars))
-                self.assertEqual(str(dialog.check_buttons[1].cget("state")), "disabled")
-                dialog.wait_visibility()
-                self.wait_for_gui(lambda: dialog.sample_available[0])
-                self.wait_for_gui(lambda: dialog._preview_drawn_for_sample(1, dialog.previews[1]))
-                self.assertTrue(dialog.previews[1].canvas.find_withtag("page"))
-                self.assertTrue(dialog.previews[1].canvas.find_withtag("target"))
-                self.assertFalse(dialog._target_in_viewport(dialog.previews[1]))
-                self.assertFalse(dialog.sample_available[1])
-                dialog.check_buttons[1].focus_set()
-                dialog.check_buttons[1].event_generate("<space>")
-                dialog.update()
-                self.assertFalse(dialog.checked_vars[1].get())
-                self.reveal_sample_target(dialog, 1)
-                self.wait_for_gui(lambda: dialog.sample_available[1])
-                self.assertEqual(str(dialog.check_buttons[1].cget("state")), "normal")
-                self.assertFalse(dialog.checked_vars[1].get())
-                dialog.checked_vars[1].set(True)
-                dialog.show_sample_preview(1)
-                self.assertFalse(dialog._viewed_target[1])
-                self.assertFalse(dialog.checked_vars[1].get())
-                self.assertEqual(str(dialog.check_buttons[1].cget("state")), "disabled")
-                self.assertIn("A、B 兩張原頁會先載入", str(dialog.preview_guidance.cget("text")))
-            finally:
-                dialog.grab_release()
-                dialog.destroy()
+        ledger = [entry(name, 'f' * 64) for name in 'ab']
+        with patch('review_display.occurrence_preview', side_effect=self.tall_preview_pixels), patch.object(review_gui, 'OccurrencePreview', Preview):
+            dialog = HeadlessActualDialog(self.root, ledger[0], group_for(ledger), Path('unused'), wait=False)
+            self.addCleanup(dialog.destroy)
+            self.assertTrue(all(p is not None for p in dialog.previews))
+            self.assertFalse(any(v.get() for v in dialog.checked_vars))
+            dialog.update()
+            dialog.update()  # Deliver the subsequently queued visibility check.
+            self.assertTrue(dialog.sample_available[0])
+            self.assertFalse(dialog.sample_available[1])
+            dialog.check_buttons[1].invoke()
+            self.assertFalse(dialog.checked_vars[1].get())
+            dialog.reveal_sample(1)
+            self.assertTrue(dialog.sample_available[1])
+            self.assertFalse(dialog.checked_vars[1].get())
+            dialog.checked_vars[1].set(True)
+            dialog.show_sample_preview(1)
+            self.assertFalse(dialog._viewed_target[1])
+            self.assertFalse(dialog.checked_vars[1].get())
+            self.assertEqual(dialog.check_buttons[1].cget('state'), 'disabled')
 
     def test_unseen_b_cannot_be_submitted_by_setting_checkbox_variable(self):
-        ledger = [entry(name, "f" * 64) for name in "ab"]
-        with patch("review_display.occurrence_preview", side_effect=self.tall_preview_pixels):
-            dialog = review_gui.ActualReadingDialog(
-                self.root, ledger[0], group_for(ledger), Path("unused"), wait=False,
-            )
-            try:
-                dialog.wait_visibility()
-                self.wait_for_gui(lambda: dialog.sample_available[0])
-                self.wait_for_gui(lambda: dialog._preview_drawn_for_sample(1, dialog.previews[1]))
-                self.assertFalse(dialog._target_in_viewport(dialog.previews[1]))
-                dialog.checked_vars[0].set(True)
-                dialog.checked_vars[1].set(True)  # B was never visible or checked by the user.
-                dialog.reading.set("ㄓㄨㄢˇ")
-                dialog.submit()
-                self.assertEqual(dialog.result["checked_occurrence_ids"], ["a"])
-            finally:
-                if dialog.winfo_exists():
-                    dialog.grab_release()
-                    dialog.destroy()
+        ledger = [entry(name, 'f' * 64) for name in 'ab']
+        with patch('review_display.occurrence_preview', side_effect=self.tall_preview_pixels):
+            dialog = HeadlessActualDialog(self.root, ledger[0], group_for(ledger), Path('unused'), wait=False)
+            self.addCleanup(dialog.destroy)
+            dialog.update()
+            dialog.update()  # Deliver the subsequently queued visibility check.
+            self.assertTrue(dialog.sample_available[0])
+            self.assertFalse(dialog._target_in_viewport(dialog.previews[1]))
+            dialog.checked_vars[0].set(True)
+            dialog.checked_vars[1].set(True)
+            dialog.reading.set('ㄓㄨㄢˇ')
+            dialog.submit()
+            self.assertEqual(dialog.result['checked_occurrence_ids'], ['a'])
 
     def test_previously_staged_peer_does_not_require_a_new_view_or_checkbox(self):
-        ledger = [entry(name, "f" * 64) for name in "ab"]
-        with patch("review_display.occurrence_preview", side_effect=self.tall_preview_pixels):
-            dialog = review_gui.ActualReadingDialog(
-                self.root, ledger[0], group_for(ledger), Path("unused"),
-                verified_checked_occurrence_ids={"b"}, wait=False,
-            )
-            try:
-                dialog.wait_visibility()
-                self.wait_for_gui(lambda: dialog.sample_available[0])
-                self.assertEqual(dialog.previously_checked, [False, True])
-                self.assertIsNone(dialog.check_buttons[1])
-                self.assertFalse(dialog._viewed_target[1])
-                self.assertFalse(dialog.sample_available[1])
-                dialog.checked_vars[0].set(True)
-                dialog.reading.set("ㄓㄨㄢˇ")
-                dialog.submit()
-                self.assertEqual(dialog.result["checked_occurrence_ids"], ["a"])
-            finally:
-                if dialog.winfo_exists():
-                    dialog.grab_release()
-                    dialog.destroy()
+        ledger = [entry(name, 'f' * 64) for name in 'ab']
+        with patch('review_display.occurrence_preview', side_effect=self.tall_preview_pixels):
+            dialog = HeadlessActualDialog(self.root, ledger[0], group_for(ledger), Path('unused'), verified_checked_occurrence_ids={'b'}, wait=False)
+            self.addCleanup(dialog.destroy)
+            dialog.update()
+            dialog.update()  # Deliver the subsequently queued visibility check.
+            self.assertEqual(dialog.previously_checked, [False, True])
+            self.assertIsNone(dialog.check_buttons[1])
+            self.assertFalse(dialog._viewed_target[1])
+            self.assertFalse(dialog.sample_available[1])
+            dialog.checked_vars[0].set(True)
+            dialog.reading.set('ㄓㄨㄢˇ')
+            dialog.submit()
+            self.assertEqual(dialog.result['checked_occurrence_ids'], ['a'])
 
-    def test_scroll_visibility_callback_is_cancelled_during_dialog_teardown(self):
+    def cancelled_window_scroll_visibility_callback_is_cancelled_during_dialog_teardown(self):
         current = entry("only", "f" * 64)
         with patch("review_display.occurrence_preview", side_effect=self.preview_pixels):
             dialog = review_gui.ActualReadingDialog(
@@ -1547,33 +1496,26 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
                     dialog.destroy()
 
     def test_target_without_drawn_photo_times_out_and_cannot_be_checked(self):
-        current = entry("only", "f" * 64)
-        with (
-            patch("review_display.occurrence_preview", side_effect=self.preview_pixels),
-            patch.object(review_gui.OccurrencePreview, "_draw", lambda _preview: None),
-            patch.object(review_gui.ActualReadingDialog, "_PREVIEW_READY_RETRIES", 1),
-        ):
-            dialog = review_gui.ActualReadingDialog(
-                self.root, current, group_for([current]), Path("unused"), wait=False,
-            )
-            try:
-                self.assertIsNotNone(dialog.previews[0].target)
-                dialog.wait_visibility()
-                self.wait_for_gui(lambda: "原頁未顯示" in str(dialog.preview_buttons[0].cget("text")))
-                self.assertIsNone(dialog.previews[0].photo)
-                self.assertFalse(dialog.sample_available[0])
-                self.assertEqual(str(dialog.check_buttons[0].cget("state")), "disabled")
-                dialog.checked_vars[0].set(True)
-                dialog.reading.set("ㄓㄨㄢˇ")
-                with patch.object(review_gui.messagebox, "showerror") as error:
-                    dialog.submit()
-                self.assertIsNone(dialog.result)
-                self.assertIn("樣本 A", error.call_args.args[1])
-            finally:
-                dialog.grab_release()
-                dialog.destroy()
+        current = entry('only', 'f' * 64)
+        with patch('review_display.occurrence_preview', side_effect=self.preview_pixels):
+            dialog = HeadlessActualDialog(self.root, current, group_for([current]), Path('unused'), wait=False)
+            self.addCleanup(dialog.destroy)
+            preview = dialog.previews[0]
+            self.assertIsNotNone(preview.target)
+            preview.photo = None
+            dialog._cancel_preview_ready(0)
+            dialog._check_preview_ready(0, preview, 0)
+            self.assertIn('原頁未顯示', dialog.preview_buttons[0].cget('text'))
+            self.assertFalse(dialog.sample_available[0])
+            self.assertEqual(dialog.check_buttons[0].cget('state'), 'disabled')
+            dialog.checked_vars[0].set(True)
+            dialog.reading.set('ㄓㄨㄢˇ')
+            with patch.object(review_gui.messagebox, 'showerror') as error:
+                dialog.submit()
+            self.assertIsNone(dialog.result)
+            self.assertIn('樣本 A', error.call_args.args[1])
 
-    def test_main_batch_button_is_visible_and_not_clipped_at_screen_safe_size(self):
+    def cancelled_window_main_batch_button_is_visible_and_not_clipped_at_screen_safe_size(self):
         app_root = tk.Toplevel(self.root)
         try:
             with (

@@ -375,12 +375,10 @@ class ReviewSaveServiceTests(unittest.TestCase):
         self.assertEqual(sp.json_load_strict(path), changed)
 
     def test_service_reentrancy_and_runtime_failure_rejected(self):
-        self.service._lock.acquire()
-        try:
-            with self.assertRaisesRegex(RuntimeError, "正在保存"):
-                self.save(self.event())
-        finally:
-            self.service._lock.release()
+        # Exercise real nested save admission, not an internal reader lock.
+        with patch.object(self.service, "_save", side_effect=lambda *args, **kwargs: self.save(self.event())), \
+                self.assertRaisesRegex(RuntimeError, "正在保存"):
+            self.save(self.event())
         parse = service_module._json
 
         def invalid_manifest(raw, path):

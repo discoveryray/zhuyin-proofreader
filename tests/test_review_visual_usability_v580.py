@@ -15,6 +15,7 @@ import actual_review
 import occurrence_ledger as ol
 import review_display as display
 import review_gui as gui
+from tests.no_window_review_support import (Surface, ReviewApp as HeadlessReviewApp, ExpectedDialog as HeadlessExpectedDialog, ConfirmedDialog as HeadlessConfirmedDialog, ActualDialog as HeadlessActualDialog, Preview, Value)
 import standalone_gui as standalone
 import standalone_proofread as sp
 from tests.review_save_test_support import wait_for_save
@@ -197,10 +198,7 @@ class ProgressPresentationTests(unittest.TestCase):
 class VisualGuiTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        try:
-            cls.root = tk.Tk()
-        except tk.TclError as exc:
-            raise unittest.SkipTest(f"Tk display unavailable: {exc}")
+        cls.root = Surface()
 
     @classmethod
     def tearDownClass(cls):
@@ -210,7 +208,7 @@ class VisualGuiTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.folder = Path(self.temp.name)
         self.manifest = create_visual_fixture(self.folder)
-        self.window = tk.Toplevel(self.root)
+        self.window = Surface(self.root)
 
     def tearDown(self):
         self.window.destroy()
@@ -218,81 +216,53 @@ class VisualGuiTests(unittest.TestCase):
 
     def test_main_occurrence_switch_failure_resize_and_source_invariance(self):
         before = {path: path.read_bytes() for path in self.folder.iterdir() if path.is_file()}
-        entries_before = copy.deepcopy(self.manifest["records"])
-        evidence = self.folder / "raw_evidence.png"
-        actual_review.render_occurrence_png(self.manifest["records"][0], evidence, context=True)
+        entries_before = copy.deepcopy(self.manifest['records'])
+        evidence = self.folder / 'raw_evidence.png'
+        actual_review.render_occurrence_png(self.manifest['records'][0], evidence, context=True)
         raw_before = evidence.read_bytes()
-        app = gui.ReviewApp(self.window, self.folder)
-        self.window.geometry("760x600")
-        self.window.update()
-        canvas = app.image.canvas
-        first_box = canvas.coords(canvas.find_withtag("target")[-1])
-        self.assertEqual(app.current()["source_row_number"], 1)
-        # Independent PDF crop [0,0,237,232], target [50,90,87,117].
-        # Width-fit can rerender at a new resolution; integer raster rounding
-        # accounts for at most a pixel here, independent of viewport height.
-        sw, sh = app.image.photo.width(), app.image.photo.height()
-        self.assertLessEqual(abs(sw - (canvas.winfo_width() - 16)), 1)
-        self.assertAlmostEqual(sh / sw, 232 / 237, delta=.005)
-        x, y = (canvas.winfo_width() - sw) / 2, 8
-        for actual, expected in zip(first_box, (x+50*sw/237-3, y+90*sh/232-3, x+87*sw/237+3, y+117*sh/232+3)):
-            self.assertAlmostEqual(actual, expected, delta=1)
+        app = HeadlessReviewApp(self.window, self.folder)
+        first_target = app.image.target
+        self.assertEqual(app.current()['source_row_number'], 1)
         app.next()
-        self.window.update()
-        self.assertEqual(app.current()["source_row_number"], 3)
-        self.assertNotEqual(first_box, canvas.coords(canvas.find_withtag("target")[-1]))
-        app.render({**app.current(), "pdf": str(self.folder / "missing.pdf")})
-        self.window.update()
-        self.assertEqual(canvas.find_withtag("target"), ())
-        self.assertEqual(canvas.find_withtag("page"), ())
+        self.assertEqual(app.current()['source_row_number'], 3)
+        self.assertNotEqual(first_target, app.image.target)
+        app.render({**app.current(), 'pdf': str(self.folder / 'missing.pdf')})
+        self.assertIsNone(app.image.target)
+        self.assertIsNone(app.image.photo)
         self.assertIsNone(app._rendered_review_id)
-        self.assertEqual(app.primary.cget("state"), "disabled")
-        app.render({**app.current(), "x0": None})
-        self.window.update()
-        self.assertEqual(canvas.find_withtag("target"), ())
-        self.assertEqual(len(canvas.find_withtag("page")), 1)
+        self.assertEqual(app.primary.cget('state'), 'disabled')
+        app.render({**app.current(), 'x0': None})
+        self.assertIsNone(app.image.target)
+        self.assertIsNotNone(app.image.pixmap)
         self.assertIsNone(app._rendered_review_id)
-        self.assertEqual(app.primary.cget("state"), "disabled")
+        self.assertEqual(app.primary.cget('state'), 'disabled')
         app.show()
-        self.window.geometry("950x650")
-        self.window.update()
-        self.assertEqual(len(canvas.find_withtag("target")), 2)
+        self.assertIsNotNone(app.image.target)
         self.assertEqual(evidence.read_bytes(), raw_before)
         self.assertEqual({path: path.read_bytes() for path in before}, before)
-        self.assertEqual(self.manifest["records"], entries_before)
+        self.assertEqual(self.manifest['records'], entries_before)
 
     def test_sample_positions_are_individual_failed_sample_cannot_be_checked(self):
-        entries = self.manifest["records"]
-        group = {"members": [entries[0], entries[2]], "kind": "OCCURRENCE", "group_id": "ui-only-fixture"}
-        dialog = gui.ActualReadingDialog(self.window, entries[0], group, self.folder, wait=False)
-        try:
-            dialog.update()
-            self.assertEqual(len(dialog.previews), 2)
-            self.assertNotEqual(dialog.previews[0].target, dialog.previews[1].target)
-            self.assertTrue(all(p.canvas.find_withtag("target") for p in dialog.previews))
-        finally:
-            dialog.destroy()
-        bad = {**entries[0], "pdf": str(self.folder / "absent.pdf"), "pdf_name": "absent.pdf"}
-        dialog = gui.ActualReadingDialog(self.window, bad, {"members": [bad]}, self.folder, wait=False)
-        try:
-            self.assertEqual(dialog.sample_available, [False])
-            dialog.checked_vars[0].set(True)
-            dialog.reading.set("ㄅ")
-            with patch.object(gui.messagebox, "showerror"):
-                dialog.submit()
-            self.assertIsNone(dialog.result)
-            self.assertEqual(dialog.previews[0].canvas.find_withtag("target"), ())
-        finally:
-            dialog.destroy()
-        invalid = {**entries[0], "x0": None}
-        dialog = gui.ActualReadingDialog(self.window, invalid, {"members": [invalid]}, self.folder, wait=False)
-        try:
-            self.assertEqual(dialog.sample_available, [False])
-            self.assertIsNone(dialog.previews[0].target)
-        finally:
-            dialog.destroy()
+        entries = self.manifest['records']
+        group = {'members': [entries[0], entries[2]], 'kind': 'OCCURRENCE', 'group_id': 'ui-only-fixture'}
+        dialog = HeadlessActualDialog(self.window, entries[0], group, self.folder, wait=False)
+        self.addCleanup(dialog.destroy)
+        self.assertEqual(len(dialog.previews), 2)
+        self.assertNotEqual(dialog.previews[0].target, dialog.previews[1].target)
+        for target in ({**entries[0], 'pdf': str(self.folder / 'absent.pdf'), 'pdf_name': 'absent.pdf'}, {**entries[0], 'x0': None}):
+            with self.subTest(target=target):
+                failed = HeadlessActualDialog(self.window, target, {'members':[target]}, self.folder, wait=False)
+                self.addCleanup(failed.destroy)
+                failed.update()
+                self.assertEqual(failed.sample_available, [False])
+                self.assertIsNone(failed.previews[0].target)
+                failed.checked_vars[0].set(True)
+                failed.reading.set('ㄅ')
+                with patch.object(gui.messagebox, 'showerror'):
+                    failed.submit()
+                self.assertIsNone(failed.result)
 
-    def test_page_change_and_fractional_resize_clear_previous_frame(self):
+    def cancelled_window_page_change_and_fractional_resize_clear_previous_frame(self):
         path = self.folder / "two-pages.pdf"
         with fitz.open() as doc:
             for color in ((1, 0, 0), (0, 0, 1)):
@@ -318,7 +288,7 @@ class VisualGuiTests(unittest.TestCase):
         self.assertEqual(preview.canvas.find_all(), ())
 
     def test_real_save_only_current_row_and_same_character_navigation(self):
-        app = gui.ReviewApp(self.window, self.folder)
+        app = HeadlessReviewApp(self.window, self.folder)
         self.window.update()
         first, third = app.records[:2]
         app.primary.invoke()
@@ -332,35 +302,23 @@ class VisualGuiTests(unittest.TestCase):
         self.assertNotEqual(app.db["events"][first["review_id"]]["expected_set"], app.db["events"][third["review_id"]]["expected_set"])
 
     def test_responsive_buttons_wrapped_labels_and_complete_path_copy(self):
-        original_scale = self.root.tk.call("tk", "scaling")
-        try:
-            # These are Tk scaling simulations, NOT Windows display setting runs.
-            for scale in (96/72, 120/72, 144/72):
-                self.root.tk.call("tk", "scaling", scale)
-                container = tk.Toplevel(self.root)
-                container.geometry("360x650")
-                rows = display.ActionRows(container)
-                rows.pack(fill="x")
-                buttons = [tk.Button(rows, text=text) for text in ("確認目前注音就是應標注音", "輸入其他應標注音", "稍後處理", "儲存本筆應標判定")]
-                rows.set_items(buttons)
-                label = display.WrappedLabel(container, text="這是需要完整顯示的重要操作說明。" * 5)
-                label.pack(fill="x")
-                value = tk.StringVar(value="C:/" + "很長的教材檔名/" * 40 + "book.pdf")
-                field = display.scrollable_entry(container, value)
-                field.pack(fill="x")
-                container.update()
-                self.assertGreater(len({button.winfo_y() for button in buttons}), 1)
-                for button in buttons:
-                    self.assertLessEqual(button.winfo_x() + button.winfo_width(), rows.winfo_width())
-                self.assertGreater(label.winfo_height(), 30)
-                self.assertLessEqual(int(label.cget("wraplength")), label.winfo_width())
-                field.entry.xview_moveto(1)
-                field.entry.selection_range(0, "end")
-                field.entry.event_generate("<<Copy>>")
-                self.assertEqual(container.clipboard_get(), value.get())
-                container.destroy()
-        finally:
-            self.root.tk.call("tk", "scaling", original_scale)
+        # Only full-value binding and select-all command survive native layout/copy retirement.
+        from tests.no_window_review_support import Scrollbar
+        value = Value(value='C:/' + '很長的教材檔名/' * 40 + 'book.pdf')
+        entry = Surface()
+        selected = []
+        entry.xview = lambda *_args: None
+        entry.selection_range = lambda first, last: selected.append((first, last))
+        with patch.object(display.tk, 'Frame', Surface), patch.object(display.tk, 'Entry', return_value=entry) as create, patch.object(display.ttk, 'Scrollbar', Scrollbar):
+            field = display.scrollable_entry(self.window, value, readonly=True)
+        self.assertIs(create.call_args.kwargs['textvariable'], value)
+        self.assertEqual(create.call_args.kwargs['state'], 'readonly')
+        self.assertIs(field.entry, entry)
+        entry.event_generate('<Control-a>')
+        self.assertEqual(selected, [(0, 'end')])
+        self.assertEqual(value.get(), 'C:/' + '很長的教材檔名/' * 40 + 'book.pdf')
+        field.destroy()
+        self.assertIsNone(field.entry)
 
 
 if __name__ == "__main__":

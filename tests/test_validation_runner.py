@@ -526,8 +526,8 @@ class RunnerCliTests(unittest.TestCase):
     def execute(self, body):
         self.test_path.write_text(body, encoding="utf-8")
         relative = self.test_path.relative_to(ROOT).as_posix()
-        inventory = {"schema": "zhuyin-test-groups/1", "pytest_ids": ["test_isolated.Case.test_probe"],
-                     "core_ids": ["test_isolated.Case.test_probe"], "gui_ids": [],
+        inventory = {"schema": "zhuyin-test-groups/2", "policy": runner.POLICY, "window_validation": audit.WINDOW_NOTICE, "pytest_ids": ["test_isolated.Case.test_probe"],
+                     "core_ids": ["test_isolated.Case.test_probe"], "cancelled_window_ids": [],
                      "records": [{"identity": "test_isolated.Case.test_probe", "nodeid": relative + "::Case::test_probe", "group": "core"}]}
         runner.write_json(self.execution / "inventory.json", inventory)
         result = subprocess.run([sys.executable, str(ROOT / "scripts/validation_runner.py"), "_pytest",
@@ -633,16 +633,19 @@ class RunnerOrchestrationTests(unittest.TestCase):
         self.folder = Path(self.temp.name)
         self.evidence = self.folder / "evidence"
         test_path = self.folder / "test_pair.py"
-        test_path.write_text("import unittest\nclass Case(unittest.TestCase):\n    def test_core(self): self.assertTrue(True)\n    def test_gui(self): self.assertTrue(True)\n")
+        test_path.write_text("def test_core(): assert 2 + 3 == 5\n")
         relative = test_path.relative_to(ROOT).as_posix()
-        self.inventory = {"schema": "zhuyin-test-groups/1", "pytest_ids": ["test_pair.Case.test_core", "test_pair.Case.test_gui"],
-                          "core_ids": ["test_pair.Case.test_core"], "gui_ids": ["test_pair.Case.test_gui"],
-                          "records": [{"identity": "test_pair.Case.test_" + group, "nodeid": relative + "::Case::test_" + group, "group": group} for group in ("core", "gui")]}
+        self.inventory = {"schema": "zhuyin-test-groups/2", "policy": runner.POLICY,
+                          "window_validation": audit.WINDOW_NOTICE,
+                          "pytest_ids": ["test_pair.test_core"], "core_ids": ["test_pair.test_core"],
+                          "cancelled_window_ids": ["test_pair.test_native"],
+                          "records": [{"identity": "test_pair.test_core", "nodeid": relative + "::test_core", "group": "core"}]}
         self.candidate = {"head": "a" * 40, "tree": "b" * 40, "parents": ["c" * 40, "d" * 40]}
         self.real_run = ORIGINAL_RUN_PROCESS
-        self.preflight_success = False
         self.calls = []
+        # These are explicit isolated fixture boundaries, never formal Windows CI.
         self.patches = [patch.dict("os.environ", {"GITHUB_ACTIONS": "true"}),
+                        patch.object(runner, "validate_environment"),
                         patch.object(runner, "validate_history_context", return_value={"task_id": "fixture-task"}),
                         patch.object(runner, "snapshot", return_value=self.candidate),
                         patch.object(runner, "git", return_value=""),
@@ -659,90 +662,51 @@ class RunnerOrchestrationTests(unittest.TestCase):
 
     def process(self, command, folder, name, timeout, env=None):
         self.calls.append(name)
-        if name != "preflight.log":
-            return self.real_run(command, folder, name, timeout, env)
-        (folder / name).write_text("isolated preflight injection, no Tk created\n")
-        runner.write_json(folder / "preflight.json", {"stage": "complete" if self.preflight_success else "tk_initialization"})
-        root = ET.Element("testsuite")
-        case = ET.SubElement(root, "testcase", name="test_gui_environment")
-        if not self.preflight_success:
-            ET.SubElement(case, "failure", message="_tkinter.TclError: couldn't read file \"C:/Tk/combobox.tcl\": permission denied")
-        ET.ElementTree(root).write(folder / "preflight.xml")
-        return {"exit_code": 0 if self.preflight_success else 1,
-                "outcome": "success" if self.preflight_success else "failed",
-                "started_at": runner.utc_now(), "finished_at": runner.utc_now(), "runner_start_error": None}
+        self.assertNotIn("gui_preflight.py", " ".join(command))
+        return self.real_run(command, folder, name, timeout, env)
 
-    def test_preflight_failure_retains_core_and_retry_uses_full_gui_only(self):
+    def test_core_only_run_and_aggregate_need_no_gui_or_preflight(self):
         core = runner.run_group("core", self.evidence, mode="validation")
-        core_digest = runner.digest(core)
-        self.assertEqual(runner.read_verified_manifest(core)["outcome"], "success")
-        gui1 = runner.run_group("gui", self.evidence, mode="validation")
-        self.assertEqual(runner.read_verified_manifest(gui1)["outcome"], "blocked")
-        self.assertFalse((gui1.parent / "junit.xml").exists())
-        self.assertEqual(self.calls.count("raw.log"), 1)
-        with self.assertRaises(ValueError):
-            runner.aggregate(self.evidence)
-        self.assertEqual(runner.run_group("core", self.evidence, mode="validation"), core)
-        self.assertEqual(self.calls.count("raw.log"), 1)
-        self.preflight_success = True
-        gui2 = runner.run_group("gui", self.evidence, mode="validation")
-        self.assertEqual(runner.read_verified_manifest(gui2)["retry_of"], gui1.parent.name)
-        self.assertEqual(runner.digest(core), core_digest)
+        original = core.read_bytes()
         combined = runner.aggregate(self.evidence)
-        self.assertEqual(combined["status"], "success")
-        self.assertEqual(len(combined["history_manifests"]), 3)
-        output = self.evidence / "coverage.json"
-        self.assertEqual(runner.main(["aggregate", "--evidence-root", str(self.evidence), "--output", str(output)]), 0)
-        self.assertEqual(runner.main(["aggregate", "--evidence-root", str(self.evidence), "--output", str(output)]), 2)
+        self.assertEqual(combined["schema"], "zhuyin-validation-coverage/2")
+        self.assertEqual(combined["window_validation"], audit.WINDOW_NOTICE)
+        self.assertNotIn("gui_manifest", combined)
+        self.assertEqual(runner.run_group("core", self.evidence, mode="validation"), core)
+        self.assertEqual(self.calls, ["raw.log"])
+        self.assertEqual(core.read_bytes(), original)
+        self.assertFalse(list(self.evidence.rglob("preflight*")))
 
-    def test_again_failed_gui_does_not_allow_third_attempt(self):
-        runner.run_group("core", self.evidence, mode="validation")
-        runner.run_group("gui", self.evidence, mode="validation")
-        runner.run_group("gui", self.evidence, mode="validation")
-        with self.assertRaisesRegex(ValueError, "retry"):
+    def test_gui_launcher_and_child_refuse_before_any_process(self):
+        with self.assertRaisesRegex(ValueError, "取消"):
             runner.run_group("gui", self.evidence, mode="validation")
-        self.assertEqual(self.calls.count("raw.log"), 1)
-        self.assertEqual(self.calls.count("preflight.log"), 2)
+        with self.assertRaisesRegex(ValueError, "取消"):
+            runner.pytest_child(self.folder, "gui")
+        self.assertEqual(self.calls, [])
+        self.assertFalse(self.evidence.exists())
 
-    def test_new_candidate_preserves_old_core_and_blocked_gui_without_adoption(self):
+    def test_new_candidate_preserves_old_evidence_without_relabelling(self):
         old_core = runner.run_group("core", self.evidence, mode="validation")
-        old_gui = runner.run_group("gui", self.evidence, mode="validation")
-        original = {path: path.read_bytes() for path in (old_core, old_gui)}
+        original = old_core.read_bytes()
         self.candidate.update(head="e" * 40, tree="f" * 40)
-        self.preflight_success = True
         new_core = runner.run_group("core", self.evidence, mode="validation")
-        new_gui = runner.run_group("gui", self.evidence, mode="validation")
         bundle = runner.aggregate(self.evidence, head="e" * 40)
         self.assertEqual(bundle["core_manifest"], new_core.relative_to(self.evidence).as_posix())
-        self.assertEqual(bundle["gui_manifest"], new_gui.relative_to(self.evidence).as_posix())
-        self.assertEqual(len(bundle["history_manifests"]), 4)
-        self.assertEqual(self.calls.count("raw.log"), 3)  # old core, new core, new GUI exactly once
-        for path, payload in original.items(): self.assertEqual(path.read_bytes(), payload)
-        self.assertEqual(runner.read_verified_manifest(old_gui)["outcome"], "blocked")
-        # Inject a separately validated synthetic environment difference at the
-        # aggregation boundary; never rewrite durable execution artifacts.
-        history = runner.history(self.evidence)
-        foreign = copy.deepcopy(history)
-        for path, value in foreign:
-            if path == new_gui:
-                value["environment"]["environment"]["TCL_LIBRARY"] = "foreign-installation"
-        with patch.object(runner, "history", return_value=foreign), self.assertRaisesRegex(ValueError, "mixed group evidence: environment"):
-            runner.aggregate(self.evidence, head="e" * 40)
+        self.assertEqual(old_core.read_bytes(), original)
+        self.assertEqual(len(bundle["history_manifests"]), 2)
 
     def test_core_failure_cannot_be_cleared_by_same_candidate_rerun(self):
-        original = ORIGINAL_RUN_PROCESS
         def fail(command, folder, name, timeout, env=None):
-            if name == "raw.log":
-                (folder / "raw.log").write_text("AssertionError: isolated code failure")
-                return {"exit_code": 1, "outcome": "failed", "started_at": runner.utc_now(),
-                        "finished_at": runner.utc_now(), "runner_start_error": None}
-            return original(command, folder, name, timeout, env)
+            (folder / "raw.log").write_text("AssertionError: isolated code failure")
+            return {"exit_code": 1, "outcome": "failed", "started_at": runner.utc_now(),
+                    "finished_at": runner.utc_now(), "runner_start_error": None}
         self.real_run = fail
         failed = runner.run_group("core", self.evidence, mode="validation")
         self.assertEqual(runner.read_verified_manifest(failed)["outcome"], "failed")
-        self.real_run = original
         with self.assertRaisesRegex(ValueError, "core failure remains unresolved"):
             runner.run_group("core", self.evidence, mode="validation")
+        with self.assertRaisesRegex(ValueError, "unresolved"):
+            runner.aggregate(self.evidence)
 
     def test_incomplete_history_and_corrupt_artifact_fail_closed(self):
         core = runner.run_group("core", self.evidence, mode="validation")
@@ -755,6 +719,7 @@ class RunnerOrchestrationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unfinished"):
             runner.history(self.evidence)
 
+<<<<<<< HEAD
     def test_mixed_candidate_and_later_failure_reject_aggregate(self):
         runner.run_group("core", self.evidence, mode="validation")
         self.preflight_success = True
@@ -792,6 +757,18 @@ class RunnerOrchestrationTests(unittest.TestCase):
         for path, payload in original.items():
             self.assertEqual(path.read_bytes(), payload)
 
+=======
+    def test_current_manifest_cannot_claim_preflight_or_gui_success(self):
+        core = runner.run_group("core", self.evidence, mode="validation")
+        data = runner.read_json(core)
+        for field, value in (("group", "gui"), ("preflight", {"outcome": "success"}),
+                             ("policy", "future"), ("retry_eligible", True)):
+            changed = dict(data, **{field: value})
+            core.write_text(json.dumps(changed), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "policy"):
+                runner.read_verified_manifest(core)
+        core.write_text(json.dumps(data), encoding="utf-8")
+>>>>>>> origin/develop
 
 class HistoryRetrievalTests(unittest.TestCase):
     def test_prior_attempt_missing_artifact_fails_cli_without_reset(self):

@@ -16,6 +16,7 @@ from openpyxl import load_workbook
 
 import occurrence_ledger as ol
 import review_gui as gui
+from tests.no_window_review_support import (Surface, ReviewApp as HeadlessReviewApp, ExpectedDialog as HeadlessExpectedDialog, ConfirmedDialog as HeadlessConfirmedDialog, ActualDialog as HeadlessActualDialog, Preview, Value)
 import standalone_proofread as sp
 from review_save_service import ReviewSaveService
 from tests.test_staged_review_navigation_v580 import create_staged_navigation_fixture
@@ -427,73 +428,31 @@ class ExpectedResolutionMaterializationTests(_ResolutionFixture, unittest.TestCa
 
 
 class _ExpectedResolutionGuiOwner:
-    """This fixture's Tk objects retire before the next case starts workers."""
+    """Finite view lifecycle; durable workers still finish before fixture removal."""
     def __init__(self):
-        self.thread = threading.get_native_id()
-        self.root = tk.Tk()  # Required capability; never skip missing Tk.
-        self.apps = []
-        self.windows = []
-        self.references = []
-        self.retired = []
+        self.root = Surface()
+        self.apps, self.windows = [], []
         self.closed = False
-        self._observe(self.root, "root")
-
-    def _observe(self, obj, label):
-        retired = self.retired
-        self.references.append((label, weakref.ref(
-            obj, lambda _ref: retired.append((label, threading.get_native_id())))))
 
     def new_app(self, output):
-        if threading.get_native_id() != self.thread:
-            raise AssertionError("ExpectedResolution Tk creation must stay on owner thread")
-        window = tk.Toplevel(self.root)
-        self.windows.append(window)  # Registered before app construction can fail.
-        self._observe(window, "window")
-        app = gui.ReviewApp(window, output)
+        window = Surface(self.root)
+        self.windows.append(window)
+        app = HeadlessReviewApp(window, output)
         self.apps.append(app)
-        self._observe(app, "app")
-        # Observe real widgets/variables, rather than only a cleanup invocation.
-        children = list(window.winfo_children())
-        while children:
-            widget = children.pop()
-            self._observe(widget, "widget")
-            children.extend(widget.winfo_children())
-        for value in vars(app).values():
-            if isinstance(value, tk.Variable):
-                self._observe(value, "variable")
         return window, app
 
     def close(self):
         if self.closed:
             return
-        if threading.get_native_id() != self.thread:
-            raise AssertionError("ExpectedResolution Tk cleanup must stay on owner thread")
-        # A durable save may still be running after a body exception. Keep every
-        # Tk owner anchored until it finishes; never remove its project mid-write.
         for app in self.apps:
-            worker = getattr(app, "_save_worker", None)
-            if worker is not None and worker.ident is not None:
+            worker = getattr(app, '_save_worker', None)
+            if worker is not None:
                 worker.join(15)
                 if worker.is_alive():
-                    raise AssertionError("ExpectedResolution save worker did not finish")
-        app = worker = None
-        for window in self.windows:
-            if window.winfo_exists():
-                window.destroy()  # Also cancels ReviewApp's pending async polls.
-        window = None
+                    raise AssertionError('ExpectedResolution save worker did not finish')
+        self.root.destroy()
         self.apps.clear()
         self.windows.clear()
-        # Body locals have been released in finally, even when their traceback
-        # survives. Retire widget/app cycles with the root still anchoring Tcl.
-        gc.collect()
-        self.root.destroy()
-        self.root = None
-        gc.collect()
-        alive = [label for label, reference in self.references if reference() is not None]
-        if alive:
-            raise AssertionError(f"ExpectedResolution Tk objects still retained: {alive}")
-        if any(thread != self.thread for _label, thread in self.retired):
-            raise AssertionError("ExpectedResolution Tk object retired on another thread")
         self.closed = True
 
 
@@ -505,7 +464,7 @@ class ExpectedResolutionGuiTests(_ResolutionFixture, unittest.TestCase):
         window = app = reopened_window = reopened = None
         try:
             db, source, reviewed = self.legacy_resolution(with_fingerprint=False)
-            root.withdraw()
+            pass
             window, app = owner.new_app(self.output)
             target = next(row for row in app.records if row["review_id"] == self.base["review_id"])
             app.index = app.records.index(target)
@@ -541,7 +500,7 @@ class ExpectedResolutionGuiTests(_ResolutionFixture, unittest.TestCase):
         try:
             _, imported = self.import_resolution()
             window, app = owner.new_app(self.output)
-            root.withdraw()
+            pass
             target = next(row for row in app.records if row["review_id"] == self.base["review_id"])
             self.assertEqual(target["expected_set"], self.base["expected_set"])
             self.assertNotEqual(target["expected_evidence"], self.base["expected_evidence"])
@@ -567,7 +526,7 @@ class ExpectedResolutionGuiTests(_ResolutionFixture, unittest.TestCase):
         finally:
             root = window = app = reopened_window = reopened = None
 
-    def test_real_tk_owner_cleanup_retires_objects_and_pending_poll(self):
+    def cancelled_window_real_tk_owner_cleanup_retires_objects_and_pending_poll(self):
         owner = _ExpectedResolutionGuiOwner()
         self.addCleanup(owner.close)
         window = app = None
@@ -584,7 +543,7 @@ class ExpectedResolutionGuiTests(_ResolutionFixture, unittest.TestCase):
         self.assertTrue(all(reference() is None for _label, reference in owner.references))
         self.assertEqual({thread for _label, thread in owner.retired}, {owner.thread})
 
-    def test_real_tk_mid_body_failure_retires_objects_and_finishes_save(self):
+    def cancelled_window_real_tk_mid_body_failure_retires_objects_and_finishes_save(self):
         _, _imported = self.import_resolution()
         owner = _ExpectedResolutionGuiOwner()
         self.addCleanup(owner.close)

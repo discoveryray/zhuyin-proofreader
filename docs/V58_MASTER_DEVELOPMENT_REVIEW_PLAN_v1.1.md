@@ -1,14 +1,16 @@
 # zhuyin-proofreader v5.8 Master Development & Independent Review Plan
 
-文件版本：1.4（保留既有檔名以維持引用）
+文件版本：1.5（保留既有檔名以維持引用）
 
-修訂日期：2026-10-02
+修訂日期：2026-10-07
 
 Repository：`discoveryray/zhuyin-proofreader`
 
 本文件供使用者採納為專案長期規範；階段狀態與 SHA 另列於附錄，均不得當作即時 GitHub 狀態。本次修訂加入兩輪獨立審查、自動接續及使用者採納的持續授權；第 3～4 節的 actual / expected、identity、quorum、交易、legacy-v0、fingerprint 安全契約原文保留。文件修訂本身不代表程式碼已修正或重新通過審查。
 
 ## 1. 使用方式、角色與授權
+
+2026-10-07 使用者明確採納 `validation-flow/no-real-tk/1`，完全取消所有自動化入口的真視窗驗證（含 hidden root、虛擬顯示器、fixture／import／子程序）、Tcl/Tk configure／preflight／初始化能力門檻及 GUI retry／補驗。新政策適用本身與後續驗證；尚未結案任務只遷移 window 義務，其餘凍結契約、baseline、修正計數、原 Tk 失敗及 retry 額度保留，其他 blocker 不自動解除。產品 GUI／Tk／launcher 保留；有效非視窗資料／交易／恢復與功能測試、Python 3.13.0、runtime／compile／diff、兩輪審查與 actual merge 短驗證仍必要。詳見 [驗證政策](VALIDATION_POLICY.md)。
 
 專案指令保留精簡版核心規則，並指定本文件為完整規範。新的相關工作開始時，先讀本文件與該次任務的適用條款；同一任務內已讀取且未改版的內容無須反覆全文重讀。來源缺失、內容不完整或版本衝突時，明確指出缺口，不得假裝已讀取或據此給出無證據的 PASS。
 
@@ -27,7 +29,7 @@ Reviewer 均不得參與本任務實作，或修改受審檔案；可以讀取�
 
 持續授權不延伸到其他任務、未交付階段、直接 push develop、修改 main、squash／rebase merge、force push、降低保護規則、tag／release 或 live DB mutation。Review PASS、流程規劃及交接紀錄本身不創造或擴大 write authorization。必要安全門檻不因持續授權而省略。
 
-新任務依 [驗證政策](VALIDATION_POLICY.md) 預設開發模式，先短定向驗證與本機 commit；只有明確「開始驗證」後才 PR 一次核心全集＋全部必要 GUI，並在 merge 後執行短檢查。第一輪程式審查與正式 PASS 分開，第二輪可與 CI 重疊。舊任務不自動套用；明確過渡驗收保留原始使用者採納依據。
+新任務依 [驗證政策](VALIDATION_POLICY.md) 預設開發模式，先短定向驗證與本機 commit；只有明確「開始驗證」後才 PR 一次有效非視窗測試全集，並在 merge 後執行短檢查。第一輪程式審查與正式 PASS 分開，第二輪可與 CI 重疊。舊任務只遷移真視窗義務，其餘不自動套用；明確過渡驗收保留原始使用者採納依據。
 
 下一步確實超出有效授權時，先完成可安全執行的準備，交付具體結果並說明缺口；不得重新詢問已授權範圍。
 
@@ -304,7 +306,7 @@ GUI 只能呼叫既有安全 service / API，不能另造 approval、quorum、id
 2. 委派實作代理完成範圍內變更、開發模式短定向測試及本機 commit。協調者本身有修改時也列入實作者名單。
 3. 第一輪 reviewer 對固定 baseline → feature HEAD 進行完整 cumulative review，回傳 exact SHA、scope、verdict 及原始證據；功能證據未齊時 `CODE_REVIEWED` 只是中間狀態。開發模式回報「已修改、待正式驗證」並等待口令，不為取得 PASS 執行昂貴驗證。`READY FOR REVIEW` 是中間交接狀態，不是要求使用者接力的停點。
 4. 收到「開始驗證」後固定候選，第一輪完整程式審查無 confirmed code blocker 才查詢同 repository / base / compare 的 PR；無 PR 才建立 draft PR，已有唯一 PR 就更新。已合併則驗證原 merge；closed-unmerged 或多個不明匹配先停止，不另建重複 PR。
-5. PR 執行一次核心全集＋全部必要 GUI；第二輪 reviewer 可同時獨立核對 PR 全部差異與整合情境。CI 完成後兩位各自補核必要原始 coverage／CI 證據才給正式 PASS。CI event、run attempt、tested SHA、全部必要 jobs / steps 均須匹配；synthetic merge 必須核對 base / head parents 及檔案樹。
+5. PR 執行一次有效非視窗測試全集；第二輪 reviewer 可同時獨立核對 PR 全部差異與整合情境。CI 完成後兩位各自補核必要原始 coverage／CI 證據才給正式 PASS。CI event、run attempt、tested SHA、全部必要 jobs / steps 均須匹配；synthetic merge 必須核對 base / head parents 及檔案樹。
 6. 任一輪 BLOCKED 先依第 8 節核對 `blocker_kind`：只有 confirmed `code` finding 交回實作代理新增 corrective commit、重跑必要測試並使用一輪 corrective implementation；新 HEAD 必須重新取得兩輪完整適用 PASS。`evidence` 先補證據，`capability`／`contract` 先 STOP；解決後保留原 HEAD 與計數，以 append-only 完整補審接續，不能新增空 commit。所有舊報告都保留。每個 task 最多三輪自動程式修正，第三輪後仍需程式修正則停止回報，不藉另開 session／task 重設；合法 non-code 補證據不消耗此上限。
 7. 代理不可用、report 缺失／不完整、CI pending／failed／cancelled／必要 job 被 skip 時，不得合併。可自動補證據或調查故障，但不能偽裝 PASS 或改驗證規則。
 8. 兩輪適用 PASS、必要 CI 全通過且授權有效後，立即重讀 PR、base、head、findings、GitHub 保護規則及最新 CI。以 merge API 的 expected head SHA 綁定 reviewed HEAD，只使用 Create a merge commit；不用 squash、rebase、auto-merge，不降低保護規則。不代 reviewer approve、不自行 resolve discussions 或刪除 branch。
@@ -342,7 +344,7 @@ PR base / integration context 改變時，評估並重做受影響的整合檢�
 
 ## 7. Independent review 與測試標準
 
-驗證策略以 [驗證政策](VALIDATION_POLICY.md) 為主要來源。新任務預設開發模式短定向測試／compile／diff；收到「開始驗證」才固定候選，PR 一次核心全集＋全部必要 GUI，merge 後短驗證。Windows Python 3.13.0、實際依賴、GUI preflight/default capture/一次受限重試、原始證據和受控沿用依該政策。每次重跑須對應修改影響、具體失敗線索或明確門檻。等待 CI、重開 session、整理報告不構成重跑理由。效能量測僅在效能影響或明確驗收要求時執行。新制度不自動套用尚未收尾的任務，制度變更本身按使用者事前採納的明確 transition 驗收；保留舊 gate 原判定，不以受審新 gate 自行放行。
+驗證策略以 [驗證政策](VALIDATION_POLICY.md) 為主要來源。新任務預設開發模式短定向測試／compile／diff；收到「開始驗證」才固定候選，PR 一次有效非視窗測試全集，merge 後短驗證。Windows Python 3.13.0、實際依賴、無視窗範圍/default capture、原始證據和受控沿用依該政策。每次重跑須對應修改影響、具體失敗線索或明確門檻。等待 CI、重開 session、整理報告不構成重跑理由。效能量測僅在效能影響或明確驗收要求時執行。除明確無視窗義務遷移外，新制度不自動套用尚未收尾的任務，制度變更本身按使用者事前採納的明確 transition 驗收；保留舊 gate 原判定，不以受審新 gate 自行放行。
 
 必須實際核對 GitHub metadata、parents、cumulative diff、全部 changed production code 與 tests，並交叉追蹤適用的前階段架構和呼叫路徑。
 
@@ -354,7 +356,7 @@ PR base / integration context 改變時，評估並重做受影響的整合檢�
 
 明確區分本次實際執行、已閱讀 repository tests、已核對 GitHub CI、實作者回報，以及未驗證事項。
 
-Linux 執行結果不得宣稱為 Windows 已驗證。Windows-only GUI、locking、multiprocessing 等，以實際平台證據或符合要求的 CI 核對。缺少資產、權限或工具不等於已證明程式有 bug；但關鍵安全門檻缺乏證據時，不能給無條件 PASS。
+Linux 執行結果不得宣稱為 Windows 已驗證。Windows-only locking、multiprocessing 等有效非視窗範圍，以實際平台證據或符合要求的 CI 核對。缺少資產、權限或工具不等於已證明程式有 bug；但關鍵安全門檻缺乏證據時，不能給無條件 PASS。
 
 CI 必須核對 workflow、required jobs、run attempt、event、tested SHA 與結論。若測試 synthetic merge commit，核對其對應 base / head；不能把舊 run、其他 branch、skip、cancel、pending 或缺少 run 當 PASS。
 
