@@ -1,10 +1,17 @@
 from __future__ import annotations
 
 import csv
+import copy
 import hashlib
+import json
+import subprocess
+import sys
 import tempfile
+import time
 import unittest
+import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 import fitz
 from openpyxl import load_workbook
@@ -20,6 +27,10 @@ from actual_review import (
     ensure_user_evidence_files,
     dynamic_actual_hashes,
     load_user_verified_cff,
+    _resolve_pdf_path,
+    _publish_actual_review_package,
+    render_annotation_only_png,
+    render_occurrence_png,
 )
 
 
@@ -65,6 +76,301 @@ def entry(oid: str, rid: str, pdf: Path, x: float, *, state="ACTUAL_DECODE_ERROR
 
 
 class ActualReviewV540Tests(unittest.TestCase):
+    def _assert_cross_process_publication(self, *, rollback):
+        # Only the pause/failure boundary is injected; the child publisher,
+        # project lock and every successful rename execute real production code.
+        worker = r'''
+import json, sys, time
+from pathlib import Path
+from actual_review import _publish_actual_review_package
+output, stage, paused, release, result = map(Path, sys.argv[1:6])
+rollback = sys.argv[6] == "rollback"
+package = "actual待判定_GPT包"
+original_replace = Path.replace
+def pause():
+    paused.write_text("paused", encoding="utf-8")
+    deadline = time.monotonic() + 15
+    while not release.exists():
+        if time.monotonic() >= deadline:
+            raise TimeoutError("publication test release timeout")
+        time.sleep(.02)
+def replace(path, target):
+    target = Path(target)
+    if rollback and path == stage / (package + ".zip"):
+        raise OSError("injected first writer ZIP failure")
+    if rollback and path == output / package and target == stage / package:
+        pause()
+    value = original_replace(path, target)
+    if not rollback and path == stage / package and target == output / package:
+        pause()
+    return value
+Path.replace = replace
+try:
+    _publish_actual_review_package(output, stage)
+    record = {"status": "success"}
+except Exception as exc:
+    record = {"status": "error", "error": str(exc)}
+result.write_text(json.dumps(record), encoding="utf-8")
+'''
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            output = root / "output"
+            output.mkdir()
+            stage_a, stage_b = root / "stage-a", root / "stage-b"
+
+            def pair(target, value):
+                package = target / "actual待判定_GPT包"
+                package.mkdir(parents=True)
+                (package / "payload.txt").write_bytes(value)
+                with zipfile.ZipFile(target / (package.name + ".zip"), "w") as archive:
+                    archive.writestr("payload.txt", value)
+
+            def assert_pair(value):
+                self.assertEqual((output / "actual待判定_GPT包/payload.txt").read_bytes(), value)
+                with zipfile.ZipFile(output / "actual待判定_GPT包.zip") as archive:
+                    self.assertIsNone(archive.testzip())
+                    self.assertEqual(archive.read("payload.txt"), value)
+
+            pair(output, b"OLD")
+            pair(stage_a, b"A")
+            pair(stage_b, b"B")
+            paused, release, result = (root / name for name in ("paused", "release", "result.json"))
+            process = subprocess.Popen(
+                [sys.executable, "-c", worker, str(output), str(stage_a), str(paused),
+                 str(release), str(result), "rollback" if rollback else "publish"],
+                cwd=Path(__file__).resolve().parents[1],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+            )
+            try:
+                deadline = time.monotonic() + 10
+                while not paused.exists() and process.poll() is None and time.monotonic() < deadline:
+                    time.sleep(.02)
+                self.assertTrue(paused.exists(), "first writer failed to reach the bounded pause")
+                started = time.monotonic()
+                with self.assertRaises(OSError):
+                    _publish_actual_review_package(output, stage_b)
+                self.assertLess(time.monotonic() - started, 5, "second writer must reject without deadlock")
+                self.assertEqual((stage_b / "actual待判定_GPT包/payload.txt").read_bytes(), b"B")
+                self.assertFalse((stage_b / "previous-0").exists())
+                self.assertFalse((stage_b / "previous-1").exists())
+            finally:
+                release.touch()
+                try:
+                    child_log, _ = process.communicate(timeout=20)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    child_log, _ = process.communicate(timeout=5)
+                    self.fail(f"publication child exceeded its finite timeout: {child_log!r}")
+            self.assertEqual(process.returncode, 0, child_log.decode("utf-8", errors="replace"))
+            record = json.loads(result.read_text(encoding="utf-8"))
+            if rollback:
+                self.assertEqual(record, {"status": "error", "error": "injected first writer ZIP failure"})
+                assert_pair(b"OLD")
+            else:
+                self.assertEqual(record, {"status": "success"})
+                assert_pair(b"A")
+            # After lock release the same competing stage may commit. The first
+            # writer has completed its rollback before it can replace this pair.
+            _publish_actual_review_package(output, stage_b)
+            assert_pair(b"B")
+
+    def test_publication_excludes_other_process_until_both_files_commit(self):
+        self._assert_cross_process_publication(rollback=False)
+
+    def test_publication_rollback_excludes_other_process_until_old_pair_restored(self):
+        self._assert_cross_process_publication(rollback=True)
+
+    def test_export_deep_stage_paths_preserve_rendered_png_bytes(self):
+        temporary_root = Path.cwd() / "tmp"
+        temporary_root.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="bbox-long-", dir=temporary_root) as td:
+            root = Path(td)
+            output = root / ("p" * (171 - len(str(root.resolve())) - 1))
+            output.mkdir()
+            ledger, package, archive, meta = self._export_fixture(output)
+            group = build_actual_review_groups(ledger)[0]
+            expected = {}
+            for label, row in zip(("a", "b"), ledger):
+                for kind, renderer in (("annotation", render_annotation_only_png), ("whole_glyph", render_occurrence_png)):
+                    name = f"{group['group_id']}_{label}_{kind}.png"
+                    old_stage_path = output / ".actual-gpt-stage-12345678" / package.name / "images" / name
+                    self.assertGreaterEqual(len(str(old_stage_path.resolve())), 260)
+                    short = root / name
+                    renderer(row, short)
+                    expected[name] = short.read_bytes()
+            self.assertEqual(export_actual_review_package(output, ledger, **meta), archive)
+            for name, data in expected.items():
+                exported = package / "images" / name
+                self.assertEqual(exported.read_bytes(), data)
+                with fitz.open(exported) as image:
+                    pixmap = image[0].get_pixmap()
+                    self.assertGreater(pixmap.width, 0)
+                    self.assertGreater(pixmap.height, 0)
+
+    def test_export_cleanup_failure_does_not_change_publication_or_original_failure(self):
+        for render_failure in (False, True):
+            with self.subTest(render_failure=render_failure), tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                ledger, package, archive, meta = self._export_fixture(root)
+                with patch("actual_review.shutil.rmtree", side_effect=OSError("cleanup lock")):
+                    if render_failure:
+                        with patch("actual_review.render_occurrence_png", side_effect=OSError("original render failure")):
+                            with self.assertRaisesRegex(OSError, "original render failure"):
+                                export_actual_review_package(root, ledger, **meta)
+                        self._assert_old_export(package, archive)
+                    else:
+                        self.assertEqual(export_actual_review_package(root, ledger, **meta), archive)
+                        self.assertTrue((package / "actual待判定_給GPT.xlsx").is_file())
+                        with zipfile.ZipFile(archive) as zf:
+                            self.assertIsNone(zf.testzip())
+                        retained = list(root.glob(".ag-*/previous-0/old.txt"))
+                        self.assertEqual(len(retained), 1)
+                        self.assertEqual(retained[0].read_bytes(), b"old complete package")
+
+    def test_export_pdf_relocation_requires_exact_adjacent_sha(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            original = root / "original" / "book.pdf"
+            original.parent.mkdir()
+            make_pdf(original)
+            copy_pdf = root / "copy" / "book.pdf"
+            copy_pdf.parent.mkdir()
+            copy_pdf.write_bytes(original.read_bytes())
+            output = copy_pdf.parent / "output"
+            row = entry(O1, "r1", original, 60)
+            row["pdf_sha256"] = hashlib.sha256(original.read_bytes()).hexdigest()
+            frozen = copy.deepcopy(row)
+            self.assertEqual(_resolve_pdf_path(row, output), copy_pdf)
+            copy_pdf.write_bytes(b"changed bytes")
+            with self.assertRaisesRegex(ValueError, "SHA"):
+                _resolve_pdf_path(row, output)
+            self.assertEqual(row, frozen)
+
+    def test_export_rollback_failure_retains_old_bytes_for_recovery(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            ledger, package, archive, meta = self._export_fixture(root)
+            stage = root / "stage"
+            stage.mkdir()
+            new_package = stage / package.name
+            new_package.mkdir()
+            (new_package / "new.txt").write_bytes(b"new package")
+            (stage / archive.name).write_bytes(b"new zip")
+            replace = Path.replace
+            def fail_publish_and_restore(path, destination):
+                if path == stage / archive.name or path == stage / "previous-0":
+                    raise OSError("injected restore lock")
+                return replace(path, destination)
+            with patch.object(Path, "replace", fail_publish_and_restore):
+                with self.assertRaisesRegex(OSError, "需人工回復"):
+                    _publish_actual_review_package(root, stage)
+            self.assertEqual((stage / "previous-0" / "old.txt").read_bytes(), b"old complete package")
+            self.assertEqual(archive.read_bytes(), b"old archive")
+
+    def _export_fixture(self, root):
+        pdf = root / "book.pdf"
+        make_pdf(pdf)
+        ledger = [entry(O1, "r1", pdf, 60), entry(O2, "r2", pdf, 120, state="PASS")]
+        package = root / "actual待判定_GPT包"
+        package.mkdir()
+        (package / "old.txt").write_bytes(b"old complete package")
+        archive = root / "actual待判定_GPT包.zip"
+        archive.write_bytes(b"old archive")
+        meta = dict(version="5.4.0", session_id="sess", session_schema_version="2.5.0",
+                    workbook_schema_version="2.5.0", review_id_schema_version="2.5.0")
+        return ledger, package, archive, meta
+
+    def _assert_old_export(self, package, archive):
+        self.assertEqual(sorted(p.name for p in package.iterdir()), ["old.txt"])
+        self.assertEqual((package / "old.txt").read_bytes(), b"old complete package")
+        self.assertEqual(archive.read_bytes(), b"old archive")
+
+    def test_export_preflight_reports_all_selected_zero_width_including_nonpending(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            ledger, package, archive, meta = self._export_fixture(root)
+            for row in ledger:
+                row["x1"] = row["x0"]
+            frozen = copy.deepcopy(ledger)
+            with patch("actual_review.render_annotation_only_png") as renderer:
+                with self.assertRaises(ValueError) as caught:
+                    export_actual_review_package(root, ledger, **meta)
+            self.assertIn(O1, str(caught.exception))
+            self.assertIn(O2, str(caught.exception))
+            self.assertIn("r1", str(caught.exception))
+            self.assertIn("r2", str(caught.exception))
+            self.assertIn("A", str(caught.exception))
+            self.assertIn("B", str(caught.exception))
+            renderer.assert_not_called()
+            self.assertEqual(ledger, frozen)
+            self._assert_old_export(package, archive)
+
+    def test_export_preflight_rejects_nonfinite_or_outside_page(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            ledger, package, archive, meta = self._export_fixture(root)
+            ledger[0]["x0"] = float("nan")
+            ledger[1]["physical_page"] = 2
+            with self.assertRaises(ValueError) as caught:
+                export_actual_review_package(root, ledger, **meta)
+            self.assertIn(O1, str(caught.exception))
+            self.assertIn(O2, str(caught.exception))
+            self._assert_old_export(package, archive)
+
+    def test_export_render_excel_and_zip_failures_preserve_previous_pair(self):
+        for target in ("actual_review.render_occurrence_png", "actual_review.Workbook.save", "actual_review.zipfile.ZipFile.write"):
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as td:
+                root = Path(td)
+                ledger, package, archive, meta = self._export_fixture(root)
+                original_write = zipfile.ZipFile.write
+                def fail_zip_write(archive, *args, **kwargs):
+                    if str(archive.filename).endswith(".zip"):
+                        raise OSError("injected ZIP failure")
+                    return original_write(archive, *args, **kwargs)
+                injection = patch(target, fail_zip_write) if target.endswith("ZipFile.write") else patch(target, side_effect=OSError("injected stage failure"))
+                with injection:
+                    with self.assertRaises(OSError):
+                        export_actual_review_package(root, ledger, **meta)
+                self._assert_old_export(package, archive)
+
+    def test_export_publish_failure_restores_previous_directory_and_zip(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            ledger, package, archive, meta = self._export_fixture(root)
+            replace = Path.replace
+            def fail_new_archive(path, destination):
+                if path.name == "actual待判定_GPT包.zip" and path.parent != root:
+                    raise OSError("injected publish failure")
+                return replace(path, destination)
+            with patch.object(Path, "replace", fail_new_archive):
+                with self.assertRaises(OSError):
+                    export_actual_review_package(root, ledger, **meta)
+            self._assert_old_export(package, archive)
+
+    def test_export_success_preserves_selection_identity_and_matches_zip(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            ledger, package, archive, meta = self._export_fixture(root)
+            frozen = copy.deepcopy(ledger)
+            group = build_actual_review_groups(ledger)[0]
+            self.assertEqual(export_actual_review_package(root, ledger, **meta), archive)
+            wb = load_workbook(package / "actual待判定_給GPT.xlsx")
+            try:
+                ws = wb["actual待判定"]
+                row = dict(zip([c.value for c in ws[1]], [c.value for c in ws[2]]))
+                self.assertEqual(row["group_id"], group["group_id"])
+                self.assertEqual(row["group_snapshot"], group["group_snapshot"])
+                self.assertEqual(row["sample_a_occurrence_id"], O1)
+                self.assertEqual(row["sample_b_occurrence_id"], O2)
+            finally:
+                wb.close()
+            with zipfile.ZipFile(archive) as zf:
+                files = {p.relative_to(package).as_posix(): p.read_bytes() for p in package.rglob("*") if p.is_file()}
+                self.assertEqual(set(zf.namelist()), set(files))
+                for name, data in files.items():
+                    self.assertEqual(zf.read(name), data)
+            self.assertEqual(ledger, frozen)
+
     def test_exact_ttf_groups_and_promotes_only_with_two_examples(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

@@ -481,14 +481,14 @@ class ExactIdentitySchemaTests(unittest.TestCase):
             workbook.save(xlsx)
             workbook.close()
 
-            with self.assertRaisesRegex(ValueError, "session/schema 不相容"):
+            with self.assertRaisesRegex(ValueError, "^actual GPT unknown actual_review_schema_version$"):
                 import_actual_review_workbook(
                     root,
                     xlsx,
                     [group],
                     expected_metadata=metadata,
                 )
-            self.assertEqual(ACTUAL_REVIEW_SCHEMA_VERSION, "1.1")
+            self.assertEqual(ACTUAL_REVIEW_SCHEMA_VERSION, "1.2")
             self.assertEqual(list(root.glob("*.csv")), [])
 
     def test_identity_module_is_actual_only_and_has_no_sqlite_or_expected_imports(self):

@@ -13,6 +13,416 @@ import xml.etree.ElementTree as ET
 from scripts import test_entrypoint_audit as audit
 from scripts import validation_runner as runner
 
+
+# Exact adopted bytes, not a self-authored fixture authorization. Original
+# artifact pins alone are replaced with this independently specified tiny ZIP;
+# every admission, immutable manifest, skip, claim and coverage reader stays real.
+_PR43_ADOPTED_BYTES = {"authorization":"ew0KICAic2NoZW1hIjogInByNDMtZ3VpLW9uY2UtaHVtYW4tYWRvcHRpb24vMSIsDQogICJodW1hbl9tZXNzYWdlX2V4YWN0IjogIlx1NjgzOFx1NTFjNiIsDQogICJhbnRlY2VkZW50IjogIkltbWVkaWF0ZWx5IHByZWNlZGluZyBhc3Npc3RhbnQgZmluYWwgcmVjb21tZW5kYXRpb24gd2l0aCB0aHJlZSByZXF1ZXN0ZWQgZGVsaXZlcmFibGVzOyBleGFjdCBzY29wZSByZXByZXNlbnRlZCBpbiBhcHByb3ZlZC1wcm9wb3NhbC5qc29uIiwNCiAgInByb3Bvc2FsX3JlZiI6ICJDOlxcVXNlcnNcXEUwNDA2OVxcRGVza3RvcFxcR2l0SHViMlxcemh1eWluLXByb29mcmVhZGVyXFx0bXBcXHdvcmt0cmVlc1xcYWN0dWFsLWdwdC1iYm94LWV4cG9ydFxcdG1wXFxwci1yZXZpZXctYXV0b21hdGlvblxcYWN0dWFsLWdwdC1iYm94LWV4cG9ydFxccHI0My1ndWktb25jZS1hZG9wdGlvblxcYXBwcm92ZWQtcHJvcG9zYWwuanNvbiIsDQogICJwcm9wb3NhbF9zaGEyNTYiOiAiOWIwYWJhMzNmMmNmMzRiNWVjMjljMjkwZjMzODg1MDE4OTllOWU1NzdlNWExMjNiNTVjOWJmNTMyMTJjMzY0YSIsDQogICJodW1hbl9yZXBseV9yZWYiOiAiQzpcXFVzZXJzXFxFMDQwNjlcXERlc2t0b3BcXEdpdEh1YjJcXHpodXlpbi1wcm9vZnJlYWRlclxcdG1wXFx3b3JrdHJlZXNcXGFjdHVhbC1ncHQtYmJveC1leHBvcnRcXHRtcFxccHItcmV2aWV3LWF1dG9tYXRpb25cXGFjdHVhbC1ncHQtYmJveC1leHBvcnRcXHByNDMtZ3VpLW9uY2UtYWRvcHRpb25cXGh1bWFuLXJlcGx5LnR4dCIsDQogICJodW1hbl9yZXBseV9zaGEyNTYiOiAiZjVhNWU4N2Q3NzcwZTQ2ZmNmOWUwODc1ZGQzYjA4ZjA1ZmY3YmVjMjk4YWE1YTlkZjlkZjI3MDBlMTg1MjIwYyIsDQogICJhZG9wdGVkX2F0IjogIjIwMjYtMTAtMDZUMTM6MzE6MDguNDMzMDI1KzAwOjAwIiwNCiAgIm5ld19jYW5kaWRhdGVfdG9fZnJlZXplX2FmdGVyX2ltcGxlbWVudGF0aW9uIjogdHJ1ZSwNCiAgImNvcnJlY3RpdmVfZGVsdGEiOiAwDQp9DQo=","proposal":"ew0KICAic2NoZW1hIjogInByNDMtZ3VpLW9uY2UtYXBwcm92ZWQtcHJvcG9zYWwvMSIsDQogICJ0YXNrIjogImFjdHVhbC1ncHQtYmJveC1leHBvcnQiLA0KICAicmVwb3NpdG9yeSI6ICJkaXNjb3ZlcnlyYXkvemh1eWluLXByb29mcmVhZGVyIiwNCiAgInByIjogNDMsDQogICJzdGFydGluZ19oZWFkIjogImQ1OTM1OGNkNDVjYzY1YTczYjFkNGRjYjBhYTIyOGZmZTcyMzM0MzUiLA0KICAiYmFzZWxpbmUiOiAiOGVhYjlhMWRlMzRiNTkxMTU2NThhMmM3ZDM1NjVhZGIzNDdlNTlhYiIsDQogICJvcmlnaW5hbF9ydW4iOiAzNzQ1Mzg4OTI3OCwNCiAgIm9yaWdpbmFsX2F0dGVtcHQiOiAxLA0KICAib3JpZ2luYWxfYXJ0aWZhY3QiOiAxMTQxMjk2NzI3OCwNCiAgImFydGlmYWN0X3NoYTI1NiI6ICIyMDBmZjc2NzM4YzdjYjU2NWNmYWQxY2M0NzBiZTk3ZmEwYmMzYTIxOTc5MDhhNjMzOTFjMTMzNWYwZDgyMjM1IiwNCiAgIm9yaWdpbmFsX2d1aV9leGVjdXRpb24iOiAiMDhlMTkzZDY1YWZhNDRhNmI5NDk4ZjYzMTU2MTUyMWIiLA0KICAicHJvcG9zYWwiOiAiT25seSBQUjQzIGZpbml0ZSBHVUkgc3VwcGxlbWVudCBzaWRlIGV2aWRlbmNlOyBwcmVzZXJ2ZSBsZWdhY3kgcmV0cnlfZWxpZ2libGUgZmFsc2UgYW5kIGFsbCBza2lwL2V4aXQvYXJ0aWZhY3RzOyByZXN0b3JlX2hpc3RvcnkgaW1wb3J0cyBhdXRob3JpemF0aW9uLCBfcnVuX2dyb3VwIGR1cmFibHkgcmVzZXJ2ZXMgb25lIHN1cHBsZW1lbnQgYmVmb3JlIGxhdW5jaCwgcmV0cnlfaGlzdG9yeSBlbmZvcmNlcyBvcmlnaW5hbCtvbmUgYWNyb3NzIGNhbmRpZGF0ZSBjaGFuZ2UsIGFnZ3JlZ2F0ZSB2YWxpZGF0ZXMgc2FtZSBhZG1pc3Npb24gYW5kIG5ldyBjYW5kaWRhdGUgY29yZS9ndWkuIHJlYWRfdmVyaWZpZWRfbWFuaWZlc3QgbGVnYWN5IHJldHJ5IGVsaWdpYmlsaXR5IHJlbWFpbnMgdW5jaGFuZ2VkLiB2ZXJpZnlfY292ZXJhZ2UgZGVsZWdhdGVzIGFnZ3JlZ2F0ZTsgbm8gcGFyYWxsZWwgc3VjY2VzcyBzZXJ2aWNlIG9yIHdvcmtmbG93IGpvYi4gTmV3IHRyYWNrZWQgaW1wbGVtZW50YXRpb24gY29tbWl0IHJlcXVpcmVzIG5ldyBjYW5kaWRhdGUgb25jZSBmb3JtYWwgY29yZWFsbCBwbHVzIGNvbXBsZXRlR1VJLCBubyBvbGQgY29yZSByZWxhYmVsL3JldXNlLiBTaG9ydCBDTEkvaGlzdG9yeS9hZ2dyZWdhdGUgcmVncmVzc2lvbnMgdGhlbiBpbmRlcGVuZGVudCBmdWxsIGNvZGUgcmV2aWV3IGJlZm9yZSBwdXNoOyB0d28gZm9ybWFsIHJldmlld2VycyBhbmQgbWVyZ2UvcG9zdG1lcmdlIGdhdGVzIHJldGFpbmVkLiBHZW5lcmFsIHNraXAsIGdlbmVyaWMvdW5rbm93biBUY2xFcnJvciwgYXNzZXJ0aW9ucywgbWl4ZWQgZmFpbHVyZXMsIG1pc3NpbmcvY29ycnVwdCBldmlkZW5jZSByZWZ1c2UuIEV4YWN0IG9yaWdpbmFsIGluaXRpYWxpemF0aW9uIHJlYWQtZXJyb3IgZXZpZGVuY2Ugb25seTsgc291cmNlIGJpbmRpbmcsIEpVbml0L2V2ZW50cy9yYXcgYWdyZWVtZW50LiBTdXBwbGVtZW50IGFsbCBHVUkgbXVzdCBwYXNzIG5vIHNraXA7IGZhaWx1cmUvdGltZW91dC9pbnRlcnJ1cHRpb24gY29uc3VtZXMgZmluYWwgR1VJIGJ1ZGdldCBhbmQgU1RPUC4gTm8gYmJveCBmZWF0dXJlL2NhcHR1cmUvc3lzdGVtIFRjbC9QeXRob24vZ2VuZXJhbCByZXRyeSBmcmFtZXdvcmsgY2hhbmdlcy4gQ291bnRzIGJib3gyLzMgQ0ZGMi8zIHJldGFpbmVkOyBzdWJzZXF1ZW50IGNvbmZpcm1lZCBjb2RlIGNvcnJlY3RpdmUgdW5kZXIgb3JpZ2luYWwgcnVsZXMuIg0KfQ0K","human_reply":"5qC45YeG"}
+
+
+class Pr43GuiSupplementTests(unittest.TestCase):
+    def setUp(self):
+        import base64
+        import hashlib
+        import io
+        import zipfile
+        from scripts import validation_evidence
+        self.evidence_module = validation_evidence
+        self.temp = tempfile.TemporaryDirectory(dir=ROOT / "tmp", prefix="g43-")
+        self.addCleanup(self.temp.cleanup)
+        self.folder = Path(self.temp.name)
+        self.root = self.folder / "evidence"
+        self.root.mkdir()
+        self.original = self.folder / "original"
+        self.original.mkdir()
+        self.spec = dict(runner.PR43_GUI_ONCE)
+        self.feature = "1" * 40
+        self.candidate = {"head": "2" * 40, "tree": "3" * 40,
+                          "parents": [self.spec["baseline"], self.feature]}
+        self.environment = {"python": "3.13.0", "platform": "Windows", "capture": "fd",
+                            "dependencies": {}, "environment": {key: "" for key in runner.ENV_KEYS}}
+        for line in (ROOT / "requirements-ci-lock.txt").read_text().splitlines():
+            if line.strip() and not line.startswith("#"):
+                name, version = line.split("==")
+                self.environment["dependencies"][name.lower().replace("_", "-")] = version
+        self.environment["environment"]["TCL_LIBRARY"] = "C:\\Tk"
+        self.environment["environment"]["TK_LIBRARY"] = "C:\\Tk"
+        self.names = ["test_fixture_" + str(i) for i in range(11)]
+        module = self.folder / "test_manual_actual_gui_batch_v570.py"
+        module.write_text("import unittest\nclass ManualActualGuiVisibleLayoutTests(unittest.TestCase):\n"
+                          + "".join("    def " + name + "(self): self.assertTrue(True)\n" for name in self.names)
+                          + "class Other(unittest.TestCase):\n    def test_gui(self): self.assertTrue(True)\n"
+                          + "class Core(unittest.TestCase):\n    def test_core(self): self.assertTrue(True)\n")
+        relative = module.relative_to(ROOT).as_posix()
+        methods = [("ManualActualGuiVisibleLayoutTests", name, "gui") for name in self.names]
+        methods += [("Other", "test_gui", "gui"), ("Core", "test_core", "core")]
+        self.inventory = {"schema": "zhuyin-test-groups/1", "records": [
+            {"identity": "test_manual_actual_gui_batch_v570." + cls + "." + name,
+             "nodeid": relative + "::" + cls + "::" + name, "group": group} for cls, name, group in methods]}
+        self.inventory.update(pytest_ids=[row["identity"] for row in self.inventory["records"]],
+                              core_ids=[row["identity"] for row in self.inventory["records"] if row["group"] == "core"],
+                              gui_ids=[row["identity"] for row in self.inventory["records"] if row["group"] == "gui"])
+        original_inventory = copy.deepcopy(self.inventory)
+        for row in original_inventory["records"]:
+            row["nodeid"] = "tests/test_manual_actual_gui_batch_v570.py::" + row["nodeid"].split("::", 1)[1]
+        self.old = self.original / self.spec["execution_id"]
+        self.old.mkdir()
+        runner.write_json(self.old / "inventory.json", original_inventory)
+        invhash = runner.digest(self.old / "inventory.json")
+        message = ("Tk display unavailable: Can't find a usable init.tcl in the following directories: \n    C:/Tk\n\n"
+                   'C:/Tk/init.tcl: couldn\'t read file "C:/Tk/init.tcl": No error\n'
+                   'couldn\'t read file "C:/Tk/init.tcl": No error\n    while executing\n"source C:/Tk/init.tcl"\n'
+                   '    ("uplevel" body line 1)\n    invoked from within\n"uplevel #0 [list source $tclfile]"\n\n\n'
+                   "This probably means that Tcl wasn't installed properly.")
+        xml = ET.Element("testsuites")
+        suite = ET.SubElement(xml, "testsuite")
+        properties = ET.SubElement(suite, "properties")
+        for key, value in (("validation_execution_id", self.spec["execution_id"]), ("validation_inventory_sha256", invhash)):
+            ET.SubElement(properties, "property", name=key, value=value)
+        events = []
+        for row in original_inventory["records"]:
+            if row["group"] != "gui": continue
+            cls, name = row["nodeid"].split("::")[1:]
+            case = ET.SubElement(suite, "testcase", classname="tests.test_manual_actual_gui_batch_v570." + cls, name=name)
+            skip = cls == "ManualActualGuiVisibleLayoutTests"
+            if skip: ET.SubElement(case, "skipped", message=message)
+            for phase in (("setup", "teardown") if skip else ("setup", "call", "teardown")):
+                events.append(dict(nodeid=row["nodeid"], when=phase, outcome="skipped" if skip and phase == "setup" else "passed",
+                                   subtest=False, traceback=repr(("C:/site-packages/_pytest/unittest.py", 523, "Skipped: " + message))
+                                   if skip and phase == "setup" else None))
+        ET.ElementTree(xml).write(self.old / "junit.xml", encoding="utf-8")
+        (self.old / "events.jsonl").write_text("\n".join(json.dumps(event) for event in events), encoding="utf-8")
+        (self.old / "raw.log").write_text(message, encoding="utf-8")
+        (self.old / "collection.log").write_text("independent tiny fixture\n")
+        for name, value in (("preflight.json", {"stage": "complete"}), ("history-context.json", {"task_id": self.spec["task_id"]})):
+            runner.write_json(self.old / name, value)
+        (self.old / "preflight.log").write_text("fixture preflight")
+        (self.old / "preflight.xml").write_text('<testsuite><testcase name="probe"/></testsuite>')
+        value = dict(schema=runner.LEGACY_SCHEMA, execution_id=self.spec["execution_id"], group="gui",
+                     candidate={"head": "4" * 40, "tree": "5" * 40, "parents": [self.spec["baseline"], self.spec["starting_head"]]},
+                     command=[sys.executable, str(ROOT / "scripts/validation_runner.py"), "_pytest", str(self.old), "gui"],
+                     environment=self.environment, inventory_sha256=invhash,
+                     started_at="2026-10-06T00:00:00+00:00", finished_at="2026-10-06T00:00:01+00:00",
+                     exit_code=0, outcome="failed", verification={"top_level": 0, "subtests": 0, "error": "skipped"},
+                     ci={"run_id": self.spec["run_id"], "attempt": 1, "job": "grouped", "event": "pull_request"},
+                     retry_of=None, artifacts={}, retry_key=runner.canonical_digest({"task": self.spec["task_id"], "tree": "5" * 40}),
+                     retry_eligible=False, preflight={"outcome": "success", "exit_code": 0}, runner_start_error=None, code_blockers=False)
+        runner.write_json(self.old / "started.json", value)
+        value["artifacts"] = {key: runner.artifact_entry(self.old / filename, self.old) for key, filename in
+                              (("inventory", "inventory.json"), ("started", "started.json"), ("history_context", "history-context.json"),
+                               ("raw_log", "raw.log"), ("junit", "junit.xml"), ("events", "events.jsonl"),
+                               ("preflight_result", "preflight.json"), ("preflight_log", "preflight.log"), ("preflight_junit", "preflight.xml"))}
+        runner.write_json(self.old / "manifest.json", value)
+        payload = io.BytesIO()
+        with zipfile.ZipFile(payload, "w", zipfile.ZIP_DEFLATED) as zipped:
+            for path in self.original.rglob("*"):
+                if path.is_file(): zipped.write(path, path.relative_to(self.original).as_posix())
+        self.zipbytes = payload.getvalue()
+        self.spec.update(archive_sha256=hashlib.sha256(self.zipbytes).hexdigest(),
+                         manifest_sha256=runner.digest(self.old / "manifest.json"))
+        self.patch_spec = patch.dict(runner.PR43_GUI_ONCE, self.spec)
+        self.patch_spec.start(); self.addCleanup(self.patch_spec.stop)
+        for name, value in _PR43_ADOPTED_BYTES.items():
+            (self.folder / name).write_bytes(base64.b64decode(value))
+        self.block = runner.pr43_gui_block(self.feature, self.folder / "authorization", self.folder / "proposal", self.folder / "human_reply")
+        # Independent empty local-history fixture; never bootstrap/reset the
+        # real task's already sealed canonical store.
+        local_payload = io.BytesIO()
+        ledger = dict(schema=runner.LOCAL_SCHEMA, task_id=self.spec["task_id"], source_ref="independent fixture original task",
+                      baseline=self.spec["baseline"], repository=runner.REPOSITORY,
+                      created_at="2026-10-06T00:00:00+00:00", store_id="6" * 32)
+        with zipfile.ZipFile(local_payload, "w", zipfile.ZIP_DEFLATED) as zipped:
+            zipped.writestr("ledger.json", json.dumps(ledger))
+            for name in ("executions", "declarations"):
+                zipped.writestr(name + "/store.json", json.dumps({"schema": "zhuyin-local-store/1", "store_id": ledger["store_id"]}))
+        local_handoff = dict(schema=runner.HANDOFF_SCHEMA, task_id=self.spec["task_id"], source_ref=ledger["source_ref"],
+                             archive_sha256=hashlib.sha256(local_payload.getvalue()).hexdigest(),
+                             archive_base64=base64.b64encode(local_payload.getvalue()).decode())
+        self.block += "\n<!-- validation-local-history\n" + json.dumps(local_handoff) + "\n-->"
+        self.event = self.folder / "event.json"
+        runner.write_json(self.event, {"pull_request": {"number": 43, "body": self.block,
+                          "head": {"sha": self.feature, "ref": "codex/actual-gpt-bbox-export", "repo": {"full_name": runner.REPOSITORY}},
+                          "base": {"sha": self.spec["baseline"], "repo": {"full_name": runner.REPOSITORY}}}})
+        self.vars = {"GITHUB_ACTIONS": "true", "GITHUB_EVENT_NAME": "pull_request", "GITHUB_REPOSITORY": runner.REPOSITORY,
+                     "GITHUB_EVENT_PATH": str(self.event), "GITHUB_RUN_ID": "777", "GITHUB_RUN_ATTEMPT": "1", "GITHUB_JOB": "grouped"}
+        self.patches = [patch.dict("os.environ", self.vars), patch.object(runner, "snapshot", return_value=self.candidate),
+                        patch.object(runner, "git", side_effect=lambda *args: self.spec["starting_head"] if args[:1] == ("show",) else ""),
+                        patch.object(runner, "environment", return_value=self.environment),
+                        patch.object(runner, "collect_inventory", side_effect=self.collect),
+                        patch.object(runner, "run_process", side_effect=self.process)]
+        self.real_process = ORIGINAL_RUN_PROCESS
+        self.preflight_ok = True
+        self.launches = []
+        for item in self.patches: item.start(); self.addCleanup(item.stop)
+        # Current execution has exactly one real non-window test, independently
+        # from the synthetic legacy archive: no stub can authorize new GUI runs.
+        core_module = self.folder / "test_pr43_current.py"
+        core_module.write_text("def test_core(): assert 2 + 3 == 5\n")
+        identity = "test_pr43_current.test_core"
+        self.core_inventory = {"schema": "zhuyin-test-groups/2", "policy": runner.POLICY,
+            "window_validation": audit.WINDOW_NOTICE, "pytest_ids": [identity], "core_ids": [identity],
+            "cancelled_window_ids": [], "records": [{"identity": identity, "group": "core",
+            "nodeid": core_module.relative_to(ROOT).as_posix() + "::test_core"}]}
+        self.restore()
+
+    def api(self, endpoint):
+        if "/artifacts/" in endpoint:
+            return {"id": self.spec["artifact_id"], "digest": "sha256:" + self.spec["archive_sha256"],
+                    "workflow_run": {"id": self.spec["run_id"]}, "expired": False}
+        if endpoint.endswith("/artifacts?per_page=100&page=1"):
+            return {"total_count": 1, "artifacts": [{"name": "validation-evidence-37453889278-1", "expired": False}]}
+        return {"total_count": 2, "workflow_runs": [
+            {"id": 777, "head_sha": self.feature, "run_attempt": 1, "status": "in_progress",
+             "head_repository": {"full_name": runner.REPOSITORY}, "pull_requests": [{"number": 43}]},
+            {"id": self.spec["run_id"], "head_sha": self.spec["starting_head"], "run_attempt": 1, "status": "completed",
+             "head_repository": {"full_name": runner.REPOSITORY}, "pull_requests": [{"number": 43}]}]}
+
+    def restore(self):
+        import shutil
+        def output(command, **kwargs):
+            return self.zipbytes if command[-1].endswith("/zip") else json.dumps(self.api(command[-1]))
+        def download(command, **kwargs):
+            shutil.copytree(self.original, Path(command[-1]))
+            return subprocess.CompletedProcess(command, 0)
+        with patch.object(runner.subprocess, "check_output", side_effect=output), patch.object(runner.subprocess, "run", side_effect=download):
+            runner.restore_history(self.root)
+        indexes = list(self.root.glob("history-index-*.json"))
+        self.context = runner.read_json(indexes[0])
+        # Materialize a synthetic PAST declaration, without executing its GUI.
+        side = self.root / "pr43-gui-once"; side.mkdir()
+        (side / "pr-artifact.zip").write_bytes(self.zipbytes)
+        declaration = json.loads(self.block.split("<!-- pr43-gui-once\n", 1)[1].split("\n-->", 1)[0])
+        runner.write_json(side / "declaration.json", declaration)
+        self.legacy_context = {**self.context, "pr43_gui_once": {
+            "declaration": runner.artifact_entry(side / "declaration.json", self.root)}}
+        item = patch.object(runner, "validate_history_context", return_value=self.context)
+        item.start(); self.addCleanup(item.stop)
+
+    def collect(self, folder, tests=None):
+        runner.write_json(folder / "inventory.json", self.core_inventory)
+        (folder / "collection.log").write_text("finite source fixture inventory")
+        return self.core_inventory
+
+    def process(self, command, folder, name, timeout, env=None):
+        self.launches.append(name)
+        self.assertNotEqual(name, "preflight.log", "current runner must never launch preflight")
+        return self.real_process(command, folder, name, timeout, env)
+
+    def historical_claim(self, execution="7" * 32):
+        """Synthetic legacy evidence only; never a real task ledger/receipt."""
+        claim = self.root / "pr43-gui-once/claim.json"
+        runner.write_json(claim, dict(execution_id=execution, candidate=self.candidate,
+            environment=self.environment, declaration_sha256=self.legacy_context["pr43_gui_once"]["declaration"]["sha256"],
+            declared_at="2026-10-06T00:01:00+00:00"))
+        context = copy.deepcopy(self.legacy_context)
+        context["pr43_gui_once"]["claim"] = runner.artifact_entry(claim, self.root)
+        folder = self.root / execution; folder.mkdir()
+        runner.write_json(folder / "history-context.json", context)
+        return folder, context
+
+    def historical_execution(self, group, folder=None, context=None, blocked=False):
+        """Construct bounded past metadata; no retired runner/GUI is executed."""
+        import shutil
+        if folder is None:
+            folder = self.root / ("8" * 32); folder.mkdir()
+        context = context or self.legacy_context
+        old = runner.read_json(self.old / "manifest.json")
+        inventory = runner.read_json(self.old / "inventory.json")
+        for name in ("inventory.json", "preflight.json", "preflight.log", "preflight.xml"):
+            shutil.copyfile(self.old / name, folder / name)
+        if not (folder / "history-context.json").exists(): runner.write_json(folder / "history-context.json", context)
+        selected = [row for row in inventory["records"] if row["group"] == group]
+        xml = ET.Element("testsuites"); suite = ET.SubElement(xml, "testsuite")
+        props = ET.SubElement(suite, "properties")
+        for key, value in (("validation_execution_id", folder.name), ("validation_inventory_sha256", old["inventory_sha256"])):
+            ET.SubElement(props, "property", name=key, value=value)
+        events = []
+        for row in selected:
+            cls, name = row["nodeid"].split("::")[1:]
+            ET.SubElement(suite, "testcase", classname="tests.test_manual_actual_gui_batch_v570." + cls, name=name)
+            events.extend(dict(nodeid=row["nodeid"], when=phase, outcome="passed", subtest=False, traceback=None)
+                          for phase in ("setup", "call", "teardown"))
+        ET.ElementTree(xml).write(folder / "junit.xml", encoding="utf-8")
+        (folder / "events.jsonl").write_text("\n".join(json.dumps(x) for x in events), encoding="utf-8")
+        (folder / "raw.log").write_text("SYNTHETIC HISTORICAL CONTRACT FIXTURE; not an execution receipt")
+        data = {**old, "execution_id": folder.name, "group": group, "candidate": self.candidate,
+            "command": [sys.executable, str(ROOT / "scripts/validation_runner.py"), "_pytest", str(folder), group],
+            "started_at": "2026-10-06T00:01:00+00:00", "finished_at": "2026-10-06T00:01:01+00:00",
+            "retry_key": runner.canonical_digest({"task": self.spec["task_id"], "tree": self.candidate["tree"]}),
+            "retry_of": self.spec["execution_id"] if group == "gui" else None,
+            "outcome": "blocked" if blocked else "success", "exit_code": 1 if blocked else 0,
+            "verification": {"top_level": len(selected), "subtests": 0, "error": None}, "artifacts": {}}
+        if blocked:
+            data["preflight"] = {"outcome": "failed", "exit_code": 1}
+            (folder / "preflight.log").write_text("AssertionError: synthetic historical preflight failure")
+        runner.write_json(folder / "started.json", data)
+        data["artifacts"] = {key: runner.artifact_entry(folder / item["path"], folder) for key, item in old["artifacts"].items()}
+        runner.write_json(folder / "manifest.json", data)
+        runner.read_verified_manifest(folder / "manifest.json")
+        return folder / "manifest.json"
+
+    def assert_current_gui_refused(self):
+        before = list(self.launches)
+        with patch.object(runner, "collect_inventory", side_effect=AssertionError("GUI collection forbidden")):
+            for call in (lambda: runner.run_group("gui", self.root, mode="validation"),
+                         lambda: runner._run_group("gui", self.root, mode="validation"),
+                         lambda: runner.pytest_child(self.root, "gui")):
+                with self.assertRaisesRegex(ValueError, "視窗|window|Tk"):
+                    call()
+        self.assertEqual(self.launches, before)
+
+    def test_real_cli_child_history_aggregate_and_coverage_keep_legacy_false(self):
+        old = runner.history(self.root)[0][0]; original_bytes = old.read_bytes()
+        self.assertFalse(runner.read_verified_manifest(old)["retry_eligible"])
+        core = runner.run_group("core", self.root, mode="validation")
+        self.assertEqual(runner.read_verified_manifest(core)["schema"], runner.SCHEMA)
+        original_core = core.read_bytes()
+        for field, value in (("group", "gui"), ("preflight", {"outcome": "success", "exit_code": 0}),
+                             ("retry_of", self.spec["execution_id"]), ("retry_eligible", True)):
+            with self.subTest(current_rejects=field):
+                changed = json.loads(original_core); changed[field] = value
+                core.write_text(json.dumps(changed), encoding="utf-8")
+                try:
+                    with self.assertRaisesRegex(ValueError, "no-window"):
+                        runner.read_verified_manifest(core)
+                finally: core.write_bytes(original_core)
+        self.assertEqual(runner.main(["aggregate", "--evidence-root", str(self.root), "--output", str(self.root / "coverage.json")]), 0)
+        self.assertEqual(self.evidence_module.verify_coverage(self.root / "coverage.json")["status"], "success")
+        self.assertEqual(runner.run_group("core", self.root, mode="validation"), core)
+        self.assert_current_gui_refused()
+        self.assertEqual(self.launches.count("raw.log"), 1)
+        self.assertEqual(old.read_bytes(), original_bytes)
+        with self.assertRaisesRegex(ValueError, "claim"):
+            runner.validate_pr43_gui_once(self.root, self.legacy_context, self.candidate, require_claim=True)
+
+    def test_claim_before_collection_failure_consumes_final_budget(self):
+        folder, context = self.historical_claim()
+        supplement = runner.validate_pr43_gui_once(self.root, context, self.candidate, require_claim=True)
+        self.assertEqual(len(supplement["claims"]), 1)
+        key = runner.canonical_digest({"task": self.spec["task_id"], "tree": self.candidate["tree"]})
+        with self.assertRaisesRegex(ValueError, "unfinished.*budget"):
+            runner.retry_history(runner.history(self.root), key, supplement)
+        self.assert_current_gui_refused()
+        self.assertTrue((self.root / "pr43-gui-once/claim.json").is_file())
+        self.assertEqual(self.launches, [])
+
+    def test_uploaded_restored_side_refs_recompute_coverage_and_reject_corrupt_claim(self):
+        import shutil
+        folder, context = self.historical_claim()
+        self.historical_execution("gui", folder, context)
+        self.historical_execution("core")
+        restored = self.folder / "restored"; bundle = restored / "downloaded"
+        for path in self.root.rglob("*"):
+            if path.is_file() and (path.suffix in {".json", ".jsonl", ".xml", ".log"} or path.name == "pr-artifact.zip"):
+                target = bundle / path.relative_to(self.root); target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(path, target)
+        self.assertTrue((bundle / "pr43-gui-once/pr-artifact.zip").is_file())
+        self.assertFalse((restored / "pr43-gui-once").exists())
+        coverage = runner.aggregate(restored, legacy=True)
+        runner.write_json(restored / "coverage.json", coverage)
+        self.assertEqual(self.evidence_module.verify_coverage(restored / "coverage.json")["status"], "success")
+        claim = bundle / "pr43-gui-once/claim.json"; claim.write_bytes(claim.read_bytes() + b"corruption")
+        with self.assertRaises(ValueError): self.evidence_module.verify_coverage(restored / "coverage.json")
+        self.assertEqual(self.launches, [])
+
+    def test_missing_marker_stops_new_tree_gui_before_first_launch(self):
+        with self.assertRaisesRegex(ValueError, "missing"):
+            runner.validate_pr43_gui_once(self.root, self.context, self.candidate)
+        self.assert_current_gui_refused()
+        self.assertEqual(self.launches, [])
+        self.assertFalse((self.root / "pr43-gui-once/claim.json").exists())
+
+    def test_normal_legacy_fresh_groups_and_success_reuse_stay_separate(self):
+        root = self.folder / "ordinary"
+        with patch.object(runner, "validate_history_context", return_value={"task_id": "independent-fixture"}):
+            core = runner.run_group("core", root, mode="validation")
+            self.assertEqual(runner.run_group("core", root, mode="validation"), core)
+        self.assertIsNone(runner.read_verified_manifest(core)["retry_of"])
+        self.assertEqual(runner.aggregate(root)["status"], "success")
+        self.assertFalse((root / "pr43-gui-once/claim.json").exists())
+        self.assertEqual(self.launches.count("raw.log"), 1)
+        self.assert_current_gui_refused()
+
+    def test_preflight_failure_has_real_claim_and_no_third_attempt(self):
+        folder, context = self.historical_claim()
+        path = self.historical_execution("gui", folder, context, blocked=True)
+        self.assertEqual(runner.read_verified_manifest(path)["outcome"], "blocked")
+        supplement = runner.validate_pr43_gui_once(self.root, context, self.candidate, require_claim=True)
+        values = runner.history(self.root); key = runner.read_json(path)["retry_key"]
+        self.assertEqual(len(runner.retry_history(values, key, supplement)), 2)
+        with self.assertRaisesRegex(ValueError, "budget"):
+            runner.retry_history([*values, (path, {**runner.read_json(path), "execution_id": "9" * 32})], key, supplement)
+        self.assert_current_gui_refused()
+        self.assertEqual(self.launches, [])
+
+    def test_binding_head_environment_gui_identity_and_corruption_refuse(self):
+        for kind in ("missing", "sha", "candidate", "environment", "identities", "archive", "initializer", "authorization"):
+            with self.subTest(kind=kind):
+                context = copy.deepcopy(self.legacy_context); candidate = copy.deepcopy(self.candidate)
+                env = copy.deepcopy(self.environment); inventory = copy.deepcopy(self.inventory)
+                patches = []
+                if kind == "missing": context.pop("pr43_gui_once")
+                elif kind == "sha": context["pr43_gui_once"]["declaration"]["sha256"] = "0" * 64
+                elif kind == "candidate": candidate["parents"][1] = "9" * 40
+                elif kind == "environment": env["environment"]["TCL_LIBRARY"] = "foreign"
+                elif kind == "identities": inventory["gui_ids"].pop()
+                elif kind == "archive": patches.append(patch.dict(runner.PR43_GUI_ONCE, archive_sha256="0" * 64))
+                elif kind == "initializer": patches.append(patch.dict(runner.PR43_GUI_ONCE, setup_sha256="0" * 64))
+                elif kind == "authorization": patches.append(patch.dict(runner.PR43_GUI_ONCE, authorization_sha256="0" * 64))
+                for item in patches: item.start()
+                try:
+                    with self.assertRaises(ValueError):
+                        runner.validate_pr43_gui_once(self.root, context, candidate, env=env, inventory=inventory)
+                finally:
+                    for item in reversed(patches): item.stop()
+        archive = self.root / "pr43-gui-once/pr-artifact.zip"
+        original = archive.read_bytes()
+        archive.write_bytes(original + b"corruption")
+        with self.assertRaisesRegex(ValueError, "binary artifact"):
+            runner.validate_pr43_gui_once(self.root, self.legacy_context, self.candidate)
+        archive.write_bytes(original)
+
+    def test_archived_initializer_requires_full_blob_and_ast_without_execution(self):
+        # Real pinned git object; AST only, no old module import/initializer call.
+        runner._pr43_setup_source()
+        command = ["git", "show", "d59358cd45cc65a73b1d4dcb0aa228ffe7233435:tests/test_manual_actual_gui_batch_v570.py"]
+        raw = subprocess.check_output(command, cwd=ROOT)
+        import hashlib
+        self.assertEqual(hashlib.sha256(raw).hexdigest(), "1373c00997ca98db7562a39b1b0370b818bc9302c1e2c3a9ef7bc915ade416da")
+        with patch.object(runner.subprocess, "check_output", return_value=raw + b"\n") as read:
+            with self.assertRaisesRegex(ValueError, "full source changed"): runner._pr43_setup_source()
+            read.assert_called_once_with(command, cwd=ROOT)
+        with patch.dict(runner.PR43_GUI_ONCE, setup_sha256="0" * 64):
+            with self.assertRaisesRegex(ValueError, "initializer source changed"): runner._pr43_setup_source()
+        with patch.object(runner.subprocess, "check_output", side_effect=subprocess.CalledProcessError(128, command)):
+            with self.assertRaises(subprocess.CalledProcessError): runner._pr43_setup_source()
+        self.assertEqual(self.launches, [])
+
+    def test_original_general_skip_unknown_wrapper_mixed_and_noninitialization_refuse(self):
+        old = runner.history(self.root)[0]
+        folder, value = old[0].parent, old[1]
+        # Exercise the real evidence grammar independently of outer ZIP pins.
+        original_xml = (folder / "junit.xml").read_bytes()
+        original_events = (folder / "events.jsonl").read_bytes()
+        original_raw = (folder / "raw.log").read_bytes()
+        for kind in ("general", "owner", "mixed", "noninit", "phase", "unknown-event-wrapper"):
+            with self.subTest(kind=kind):
+                xml = ET.fromstring(original_xml)
+                skipped = next(xml.iter("skipped"))
+                events = [json.loads(line) for line in original_events.decode().splitlines()]
+                if kind == "general": skipped.set("message", "Tk display unavailable")
+                elif kind == "owner": next(xml.iter("testcase")).set("classname", "tests.Unknown")
+                elif kind == "mixed": ET.SubElement(next(xml.iter("testcase")), "failure", message="AssertionError: data")
+                elif kind == "noninit": skipped.set("message", skipped.get("message").replace("init.tcl", "combobox.tcl"))
+                elif kind == "phase": events[0]["when"] = "call"
+                elif kind == "unknown-event-wrapper": events[0]["traceback"] = repr(("unknown.py", 1, "Skipped: " + skipped.get("message")))
+                ET.ElementTree(xml).write(folder / "junit.xml", encoding="utf-8")
+                (folder / "events.jsonl").write_text("\n".join(json.dumps(event) for event in events), encoding="utf-8")
+                with self.assertRaises(ValueError): runner._pr43_skips(folder, value)
+                (folder / "junit.xml").write_bytes(original_xml)
+                (folder / "events.jsonl").write_bytes(original_events)
+                (folder / "raw.log").write_bytes(original_raw)
+
 ROOT = Path(__file__).resolve().parents[1]
 ORIGINAL_RUN_PROCESS = runner.run_process
 

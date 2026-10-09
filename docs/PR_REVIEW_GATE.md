@@ -384,6 +384,18 @@ Fixed 值為 task `validation-flow-reduction`、原 baseline/base `457707b4c4109
 
 [第8輪限定摘要](VALIDATION_FLOW_CORRECTION8.md) 保留新原人類授權及原第7 formal code BLOCKED。Optional `correction_exception` schema `validation-flow-correction-exception/5` closed fields 恰為 `CORRECTION8_EXCEPTION` 加 `authorization_ref`、`previous_authorization_ref`、`sixth_authorization_ref`、`fifth_authorization_ref`、`fourth_authorization_ref`；固定task/B/branch/PR41/starting d974ec5c/scope/hashes/extra1/limit8全核對。實讀第8原文hash `c156319030dc54f549e6479b369ef718fecdd494aee1817fee515e683032e05a` 及原7/6/5/4字節，nested原7validator重驗連續前七輪；原所有舊adapter与general3不改。Len7 current須起始；len8第8from须起始/current等於to。原contiguous/newcommit／未知closedfields检查不變；錯identity/ref/hash/history/scope或limit9拒絕；8用完correction与postmergecode handoff STOP，保留actualmerge/history/count，不产生9。Gate不創造來源scope、操作權限、審查PASS或同HEAD清code finding。
 
+
+## PR43 原任務第五輪 closed gate
+
+2026-10-08 明確採納限定補充（原件 SHA256 `5519099dd0d20aefe752bf7fec2cfa85998e0c70850617a8b7949a5a79219f10`），僅支援 `actual-gpt-bbox-export`／PR43／`codex/actual-gpt-bbox-export`／原 baseline `8eab9a1de34b59115658a2c7d3565adb347e59ab`。不改一般三輪或 PR41，不增加第六輪。
+
+Optional `correction_exception` 恰含 `schema: pr43-correction-exception/1`、整數 `limit`（4 或 5）、`sources`、`integration_commits`、`corrective_head`。`sources` 的每個 key 必須恰等於程式 `PR43_SOURCES`，value 為可讀原件路徑，逐 bytes 核對固定 SHA256；limit5 另要求 `fifth_authorization`，固定原採納 hash `7bf99a4fa2ef4446fb8c0490af60ab0ca8014fe35ddf1025329d3ca6fdc5624b`。保留 canonical ledger、第四輪兩份人類授權及收據、原 two-round BLOCKED gate、舊二輪 projection proposal/adoption，以及本次完整 proposal/adoption，不修改原件。
+
+Operational correction1 保留原區間；correction2 僅採已核准 a951→d593 累積區間，evidence_ref 指原 projection proposal；correction3 為 d593→7b5，evidence_ref 指本次 closed gate proposal；correction4 保留 7b5→6ce 與原 receipt reference。canonical 實際第二／三輪起點仍為 f4／ea944，原非corrective transitions、classification、parents 和全部 reports 留在 hash-bound ledger，不冒稱 operational 起點是 direct parent。四筆狀態只接受原 base／6ce、空 integration list、corrective_head=null，limit4 保留4/4；limit5 表示明確第五輪授權已讀，不表示候選已固定。
+
+第五筆只能是 6ce→固定 final candidate；`integration_commits` 保存實際 first-parent 順序的 `{sha, object_ref}`（原始 `git cat-file commit` bytes，無換行轉換），gate 重算 Git commit object SHA1 並讀 ordered parents。每筆 ordinary merge 的 first parent 接前一筆；corrective_head 精確指定鏈中唯一第五輪實作 commit，可與 merge 合一，或在先前 integration 後是單 parent commit。第五輪之後只准已授權 ordinary merge，例如保留現有 6ce＋476 merge 作第五輪，再 merge 新 develop；其餘單 parent code commit 拒絕，不偷算成 noncorrective。不接受獨立無 integration 修正、octopus、缺件、錯序、改 bytes。最後一次 integration 的第二 parent 必須等於本次 PR base，末端必須等於 current／PR head；第五筆 evidence_ref 指該末端 object_ref。base 不硬鎖舊 develop 或未存在的未來 SHA，協調者仍須從真實 Git／遠端核對每筆 integration 的授權、scope 與來源，commit bytes 本身不認證其人類授權。PR 已 merge 時保留原 reviewed pair，current develop 可前進，仍走既有 actual merge 門檻。
+
+本 adapter 只處理 count／有限表示與實際父代綁定，不清除 BLOCKED、不產生 PASS、不更動 supersedes／finalizes。第五輪用盡遇 code finding 必須 STOP；non-code 仍按原分類補證據或 STOP。新 HEAD／base 仍須兩輪完整適用獨立審查、正式 coverage／CI、保護規則及實際 merge 短驗證。
 ## PR42 的限定歷史並存 adapter
 
 使用者明確採納 `cff-review-history/1`，只處理原 `cff-batch-fingerprint` 的
@@ -444,6 +456,48 @@ HEAD、to 必須 current/PR HEAD，仍需 contiguous/new-commit schema。
 本例外只承載原任務同一第四輪，不自動解除原 BLOCKED、不增加正式 CI 或
 retry 額度、不提供獨立審查或 merge 授權。第四輪新 HEAD 仍需兩輪完整適用
 獨立審查與必要原始證據；4/4 後再有 confirmed code finding 必須 STOP。
+
+
+## PR43 唯一第六輪與原 R1 CODE／code BLOCKED 並存
+
+2026-10-09 人類採納原 proposal SHA256
+`937717ab4c55591b1c4c611595c2cc6ad216f7444dc45e0bb445dc85d22248e7`
+及 history addendum `7f92f232e35126811de3484b6da7b35e10589d04a6b6df28b7bc680101075c28`；
+採納原件 hash `a9e605fab7cc52a6159a64528c6f8bd60cbde5989e48d29884aac7ece1a46ccf`。
+僅限原 `actual-gpt-bbox-export`、PR43、`codex/actual-gpt-bbox-export`、
+baseline `8eab9a1de34b59115658a2c7d3565adb347e59ab`。原 `/1` 仍只接受四／五輪。
+
+Optional `pr43_review_history_adapter` 恰有 `contract=pr43-review-history/1`、
+`sources`；來源 keys／原 bytes SHA256 完整列於 `PR43_SIXTH_SOURCES`，不得缺件或改 hash。
+包含原第五失敗 snapshot、receipt、3ade raw object、四份報告及作者投影／聲明、
+原 CI manifest/raw/JUnit/events、proposal/addendum/adoption。先重驗原 `/1` 的五輪，
+固定 historical base `1417ac7ef08c7024f5940b3b9192abb4029405c1`、HEAD
+`3ade65a9e94017c7eede5488508b9c91767f7874`、true fifth corrective
+`f66d67a4d6c0cbf7895c456cc2791a5b8bdfa2b5` 及 raw tree/ordered parents。
+全部六份 review（包括更早兩份）與五 corrections 必須保持完整 ordered prefix。
+只有該 R1 CODE_REVIEWED／code BLOCKED 原 pair 可並存；null relations、findings、
+report refs、作者 projection 原值不變。R2 原 CI tuple 不同，沒有額外 R2 例外。
+舊第五 `/1` 保持 STOP5/5，CI37789520018/1 仍 failed、exit1、retry false。
+不得新增同原 R1 scope 的第三份 report／PASS，即使變更 CI／coverage 也拒絕。
+
+`correction_exception` 的 `/2` 恰有 `schema=pr43-correction-exception/2`、
+`limit=6`、`sixth_corrective_head`、`integration_commits`、`candidate_tree`，並要求上述 adapter。
+只接受原五筆後追加恰一筆 number6/from3ade/to final candidate；第五 to/evidence_ref 不變。
+新鏈從 3ade 開始，唯一單 parent 節點必須是 sixth_corrective_head；其餘只能是已授權
+ordinary two-parent develop merges。每筆恰有 `sha/object_ref/develop_observation_ref`，
+實讀原 commit bytes 驗 Git object SHA、唯一合法 tree header、ordered parents。
+修正節點的 observation 為 null；merge 節點引用 closed JSON
+`repository/ref/sha/evidence_ref`，固定 repository、`refs/heads/develop`，sha 必須等於
+第二 parent。evidence_ref 實讀當時 `git rev-parse origin/develop` 原始 SHA 行（LF／CRLF）；
+協調者另保留命令、時間與遠端 API 原件，gate 不自稱驗證來源真實性。
+最後 tree 必須等於 candidate_tree，HEAD/base 與當次 scope 相同，number6 evidence_ref
+必須引用最後 raw object。未發生的 merge 不得預填 SHA。
+
+新 HEAD 仍需兩輪完整適用獨立審查與必要 CI；原報告不提供新候選 PASS。
+第六輪 code finding 保持 STOP6/6；額外單 parent 修正、第七輪、壞 hash/tree/parents、
+刪改 prefix、未知 task/schema 或偽造 relations 均拒絕。一般／PR41／CFF 契約不變。
+Synthetic 回歸僅替換 fixture pins／歷史 Git identities，另驗真實 allowlist 拒絕假來源；
+不把 fixture 成功當正式原件、review 或 CI PASS。
 
 
 ### PR46 原 R1 CODE／code BLOCKED 精確並存

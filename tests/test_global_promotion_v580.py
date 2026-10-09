@@ -735,18 +735,52 @@ class AdmissionAndProjectIntegrationTests(unittest.TestCase):
         self.assertEqual(promotion.load_promotion_outbox(self.root)["items"], [])
 
     def test_delivery_failure_does_not_prevent_controller_refresh(self):
-        output = self.base / "output"
-        result = {"group_results": [{"affected_occurrence_ids": ["occ_" + sha("occ-0")]}]}
+        from tests.test_actual_refresh_publication import sealed_project
+        output, manifest = sealed_project(self.base)
+        # Controller-only unit: refresh/delivery are mocked, acknowledgment and
+        # sealed PDF checks are real. No COMMITTED transaction is fabricated.
+        self.assertIsNone(promotion.project_refresh_token(pipeline.project_actual_evidence_root(output)))
+        result = {"applied_group_count": 1, "group_results": [{"group_id": "agr_fixture", "affected_occurrence_ids": ["occ_" + sha("occ-0")], "verified_occurrence_ids": ["occ_" + sha("occ-0")], "reading": "ㄆ"}]}
         with (patch.object(pipeline, "deliver_pending_promotion_outbox", return_value={"status": "PENDING_RETRY"}),
               patch.object(pipeline, "_clear_actual_dependent_events", return_value=1) as clear,
-              patch.object(pipeline, "refresh_actual_project", return_value=output / "report.xlsx") as refresh):
+              patch.object(pipeline, "refresh_actual_project", side_effect=lambda *a, **kw: (kw["_refresh_status"].update(cleared_actual_dependent_event_count=1), output / "report.xlsx")[1]) as refresh):
             removed, _ = pipeline._finish_direct_actual_commit(output, [], result)
-        clear.assert_called_once()
+        clear.assert_not_called()
         refresh.assert_called_once()
         self.assertEqual(removed, 1)
         self.assertEqual(result["project_actual_commit"], "COMMITTED")
         self.assertEqual(result["global_promotion_delivery"]["status"], "PENDING_RETRY")
         self.assertEqual(result["project_refresh"], "SUCCESS")
+
+    def test_controller_ack_refuses_missing_manifest_or_changed_pdf_without_writes(self):
+        from tests.test_actual_refresh_publication import sealed_project
+        for mutation in ("missing_manifest", "changed_pdf"):
+            with self.subTest(mutation=mutation):
+                folder = self.base / mutation
+                folder.mkdir()
+                output, manifest = sealed_project(folder)
+                if mutation == "missing_manifest":
+                    (output / "校對工作階段.json").unlink()
+                else:
+                    Path(manifest["pdfs"][0]["pdf"]).write_bytes(b"changed sealed PDF")
+                # Initialize the real OS coordination lock before the byte
+                # baseline; refusal may acquire it but cannot change artifacts.
+                with pipeline.project_delivery_lock(pipeline.project_actual_evidence_root(output)):
+                    pass
+                before = {p: p.read_bytes() for p in folder.rglob("*") if p.is_file()}
+                result = {"applied_group_count": 1, "group_results": [{
+                    "group_id": "agr_fixture", "affected_occurrence_ids": ["occ_" + sha("occ-0")],
+                    "verified_occurrence_ids": ["occ_" + sha("occ-0")], "reading": "ㄆ"}]}
+                self.assertIsNone(promotion.project_refresh_token(pipeline.project_actual_evidence_root(output)))
+                with (patch.object(pipeline, "deliver_pending_promotion_outbox", return_value={"status": "PENDING_RETRY"}),
+                      patch.object(pipeline, "refresh_actual_project", side_effect=lambda *a, **kw: (
+                          kw["_refresh_status"].update(cleared_actual_dependent_event_count=0), output / "report.xlsx")[1]) as refresh,
+                      self.assertRaises(pipeline.ManualActualPostApplyError) as raised):
+                    pipeline._finish_direct_actual_commit(output, [], result)
+                refresh.assert_called_once()
+                self.assertEqual(raised.exception.phase, "acknowledge_project_refresh")
+                self.assertEqual(raised.exception.global_promotion_delivery["status"], "PENDING_RETRY")
+                self.assertEqual({p: p.read_bytes() for p in folder.rglob("*") if p.is_file()}, before)
 
     def test_successful_global_delivery_then_refresh_failure_is_structured(self):
         output = self.base / "output"
@@ -754,7 +788,7 @@ class AdmissionAndProjectIntegrationTests(unittest.TestCase):
         promotion.enqueue_promotion_intents(root, [intent()])
         repo = library.GlobalExactGlyphRepository.resolved(self.base / "global")
         original = promotion.deliver_pending_promotion_outbox
-        result = {"group_results": [{"affected_occurrence_ids": ["occ_" + sha("occ-0")]}]}
+        result = {"applied_group_count": 1, "group_results": [{"group_id": "agr_fixture", "affected_occurrence_ids": ["occ_" + sha("occ-0")], "verified_occurrence_ids": ["occ_" + sha("occ-0")], "reading": "ㄆ"}]}
         with (patch.object(pipeline, "deliver_pending_promotion_outbox", side_effect=lambda root: original(root, repo)),
               patch.object(pipeline, "_clear_actual_dependent_events", return_value=1),
               patch.object(pipeline, "refresh_actual_project", side_effect=RuntimeError("refresh failure")),

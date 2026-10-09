@@ -39,6 +39,15 @@ AUTHORITATIVE_ACTUAL_FILES = (
 )
 
 
+def staged_refresh_result(report, cleared_count=0):
+    """Emulate only the staged refresh boundary; controllers never clear live DB."""
+    def refresh(output_dir, *, _refresh_plan, _refresh_status):
+        assert set(_refresh_plan) == {"schema_version", "affected_occurrence_ids", "checked_postconditions"}
+        _refresh_status["cleared_actual_dependent_event_count"] = cleared_count
+        return report
+    return refresh
+
+
 def entry(
     occurrence_id: str,
     glyph_sha256: str,
@@ -76,7 +85,18 @@ def entry(
 def make_project(base: Path) -> Path:
     output_dir = base / "output"
     output_dir.mkdir(parents=True)
-    manifest = sp.seal_manifest({"pdfs": [], "records": []})
+    pdf = base / "controller-source.pdf"
+    with fitz.open() as document:
+        document.new_page()
+        document.save(pdf)
+    info = {"pdf": str(pdf), "pdf_name": pdf.name, "pdf_sha256": sp.sha256_file(pdf)}
+    for kind, directory in [("actual", "01_實際注音"), ("candidate", "02_候選報告")]:
+        path = output_dir / directory / (kind + ".xlsx")
+        path.parent.mkdir()
+        path.write_bytes(("sealed-controller-" + kind).encode())
+        info[kind + "_workbook"] = str(path)
+        info[kind + "_workbook_sha256"] = sp.sha256_file(path)
+    manifest = sp.seal_manifest({"pdfs": [info], "records": []})
     sp.json_save(output_dir / "校對工作階段.json", manifest)
     sp.json_save(output_dir / "人工判定資料庫.json", sp.normalize_db({}))
     return output_dir
@@ -345,16 +365,16 @@ class ManualActualGuiBatchOrchestrationTests(unittest.TestCase):
                 patch.object(sp, "materialize_ledger", side_effect=[pre_ledger, post_ledger]),
                 patch.object(sp, "apply_staged_manual_actual_batch", return_value=core_result) as batch,
                 patch.object(sp, "_clear_actual_dependent_events", return_value=2) as clear,
-                patch.object(sp, "refresh_actual_project", return_value=output_dir / "report.xlsx") as refresh,
+                patch.object(sp, "refresh_actual_project", side_effect=staged_refresh_result(output_dir / "report.xlsx", 2)) as refresh,
             ):
                 result = sp.apply_staged_manual_actual_corrections(output_dir)
             batch.assert_called_once()
             live_groups = batch.call_args.args[1]
             self.assertEqual({group["group_id"] for group in live_groups}, {group["group_id"] for group in groups})
-            clear.assert_called_once()
-            self.assertIs(clear.call_args.args[1], pre_ledger)
-            self.assertEqual(clear.call_args.args[2], {"occ-0", "occ-1"})
-            refresh.assert_called_once_with(output_dir)
+            clear.assert_not_called()
+            refresh.assert_called_once()
+            self.assertEqual(refresh.call_args.args, (output_dir,))
+            self.assertEqual(refresh.call_args.kwargs["_refresh_plan"]["affected_occurrence_ids"], ["occ-0", "occ-1"])
             self.assertEqual(result["cleared_actual_dependent_event_count"], 2)
             self.assertEqual(result["postcondition_checked_occurrence_ids"], ["occ-0", "occ-1"])
 
@@ -366,42 +386,55 @@ class ManualActualGuiBatchOrchestrationTests(unittest.TestCase):
                 patch.object(sp, "materialize_ledger", side_effect=[pre_ledger, refreshed_ledger_for(groups)]),
                 patch.object(sp, "apply_staged_manual_actual_batch", return_value=batch_result_for(groups)) as batch,
                 patch.object(sp, "_clear_actual_dependent_events", return_value=0) as clear,
-                patch.object(sp, "refresh_actual_project", return_value=output_dir / "report.xlsx") as refresh,
+                patch.object(sp, "refresh_actual_project", side_effect=staged_refresh_result(output_dir / "report.xlsx")) as refresh,
             ):
                 sp.apply_staged_manual_actual_corrections(output_dir)
             batch.assert_called_once()
-            clear.assert_called_once()
-            refresh.assert_called_once_with(output_dir)
+            clear.assert_not_called()
+            refresh.assert_called_once()
+            self.assertEqual(refresh.call_args.args, (output_dir,))
             self.assertEqual(len(batch.call_args.args[1]), 10)
 
     def test_refresh_actual_project_forwards_the_complete_session_pdf_roster_once(self):
+        from tests.test_actual_refresh_publication import sealed_project, successful_stage
         with tempfile.TemporaryDirectory() as directory:
-            output_dir = Path(directory) / "output"
-            output_dir.mkdir()
-            manifest = {
-                "session_id": "full-session-id",
-                "pdfs": [
-                    {"pdf_name": "affected.pdf"},
-                    {"pdf_name": "unaffected.pdf"},
-                    {"pdf_name": "cross-file-evidence.pdf"},
-                ],
-            }
-            pdfs = [Path(directory) / item["pdf_name"] for item in manifest["pdfs"]]
-            with (
-                patch.object(sp, "json_load_strict", return_value=manifest),
-                patch.object(sp, "validate_manifest_integrity"),
-                patch.object(sp, "validate_output_artifact_hashes"),
-                patch.object(sp, "_resolve_session_pdfs", return_value=pdfs) as resolve,
-                patch.object(sp, "run_pipeline_pdfs", return_value=output_dir / "report.xlsx") as pipeline,
-            ):
-                sp.refresh_actual_project(output_dir)
-            resolve.assert_called_once_with(output_dir, manifest)
-            pipeline.assert_called_once_with(
-                pdfs,
-                output_dir,
-                session_id_override="full-session-id",
-                defer_excel_reports=True,
-            )
+            output_dir, manifest = sealed_project(Path(directory))
+            original = manifest["pdfs"][0]
+            for name in ("unaffected.pdf", "cross-file-evidence.pdf"):
+                info = copy.deepcopy(original)
+                pdf = Path(directory) / name
+                pdf.write_bytes(Path(original["pdf"]).read_bytes())
+                info["pdf_name"] = name
+                info["pdf"] = str(pdf)
+                for key in ("actual_workbook", "candidate_workbook"):
+                    target = Path(info[key]).with_name(name + ".xlsx")
+                    target.write_bytes(Path(original[key]).read_bytes())
+                    info[key] = str(target)
+                manifest["pdfs"].append(info)
+            manifest = sp.seal_manifest(manifest)
+            sp.json_save(output_dir / "校對工作階段.json", manifest)
+            # This is an existing OS path through a real parent directory, not
+            # a fabricated RUNNER~1 spelling. The ordered roster remains exact.
+            alias = Path(directory) / ".." / Path(directory).name
+            self.assertTrue(alias.is_dir())
+            pdfs = [alias / Path(item["pdf"]).name for item in manifest["pdfs"]]
+            self.assertEqual([p.resolve(strict=True) for p in pdfs],
+                             [Path(item["pdf"]).resolve(strict=True) for item in manifest["pdfs"]])
+            source_alias = alias / output_dir.name
+            def checked_stage(pdfs, destination, **kwargs):
+                self.assertNotEqual(Path(destination).resolve(strict=True), source_alias.resolve(strict=True))
+                return successful_stage(pdfs, destination, **kwargs)
+            with patch.object(sp, "run_pipeline_pdfs", side_effect=checked_stage) as pipeline:
+                sp.refresh_actual_project(source_alias)
+            pipeline.assert_called_once()
+            self.assertEqual([Path(p).resolve(strict=True) for p in pipeline.call_args.args[0]],
+                             [p.resolve(strict=True) for p in pdfs])
+            # The verified isolated stage has been cleaned after publication.
+            self.assertNotEqual(Path(pipeline.call_args.args[1]).resolve(), output_dir.resolve(strict=True))
+            self.assertEqual(Path(pipeline.call_args.kwargs["_source_project_dir"]).resolve(strict=True),
+                             source_alias.resolve(strict=True))
+            self.assertEqual(pipeline.call_args.kwargs["session_id_override"], manifest["session_id"])
+            self.assertTrue(pipeline.call_args.kwargs["defer_excel_reports"])
 
     def test_one_refresh_pass_decodes_each_invalidated_pdf_once_and_reuses_unaffected(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -539,7 +572,7 @@ class ManualActualGuiBatchOrchestrationTests(unittest.TestCase):
                 ) as build_group,
                 patch.object(sp, "apply_staged_manual_actual_batch", return_value=batch_result_for(staged_groups)) as batch,
                 patch.object(sp, "_clear_actual_dependent_events", return_value=0),
-                patch.object(sp, "refresh_actual_project", return_value=output_dir / "report.xlsx"),
+                patch.object(sp, "refresh_actual_project", side_effect=staged_refresh_result(output_dir / "report.xlsx")),
             ):
                 sp.apply_staged_manual_actual_corrections(output_dir)
             self.assertEqual(build_group.call_count, 2)
@@ -575,7 +608,7 @@ class ManualActualGuiBatchOrchestrationTests(unittest.TestCase):
                 patch.object(sp, "materialize_ledger", side_effect=[pre_ledger, refreshed_ledger_for(groups)]),
                 patch.object(sp, "apply_staged_manual_actual_batch", return_value=core_result),
                 patch.object(sp, "_clear_actual_dependent_events", return_value=0),
-                patch.object(sp, "refresh_actual_project", return_value=output_dir / "report.xlsx") as refresh,
+                patch.object(sp, "refresh_actual_project", side_effect=staged_refresh_result(output_dir / "report.xlsx")) as refresh,
             ):
                 result = sp.apply_staged_manual_actual_corrections(output_dir)
             refresh.assert_called_once()
@@ -610,7 +643,7 @@ class ManualActualGuiBatchOrchestrationTests(unittest.TestCase):
                 patch.object(sp, "materialize_ledger", side_effect=[pre_ledger, refreshed_ledger_for(groups)]),
                 patch.object(sp, "apply_staged_manual_actual_batch", return_value=batch_result_for(groups)),
                 patch.object(sp, "_clear_actual_dependent_events", return_value=1),
-                patch.object(sp, "refresh_actual_project", return_value=output_dir / "report.xlsx"),
+                patch.object(sp, "refresh_actual_project", side_effect=staged_refresh_result(output_dir / "report.xlsx")),
             ):
                 result = sp.apply_staged_manual_actual_corrections(output_dir)
             self.assertEqual(result["postcondition_checked_occurrence_ids"], ["occ-0", "occ-1"])
@@ -626,7 +659,7 @@ class ManualActualGuiBatchOrchestrationTests(unittest.TestCase):
                 patch.object(sp, "materialize_ledger", side_effect=[pre_ledger, post_ledger]),
                 patch.object(sp, "apply_staged_manual_actual_batch", return_value=batch_result_for(groups)),
                 patch.object(sp, "_clear_actual_dependent_events", return_value=0),
-                patch.object(sp, "refresh_actual_project", return_value=output_dir / "report.xlsx") as refresh,
+                patch.object(sp, "refresh_actual_project", side_effect=staged_refresh_result(output_dir / "report.xlsx")) as refresh,
             ):
                 with self.assertRaises(sp.ManualActualPostApplyError) as caught:
                     sp.apply_staged_manual_actual_corrections(output_dir)
@@ -643,7 +676,7 @@ class ManualActualGuiBatchOrchestrationTests(unittest.TestCase):
                 patch.object(sp, "materialize_ledger", side_effect=[pre_ledger, []]),
                 patch.object(sp, "apply_staged_manual_actual_batch", return_value=batch_result_for(groups)),
                 patch.object(sp, "_clear_actual_dependent_events", return_value=0),
-                patch.object(sp, "refresh_actual_project", return_value=output_dir / "report.xlsx"),
+                patch.object(sp, "refresh_actual_project", side_effect=staged_refresh_result(output_dir / "report.xlsx")),
             ):
                 with self.assertRaises(sp.ManualActualPostApplyError) as caught:
                     sp.apply_staged_manual_actual_corrections(output_dir)
@@ -660,7 +693,7 @@ class ManualActualGuiBatchOrchestrationTests(unittest.TestCase):
                 patch.object(sp, "materialize_ledger", side_effect=[pre_ledger, post_ledger]),
                 patch.object(sp, "apply_staged_manual_actual_batch", return_value=batch_result_for(groups)),
                 patch.object(sp, "_clear_actual_dependent_events", return_value=0),
-                patch.object(sp, "refresh_actual_project", return_value=output_dir / "report.xlsx"),
+                patch.object(sp, "refresh_actual_project", side_effect=staged_refresh_result(output_dir / "report.xlsx")),
             ):
                 result = sp.apply_staged_manual_actual_corrections(output_dir)
             self.assertEqual(result["postcondition_checked_occurrence_ids"], ["occ-0"])

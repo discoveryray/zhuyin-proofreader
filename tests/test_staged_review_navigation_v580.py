@@ -19,6 +19,9 @@ from tests.test_manual_actual_gui_batch_v570 import DummyButton, FakeProgressWid
 from export_zhuyin_readings import load_actual_occurrence_overrides, match_actual_occurrence_override
 
 
+_REAL_REFRESH_ACTUAL_PROJECT = sp.refresh_actual_project
+
+
 def create_staged_navigation_fixture(output, *, same_exact_peers=False):
     """Synthetic visual samples plus sealed fixture workbooks; no real textbook.
 
@@ -37,7 +40,9 @@ def create_staged_navigation_fixture(output, *, same_exact_peers=False):
     info = {"pdf": str(pdf), "pdf_name": pdf.name,
             "pdf_sha256": hashlib.sha256(pdf.read_bytes()).hexdigest()}
     for kind in ("actual", "candidate"):
-        path = output / f"isolated-{kind}.xlsx"
+        directory = "01_實際注音" if kind == "actual" else "02_候選報告"
+        path = output / directory / f"isolated-{kind}.xlsx"
+        path.parent.mkdir(exist_ok=True)
         wb = Workbook()
         wb.active.title = "隔離測試輸入"
         wb.active.append(["occurrence_id", "actual", "expected"])
@@ -66,21 +71,97 @@ def headless_app(output):
     return app
 
 
-def controlled_refresh(output):
-    """Consume the real committed overrides, substituting only PDF re-decoding.
-
-    This synthetic PDF has no textbook embedded Zhuyin glyph decoder fixture.
-    The transaction, staging ack, expected replay and postconditions are real.
-    """
-    manifest = sp.json_load_strict(output / "校對工作階段.json")
+def synthetic_actual_stage(pdfs, destination, *, session_id_override,
+                           defer_excel_reports, _source_project_dir):
+    """Only substitute decoder bytes inside the real isolated refresh stage."""
+    destination, source = Path(destination), Path(_source_project_dir)
+    if destination.resolve() == source.resolve():
+        raise AssertionError("synthetic producer must not write the live project")
+    manifest = sp.json_load_strict(destination / "校對工作階段.json")
+    assert manifest["session_id"] == session_id_override and defer_excel_reports
+    # Preserve the complete ordered roster (including multiplicity), while
+    # accepting only spellings that resolve to the same existing OS files.
+    assert [Path(info["pdf"]).resolve(strict=True) for info in manifest["pdfs"]] == [
+        Path(pdf).resolve(strict=True) for pdf in pdfs]
     for row in manifest["records"]:
-        overrides = load_actual_occurrence_overrides(sp.project_actual_evidence_root(output) / ar.OCCURRENCE_OVERRIDE_FILE, Path(row["pdf"]))
+        overrides = load_actual_occurrence_overrides(
+            sp.project_actual_evidence_root(source) / ar.OCCURRENCE_OVERRIDE_FILE, Path(row["pdf"]))
         override = match_actual_occurrence_override(row["source_record"], overrides)
         if override:
-            row.update(actual=override["actual_reading"], actual_status="RESOLVED", actual_evidence="isolated refreshed direct override")
+            row.update(actual=override["actual_reading"], actual_status="RESOLVED",
+                       actual_evidence="isolated refreshed direct override")
             row.update(ol.refresh_derived_state(row, preserve_confirmed=False))
-    sp.json_save(output / "校對工作階段.json", sp.seal_manifest(manifest))
-    return output / "fixture-report.xlsx"
+    # Existing sealed fixture workbook bytes were copied by the real stage.
+    sp.json_save(destination / "校對工作階段.json", sp.seal_manifest(manifest))
+    sp.json_save(destination / "pipeline_status.json",
+                 {"excel_report_deferred": True, "status": "PROCESSING_FINISHED"})
+    return destination / "注音校對_最終報告.xlsx"
+
+
+def controlled_refresh(output, *, _refresh_plan=None, _refresh_status=None):
+    """Real source checks, staging, publication and status; only decoder is synthetic.
+
+    Capture the original callable at module import so an outer controller patch
+    cannot recurse. Expected evidence never supplies the actual override reading.
+    """
+    with patch.object(sp, "run_pipeline_pdfs", side_effect=synthetic_actual_stage):
+        return _REAL_REFRESH_ACTUAL_PROJECT(
+            output, _refresh_plan=_refresh_plan, _refresh_status=_refresh_status)
+
+
+class SyntheticActualStageContractTests(unittest.TestCase):
+    def test_real_path_alias_accepts_complete_ordered_roster_in_isolated_stage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source"
+            source.mkdir()
+            create_staged_navigation_fixture(source)
+            ar.ensure_user_evidence_files(sp.project_actual_evidence_root(source))
+            before = {p: p.read_bytes() for p in source.rglob("*") if p.is_file()}
+            calls = []
+            def alias_stage(pdfs, destination, **kwargs):
+                aliases = [Path(p).parent / ".." / Path(p).parent.name / Path(p).name for p in pdfs]
+                self.assertTrue(all(p.is_file() for p in aliases))
+                self.assertEqual([p.resolve(strict=True) for p in aliases],
+                                 [Path(p).resolve(strict=True) for p in pdfs])
+                calls.append((list(pdfs), Path(destination), kwargs))
+                return synthetic_actual_stage(aliases, destination, **kwargs)
+            with patch.object(sp, "run_pipeline_pdfs", side_effect=alias_stage):
+                sp.refresh_actual_project(source)
+            self.assertEqual(len(calls), 1)
+            self.assertNotEqual(calls[0][1].resolve(), source.resolve())
+            self.assertEqual(calls[0][2]["session_id_override"],
+                             sp.json_load_strict(source / "校對工作階段.json")["session_id"])
+            self.assertTrue(calls[0][2]["defer_excel_reports"])
+            # Real publication may add status/DB files; it cannot rewrite the
+            # fixture's sealed workbook or authoritative actual evidence.
+            for path, raw in before.items():
+                if path.suffix == ".xlsx" or "_專案證據" in path.parts:
+                    self.assertEqual(path.read_bytes(), raw)
+
+    def test_missing_extra_different_or_duplicate_roster_rejects_without_live_writes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source"
+            source.mkdir()
+            create_staged_navigation_fixture(source)
+            ar.ensure_user_evidence_files(sp.project_actual_evidence_root(source))
+            other = Path(directory) / "other.pdf"
+            other.write_bytes(Path(sp.json_load_strict(source / "校對工作階段.json")["pdfs"][0]["pdf"]).read_bytes())
+            before = {p: p.read_bytes() for p in source.rglob("*") if p.is_file()}
+            for mutation in ("missing", "extra", "different", "duplicate"):
+                with self.subTest(mutation=mutation):
+                    def invalid_stage(pdfs, destination, **kwargs):
+                        roster = {"missing": [], "extra": [*pdfs, other],
+                                  "different": [other], "duplicate": [*pdfs, *pdfs]}[mutation]
+                        return synthetic_actual_stage(roster, destination, **kwargs)
+                    with patch.object(sp, "run_pipeline_pdfs", side_effect=invalid_stage), self.assertRaises(AssertionError):
+                        sp.refresh_actual_project(source)
+                    self.assertEqual({p: p.read_bytes() for p in before}, before)
+            manifest = sp.json_load_strict(source / "校對工作階段.json")
+            with self.assertRaisesRegex(AssertionError, "must not write the live project"):
+                synthetic_actual_stage([Path(i["pdf"]) for i in manifest["pdfs"]], source,
+                                       session_id_override=manifest["session_id"], defer_excel_reports=True,
+                                       _source_project_dir=source / ".." / source.name)
+            self.assertEqual({p: p.read_bytes() for p in before}, before)
 
 
 class StagedNavigationTests(unittest.TestCase):
@@ -522,6 +603,98 @@ class SameExactStagedNavigationTests(unittest.TestCase):
         batch.assert_not_called()
         self.assertCountEqual(result["postcondition_checked_occurrence_ids"], self.ids[:2])
         self.assertEqual(sp.load_or_initialize_db(self.output)["events"], self.expected_before)
+
+
+class ControlledRefreshContractTests(unittest.TestCase):
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.output = Path(self.temp.name)
+        self.manifest = create_staged_navigation_fixture(self.output)
+        self.row = self.manifest["records"][0]
+        sp.stage_manual_actual_correction(self.output, self.row["review_id"], "ㄎㄢ")
+        # A real committed apply whose refresh failed; no fabricated transaction.
+        with patch.object(sp, "refresh_actual_project", side_effect=OSError("fixture stop after commit")):
+            with self.assertRaises(sp.ManualActualPostApplyError):
+                sp.apply_staged_manual_actual_corrections(self.output)
+        self.root = sp.project_actual_evidence_root(self.output)
+        self.pending = sp.committed_project_recovery(self.root)
+        self.assertIsNotNone(self.pending)
+
+    def snapshot(self):
+        return {p.relative_to(self.output).as_posix(): p.read_bytes()
+                for p in self.output.rglob("*") if p.is_file()}
+
+    def test_real_plan_status_nonzero_clear_preserves_independent_expected_and_ack_once(self):
+        db = sp.load_or_initialize_db(self.output)
+        other = self.manifest["records"][1]
+        expected = sp.build_manual_expected_event(other, operation="ENTER_EXPECTED", expected_set="ㄎㄢˊ")
+        db["events"][other["review_id"]] = expected
+        own_expected = sp.build_manual_expected_event(
+            self.row, operation="ENTER_EXPECTED", expected_set="ㄎㄢ")
+        reviewed = sp._apply_review_event(self.row, own_expected)
+        db["events"][self.row["review_id"]] = {
+            **own_expected, "action": "確認現版差異",
+            "gui_confirmation": sp.build_gui_confirmation(reviewed),
+            "confirmation_actual_snapshot": sp.actual_confirmation_snapshot(reviewed)}
+        sp.json_save(self.output / "人工判定資料庫.json", db)
+        status = {}
+        with patch.object(sp, "apply_staged_manual_actual_batch") as apply:
+            controlled_refresh(self.output, _refresh_plan=self.pending[1], _refresh_status=status)
+            self.assertEqual(status, {"cleared_actual_dependent_event_count": 1})
+            self.assertEqual(sp.committed_project_recovery(self.root), self.pending)
+            events = sp.load_or_initialize_db(self.output)["events"]
+            self.assertEqual(events[other["review_id"]], expected)
+            self.assertNotEqual(events[self.row["review_id"]]["action"], "確認現版差異")
+            for key in ("expected_set", "expected_evidence", "context_evidence", "manual_expected_decision"):
+                self.assertEqual(events[self.row["review_id"]][key], own_expected[key])
+            self.assertNotIn("gui_confirmation", events[self.row["review_id"]])
+            with patch.object(sp, "refresh_actual_project", side_effect=controlled_refresh):
+                result = sp.recover_committed_actual_project(self.output)
+            self.assertEqual(result["project_refresh"], "SUCCESS")
+            self.assertIsNone(sp.committed_project_recovery(self.root))
+            self.assertIsNone(sp.recover_committed_actual_project(self.output))
+            apply.assert_not_called()
+        self.assertEqual(sp.load_or_initialize_db(self.output)["events"][other["review_id"]], expected)
+
+    def test_mismatched_committed_plan_refuses_before_producer_and_preserves_all_bytes(self):
+        for kind in ("affected", "reading"):
+            with self.subTest(kind=kind):
+                plan = copy.deepcopy(self.pending[1])
+                if kind == "affected":
+                    plan["affected_occurrence_ids"] = sorted(
+                        plan["affected_occurrence_ids"] + [self.manifest["records"][1]["occurrence_id"]])
+                else:
+                    plan["checked_postconditions"][0]["reading"] = "ㄎㄢˊ"
+                before = self.snapshot()
+                status = {}
+                with patch(__name__ + ".synthetic_actual_stage") as producer:
+                    with self.assertRaises(ValueError):
+                        controlled_refresh(self.output, _refresh_plan=plan, _refresh_status=status)
+                    producer.assert_not_called()
+                self.assertEqual(status, {})
+                self.assertEqual(self.snapshot(), before)
+                self.assertEqual(sp.committed_project_recovery(self.root), self.pending)
+
+    def test_stage_producer_failure_preserves_committed_then_recovers_without_reapply(self):
+        producer = synthetic_actual_stage
+        def fail_after_stage_write(*args, **kwargs):
+            producer(*args, **kwargs)
+            raise OSError("fixture staged producer failure")
+        before = self.snapshot()
+        status = {}
+        with patch(__name__ + ".synthetic_actual_stage", side_effect=fail_after_stage_write):
+            with self.assertRaisesRegex(OSError, "staged producer failure"):
+                controlled_refresh(self.output, _refresh_plan=self.pending[1], _refresh_status=status)
+        self.assertEqual(status, {})
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(sp.committed_project_recovery(self.root), self.pending)
+        with patch.object(sp, "apply_staged_manual_actual_batch") as apply, \
+                patch.object(sp, "refresh_actual_project", side_effect=controlled_refresh):
+            result = sp.recover_committed_actual_project(self.output)
+        apply.assert_not_called()
+        self.assertEqual(result["project_refresh"], "SUCCESS")
+        self.assertIsNone(sp.committed_project_recovery(self.root))
 
 
 if __name__ == "__main__":

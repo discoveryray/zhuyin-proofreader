@@ -109,6 +109,8 @@ from actual_review import (
     apply_direct_visual_actual_batch,
     export_actual_review_package,
     import_actual_review_workbook,
+    actual_sample_availability,
+    validate_actual_sample_profile,
     ensure_user_evidence_files,
     actual_workbook_dynamic_dependencies,
     actual_workbook_global_exact_dependencies,
@@ -244,9 +246,21 @@ def recover_committed_actual_project(output_dir: Path, *, acknowledge: bool = Tr
     output_dir = Path(output_dir)
     root = project_actual_evidence_root(output_dir)
     recover_pending_project_actual_write(root)
-    if committed_project_recovery(root) is None:
+    if committed_project_recovery(root) is None and not (output_dir / ACTUAL_REFRESH_PUBLICATION).exists():
         return None
     with project_delivery_lock(root):
+        resumed = _resume_actual_refresh_publication(output_dir.resolve())
+        if resumed is not None and resumed["phase"] == "ACKNOWLEDGING":
+            from global_glyph_promotion import load_promotion_outbox
+            items = load_promotion_outbox(root)["items"]
+            plan = resumed["_recovery_plan"]
+            return {"project_actual_commit": "COMMITTED", "project_refresh": "SUCCESS",
+                    "global_promotion_delivery": {"status": "DELIVERED" if all(item["status"] == "DELIVERED" for item in items) else "PENDING_RETRY"},
+                    "affected_occurrence_ids": plan["affected_occurrence_ids"], "recovery_plan": plan,
+                    "project_refresh_token": resumed["token"], "refresh_performed": True,
+                    "cleared_actual_dependent_event_count": resumed["cleared_count"],
+                    "refresh_report": str(output_dir / "注音校對_最終報告.xlsx"),
+                    "postcondition_checked_occurrence_ids": [item["occurrence_id"] for item in plan["checked_postconditions"]]}
         pending = committed_project_recovery(root)
         if pending is None:
             return None
@@ -263,10 +277,10 @@ def recover_committed_actual_project(output_dir: Path, *, acknowledge: bool = Tr
             validate_manifest_integrity(manifest)
             validate_output_artifact_hashes(manifest)
             ledger = materialize_ledger(manifest, load_or_initialize_db(output_dir))
-            phase = "clear_actual_dependent_events"
-            removed = _clear_actual_dependent_events(output_dir, ledger, set(plan["affected_occurrence_ids"]))
             phase = "refresh_actual_project"
-            report = refresh_actual_project(output_dir)
+            refresh_status = {}
+            report = refresh_actual_project(output_dir, _refresh_plan=plan, _refresh_status=refresh_status)
+            removed = refresh_status["cleared_actual_dependent_event_count"]
             phase = "post_refresh_actual_verification"
             manifest = json_load_strict(output_dir / "校對工作階段.json")
             validate_manifest_integrity(manifest)
@@ -275,7 +289,7 @@ def recover_committed_actual_project(output_dir: Path, *, acknowledge: bool = Tr
             _verify_manual_actual_batch_postconditions(refreshed, plan["checked_postconditions"])
             phase = "acknowledge_project_refresh"
             if acknowledge:
-                acknowledge_project_refresh(root, token)
+                _acknowledge_actual_refresh(output_dir, token)
                 report = _publish_local_actual_conflict_resolution(output_dir, report)
         except Exception as exc:
             raise ManualActualPostApplyError(
@@ -311,18 +325,20 @@ def _finish_direct_actual_commit(output_dir, ledger, result, *, refresh=True, ac
     removed = None
     phase = "clear_actual_dependent_events"
     try:
-        removed = _clear_actual_dependent_events(output_dir, ledger, affected)
         phase = "refresh_actual_project"
         if refresh or result.get("project_refresh_token"):
-            report = refresh_actual_project(output_dir)
+            plan = {"schema_version": "1.0", "affected_occurrence_ids": sorted(affected),
+                    "checked_postconditions": sorted(_manual_actual_batch_postconditions(result), key=lambda item: item["occurrence_id"])}
+            refresh_status = {}
+            report = refresh_actual_project(output_dir, _refresh_plan=plan, _refresh_status=refresh_status)
+            removed = refresh_status["cleared_actual_dependent_event_count"]
             result["project_refresh"] = "SUCCESS"
             phase = "acknowledge_project_refresh"
             if acknowledge:
-                acknowledge_project_refresh(
-                    project_actual_evidence_root(output_dir), result.get("project_refresh_token"),
-                )
+                _acknowledge_actual_refresh(output_dir, result.get("project_refresh_token"))
                 report = _publish_local_actual_conflict_resolution(output_dir, report)
         else:
+            removed = 0
             report = Path(output_dir) / "注音校對_最終報告.xlsx"
             result["project_refresh"] = "NOT_REQUIRED"
         return removed, report
@@ -1380,6 +1396,44 @@ def _validate_gpt_bundle_metadata(meta: Mapping[str, Any], manifest: Mapping[str
     if bad:
         raise ValueError(f"GPT 判定包 session/schema 不相容：{bad}")
 
+def _read_actual_csv_rows(csv_path):
+    required = {
+        "occurrence_id", "review_id", "pdf_name", "physical_page", "char",
+        "exported_actual", "exported_actual_evidence_sha256", "verified_actual",
+        "visual_confirmation", "note",
+    }
+    with Path(csv_path).open("r", encoding="utf-8-sig", newline="") as stream:
+        reader = csv.DictReader(stream)
+        if not reader.fieldnames or not required.issubset(set(reader.fieldnames)):
+            raise ValueError(f"GPT actual occurrence 決策表缺少欄位：{sorted(required - set(reader.fieldnames or []))}")
+        return list(reader)
+
+
+def _guard_actual_csv_sources(output_dir, ledger, rows):
+    # This visual-confirmation route is separate from local manual correction.
+    by_occ = {entry["occurrence_id"]: entry for entry in ledger}
+    for row in rows:
+        entry = by_occ.get(str(row.get("occurrence_id") or "").strip())
+        if entry is None or str(row.get("review_id") or "").strip() != entry["review_id"]:
+            raise ValueError("GPT actual visual source identity 未知或不符；未 recovery／初始化")
+        if actual_sample_availability(entry, output_dir) != "READABLE":
+            raise ValueError("SOURCE_DRAWING_CLIPPED 不允許 GPT CSV visual_confirmation")
+    if not rows:
+        from actual_render_geometry import source_clipped_candidate
+        for entry in ledger:
+            if source_clipped_candidate(entry) is not None:
+                actual_sample_availability(entry, output_dir)
+
+
+def _read_actual_source_db(output_dir):
+    # Avoid load_or_initialize_db's legacy orphan report and all recovery writes.
+    path = Path(output_dir) / "人工判定資料庫.json"
+    raw = json_load_strict(path) if path.exists() else {}
+    if not isinstance(raw, dict):
+        raise ValueError("DATA_INTEGRITY_ERROR：人工判定資料庫根節點必須是物件")
+    return normalize_db(raw)
+
+
 @_serialized_user_project_entry
 def import_actual_occurrence_decisions(output_dir: Path, csv_path: Path, *, package_meta: Mapping[str, Any]) -> tuple[int, int, Path]:
     """Import occurrence-scoped visual actual decisions from a GPT bundle.
@@ -1396,22 +1450,17 @@ def import_actual_occurrence_decisions(output_dir: Path, csv_path: Path, *, pack
     validate_manifest_integrity(manifest)
     validate_output_artifact_hashes(manifest)
     _validate_gpt_bundle_metadata(package_meta, manifest)
+    rows = _read_actual_csv_rows(csv_path)
+    _guard_actual_csv_sources(output_dir, materialize_ledger(manifest, _read_actual_source_db(output_dir)), rows)
     recover_pending_project_actual_write(project_actual_evidence_root(output_dir))
     db = load_or_initialize_db(output_dir)
     ledger = materialize_ledger(manifest, db)
     by_occ = {str(e.get("occurrence_id") or ""): e for e in ledger}
 
-    required = {
-        "occurrence_id", "review_id", "pdf_name", "physical_page", "char",
-        "exported_actual", "exported_actual_evidence_sha256", "verified_actual",
-        "visual_confirmation", "note",
-    }
-    with Path(csv_path).open("r", encoding="utf-8-sig", newline="") as f:
-        reader = csv.DictReader(f)
-        if not reader.fieldnames or not required.issubset(set(reader.fieldnames)):
-            raise ValueError(f"GPT actual occurrence 決策表缺少欄位：{sorted(required - set(reader.fieldnames or []))}")
-        rows = list(reader)
-    prewrite_guard = lambda: _validate_actual_import_target(output_dir, manifest, db)
+    def prewrite_guard():
+        _validate_actual_import_target(output_dir, manifest, db)
+        _guard_actual_csv_sources(output_dir, ledger, rows)
+    _guard_actual_csv_sources(output_dir, ledger, rows)
     if not rows:
         prewrite_guard()
         return 0, 0, generate_report(output_dir, manifest, db)
@@ -1503,7 +1552,7 @@ def import_actual_occurrence_decisions(output_dir: Path, csv_path: Path, *, pack
     )
     from pdf_portability import _load_project
     _load_project(output_dir)
-    acknowledge_project_refresh(root, transaction_result.get("project_refresh_token"))
+    _acknowledge_actual_refresh(output_dir, transaction_result.get("project_refresh_token"))
     if already_applied_ids:
         print(
             f"  GPT actual 判定包重試：{len(already_applied_ids)} 筆 current actual 已等於 verified_actual；"
@@ -1546,6 +1595,9 @@ def import_gpt_decision_bundle(output_dir: Path, bundle: Path) -> tuple[int, int
             td = Path(td)
             actual_csv = td / "actual_occurrence_decisions.csv"
             actual_csv.write_bytes(zf.read("actual_occurrence_decisions.csv"))
+            _guard_actual_csv_sources(
+                output_dir, materialize_ledger(manifest, _read_actual_source_db(output_dir)),
+                _read_actual_csv_rows(actual_csv))
             expected_path = None
             if expected_name:
                 expected_path = td / Path(expected_name).name
@@ -4182,10 +4234,327 @@ def _clear_actual_dependent_events(output_dir: Path, ledger: list[dict[str, Any]
     return removed
 
 
+ACTUAL_REFRESH_PUBLICATION = "actual_refresh_publication.json"
+
+
+def _refresh_source_snapshot(output_dir):
+    root = project_actual_evidence_root(output_dir)
+    names = (OCCURRENCE_OVERRIDE_FILE, USER_GLYF_FILE, USER_CFF_FILE,
+             GLYPH_CONFLICT_FILE, GLYPH_PROVENANCE_FILE, "global_exact_glyph_promotion_outbox.json")
+    return {name: sha256_file(root / name) if (root / name).is_file() else None for name in names}
+
+
+def _refresh_file_sha(path):
+    return sha256_file(path) if path.is_file() else None
+
+
+def _refresh_plan_digest(output_dir):
+    pending = committed_project_recovery(project_actual_evidence_root(output_dir))
+    return _hash_review_payload(pending[1]) if pending is not None else None
+
+
+def _refresh_owned_path(base, relative):
+    target = base / relative
+    for part in (target, *target.parents):
+        if part == base.parent:
+            break
+        if part.is_symlink() or part.is_junction():
+            raise ValueError("actual refresh publication path link/junction 不允許")
+    if target.resolve() != base.resolve() / relative:
+        raise ValueError("actual refresh publication path 不屬於 owner")
+    return target
+
+
+def _refresh_rebase_manifest(manifest, source, destination):
+    """Rebase only the pipeline's known workbook locators, never identity."""
+    result = copy.deepcopy(manifest)
+    source, destination = Path(source).resolve(), Path(destination).resolve()
+    known = {key: {Path(info[key]).resolve() for info in manifest["pdfs"]}
+             for key in ("actual_workbook", "candidate_workbook")}
+    for info in result["pdfs"]:
+        for kind in ("actual", "candidate"):
+            key = kind + "_workbook"
+            relative = Path(info[key]).resolve().relative_to(source)
+            directory = "01_實際注音" if kind == "actual" else "02_候選報告"
+            if relative.parent != Path(directory) or relative.suffix != ".xlsx":
+                raise ValueError("actual refresh 工作簿路徑不在有限專案目錄")
+            info[key] = str(destination / relative)
+    for entry in result.get("records", []):
+        for key in ("actual_workbook", "candidate_workbook"):
+            if entry.get(key):
+                if Path(entry[key]).resolve() not in known[key]:
+                    raise ValueError("actual refresh record workbook locator 不符")
+                entry[key] = str(destination / Path(entry[key]).resolve().relative_to(source))
+    result["dynamic_actual_evidence_root"] = str(project_actual_evidence_root(destination))
+    return seal_manifest(result)
+
+
+def _refresh_atomic_bytes(path, raw):
+    temporary = path.with_name(".ar-" + uuid4().hex[:8])
+    try:
+        with temporary.open("xb") as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _read_actual_refresh_publication(output_dir, *, acknowledged=None):
+    """Verify every byte and owner before any interrupted publication write."""
+    path = output_dir / ACTUAL_REFRESH_PUBLICATION
+    if not path.exists():
+        return None
+    journal, digest = json_load_snapshot(path)
+    keys = {"schema", "phase", "project", "session_id", "token", "plan_sha", "source", "stage", "entries", "cleared_count"}
+    if isinstance(journal, dict) and journal.get("phase") == "ACKNOWLEDGING":
+        keys.add("ack_sha")
+    if (not isinstance(journal, dict) or set(journal) != keys
+            or journal["schema"] != "actual-deferred-refresh/1"
+            or journal["phase"] not in {"PREPARED", "PUBLISHED", "ACKNOWLEDGING"}
+            or journal["project"] != str(output_dir.resolve())
+            or not isinstance(journal["stage"], str)
+            or re.fullmatch(r"\.ar-[a-zA-Z0-9_]{8}", journal["stage"]) is None
+            or type(journal["cleared_count"]) is not int or journal["cleared_count"] < 0):
+        raise ValueError("actual refresh publication journal contract/owner 不符")
+    stage = output_dir.parent / journal["stage"]
+    if not stage.is_dir() or stage.is_symlink() or stage.is_junction():
+        raise ValueError("actual refresh publication backup 缺失或不可信")
+    entries = journal["entries"]
+    if not isinstance(entries, list) or not entries:
+        raise ValueError("actual refresh publication entries 缺失")
+    originals = {}
+    seen = set()
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict) or set(entry) != {"path", "old_sha", "new_sha"}:
+            raise ValueError("actual refresh publication entry contract 不符")
+        relative = Path(entry["path"])
+        if relative.is_absolute() or ".." in relative.parts or str(relative) != entry["path"] or entry["path"] in seen:
+            raise ValueError("actual refresh publication path 重複或越界")
+        seen.add(entry["path"])
+        for name in ("old_sha", "new_sha"):
+            value = entry[name]
+            if (name == "new_sha" or value is not None) and (not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None):
+                raise ValueError("actual refresh publication SHA 格式不符")
+        backup = _refresh_owned_path(stage, Path("previous") / str(index))
+        if entry["old_sha"] is not None:
+            if not backup.is_file() or sha256_file(backup) != entry["old_sha"]:
+                raise ValueError("actual refresh publication backup SHA 不符")
+            originals[entry["path"]] = backup.read_bytes()
+        elif backup.exists():
+            raise ValueError("actual refresh publication unexpected backup")
+        target = _refresh_owned_path(output_dir, relative)
+        if target.exists() and not target.is_file():
+            raise ValueError("actual refresh publication target 不是一般檔案")
+        current = _refresh_file_sha(target)
+        allowed = {entry["old_sha"], entry["new_sha"]} if journal["phase"] == "PREPARED" else {entry["new_sha"]}
+        if current not in allowed:
+            raise ValueError("actual refresh publication target 已由其他來源變動")
+    old_manifest = json_parse_strict(originals.get("校對工作階段.json", b""), path)
+    validate_manifest_integrity(old_manifest)
+    allowed = {"校對工作階段.json", "人工判定資料庫.json", "待人工確認.json", "pipeline_status.json"}
+    for info in old_manifest["pdfs"]:
+        for kind in ("actual", "candidate"):
+            relative = Path(info[kind + "_workbook"]).resolve().relative_to(output_dir.resolve())
+            directory = "01_實際注音" if kind == "actual" else "02_候選報告"
+            if relative.parent != Path(directory) or relative.suffix != ".xlsx":
+                raise ValueError("actual refresh publication workbook allowlist 不符")
+            allowed.add(str(relative))
+            item = next((e for e in entries if e["path"] == str(relative)), None)
+            if item is not None and item["old_sha"] != info[kind + "_workbook_sha256"]:
+                raise ValueError("actual refresh publication backup 與原封印不符")
+    if (not seen.issubset(allowed) or not {"校對工作階段.json", "人工判定資料庫.json", "待人工確認.json", "pipeline_status.json"}.issubset(seen)
+            or old_manifest["session_id"] != journal["session_id"]
+            or journal["source"] != _refresh_source_snapshot(output_dir)):
+        raise ValueError("actual refresh publication source/allowlist 不符")
+    token = project_refresh_token(project_actual_evidence_root(output_dir))
+    acknowledged_here = False
+    if journal["phase"] == "ACKNOWLEDGING":
+        from global_glyph_promotion import _validated_project_journal
+        receipt = _refresh_owned_path(stage, Path("ack-committed.json"))
+        if (not receipt.is_file() or sha256_file(receipt) != journal["ack_sha"]):
+            raise ValueError("actual refresh acknowledgement 原件 SHA 不符")
+        original = _validated_project_journal(receipt.read_bytes())
+        if (original["state"] != "COMMITTED" or original["transaction_id"] != journal["token"]
+                or _hash_review_payload(original["recovery_plan"]) != journal["plan_sha"]):
+            raise ValueError("actual refresh acknowledgement 原件 token/plan 不符")
+        acknowledged_here = token is None
+    if token != journal["token"] and not acknowledged_here:
+        raise ValueError("actual refresh publication COMMITTED token 不符")
+    if token is not None and journal["plan_sha"] != _refresh_plan_digest(output_dir):
+        raise ValueError("actual refresh publication COMMITTED plan 不符")
+    if token is None and journal["phase"] == "PREPARED" and journal["plan_sha"] is not None:
+        raise ValueError("actual refresh publication unexpected recovery plan")
+    return journal, digest, stage, originals
+
+
+def _verify_actual_refresh_pdf_binding(output_dir, manifest, *, sealed_manifest=None):
+    """Require readable bytes bound to the original sealed PDF roster."""
+    def roster(value):
+        pdfs = value.get("pdfs")
+        if not isinstance(pdfs, list) or not pdfs:
+            raise ValueError("actual refresh sealed PDF roster 缺失")
+        result = []
+        for info in pdfs:
+            digest = info.get("pdf_sha256") if isinstance(info, dict) else None
+            name = info.get("pdf_name") if isinstance(info, dict) else None
+            if (not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+                    or not isinstance(name, str) or not name):
+                raise ValueError("actual refresh sealed PDF name/SHA 缺失或不符")
+            result.append((name, digest))
+        return sorted(result)
+
+    current = roster(manifest)
+    if sealed_manifest is not None and current != roster(sealed_manifest):
+        raise ValueError("actual refresh staged PDF roster 改變原封印")
+    return _resolve_session_pdfs(output_dir, manifest)
+
+
+def _resume_actual_refresh_publication(output_dir, *, cleanup=False, acknowledged=None):
+    pending = _read_actual_refresh_publication(output_dir, acknowledged=acknowledged)
+    if pending is None:
+        return
+    journal, digest, stage, originals = pending
+    if journal["phase"] == "PREPARED":
+        for entry in reversed(journal["entries"]):
+            target = output_dir / entry["path"]
+            if entry["old_sha"] is None:
+                target.unlink(missing_ok=True)
+            else:
+                _refresh_atomic_bytes(target, originals[entry["path"]])
+    manifest = json_load_strict(output_dir / "校對工作階段.json")
+    validate_manifest_integrity(manifest)
+    validate_output_artifact_hashes(manifest)
+    sealed_manifest = json_parse_strict(originals["校對工作階段.json"], output_dir / ACTUAL_REFRESH_PUBLICATION)
+    _verify_actual_refresh_pdf_binding(output_dir, manifest, sealed_manifest=sealed_manifest)
+    if journal["phase"] != "PREPARED":
+        pending_actual = committed_project_recovery(project_actual_evidence_root(output_dir))
+        recovery_plan = pending_actual[1] if pending_actual is not None else None
+        if journal["phase"] == "ACKNOWLEDGING":
+            from global_glyph_promotion import _validated_project_journal
+            recovery_plan = _validated_project_journal((stage / "ack-committed.json").read_bytes())["recovery_plan"]
+        if recovery_plan is not None:
+            _verify_manual_actual_batch_postconditions(
+                materialize_ledger(manifest, load_or_initialize_db(output_dir)), recovery_plan["checked_postconditions"])
+        _verify_actual_refresh_pdf_binding(output_dir, manifest, sealed_manifest=sealed_manifest)
+        if journal["phase"] == "ACKNOWLEDGING":
+            if pending_actual is not None:
+                acknowledge_project_refresh(project_actual_evidence_root(output_dir), journal["token"])
+        elif not cleanup or pending_actual is not None:
+            return journal
+    path = output_dir / ACTUAL_REFRESH_PUBLICATION
+    if sha256_file(path) != digest:
+        raise ValueError("actual refresh publication journal 已變動")
+    path.unlink()
+    try:
+        shutil.rmtree(stage)
+    except OSError:
+        pass  # Successful publication/rollback remains truthful; retain backups.
+    if journal["phase"] == "ACKNOWLEDGING":
+        return {**journal, "_recovery_plan": recovery_plan}
+
+
+def _acknowledge_actual_refresh(output_dir, token, *, _post_ack_guard=None):
+    with project_delivery_lock(project_actual_evidence_root(output_dir)):
+        return _acknowledge_actual_refresh_locked(output_dir, token, _post_ack_guard=_post_ack_guard)
+
+
+def _acknowledge_actual_refresh_locked(output_dir, token, *, _post_ack_guard=None):
+    output_dir = Path(output_dir).resolve()
+    pending = _read_actual_refresh_publication(output_dir)
+    if pending is not None and pending[0]["phase"] not in {"PUBLISHED", "ACKNOWLEDGING"}:
+        raise ValueError("actual refresh 未完整發布；未 acknowledgement")
+    if pending is not None:
+        journal, digest, stage, _ = pending
+        if token != journal["token"]:
+            from global_exact_glyph_library import GlobalLibraryIntentConflictError
+            raise GlobalLibraryIntentConflictError("project refresh acknowledgement is stale")
+        manifest = json_load_strict(output_dir / "校對工作階段.json")
+        validate_manifest_integrity(manifest)
+        sealed_manifest = json_parse_strict(pending[3]["校對工作階段.json"], output_dir / ACTUAL_REFRESH_PUBLICATION)
+        _verify_actual_refresh_pdf_binding(output_dir, manifest, sealed_manifest=sealed_manifest)
+        if journal["phase"] == "PUBLISHED":
+            from global_glyph_promotion import PROJECT_TRANSACTION_FILE
+            raw = (project_actual_evidence_root(output_dir) / PROJECT_TRANSACTION_FILE).read_bytes()
+            _refresh_atomic_bytes(stage / "ack-committed.json", raw)
+            journal.update(phase="ACKNOWLEDGING", ack_sha=hashlib.sha256(raw).hexdigest())
+            json_save(output_dir / ACTUAL_REFRESH_PUBLICATION, journal, expected_sha256=digest)
+    manifest = json_load_strict(output_dir / "校對工作階段.json")
+    validate_manifest_integrity(manifest)
+    _verify_actual_refresh_pdf_binding(output_dir, manifest,
+                                      sealed_manifest=sealed_manifest if pending is not None else None)
+    acknowledge_project_refresh(project_actual_evidence_root(output_dir), token)
+    if _post_ack_guard is not None:
+        _post_ack_guard()
+    _resume_actual_refresh_publication(output_dir, cleanup=True)
+
+
+def _publish_actual_refresh(output_dir, stage, manifest, *, source, token, before, cleared_count=0, _prewrite_guard=None):
+    if _prewrite_guard is not None:
+        _prewrite_guard()
+    sealed_manifest = json_load_strict(output_dir / "校對工作階段.json")
+    validate_manifest_integrity(sealed_manifest)
+    _verify_actual_refresh_pdf_binding(output_dir, manifest, sealed_manifest=sealed_manifest)
+    if (source != _refresh_source_snapshot(output_dir)
+            or token != project_refresh_token(project_actual_evidence_root(output_dir))):
+        raise ValueError("actual refresh 來源/COMMITTED token 已變動")
+    for relative, digest in before.items():
+        if _refresh_file_sha(_refresh_owned_path(output_dir, Path(relative))) != digest:
+            raise ValueError("actual refresh 發布前原專案已變動")
+    names = []
+    for info in manifest["pdfs"]:
+        for kind in ("actual", "candidate"):
+            relative = Path(info[kind + "_workbook"]).resolve().relative_to(output_dir.resolve())
+            if sha256_file(stage / relative) != before[str(relative)]:
+                names.append(str(relative))
+    names.extend(["人工判定資料庫.json", "待人工確認.json", "pipeline_status.json", "校對工作階段.json"])
+    (stage / "previous").mkdir()
+    entries = []
+    for index, name in enumerate(names):
+        old = before[name]
+        if old is not None:
+            raw = (output_dir / name).read_bytes()
+            _refresh_atomic_bytes(stage / "previous" / str(index), raw)
+            if sha256_file(stage / "previous" / str(index)) != old:
+                raise ValueError("actual refresh backup source 已變動")
+        entries.append({"path": name, "old_sha": old, "new_sha": sha256_file(stage / name)})
+    journal = {"schema": "actual-deferred-refresh/1", "phase": "PREPARED",
+               "project": str(output_dir.resolve()), "session_id": manifest["session_id"],
+               "token": token, "plan_sha": _refresh_plan_digest(output_dir), "source": source,
+               "stage": stage.name, "entries": entries, "cleared_count": cleared_count}
+    journal_path = output_dir / ACTUAL_REFRESH_PUBLICATION
+    journal_sha = json_save(journal_path, journal, expected_sha256="")
+    try:
+        for name in names:
+            (stage / name).replace(output_dir / name)
+        validate_manifest_integrity(json_load_strict(output_dir / "校對工作階段.json"))
+        validate_output_artifact_hashes(manifest)
+        for entry in entries:
+            if _refresh_file_sha(output_dir / entry["path"]) != entry["new_sha"]:
+                raise ValueError("actual refresh 發布後 SHA 不符")
+        pending = committed_project_recovery(project_actual_evidence_root(output_dir))
+        if pending is not None:
+            _verify_manual_actual_batch_postconditions(
+                materialize_ledger(manifest, load_or_initialize_db(output_dir)), pending[1]["checked_postconditions"])
+        _verify_actual_refresh_pdf_binding(output_dir, manifest, sealed_manifest=sealed_manifest)
+        journal["phase"] = "PUBLISHED"
+        json_save(journal_path, journal, expected_sha256=journal_sha)
+    except BaseException:
+        _resume_actual_refresh_publication(output_dir)
+        raise
+    if token is None:
+        _resume_actual_refresh_publication(output_dir, cleanup=True)
+
+
 def refresh_actual_project(output_dir: Path, *, defer_excel_reports: bool = True,
-                           _prewrite_guard=None) -> Path:
+                           _prewrite_guard=None, _refresh_plan=None, _refresh_status=None) -> Path:
     """Incrementally re-decode current project after dynamic actual evidence changes."""
-    output_dir = Path(output_dir)
+    output_dir = Path(output_dir).resolve()
+    if defer_excel_reports:
+        with project_delivery_lock(project_actual_evidence_root(output_dir)):
+            return _stage_actual_refresh(output_dir, _prewrite_guard=_prewrite_guard,
+                                         plan=_refresh_plan, status=_refresh_status)
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
     # Workbooks may now be stale relative to dynamic actual evidence, but must
@@ -4199,6 +4568,94 @@ def refresh_actual_project(output_dir: Path, *, defer_excel_reports: bool = True
         defer_excel_reports=defer_excel_reports,
         **({"_prewrite_guard": _prewrite_guard} if _prewrite_guard is not None else {}),
     )
+
+
+def _stage_actual_refresh(output_dir, *, _prewrite_guard=None, plan=None, status=None):
+    published = _resume_actual_refresh_publication(output_dir)
+    if published is not None:
+        if published["phase"] == "ACKNOWLEDGING":
+            if status is not None:
+                status["cleared_actual_dependent_event_count"] = published["cleared_count"]
+            return output_dir / "注音校對_最終報告.xlsx"
+        if project_refresh_token(project_actual_evidence_root(output_dir)) is not None:
+            if status is not None:
+                status["cleared_actual_dependent_event_count"] = published["cleared_count"]
+            return output_dir / "注音校對_最終報告.xlsx"
+        _resume_actual_refresh_publication(output_dir, cleanup=True)
+    manifest = json_load_strict(output_dir / "校對工作階段.json")
+    validate_manifest_integrity(manifest)
+    validate_output_artifact_hashes(manifest)
+    from actual_review import dynamic_actual_hashes
+    dynamic_actual_hashes(project_actual_evidence_root(output_dir), read_only=True)
+    pdfs = _verify_actual_refresh_pdf_binding(output_dir, manifest)
+    if _prewrite_guard is not None:
+        _prewrite_guard()
+    token = project_refresh_token(project_actual_evidence_root(output_dir))
+    pending = committed_project_recovery(project_actual_evidence_root(output_dir))
+    if plan is None and pending is not None:
+        plan = pending[1]
+    if plan is not None:
+        from global_glyph_promotion import validate_post_commit_recovery_plan
+        plan = validate_post_commit_recovery_plan(plan)
+        if pending is not None and plan != pending[1]:
+            raise ValueError("actual refresh recovery plan 與 COMMITTED 不符")
+    source = _refresh_source_snapshot(output_dir)
+    names = ["校對工作階段.json", "人工判定資料庫.json", "待人工確認.json", "pipeline_status.json"]
+    for info in manifest["pdfs"]:
+        for kind in ("actual", "candidate"):
+            names.append(str(Path(info[kind + "_workbook"]).resolve().relative_to(output_dir)))
+    before = {name: _refresh_file_sha(output_dir / name) for name in names}
+    stage = Path(tempfile.mkdtemp(prefix=".ar-", dir=output_dir.parent))
+    try:
+        staged_manifest = _refresh_rebase_manifest(manifest, output_dir, stage)
+        for name in names:
+            if name in {"校對工作階段.json", "待人工確認.json", "pipeline_status.json"}:
+                continue
+            target = stage / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if before[name] is not None:
+                shutil.copyfile(output_dir / name, target)
+        if before["人工判定資料庫.json"] is None:
+            json_save(stage / "人工判定資料庫.json", normalize_db({}))
+        json_save(stage / "校對工作階段.json", staged_manifest)
+        db = load_or_initialize_db(stage)
+        removed = 0
+        if plan is not None:
+            ledger = materialize_ledger(manifest, db)
+            removed = _clear_actual_dependent_events(stage, ledger, set(plan["affected_occurrence_ids"]))
+        run_pipeline_pdfs(pdfs, stage, session_id_override=manifest["session_id"],
+                          defer_excel_reports=True, _source_project_dir=output_dir,
+                          **({"_prewrite_guard": _prewrite_guard} if _prewrite_guard is not None else {}))
+        updated = json_load_strict(stage / "校對工作階段.json")
+        validate_manifest_integrity(updated)
+        validate_output_artifact_hashes(updated)
+        identities = lambda value: sorted((entry["occurrence_id"], entry["review_id"]) for entry in value.get("records", []))
+        if (updated.get("session_id") != manifest["session_id"]
+                or identities(updated) != identities(manifest)
+                or sorted(updated.get("actual_source_ids", [])) != sorted(manifest.get("actual_source_ids", []))):
+            raise ValueError("actual refresh stage 改變原 session/occurrence/review identity")
+        refreshed_db = load_or_initialize_db(stage)
+        ledger = materialize_ledger(updated, refreshed_db)
+        if plan is not None:
+            _verify_manual_actual_batch_postconditions(ledger, plan["checked_postconditions"])
+        final = _refresh_rebase_manifest(updated, stage, output_dir)
+        json_save(stage / "校對工作階段.json", final)
+        save_pending_json(stage, final, refreshed_db)
+        pipeline_status = json_load_strict(stage / "pipeline_status.json")
+        pipeline_status["user_report"] = str(output_dir / "注音校對_最終報告.xlsx")
+        pipeline_status["technical_audit_report"] = str(output_dir / "注音校對_技術稽核.xlsx")
+        json_save(stage / "pipeline_status.json", pipeline_status)
+        _publish_actual_refresh(output_dir, stage, final, source=source, token=token,
+                                before=before, cleared_count=removed, _prewrite_guard=_prewrite_guard)
+        if status is not None:
+            status["cleared_actual_dependent_event_count"] = removed
+        return output_dir / "注音校對_最終報告.xlsx"
+    finally:
+        if not (output_dir / ACTUAL_REFRESH_PUBLICATION).exists():
+            try:
+                shutil.rmtree(stage)
+            except OSError:
+                pass
 
 
 def _validate_actual_import_target(output_dir: Path, manifest, db):
@@ -4246,6 +4703,10 @@ def _import_same_session_actual_snapshot(output_dir: Path, xlsx: Path, *,
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
     validate_output_artifact_hashes(manifest)
+    readonly_db = _read_actual_source_db(output_dir)
+    readonly_groups = build_actual_review_groups(materialize_ledger(manifest, readonly_db))
+    validate_actual_sample_profile(xlsx, readonly_groups, output_dir,
+                                  require_content_proof=bool(manifest.get("pdfs")), source_manifest=manifest)
     recover_pending_project_actual_write(project_actual_evidence_root(output_dir))
     db = load_or_initialize_db(output_dir)
     ledger = materialize_ledger(manifest, db)
@@ -4254,6 +4715,8 @@ def _import_same_session_actual_snapshot(output_dir: Path, xlsx: Path, *,
         from pdf_portability import _verify_excel_import_snapshot
         _verify_excel_import_snapshot(xlsx, _original_xlsx, _snapshot_sha)
         _validate_actual_import_target(output_dir, manifest, db)
+        validate_actual_sample_profile(xlsx, groups, output_dir,
+                                      require_content_proof=bool(manifest.get("pdfs")), source_manifest=manifest)
     result = import_actual_review_workbook(
         project_actual_evidence_root(output_dir),
         Path(xlsx),
@@ -4262,12 +4725,13 @@ def _import_same_session_actual_snapshot(output_dir: Path, xlsx: Path, *,
         source_context=_global_direct_source_context(output_dir, manifest),
         initialize_evidence=lambda: initialize_project_actual_evidence(output_dir),
         prewrite_guard=prewrite_guard,
+        source_output_dir=output_dir,
     )
     _reject_incomplete_portable_project(output_dir)
     removed, report = _finish_direct_actual_commit(output_dir, ledger, result, acknowledge=False)
     from pdf_portability import _load_project
     _load_project(output_dir)
-    acknowledge_project_refresh(project_actual_evidence_root(output_dir), result.get("project_refresh_token"))
+    _acknowledge_actual_refresh(output_dir, result.get("project_refresh_token"))
     return ActualImportResult(int(result.get("imported_groups") or 0), removed, report, result)
 
 
@@ -4350,9 +4814,7 @@ def apply_manual_actual_correction(
         result["post_actual"] = observed
         result["post_state"] = str(refreshed_entry.get("state") or "")
         result["resolved_from_pending"] = result["post_state"] not in NON_TERMINAL_STATES
-        acknowledge_project_refresh(
-            project_actual_evidence_root(output_dir), transaction_result.get("project_refresh_token"),
-        )
+        _acknowledge_actual_refresh(output_dir, transaction_result.get("project_refresh_token"))
         report = _publish_local_actual_conflict_resolution(output_dir, report)
     except Exception as exc:
         raise ManualActualPostApplyError(
@@ -4530,28 +4992,18 @@ def apply_staged_manual_actual_corrections(output_dir: Path) -> dict[str, Any]:
         for occurrence_id in (batch_result.get("affected_occurrence_ids") or [])
         if str(occurrence_id)
     }
+    refresh_status = {}
     try:
-        cleared_event_count = _clear_actual_dependent_events(
-            output_dir,
-            pre_refresh_ledger,
-            affected_occurrence_ids,
-        )
-    except Exception as exc:
-        raise ManualActualPostApplyError(
-            "clear_actual_dependent_events",
-            exc,
-            batch_result=batch_result,
-            cleared_event_count=None,
-        ) from exc
-
-    try:
-        report = refresh_actual_project(output_dir)
+        plan = {"schema_version": "1.0", "affected_occurrence_ids": sorted(affected_occurrence_ids),
+                "checked_postconditions": sorted(postconditions, key=lambda item: item["occurrence_id"])}
+        report = refresh_actual_project(output_dir, _refresh_plan=plan, _refresh_status=refresh_status)
+        cleared_event_count = refresh_status["cleared_actual_dependent_event_count"]
     except Exception as exc:
         raise ManualActualPostApplyError(
             "refresh_actual_project",
             exc,
             batch_result=batch_result,
-            cleared_event_count=cleared_event_count,
+            cleared_event_count=refresh_status.get("cleared_actual_dependent_event_count"),
         ) from exc
 
     try:
@@ -4570,7 +5022,7 @@ def apply_staged_manual_actual_corrections(output_dir: Path) -> dict[str, Any]:
         ) from exc
 
     try:
-        acknowledge_project_refresh(actual_root, batch_result.get("project_refresh_token"))
+        _acknowledge_actual_refresh(output_dir, batch_result.get("project_refresh_token"))
         report = _publish_local_actual_conflict_resolution(output_dir, report)
     except Exception as exc:
         raise ManualActualPostApplyError(
@@ -4634,6 +5086,7 @@ def run_pipeline_pdfs(
     defer_excel_reports: bool = False,
     runtime_root: Path | None = None,
     _prewrite_guard=None,
+    _source_project_dir: Path | None = None,
 ) -> Path:
     if _prewrite_guard is not None:
         _prewrite_guard()
@@ -4669,7 +5122,12 @@ def run_pipeline_pdfs(
     output_dir.mkdir(parents=True,exist_ok=True)
     actual_dir=output_dir/"01_實際注音"; cand_dir=output_dir/"02_候選報告"
     actual_dir.mkdir(exist_ok=True); cand_dir.mkdir(exist_ok=True)
-    dynamic_actual_root = initialize_project_actual_evidence(output_dir, root)
+    if _source_project_dir is not None:
+        from actual_review import dynamic_actual_hashes
+        dynamic_actual_root = project_actual_evidence_root(Path(_source_project_dir).resolve())
+        dynamic_actual_hashes(dynamic_actual_root, read_only=True)
+    else:
+        dynamic_actual_root = initialize_project_actual_evidence(output_dir, root)
     # Freeze the previous session before any output file is touched.  Reuse
     # decisions must not be recomputed after the first rewritten workbook,
     # otherwise one changed file would invalidate the old manifest and make all
@@ -4866,7 +5324,7 @@ def run_pipeline_pdfs(
             reconciliation = reconcile_ledger(ledger, manifest.get("actual_source_ids") or [])
             gate = completion_gate(ledger, reconciliation, manifest.get("regression_gate") or {}, source_validation_ok=True)
             from pdf_portability import hold_actual_excel_completion
-            gate = hold_actual_excel_completion(output_dir, manifest, db, gate)
+            gate = hold_actual_excel_completion(_source_project_dir or output_dir, manifest, db, gate)
             if _prewrite_guard is not None:
                 _prewrite_guard()
             if defer_excel_reports:
