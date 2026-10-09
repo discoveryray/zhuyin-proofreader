@@ -705,7 +705,8 @@ def validate_state(state):
             + (" correction_exception" if type(state) is dict and "correction_exception" in state else "")
             + (" validation_policy" if type(state) is dict and "validation_policy" in state else "")
             + (" pr43_review_history_adapter" if type(state) is dict and "pr43_review_history_adapter" in state else "")
-            + (" cff_review_history_adapter" if type(state) is dict and "cff_review_history_adapter" in state else ""), "state")
+            + (" cff_review_history_adapter" if type(state) is dict and "cff_review_history_adapter" in state else "")
+            + (" pr46_review_history_adapter" if type(state) is dict and "pr46_review_history_adapter" in state else ""), "state")
     if "validation_policy" in state:
         _require(state["validation_policy"] == NO_WINDOW_POLICY, "unknown validation policy")
     _require(state["schema"] in (SCHEMA, STAGED_SCHEMA), "unsupported schema")
@@ -1031,9 +1032,108 @@ def _cff_history_pairs(state):
     return pairs
 
 
+# Exact historical identities/digests only; private report paths are external inputs.
+PR46_HISTORY_TASK = {"id": "review-start-save-responsive", "repository": REPOSITORY,
+                     "baseline": "8eab9a1de34b59115658a2c7d3565adb347e59ab",
+                     "base_branch": "develop", "head_branch": "codex/review-start-save-responsive"}
+PR46_HISTORY_BASE = "1417ac7ef08c7024f5940b3b9192abb4029405c1"
+PR46_HISTORY_HEAD = "2afa2b7883449fd8288ba1cce07519223c2070e0"
+PR46_HISTORY_DIGESTS = {
+    "authorization": "0b42458cd078713db42ff78570d74f0ce03c96344586c2905546842ac820f269",
+    "proposal": "927258d6673cfadb93716c6c69adaadba893104d564342ad684c85b3a683df88",
+    "source_inventory": "979c762fd62d05d9ee6d10c814fef3fdc26f27732cfd4fa15a2cfb076f216a65",
+    "snapshot": "bbbaa8769507f0e2e26b46d43b3d4b0825dd137d98db147d4f1779e385921f20",
+    "code_md": "637436183e024903918949f1b499d201a535a23842422d3f46a035c1162d86cf",
+    "code_projection": "805ccb66be89a702f4375d3af41556dbfb09767cfec1418b3e449cc221ce9f75",
+    "blocked_md": "3be74a8c7fa8e2f8db7d71e7f3fe67c6e2967deccdc09f14e1090185cef72188",
+    "blocked_projection": "b1e7e7a633b4da926cccf8031906768aae731f9e6313ea6b9a32d9cca571a672",
+    "manifest": "04c0bb5b01b074a3fd4a1ea063fe52fc5a19d89f8ff984559de51859f13c090a",
+    "completed_metadata": "2ecfdcccace8be032098f924549e572f20a53a3558ef4316cfffb94097b198ac",
+    "archive": "c587fc4b3c5694004eef104a4cf89aca850f56e4129131aa8cba0afa2feb06f0",
+    "ci_inventory": "0788b4f8d3215f607e28f83ebb0da4d18086359569e51b49cc32bb286de147b1",
+    "ci_started": "33019c3d95a8861456e17f7e09452762cfd102bfef110d505a70319b57b8232f",
+    "ci_history_context": "6ac0563ccbe7ac320266c6049671122ad396352a52fdeb1c2ae9c1a829db1302",
+    "ci_collection_log": "d21eab94f6da722d382d32371b8ac92089a6e0459b717cb66c081b49dfea55ea",
+    "ci_raw_log": "ee8e2c6506437000cca81df4c3cc94b380cd9b209aae878bde248668f7fd90e2",
+    "ci_junit": "7481e64c5a768b9a2a3a0c1e8d4932c5693d529057cfa3a50936e6cf55a47fbf",
+    "ci_events": "bb3fb4ece5dd0d3a5946d2eabd7134de7887c5c37c36d6e06e671a5e70725dcc"
+}
+
+
+def _pr46_history_pairs(state):
+    """Represent one retained R1 code failure; never supersede or clear it."""
+    adapter = state.get("pr46_review_history_adapter")
+    if adapter is None:
+        _require("pr46_review_history_adapter" not in state, "PR46 adapter cannot be null")
+        return set()
+    _require(state["schema"] == STAGED_SCHEMA and state["task"] == PR46_HISTORY_TASK,
+             "PR46 history adapter belongs to its exact original task")
+    pr = state["pr"]
+    _require(type(pr) is dict and pr.get("number") == 46
+             and pr.get("base_branch") == "develop"
+             and pr.get("head_branch") == PR46_HISTORY_TASK["head_branch"],
+             "PR46 history adapter requires original PR46/branches")
+    _fields(adapter, "contract sources", "pr46_review_history_adapter")
+    _require(adapter["contract"] == "pr46-review-history/1", "unknown PR46 history contract")
+    sources = adapter["sources"]
+    _require(type(sources) is dict and sources.keys() == PR46_HISTORY_DIGESTS.keys(),
+             "PR46 history sources must be the exact retained originals")
+    payloads = {}
+    for name, digest in PR46_HISTORY_DIGESTS.items():
+        _text(sources[name], "PR46 original source")
+        try:
+            raw = Path(sources[name]).read_bytes()
+        except OSError as exc:
+            raise EvidenceError("PR46 original source unavailable: " + name) from exc
+        _require(hashlib.sha256(raw).hexdigest() == digest, "PR46 original source hash differs: " + name)
+        if name in ("snapshot", "code_projection", "blocked_projection", "manifest"):
+            payloads[name] = json.loads(raw.decode("utf-8-sig"), object_pairs_hook=_unique_object)
+    original, code, blocked, manifest = (payloads[k] for k in
+                                        ("snapshot", "code_projection", "blocked_projection", "manifest"))
+    _require(original["task"] == PR46_HISTORY_TASK and original["corrections"] == []
+             and len(original["reviews"]) == 5 and original["reviews"][2] == code
+             and original["reviews"][4] == blocked,
+             "PR46 original five-report/zero-correction checkpoint differs")
+    _require(state["reviews"][:5] == original["reviews"],
+             "PR46 original five-report prefix must remain unchanged")
+    corrections = state["corrections"]
+    candidate = pr.get("head_sha") if pr.get("state") == "merged" else state["current"]["head"]
+    if corrections:
+        _require(corrections[0]["from_head"] == PR46_HISTORY_HEAD,
+                 "PR46 first correction must start at the original blocked HEAD")
+        _require(corrections[-1]["to_head"] == candidate,
+                 "PR46 final correction must identify the feature candidate")
+    else:
+        _require(candidate == PR46_HISTORY_HEAD,
+                 "PR46 zero corrections must retain the original blocked HEAD")
+    _require(code["verdict"] == "CODE_REVIEWED" and blocked["verdict"] == "BLOCKED"
+             and blocked["blocker_kind"] == "code" and bool(blocked["findings"])
+             and code["reviewer"] == blocked["reviewer"]
+             and _review_scope(code) == _review_scope(blocked)
+             and _review_scope(code) == (1, PR46_HISTORY_TASK["baseline"], PR46_HISTORY_BASE,
+                                        PR46_HISTORY_HEAD, "baseline_to_head"),
+             "PR46 exact R1 CODE/code BLOCKED pair differs")
+    _require([r for r in state["reviews"] if _review_scope(r) == _review_scope(code)] == [code, blocked],
+             "PR46 original R1 scope permits only its exact retained pair")
+    for report in (code, blocked):
+        _require(all(report[k] is None for k in ("ci", "coverage_sha256", "supersedes_report_ref",
+                                                 "finalizes_report_ref", "resolution_evidence_ref")),
+                 "PR46 original null relations/CI/coverage must remain unchanged")
+    _require(manifest["ci"] == {"run_id": 37804577686, "attempt": 1, "job": "grouped",
+                                "event": "pull_request"}
+             and manifest["candidate"] == {
+                 "head": "843621ba2c47e7cdeb19c46ad34746bf3fbb2e4d",
+                 "tree": "0e647bd2231517a85ada8352d3381b20f18fe6ab",
+                 "parents": [PR46_HISTORY_BASE, PR46_HISTORY_HEAD]}
+             and manifest["exit_code"] == 1 and manifest["outcome"] == "failed"
+             and manifest["retry_eligible"] is False,
+             "PR46 original failed CI identity/outcome differs")
+    return {frozenset((code["report_ref"], blocked["report_ref"]))}
+
+
 def _validate_review_history(state):
     """Resolve only explicit, append-only supplements backed by retained evidence."""
-    allowed_pairs = _cff_history_pairs(state) | _pr43_history_pairs(state)
+    allowed_pairs = _cff_history_pairs(state) | _pr43_history_pairs(state) | _pr46_history_pairs(state)
     reports, superseded = {}, set()
     for review in state["reviews"]:
         ref, prior = review["report_ref"], review["supersedes_report_ref"]

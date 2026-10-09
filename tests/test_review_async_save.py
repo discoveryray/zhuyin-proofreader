@@ -174,6 +174,43 @@ class AsyncReviewSaveTests(unittest.TestCase):
         self.assertEqual(ui_ids, [threading.get_ident()])
         self.assertEqual(app.last_save_timings["cooldown_seconds"], 0.5)
 
+    def test_control_snapshot_deduplicates_identity_and_preserves_failure_guard(self):
+        app = self.app
+        app.primary = Surface()
+        app.confirmed_button = Surface()
+        app.undo_expected_button = Surface(state="disabled")
+        app.navigation = Mock()
+        app.navigation.winfo_children.return_value = [app.confirmed_button, app.primary,
+                                                       app.undo_expected_button]
+        app.status = Surface(text="before save")
+        app._rendered_review_id = self.row["review_id"]
+        entered, release = threading.Event(), threading.Event()
+        def failed_save(*args, **kwargs):
+            entered.set()
+            if not release.wait(5):
+                raise AssertionError("save not released")
+            raise OSError("isolated write failure")
+        with patch.object(app._save_service, "save_event", side_effect=failed_save), \
+                patch.object(gui.messagebox, "showerror") as error:
+            try:
+                self.assertTrue(app.save_event(self.row, self.event))
+                self.assertTrue(entered.wait(5))
+                app._disable_save_controls()  # repeated disable retains original snapshot
+                self.assertFalse(app.save_event(self.row, self.event))
+                identities = [id(widget) for widget, _state in app._saved_control_states]
+                self.assertEqual(len(identities), len(set(identities)))
+                app._rendered_review_id = None  # rendering failed while write was pending
+            finally:
+                release.set()
+                wait_for_save(app)
+        error.assert_called_once()
+        self.assertEqual(app.confirmed_button.cget("state"), "normal")
+        self.assertEqual(app.undo_expected_button.cget("state"), "disabled")
+        self.assertEqual(app.primary.cget("state"), "disabled")
+        self.assertEqual(app.status.cget("text"), "before save")
+        self.assertFalse(app._last_event_saved)
+        self.assertEqual(app._saved_control_states, [])
+
     def test_write_failure_leaves_current_memory_disk_and_reopen_unchanged(self):
         before = copy.deepcopy(self.app.db)
         raw = (self.output / "人工判定資料庫.json").read_bytes()

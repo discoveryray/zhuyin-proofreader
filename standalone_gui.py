@@ -187,6 +187,22 @@ def project_status_text(folder: Path) -> str:
     return project_status_details(folder)[0]
 
 
+def review_child_worker(cmd, env, messages, token):
+    """Drain child diagnostics and report exit without touching launcher Tk."""
+    tail = ""
+    try:
+        with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                              text=True, encoding="utf-8", errors="replace", env=env) as child:
+            for line in child.stdout:
+                tail = (tail + line)[-8192:]
+                messages.put(("__REVIEW_LOG__", token, line))
+            code = child.wait()
+    except Exception as exc:
+        code = -1
+        tail = (tail + f"\n無法啟動／監督人工校對：{exc}")[-8192:]
+    messages.put(("__REVIEW_DONE__", token, code, tail))
+
+
 class App:
     def __init__(self, root):
         self.root = root
@@ -289,6 +305,7 @@ class App:
         self.runbtn = tk.Button(buttons, text="開始新校對", height=2, width=16, command=self.run)
 
         review = tk.Button(buttons, text="繼續校對", command=self.review)
+        self.review_button = review
         repair = tk.Button(buttons, text="修復／更新報告", command=self.report)
         report = tk.Button(buttons, text="查看報告", command=self.open_user_report)
 
@@ -556,6 +573,9 @@ class App:
         self.start(self.proof_cmd(["--refresh-actual", "-o", out]))
 
     def review(self):
+        if getattr(self, "_review_child_token", None) is not None:
+            self.run_status.config(text="人工校對視窗正在載入或已開啟，請查看該視窗。")
+            return
         out = self.output.get().strip()
         if not out:
             messagebox.showerror("缺少專案資料夾", "請先選擇校對專案資料夾。")
@@ -569,7 +589,40 @@ class App:
         env = os.environ.copy()
         env["PYTHONUTF8"] = "1"
         env["PYTHONIOENCODING"] = "utf-8"
-        subprocess.Popen([sys.executable, "-X", "utf8", str(Path(__file__).resolve().parent / "review_gui.py"), out], env=env)
+        token = object()
+        self._review_child_token = token
+        self.review_button.config(state="disabled")
+        self.run_status.config(text="正在啟動人工校對…工作階段核對進度將顯示在校對視窗。")
+        cmd = [sys.executable, "-X", "utf8", str(Path(__file__).resolve().parent / "review_gui.py"), out]
+        try:
+            threading.Thread(target=review_child_worker, args=(cmd, env, self.q, token), daemon=True).start()
+        except Exception as exc:
+            self._review_child_token = None
+            self.review_button.config(state="normal")
+            self.run_status.config(text="無法啟動人工校對；可再次嘗試。")
+            messagebox.showerror("無法啟動人工校對", str(exc), parent=self.root)
+
+    def _review_child_message(self, message):
+        if message[1] is not getattr(self, "_review_child_token", None):
+            return
+        if message[0] == "__REVIEW_LOG__":
+            line = message[2]
+            self.log.insert("end", line)
+            self.log.see("end")
+            if line.startswith("[人工校對]") or line.startswith("[人工校對載入失敗]"):
+                self.run_status.config(text=line.strip())
+            return
+        self._review_child_token = None
+        self.review_button.config(state="normal")
+        code, detail = message[2], message[3]
+        self.log.insert("end", f"\n[人工校對結束，代碼 {code}]\n")
+        self.log.see("end")
+        if code:
+            self.run_status.config(text=f"人工校對未正常結束（代碼 {code}）；請查看原因後重新開啟。")
+            messagebox.showerror("人工校對未正常結束",
+                                 f"代碼 {code}。請查看執行紀錄；修正原因後可重新開啟。\n\n{detail}", parent=self.root)
+        else:
+            self.run_status.config(text="人工校對視窗已關閉；可再次按『繼續校對』。")
 
     def _open_report(self, filename: str, missing_message: str):
         out = self.output.get().strip()
@@ -681,7 +734,9 @@ class App:
         try:
             while True:
                 x = self.q.get_nowait()
-                if isinstance(x, tuple) and x and x[0] == "__DONE__":
+                if isinstance(x, tuple) and x and x[0] in {"__REVIEW_LOG__", "__REVIEW_DONE__"}:
+                    self._review_child_message(x)
+                elif isinstance(x, tuple) and x and x[0] == "__DONE__":
                     if x[1] is not None:
                         x[1].config(state="normal")
                     self.refresh_project_status()
