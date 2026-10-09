@@ -41,7 +41,8 @@ AUTHORITATIVE_ACTUAL_FILES = (
 
 def staged_refresh_result(report, cleared_count=0):
     """Emulate only the staged refresh boundary; controllers never clear live DB."""
-    def refresh(output_dir, *, _refresh_plan, _refresh_status):
+    def refresh(output_dir, *, _refresh_plan, _refresh_status, _refresh_acknowledge=True):
+        assert type(_refresh_acknowledge) is bool
         assert set(_refresh_plan) == {"schema_version", "affected_occurrence_ids", "checked_postconditions"}
         _refresh_status["cleared_actual_dependent_event_count"] = cleared_count
         return report

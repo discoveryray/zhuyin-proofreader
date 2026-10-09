@@ -1642,3 +1642,144 @@ def test_real_pipeline_conflict_stays_pending_until_new_local_adjudication(tmp_p
         assert len(sp.json_load_strict(merged / "待人工確認.json")["pending"]) == 1
         assert sp.json_load_strict(merged / portability.CONFLICT_FILE) == receipt
     assert not list((tmp_path / "isolated-localappdata").rglob("*.sqlite*"))
+
+
+def test_actual_excel_deferred_owner_restarts_preserve_real_commit_and_expected(tmp_path, monkeypatch):
+    import global_glyph_promotion as promotion
+
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
+    first, second = _pdfs(tmp_path)
+    source, target = tmp_path / "source", tmp_path / "target"
+    with patch.object(sp, "decode", side_effect=_synthetic_unresolved_decode), \
+         patch.object(sp, "actual_workbook_global_exact_dependencies", return_value=()), \
+         patch("check_pronunciation_candidates.actual_workbook_global_exact_dependencies", return_value=()):
+        sp.run_pipeline_pdfs([first], source, defer_excel_reports=True)
+        sp.run_pipeline_pdfs([second], target, defer_excel_reports=True)
+        manifest = sp.json_load_strict(target / "校對工作階段.json")
+        identities = [(row["review_id"], row["occurrence_id"]) for row in manifest["records"]]
+        expected_id = manifest["records"][1]["review_id"]
+        ReviewSaveService(target).save_event(expected_id, {
+            "action": "補建expected證據", "expected_set": ["ㄐㄩㄝˊ"],
+            "expected_evidence": "independent manual expected", "context_evidence": "PDF page 1",
+        })
+        expected_event = sp.json_load_strict(target / "人工判定資料庫.json")["events"][expected_id]
+        sp.export_actual_pending_for_gpt(source)
+        workbook = load_workbook(source / "actual待判定_GPT包" / "actual待判定_給GPT.xlsx")
+        sheet = workbook["actual待判定"]
+        headers = [cell.value for cell in sheet[1]]
+        for key, value in {"decision": "VERIFIED", "actual_reading": "ㄐㄩㄝˊ",
+                           "confidence": "高", "sample_a_checked": "Y"}.items():
+            sheet.cell(2, headers.index(key) + 1, value)
+        filled = tmp_path / "filled.xlsx"
+        workbook.save(filled)
+        workbook.close()
+        marker_path = target / portability.INCOMPLETE_FILE
+        journal_path = target / sp.ACTUAL_REFRESH_PUBLICATION
+        original_save = sp.json_save
+
+        def interrupt_owner_transition(path, value, **kwargs):
+            if Path(path) == marker_path and value.get("status") == "ACTUAL_EXCEL_RECOVERED":
+                raise SystemExit("real owner return before durable marker")
+            return original_save(path, value, **kwargs)
+
+        # Real pipeline, transaction and publication have completed; only the
+        # owner's durable transition is interrupted, without writing its marker.
+        with patch.object(sp, "json_save", side_effect=interrupt_owner_transition):
+            with pytest.raises(SystemExit, match="before durable marker"):
+                sp.import_actual_gpt_decisions(target, filled)
+        root = sp.project_actual_evidence_root(target)
+        token, plan = promotion.committed_project_recovery(root)
+        assert plan["checked_postconditions"]
+        original_marker = marker_path.read_bytes()
+        assert sp.json_load_strict(marker_path)["status"] == "ACTUAL_EXCEL_REFRESH_PENDING"
+        assert sp.json_load_strict(journal_path)["phase"] == "PUBLISHED"
+        published_state = portability._actual_excel_file_snapshot(target)
+        overrides = (root / ar.OCCURRENCE_OVERRIDE_FILE).read_bytes()
+        outbox = promotion.load_promotion_outbox(root)
+        with pytest.raises(ValueError, match="所屬交易"):
+            sp.refresh_actual_with_recovery(target)
+        assert marker_path.read_bytes() == original_marker
+
+        with patch.object(sp, "run_pipeline_pdfs", side_effect=AssertionError("duplicate decode")), \
+             patch.object(sp, "_publish_actual_refresh", side_effect=AssertionError("duplicate publish")):
+            # A restart returns verified recovered data but crashes before CAS.
+            with patch.object(sp, "json_save", side_effect=interrupt_owner_transition):
+                with pytest.raises(SystemExit, match="before durable marker"):
+                    portability.resume_actual_excel_project(target)
+            assert marker_path.read_bytes() == original_marker
+            assert promotion.project_refresh_token(root) == token
+            assert portability._actual_excel_file_snapshot(target) == published_state
+            assert (root / ar.OCCURRENCE_OVERRIDE_FILE).read_bytes() == overrides
+
+            def interrupt_before_token(actual_root, actual_token):
+                assert Path(actual_root).resolve() == root
+                assert actual_token == token
+                assert sp.json_load_strict(marker_path)["status"] == "ACTUAL_EXCEL_RECOVERED"
+                assert sp.json_load_strict(journal_path)["phase"] == "ACKNOWLEDGING"
+                raise SystemExit("real owned ACK before token")
+
+            # The actual owner now durably writes RECOVERED, and the genuine
+            # acknowledgement writer persists its receipt before the next fault.
+            with patch.object(sp, "acknowledge_project_refresh", side_effect=interrupt_before_token):
+                with pytest.raises(SystemExit, match="before token"):
+                    portability.resume_actual_excel_project(target)
+            recovered_marker = marker_path.read_bytes()
+            journal = sp.json_load_strict(journal_path)
+            stage = target.parent / journal["stage"]
+            assert (stage / "ack-committed.json").is_file()
+            retained = {p: p.read_bytes() for directory in (target, stage)
+                        for p in directory.rglob("*") if p.is_file()}
+            for _ in range(2):
+                assert sp.recover_committed_actual_project(target, acknowledge=False)["project_refresh"] == "SUCCESS"
+                assert {p: p.read_bytes() for p in retained} == retained
+                assert promotion.project_refresh_token(root) == token
+
+            unlink = Path.unlink
+            def interrupt_cleanup(self, *args, **kwargs):
+                if self == journal_path:
+                    raise SystemExit("real owned token consumed before cleanup")
+                return unlink(self, *args, **kwargs)
+            with patch.object(Path, "unlink", interrupt_cleanup), \
+                 patch.object(sp, "acknowledge_project_refresh", wraps=sp.acknowledge_project_refresh) as ack:
+                with pytest.raises(SystemExit, match="before cleanup"):
+                    portability.resume_actual_excel_project(target)
+                ack.assert_called_once_with(root, token)
+            assert promotion.project_refresh_token(root) is None
+            assert marker_path.read_bytes() == recovered_marker
+            assert sp.json_load_strict(journal_path)["phase"] == "ACKNOWLEDGING"
+
+            # Missing sealed source after token consumption still fails closed,
+            # keeping the authentic marker, receipt and remaining backups.
+            second_raw = second.read_bytes()
+            second.unlink()
+            retained = {p: p.read_bytes() for directory in (target, stage)
+                        for p in directory.rglob("*") if p.is_file()}
+            with pytest.raises(FileNotFoundError, match="PDF"):
+                portability.resume_actual_excel_project(target)
+            assert {p: p.read_bytes() for p in retained} == retained
+            second.write_bytes(second_raw)
+
+            def interrupt_final_marker(self, *args, **kwargs):
+                if self == marker_path:
+                    raise SystemExit("real final owner marker cleanup")
+                return unlink(self, *args, **kwargs)
+            with patch.object(Path, "unlink", interrupt_final_marker), \
+                 patch.object(sp, "acknowledge_project_refresh", side_effect=AssertionError("duplicate token acknowledgement")):
+                with pytest.raises(SystemExit, match="final owner"):
+                    portability.resume_actual_excel_project(target)
+            assert marker_path.read_bytes() == recovered_marker
+            assert not journal_path.exists()
+            assert promotion.project_refresh_token(root) is None
+            assert portability.resume_actual_excel_project(target)["project_refresh"] == "SUCCESS"
+            assert not marker_path.exists()
+        current = sp.json_load_strict(target / "校對工作階段.json")
+        assert [(row["review_id"], row["occurrence_id"]) for row in current["records"]] == identities
+        assert sp.json_load_strict(target / "人工判定資料庫.json")["events"][expected_id] == expected_event
+        assert (root / ar.OCCURRENCE_OVERRIDE_FILE).read_bytes() == overrides
+        assert promotion.load_promotion_outbox(root) == outbox
+        assert sp.import_actual_gpt_decisions(target, filled)[0] == 0
+        assert (root / ar.OCCURRENCE_OVERRIDE_FILE).read_bytes() == overrides
+        assert sp.json_load_strict(target / "人工判定資料庫.json")["events"][expected_id] == expected_event
+    # This Excel fixture is ineligible for Global learning; separate genuine
+    # Global/outbox/receipt assertions exercise the shared C7 recovery path.
+    assert not list((tmp_path / "isolated-localappdata").rglob("*.sqlite*"))

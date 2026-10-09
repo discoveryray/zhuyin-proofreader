@@ -588,6 +588,9 @@ def _pr43_history(state):
 def _pr43_history_pairs(state):
     if "pr43_review_history_adapter" not in state:
         return set()
+    if state.get("correction_exception", {}).get("schema") == PR43_POSTMERGE_SCHEMA:
+        original = _pr43_postmerge_original(state)
+        return _pr43_history({**original, "reviews": state["reviews"]})[1]
     return _pr43_history(state)[1]
 
 
@@ -639,10 +642,158 @@ def _pr43_sixth_limit(state):
     return 6
 
 
+PR43_POSTMERGE_SCHEMA = "pr43-postmerge-correction/1"
+PR43_POSTMERGE_BRANCH = "codex/actual-gpt-bbox-export-postmerge7"
+PR43_INTEGRATION_HEAD = "50b46f9624700399fda2dc610575041c9e1c1fc2"
+PR43_MERGE_BASE = "4aeb4837da8d77b91c816930533042916cc638b5"
+PR43_ACTUAL_MERGE = "92ffeda22dcaa0bb34da6b4d26ed7593e0bce641"
+PR43_MERGE_TREE = "22c5aaf8e6f8afcc3465996fafeda5e2669ad3d5"
+PR43_POSTMERGE_SOURCES = {
+    "authorization": "5777e88fdff4820b2bbebdf0b1b95f3084acf4d46607f4610be5513b5a71a552",
+    "proposal": "fcf550ce11e66802f350ec563c784479d692958073dae0f6c7d71b99de37afc3",
+    "snapshot": "21ff67454a3a9235c05e725c5c4781ac1adf4562bb144c77a5d29c1afd320120",
+    "handoff": "c05a91d8a9965ac1ec0678b3bef032cc0e28609ad8005e680dd8be4cd824042c",
+    "merge_object": "8c999f29eba67fcbba90109cc64739ffea81039d46435523fff2c9059216f550",
+    "short": "2886b9e6895661222e206fa26c924c18bae9e2f24ac74c808724ff48e0b2c3f5",
+    "finding": "7b2cd32ceba38493f1b20ca0d9a42343961b66c1618043fb7994092ed7c670c0",
+    "finding_report": "edfe0ac324d2dd16c4f322e3a16bcc01c144e16b1cbff46e2c6477da1fe2426c",
+    "finding_receipt": "8a36fed67843e99d93d68b4a1baa07ea1da453ae5be45c933d6c707a56c85851",
+    "reproducer": "77a418c19c7ba99117b9f04f7ff902bbfd155a7f71711d126a56d8aa551b3562",
+    "reproducer_result": "a0f44e4ae4b5102b49c37a262c9d146ebf041a7a0c00ad62c92c8c986cde2f38",
+}
+
+
+def _pr43_postmerge_original(state):
+    """Read the immutable old task, never clear its merged code blocker."""
+    ex = state["correction_exception"]
+    _fields(ex, "schema limit sources candidate pr_observation_ref", "PR43 postmerge exception")
+    _require(ex["schema"] == PR43_POSTMERGE_SCHEMA and type(ex["limit"]) is int
+             and ex["limit"] == 7, "PR43 postmerge permits exactly seven rounds")
+    _fields(ex["sources"], " ".join(PR43_POSTMERGE_SOURCES), "PR43 postmerge sources")
+    saved = {}
+    for name, digest in PR43_POSTMERGE_SOURCES.items():
+        raw = _pr43_saved_bytes(ex["sources"][name])
+        _require(hashlib.sha256(raw).hexdigest() == digest, "PR43 postmerge source hash differs: " + name)
+        saved[name] = raw
+    original = _pr43_json(saved["snapshot"])
+    _require(_pr43_sixth_limit(original) == 6 and len(original["reviews"]) == 10
+             and original["pr"]["state"] == "merged"
+             and original["pr"]["head_sha"] == PR43_INTEGRATION_HEAD
+             and original["pr"]["base_sha"] == PR43_MERGE_BASE
+             and original["merge"]["sha"] == PR43_ACTUAL_MERGE
+             and original["pr"]["new_blockers"] and not original["pr"]["protection_satisfied"],
+             "PR43 original merged STOP/six-round history differs")
+    _require(_pr43_commit({"sha": PR43_ACTUAL_MERGE, "object_ref": ex["sources"]["merge_object"]})
+             == (PR43_MERGE_TREE, [PR43_MERGE_BASE, PR43_INTEGRATION_HEAD]),
+             "PR43 actual merge bridge tree/ordered parents differ")
+    short = _pr43_json(saved["short"])
+    _require(short["candidate"] == {"head": PR43_ACTUAL_MERGE, "tree": PR43_MERGE_TREE,
+                                   "parents": [PR43_MERGE_BASE, PR43_INTEGRATION_HEAD]}
+             and short["ci"] == {"run_id": 37881982664, "attempt": 1, "event": "push", "job": "short"}
+             and short["outcome"] == "success", "PR43 original actual merge short differs")
+    finding = _pr43_json(saved["finding"])
+    _require(finding["task"] == PR43_TASK and finding["baseline"] == PR43_BASELINE
+             and finding["reviewed_head"] == PR43_INTEGRATION_HEAD
+             and finding["actual_merge"] == PR43_ACTUAL_MERGE
+             and finding["verdict"] == "BLOCKED" and finding["blocker_kind"] == "code"
+             and finding["findings"] and finding["supersedes_report_ref"] is None
+             and finding["finalizes_report_ref"] is None,
+             "PR43 confirmed postmerge code finding must remain unchanged")
+    _require(state.get("pr43_review_history_adapter") == original["pr43_review_history_adapter"]
+             and state["corrections"][:6] == original["corrections"]
+             and state["reviews"][:10] == original["reviews"],
+             "PR43 original six corrections/ten reports/adapter must remain unchanged")
+    return original
+
+
+def _pr43_followup_identity(value):
+    """Only a complete GitHub PR identity; malformed nested values fail closed."""
+    if type(value) is not dict or type(value.get("number")) is not int:
+        return None
+    sides = []
+    for key in ("base", "head"):
+        side = value.get(key)
+        if type(side) is not dict or type(side.get("repo")) is not dict:
+            return None
+        sides.append((side.get("ref"), side.get("sha"), side["repo"].get("full_name")))
+    return value["number"], *sides
+
+
+def _pr43_seventh_limit(state):
+    original = _pr43_postmerge_original(state)
+    ex, task, pr = state["correction_exception"], state["task"], state["pr"]
+    _require(state["schema"] == STAGED_SCHEMA and task == {
+        "id": PR43_TASK, "repository": REPOSITORY, "baseline": PR43_BASELINE,
+        "base_branch": "develop", "head_branch": PR43_POSTMERGE_BRANCH},
+        "PR43 postmerge task/baseline/branch differs")
+    _require(len(state["corrections"]) == 7, "PR43 postmerge requires exactly seven retained corrections")
+    candidate = ex["candidate"]
+    tree, parents = _pr43_commit(candidate)
+    _require(parents == [PR43_ACTUAL_MERGE] and candidate["sha"] != PR43_ACTUAL_MERGE,
+             "PR43 seventh must be one new direct child of actual merge")
+    _require(state["corrections"][6] == {"number": 7, "from_head": PR43_ACTUAL_MERGE,
+             "to_head": candidate["sha"], "evidence_ref": candidate["object_ref"]},
+             "PR43 seventh correction must bind actual merge and raw candidate")
+    _require(state["current"]["head"] == candidate["sha"], "PR43 seventh current candidate differs")
+    _require(set(original["implementers"]) <= set(state["implementers"]),
+             "PR43 original implementers cannot be removed")
+    _require(all(r.get("baseline") == PR43_BASELINE and r.get("base") == PR43_ACTUAL_MERGE
+                 and r.get("head") == candidate["sha"] for r in state["reviews"][10:]),
+             "PR43 appended reviews must belong to new full candidate scope")
+    if pr is None:
+        _require(not any(r.get("verdict") == "PASS" for r in state["reviews"][10:]),
+                 "PR43 pre-PR cannot claim formal PASS")
+        _require(ex["pr_observation_ref"] is None and state["current"]["base"] == PR43_ACTUAL_MERGE,
+                 "PR43 pre-PR candidate must keep actual merge base and no invented PR")
+        _require(all(state[name] is None for name in ("pr_ci", "push_ci", "merge", "coverage", "short_validation")),
+                 "PR43 pre-PR cannot claim CI/merge evidence")
+    else:
+        _require(type(pr) is dict and type(pr.get("number")) is int and pr["number"] > 43
+                 and pr.get("head_branch") == PR43_POSTMERGE_BRANCH
+                 and pr.get("base_branch") == "develop" and pr.get("base_sha") == PR43_ACTUAL_MERGE
+                 and pr.get("head_sha") == candidate["sha"], "PR43 follow-up PR identity differs")
+        observation = _pr43_json(_pr43_saved_bytes(ex["pr_observation_ref"]))
+        _fields(observation, "repository pull_requests list_evidence_ref", "PR43 unique follow-up PR observation")
+        _require(observation["repository"] == REPOSITORY and type(observation["pull_requests"]) is list
+                 and len(observation["pull_requests"]) == 1, "PR43 exactly one actual follow-up PR required")
+        observed = observation["pull_requests"][0]
+        _fields(observed, "number base_branch head_branch base_sha head_sha evidence_ref", "PR43 observed PR")
+        _require(all(type(observed[k]) is type(pr[k]) and observed[k] == pr[k]
+                     for k in ("number", "base_branch", "head_branch", "base_sha", "head_sha")),
+                 "PR43 observed PR scope differs")
+        raw_pr = _pr43_json(_pr43_saved_bytes(observed["evidence_ref"]))
+        raw_list = _pr43_json(_pr43_saved_bytes(observation["list_evidence_ref"]))
+        _require(type(raw_list) is list, "PR43 full matching PR list required")
+        identities = [_pr43_followup_identity(row) for row in raw_list]
+        _require(all(identity is not None for identity in identities), "PR43 malformed raw PR list entry")
+        matches = [row for row, identity in zip(raw_list, identities)
+                   if identity[1][0] == "develop" and identity[2][0] == PR43_POSTMERGE_BRANCH
+                   and identity[1][2] == identity[2][2] == REPOSITORY]
+        _require(len(matches) == 1 and _pr43_followup_identity(matches[0]) == _pr43_followup_identity(raw_pr),
+                 "PR43 original PR list and GET must match one unique follow-up")
+        _require(_pr43_followup_identity(raw_pr) == (pr["number"],
+                    ("develop", PR43_ACTUAL_MERGE, REPOSITORY),
+                    (PR43_POSTMERGE_BRANCH, candidate["sha"], REPOSITORY)),
+                 "PR43 raw follow-up PR identity differs")
+        _require(pr["state"] == "merged" or state["current"]["base"] == PR43_ACTUAL_MERGE,
+                 "PR43 seventh base drift")
+    for ci_name in ("pr_ci", "push_ci"):
+        ci = state[ci_name]
+        _require(ci is None or ci.get("run_id") not in (37873515033, 37881982664),
+                 "PR43 original CI cannot become seventh candidate evidence")
+    _require(state["pr_ci"] is None or state["pr_ci"].get("tree") == tree,
+             "PR43 new CI tree differs from seventh raw candidate")
+    _require(state["merge"] is None or state["merge"].get("tree") == tree,
+             "PR43 new actual merge tree differs from seventh raw candidate")
+    return 7
+
+
 def _correction_limit(state):
     if "correction_exception" not in state:
         return 3
     exception = state["correction_exception"]
+    if type(exception) is dict and exception.get("schema") == PR43_POSTMERGE_SCHEMA:
+        return _pr43_seventh_limit(state)
     if type(exception) is dict and exception.get("schema") == PR43_SIXTH_SCHEMA:
         return _pr43_sixth_limit(state)
     if type(exception) is dict and exception.get("schema") == PR43_CORRECTION_SCHEMA:
@@ -760,7 +911,11 @@ def validate_state(state):
         _text(correction["evidence_ref"], "correction.evidence_ref")
         _require(correction["from_head"] != correction["to_head"], "correction needs a new commit")
         if previous is not None:
-            _require(previous == correction["from_head"], "correction history is discontinuous")
+            postmerge_bridge = (number == 7 and previous == PR43_INTEGRATION_HEAD
+                and correction["from_head"] == PR43_ACTUAL_MERGE
+                and state.get("correction_exception", {}).get("schema") == PR43_POSTMERGE_SCHEMA)
+            _require(previous == correction["from_head"] or postmerge_bridge,
+                     "correction history is discontinuous")
         previous = correction["to_head"]
     _require(type(state["reviews"]) is list, "reviews: expected list")
     for review in state["reviews"]:
