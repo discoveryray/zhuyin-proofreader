@@ -17,7 +17,7 @@ import hashlib
 import importlib.metadata
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import platform
 import re
 import subprocess
@@ -56,6 +56,38 @@ PR43_GUI_ONCE = {
     "proposal_sha256": "9b0aba33f2cf34b5ec29c290f3388501899e9e577e5a123b55c9bf53212c364a",
     "human_reply_sha256": "f5a5e87d7770e46fcf9e0875dd3b08f05ff7bec298aa5a9df9df2700e185220c",
 }
+
+
+# Only the adopted seventh correction may reference the already published
+# PR43 handoff. This is history retrieval, never a new ledger or a review PASS.
+PR43_POSTMERGE_HISTORY = {
+    "schema": "validation-postmerge-continuation/1",
+    "repository": "discoveryray/zhuyin-proofreader",
+    "task_id": "actual-gpt-bbox-export",
+    "baseline": "8eab9a1de34b59115658a2c7d3565adb347e59ab",
+    "original_pr": 43,
+    "branch": "codex/actual-gpt-bbox-export-postmerge7",
+    "authorization_sha256": "5777e88fdff4820b2bbebdf0b1b95f3084acf4d46607f4610be5513b5a71a552",
+    "original_head": "50b46f9624700399fda2dc610575041c9e1c1fc2",
+    "original_merge": "92ffeda22dcaa0bb34da6b4d26ed7593e0bce641",
+    "original_merge_parents": ["4aeb4837da8d77b91c816930533042916cc638b5",
+                               "50b46f9624700399fda2dc610575041c9e1c1fc2"],
+    "original_merge_tree": "22c5aaf8e6f8afcc3465996fafeda5e2669ad3d5",
+    "original_history_block_sha256": "6baf58dcf47f2726c1f4c83fb66e48afd5b4af29a78dbf9186a5fdcc7d184d88",
+    "original_archive_sha256": "322ddf29015c63ed646733af9f6c937f0ae4807120f347d135649b6d8ae6660e",
+    "original_source_ref": "tmp/pr-review-automation/actual-gpt-bbox-export/original-request.txt",
+    "sixth_state_sha256": "21ff67454a3a9235c05e725c5c4781ac1adf4562bb144c77a5d29c1afd320120",
+    "p1_report_sha256": "edfe0ac324d2dd16c4f322e3a16bcc01c144e16b1cbff46e2c6477da1fe2426c",
+    "p1_thread": "PRRT_kwDOUDv6jM6qpB4j", "p1_comment": 4226509109,
+    "corrective_count": 7,
+}
+PR43_ORIGINAL_BRANCH = "codex/actual-gpt-bbox-export"
+PR43_ORIGINAL_FULL_RUN = 37873515033
+PR43_ORIGINAL_PUSH_RUN = 37881982664
+PR43_ORIGINAL_PUSH_ARTIFACT = 11595410764
+PR43_ORIGINAL_PUSH_ARCHIVE_SHA256 = "7278108f68b31e4d45acc8fead8ef83af83682d70e012e4d920420da140ff884"
+PR43_ORIGINAL_COVERAGE_SHA256 = "00ce13eb3a9946381542d52e5dc00f4abd4cfc72a09e4497d44418a6944d44b0"
+PR43_ORIGINAL_SHORT_SHA256 = "2886b9e6895661222e206fa26c924c18bae9e2f24ac74c808724ff48e0b2c3f5"
 
 
 def utc_now():
@@ -1149,6 +1181,175 @@ def aggregate(evidence_root, head=None, ci=None, *, legacy=False):
     return result
 
 
+def pr43_postmerge_handoff(event, candidate, api, repository):
+    """Validate the sole adopted post-merge reference before importing history.
+
+    Source pins identify originals; they do not authenticate reviewers or turn
+    the retained P1/code report into a PASS. No private archive is republished.
+    """
+    pr = event["pull_request"]
+    body = pr.get("body") or ""
+    marker = "<!-- validation-postmerge-continuation"
+    selected = marker in body or pr["head"]["ref"] == PR43_POSTMERGE_HISTORY["branch"]
+    if not selected:
+        return None
+    blocks = re.findall(r"<!-- validation-postmerge-continuation\s+(.*?)\s*-->", body, re.DOTALL)
+    if len(blocks) != 1 or len(blocks[0].encode()) > HANDOFF_LIMIT or "<!-- validation-local-history" in body:
+        raise ValueError("exactly one bounded PR43 post-merge reference without a new archive is required")
+    value = parse_json(blocks[0])
+    if not isinstance(value, dict) or set(value) != set(PR43_POSTMERGE_HISTORY) | {"current_pr", "head"}:
+        raise ValueError("invalid PR43 post-merge continuation fields")
+    if any(type(value[key]) is not type(expected) or value[key] != expected
+           for key, expected in PR43_POSTMERGE_HISTORY.items()):
+        raise ValueError("PR43 post-merge continuation identity or original source differs")
+    # Creation cannot know the assigned PR number. Only this explicit strategy
+    # derives it from the immutable opened event; never infer or default it.
+    declared_pr = value["current_pr"]
+    number = pr.get("number")
+    if (type(number) is not int or number <= 43
+            or not ((type(declared_pr) is int and declared_pr == number)
+                    or (type(declared_pr) is str and declared_pr == "event.pull_request.number"))):
+        raise ValueError("PR43 post-merge current PR declaration/event differs")
+    value = {**value, "current_pr": number}
+    if (repository != REPOSITORY
+            or value["head"] != pr["head"]["sha"]
+            or not re.fullmatch(r"[0-9a-f]{40}", value["head"])
+            or value["head"] == "0" * 40 or value["head"] == value["original_merge"]
+            or pr["head"]["ref"] != value["branch"]
+            or pr["base"].get("ref") != "develop" or pr["base"]["sha"] != value["original_merge"]
+            or any(pr[side].get("repo", {}).get("full_name") != repository for side in ("head", "base"))):
+        raise ValueError("PR43 post-merge current PR/base/head/repository differs")
+    if (git("show", "-s", "--format=%P", value["head"]).split() != [value["original_merge"]]
+            or git("show", "-s", "--format=%T", value["head"]) != candidate["tree"]
+            or candidate["parents"] != [value["original_merge"], value["head"]]
+            or git("show", "-s", "--format=%P", value["original_merge"]).split() != value["original_merge_parents"]
+            or git("show", "-s", "--format=%T", value["original_merge"]) != value["original_merge_tree"]
+            or git("show", "-s", "--format=%T", value["original_head"]) != value["original_merge_tree"]):
+        raise ValueError("PR43 post-merge actual commit parents/tree differs")
+    original = api("repos/discoveryray/zhuyin-proofreader/pulls/43")
+    if (original.get("number") != 43 or original.get("state") != "closed" or original.get("merged") is not True
+            or original.get("merge_commit_sha") != value["original_merge"]
+            or original["head"]["sha"] != value["original_head"]
+            or original["head"]["ref"] != PR43_ORIGINAL_BRANCH
+            or original["base"]["sha"] != value["original_merge_parents"][0]
+            or original["base"].get("ref") != "develop"
+            or any(original[side].get("repo", {}).get("full_name") != repository for side in ("head", "base"))):
+        raise ValueError("original merged PR43 identity differs")
+    old_body = original.get("body") or ""
+    old_blocks = re.findall(r"<!-- validation-local-history\s+(.*?)\s*-->", old_body, re.DOTALL)
+    if (len(old_blocks) != 1 or len(old_blocks[0].encode()) > HANDOFF_LIMIT
+            or hashlib.sha256(old_blocks[0].encode()).hexdigest() != value["original_history_block_sha256"]):
+        raise ValueError("original PR43 history block differs")
+    handoff = parse_json(old_blocks[0])
+    if (handoff.get("schema") != HANDOFF_SCHEMA or handoff.get("task_id") != value["task_id"]
+            or handoff.get("source_ref") != value["original_source_ref"]
+            or handoff.get("archive_sha256") != value["original_archive_sha256"]):
+        raise ValueError("original PR43 handoff identity differs")
+    return value, old_body
+
+
+def restore_pr43_original_push(destination, artifact, root):
+    """Retain the exact merge ZIP; materialize only its complete group history.
+
+    The sole known merge-short started record is not a pytest declaration.
+    Its original bytes and every short source/log remain in the original ZIP;
+    any other started record without a manifest still blocks restoration.
+    """
+    if (artifact.get("id") != PR43_ORIGINAL_PUSH_ARTIFACT
+            or artifact.get("digest") != "sha256:" + PR43_ORIGINAL_PUSH_ARCHIVE_SHA256):
+        raise ValueError("original PR43 merge artifact identity differs")
+    payload = subprocess.check_output(["gh", "api",
+        "repos/discoveryray/zhuyin-proofreader/actions/artifacts/11595410764/zip"])
+    if hashlib.sha256(payload).hexdigest() != PR43_ORIGINAL_PUSH_ARCHIVE_SHA256:
+        raise ValueError("original PR43 merge archive digest differs")
+    destination.mkdir(parents=True)
+    raw_path = destination / "pr-artifact.zip"
+    with raw_path.open("xb") as handle:
+        handle.write(payload)
+    try:
+        original_archive = zipfile.ZipFile(io.BytesIO(payload))
+    except zipfile.BadZipFile as error:
+        raise ValueError("corrupt original PR43 merge archive") from error
+    with original_archive as archive:
+        names = archive.namelist()
+        if len(names) != len(set(names)) or archive.testzip() is not None:
+            raise ValueError("duplicate or corrupt original PR43 merge archive")
+        for info in archive.infolist():
+            name = PurePosixPath(info.filename)
+            if (name.is_absolute() or ".." in name.parts or "\\" in info.filename
+                    or ":" in info.filename or (info.external_attr >> 16) & 0o170000 == 0o120000):
+                raise ValueError("unsafe original PR43 merge archive member")
+        files = {item.filename for item in archive.infolist() if not item.is_dir()}
+        short_names = [name for name in files if len(PurePosixPath(name).parts) == 2
+                       and PurePosixPath(name).parts[0].startswith("short-") and name.endswith("/short.json")]
+        if len(short_names) != 1:
+            raise ValueError("original PR43 merge short receipt missing")
+        short_name = short_names[0]
+        short_bytes = archive.read(short_name)
+        if hashlib.sha256(short_bytes).hexdigest() != PR43_ORIGINAL_SHORT_SHA256:
+            raise ValueError("original PR43 merge short receipt corrupt")
+        short = parse_json(short_bytes.decode("utf-8-sig"))
+        spec = PR43_POSTMERGE_HISTORY
+        from scripts import validation_evidence as evidence
+        if (short.get("schema") != evidence.SHORT_SCHEMA or short.get("policy") != POLICY
+                or short.get("window_validation") != audit.WINDOW_NOTICE or short.get("outcome") != "success"
+                or short.get("candidate") != {"head": spec["original_merge"], "tree": spec["original_merge_tree"],
+                                               "parents": spec["original_merge_parents"]}
+                or short.get("ci") != {"run_id": PR43_ORIGINAL_PUSH_RUN, "attempt": 1, "job": "short", "event": "push"}
+                or short.get("coverage_sha256") != PR43_ORIGINAL_COVERAGE_SHA256
+                or set(short.get("source", {})) != {"archive", "artifact", "assets", "commit", "pr", "pr_assets", "run", "runs"}):
+            raise ValueError("original PR43 merge short scope differs")
+        validate_environment(short["environment"])
+        expected = evidence.short_commands(spec["original_merge_parents"][0], spec["original_merge"])
+        if ([item["name"] for item in short["checks"]] != [name for name, _ in expected]
+                or any(type(item["exit_code"]) is not int or item["exit_code"] != 0
+                       or evidence._canonical_command(item["command"]) != evidence._canonical_command(command)
+                       for item, (_, command) in zip(short["checks"], expected))):
+            raise ValueError("original PR43 merge short checks differ")
+        parent = PurePosixPath(short_name).parent
+        byte_refs = []
+        for entry in [*short["source"].values(), *(item["log"] for item in short["checks"])]:
+            member = parent / entry["path"]
+            if (set(entry) != {"path", "sha256"} or PurePosixPath(entry["path"]).is_absolute()
+                    or ".." in member.parts or "\\" in entry["path"] or str(member) not in files
+                    or hashlib.sha256(archive.read(str(member))).hexdigest() != entry["sha256"]):
+                raise ValueError("original PR43 merge short raw artifact missing or corrupt")
+            byte_refs.append({"member": str(member), "sha256": entry["sha256"]})
+        short_start = str(parent / "started.json")
+        if short_start not in files:
+            raise ValueError("original PR43 merge short start missing")
+        byte_refs.append({"member": short_start, "sha256": hashlib.sha256(archive.read(short_start)).hexdigest()})
+        selected = set()
+        for name in files:
+            member = PurePosixPath(name)
+            if member.name == "started.json" and name != short_start and str(member.parent / "manifest.json") not in files:
+                raise ValueError("unfinished execution in original PR43 merge history")
+            if member.name == "manifest.json":
+                value = parse_json(archive.read(name).decode("utf-8-sig"))
+                selected.add(name)
+                for item in value["artifacts"].values():
+                    relative = PurePosixPath(item["path"])
+                    linked = member.parent / relative
+                    if (relative.is_absolute() or ".." in relative.parts or "\\" in item["path"]
+                            or str(linked) not in files
+                            or hashlib.sha256(archive.read(str(linked))).hexdigest() != item["sha256"]):
+                        raise ValueError("original PR43 merge group closure missing or corrupt")
+                    selected.add(str(linked))
+            if member.name == "ledger.json":
+                selected.update(value for value in files if PurePosixPath(value).is_relative_to(member.parent))
+        if short_start in selected:
+            raise ValueError("original PR43 short start conflicts with group history")
+        if not any(PurePosixPath(name).name == "manifest.json" for name in selected):
+            raise ValueError("original PR43 merge group history missing")
+        for name in sorted(selected):
+            target = destination / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with target.open("xb") as handle:
+                handle.write(archive.read(name))
+    return {"archive": artifact_entry(raw_path, root), "short": {"member": short_name, "sha256": PR43_ORIGINAL_SHORT_SHA256},
+            "short_raw_bytes": byte_refs, "materialized_members": sorted(selected)}
+
+
 def restore_history(root):
     """Retrieve every prior exact-head PR execution; missing history fails closed."""
     root = Path(root).resolve()
@@ -1164,14 +1365,23 @@ def restore_history(root):
     def api(endpoint):
         return json.loads(subprocess.check_output(["gh", "api", endpoint], text=True, encoding="utf-8"))
 
-    runs = []
-    page = 1
-    while True:
-        result = api(f"repos/{repository}/actions/workflows/ci.yml/runs?event=pull_request&branch={quote(branch, safe="")}&per_page=100&page={page}")
-        runs.extend(result["workflow_runs"])
-        if len(runs) >= result["total_count"]:
-            break
-        page += 1
+    def branch_runs(source_branch):
+        values = []
+        page = 1
+        while True:
+            result = api(f"repos/{repository}/actions/workflows/ci.yml/runs?event=pull_request&branch={quote(source_branch, safe="")}&per_page=100&page={page}")
+            batch = result["workflow_runs"]
+            values.extend(batch)
+            if len(values) >= result["total_count"]:
+                break
+            if not batch:
+                raise ValueError("workflow run pagination is incomplete")
+            page += 1
+        if len({row["id"] for row in values}) != len(values):
+            raise ValueError("duplicate workflow run identity")
+        return values
+
+    runs = branch_runs(branch)
     current = [run for run in runs if run["id"] == current_run]
     if len(current) != 1 or current[0]["head_sha"] != head or current[0]["run_attempt"] != current_attempt:
         raise ValueError("current PR workflow run is absent or mismatched")
@@ -1183,7 +1393,44 @@ def restore_history(root):
     candidate = snapshot()
     if candidate["parents"] != [event["pull_request"]["base"]["sha"], head]:
         raise ValueError("checkout is not the current PR integration commit")
-    handoff = import_local_handoff(event["pull_request"].get("body"), root)
+    continuation = pr43_postmerge_handoff(event, candidate, api, repository)
+    history_origins = {}
+    if continuation is not None:
+        reference, original_body = continuation
+        original_runs = branch_runs(PR43_ORIGINAL_BRANCH)
+        original_full = [row for row in original_runs if row["id"] == PR43_ORIGINAL_FULL_RUN]
+        if (len(original_full) != 1 or original_full[0]["head_sha"] != reference["original_head"]
+                or original_full[0]["run_attempt"] != 1 or original_full[0]["status"] != "completed"
+                or original_full[0].get("conclusion") != "success"):
+            raise ValueError("original PR43 fixed full CI history is missing or mismatched")
+        push = api(f"repos/discoveryray/zhuyin-proofreader/actions/runs/{PR43_ORIGINAL_PUSH_RUN}")
+        if (push.get("id") != PR43_ORIGINAL_PUSH_RUN or push.get("run_attempt") != 1
+                or push.get("event") != "push" or push.get("head_sha") != reference["original_merge"]
+                or push.get("head_branch") != "develop" or push.get("status") != "completed"
+                or push.get("conclusion") != "success"
+                or push.get("head_repository", {}).get("full_name") != repository):
+            raise ValueError("original PR43 actual merge push history is missing or mismatched")
+        for source_branch, source_pr, values in ((branch, pr_number, runs), (PR43_ORIGINAL_BRANCH, 43, original_runs)):
+            for row in values:
+                links = row.get("pull_requests")
+                if (row.get("head_branch") != source_branch or row.get("event") != "pull_request"
+                        or row.get("head_repository", {}).get("full_name") != repository
+                        or not isinstance(links, list)
+                        or (links and (len(links) != 1 or not isinstance(links[0], dict)
+                            or type(links[0].get("number")) is not int or links[0]["number"] != source_pr))
+                        or row["id"] in history_origins):
+                    raise ValueError("PR43 continuation history run scope or duplicate differs")
+                history_origins[row["id"]] = {"branch": source_branch, "pr": source_pr}
+        if push["id"] in history_origins:
+            raise ValueError("duplicate PR43 merge push history")
+        history_origins[push["id"]] = {"branch": "develop", "pr": 43}
+        runs = [*runs, *original_runs, push]
+        handoff = import_local_handoff(original_body, root, task_id=reference["task_id"])
+        ledger = read_local_ledger(root / "local-history", reference["task_id"])
+        if ledger["baseline"] != reference["baseline"] or ledger["repository"] != repository:
+            raise ValueError("original PR43 ledger baseline/repository differs")
+    else:
+        handoff = import_local_handoff(event["pull_request"].get("body"), root)
     # Only this exact PR/task caller may opt into the retained False record.
     history_policy = (POLICY if repository == REPOSITORY
                       and branch == "codex/cff-batch-fingerprint" and pr_number == 42
@@ -1192,7 +1439,8 @@ def restore_history(root):
     for run in runs:
         if run.get("head_repository", {}).get("full_name") != repository:
             continue
-        if run.get("pull_requests") and not any(pr["number"] == pr_number for pr in run["pull_requests"]):
+        source_pr = history_origins[run["id"]]["pr"] if continuation is not None else pr_number
+        if run.get("pull_requests") and not any(pr["number"] == source_pr for pr in run["pull_requests"]):
             continue
         if run["id"] == current_run and current_attempt == 1:
             continue
@@ -1215,8 +1463,16 @@ def restore_history(root):
             destination = root / "history" / name
             if destination.exists():
                 raise ValueError("history download would overwrite")
-            subprocess.run(["gh", "run", "download", str(run["id"]), "--repo", repository,
-                            "--name", name, "--dir", str(destination)], check=True)
+            if continuation is not None and run["id"] == PR43_ORIGINAL_PUSH_RUN:
+                history_origins[run["id"]]["retained_short"] = restore_pr43_original_push(destination, matches[0], root)
+            else:
+                subprocess.run(["gh", "run", "download", str(run["id"]), "--repo", repository,
+                                "--name", name, "--dir", str(destination)], check=True)
+            if continuation is not None and run["id"] == PR43_ORIGINAL_FULL_RUN:
+                original_coverage = destination / "coverage.json"
+                if not original_coverage.is_file() or digest(original_coverage) != PR43_ORIGINAL_COVERAGE_SHA256:
+                    raise ValueError("original PR43 fixed full coverage missing or corrupt")
+                history_origins[run["id"]]["coverage"] = artifact_entry(original_coverage, root)
             # Prior bundles already contain earlier history. Keep one original
             # copy per execution, rejecting inconsistent duplicates.
             for manifest in destination.rglob("manifest.json"):
@@ -1232,6 +1488,10 @@ def restore_history(root):
     context = {"head": head, "current_run": current_run, "current_attempt": current_attempt,
                 "runs": [{"id": run["id"], "attempt": run["run_attempt"]} for run in runs],
                 "executions": sorted(seen), "candidate": candidate, "raw_runs": runs, "task_id": handoff["task_id"], "local_handoff_sha256": handoff["archive_sha256"]}
+    if continuation is not None:
+        context["postmerge_continuation"] = {"reference": reference,
+            "original_history_block_sha256": reference["original_history_block_sha256"],
+            "origins": [{"run_id": key, **value} for key, value in sorted(history_origins.items())]}
     if POLICY != "validation-flow/no-real-tk/1":
         import_pr43_gui_once(event["pull_request"].get("body"), root, context, candidate, api, repository, pr_number)
     write_json(root / ("history-index-" + uuid.uuid4().hex + ".json"), context)

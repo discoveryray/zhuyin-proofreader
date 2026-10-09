@@ -522,3 +522,47 @@ Correction chain 必須綁定原 blocked HEAD：零筆修正只能保留 `2afa2b
 當前 feature candidate。未合併時取 `current.head`；已合併時取保留的
 `pr.head_sha`，不把 actual merge／後續 develop SHA 當成 corrective HEAD。
 既有連續編號、相鄰 chain 及三輪上限照常驗證，不能以換 HEAD 重設計數。
+
+
+## PR43 合併後唯一第七輪
+
+人類原文 SHA256 `5777e88fdff4820b2bbebdf0b1b95f3084acf4d46607f4610be5513b5a71a552`
+明確授權原 `actual-gpt-bbox-export` 的同 task 第七輪，總數七；不是新 task 或清除舊 STOP。
+`correction_exception` 可選 `pr43-postmerge-correction/1`，closed fields 為
+`schema/limit/sources/candidate/pr_observation_ref`，整數 limit 必須 7。
+`sources` 恰為 `PR43_POSTMERGE_SOURCES` 的 keys，每份原 bytes 實讀固定 hash：
+人類原文、草案、原 confirmed-P1 STOP snapshot/handoff、raw merge、成功 short、
+P1 原文／finding／receipt／reproducer／result。人類原文優先於草案；gate 不自授權。
+原 snapshot 的 `/2` 與全部歷史來源仍按舊契約重驗；六 correction、十 report 及
+原 history adapter 必須逐值保留 ordered prefix，不新增同 HEAD supersession/finalization。
+
+限原 baseline `8eab9a1de34b59115658a2c7d3565adb347e59ab`、新 branch
+`codex/actual-gpt-bbox-export-postmerge7`。舊 PR43 的 I 為
+`50b46f9624700399fda2dc610575041c9e1c1fc2`；actual M 為
+`92ffeda22dcaa0bb34da6b4d26ed7593e0bce641`，raw ordered parents 必須
+`[4aeb4837da8d77b91c816930533042916cc638b5,I]`，tree
+`22c5aaf8e6f8afcc3465996fafeda5e2669ad3d5`。只有第六 to I → actual M →
+第七 from M 的 discontinuity 可接受，不能把 M 當第七 corrective HEAD。
+`candidate` 恰含 `sha/object_ref`，重算原 Git object SHA，唯一 parent 必須 M。
+第七筆恰為 `number=7/from_head=M/to_head=C/evidence_ref=candidate.object_ref`；
+current.head 必須 C，未 merge 的 base 必須 M。只許這一個 C，沒有額外 integration/code commit。
+
+新 PR 未建立前，`pr=null` 與 `pr_observation_ref=null` 同時成立；不得有新正式 PASS、
+coverage、CI 或 merge 證據，只能依原流程要求 R1、等待驗證授權或建立唯一 draft PR。
+新 PR 存在時，其實際 number 不預填。`pr_observation_ref` 是 closed JSON
+`repository/pull_requests/list_evidence_ref`；pull_requests 恰一筆
+`number/base_branch/head_branch/base_sha/head_sha/evidence_ref`。
+`evidence_ref` 指完整 GitHub GET PR 的 JSON payload，`list_evidence_ref` 指已讀完所有頁的
+完整 PR array；來源 tool wrapper／pagination／時間另存，不能將摘要冒稱原件。
+Gate 核對 list 與 GET 同一筆唯一 matching repo/develop/新 branch，並綁相同 number/base M/head C。
+原件的來源真實性、完整分页及遠端新鮮度仍由協調者查核，schema-valid 並非 authenticity。
+runner 的 `validation-postmerge-continuation/1` 另外承載舊 PR43 history 的有限讀取；
+兩者須使用同 task/B/branch/M/I/authorization 及真實新 PR/C，不能挪用一般歷史讀取器。
+
+追加報告只能屬新 C／base M／原 B；新 R1 完整 B→C、新 R2 全部 PR、一次正式 CI、
+兩份作者正式 PASS、保護與實際新 merge short 仍按原 v4 門檻。
+原 CI37873515033/1 與 M push37881982664/1 留為歷史，不能填作新 CI。
+原 P1 BLOCKED 保留，只有新候選的完整獨立審查可判定修復適用性。
+任何新 confirmed code finding 在7/7必須 STOP，不接受第八輪。
+未知 schema/task/hash、少改 prefix、錯 parent/order/tree、錯 PR/raw、重複 matching PR、
+新 scope 偽造舊 PASS 均拒絕。舊 `/1`、`/2` 與一般／PR41／CFF／PR46 契約不放寬。

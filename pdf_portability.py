@@ -2338,6 +2338,15 @@ def _resume_actual_excel_project_locked(output_dir: Path):
             if pending[0] != marker.get("recovery_token"):
                 raise ValueError("actual Excel COMMITTED journal 與已恢復標記不符")
             _acknowledge_owned_actual_refresh(root, pending[0], marker_path, marker_sha)
+        elif (output_dir / sp.ACTUAL_REFRESH_PUBLICATION).exists():
+            retained = sp._resume_actual_refresh_publication(output_dir, acknowledge=False)
+            if (retained is None or retained["phase"] != "ACKNOWLEDGING"
+                    or retained["token"] != marker["recovery_token"]):
+                raise ValueError("actual Excel 已恢復標記與 acknowledgement 原件不符；未清除")
+            _assert_actual_marker_owner(marker_path, marker_sha)
+            sp._resume_actual_refresh_publication(
+                output_dir, cleanup=True,
+                _post_ack_guard=lambda: _assert_actual_marker_owner(marker_path, marker_sha))
         _assert_actual_marker_owner(marker_path, marker_sha)
         marker_path.unlink()
         return {"project_actual_commit": "COMMITTED", "project_refresh": "SUCCESS",

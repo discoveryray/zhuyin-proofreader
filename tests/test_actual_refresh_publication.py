@@ -540,3 +540,190 @@ def test_real_pipeline_stage_keeps_exact_fingerprints_and_identity(tmp_path, mon
         sp.validate_output_artifact_hashes(final)
     finally:
         surface.doCleanups()
+
+
+def _real_ack_intent_for_deferred_resume(tmp_path, monkeypatch, *, consumed=False):
+    """Reach ACK via the real writer; do not edit phases or fabricate COMMITTED."""
+    output, manifest = sealed_project(tmp_path)
+    token = commit_empty_plan(output)
+    monkeypatch.setattr(sp, 'run_pipeline_pdfs', successful_stage)
+    sp.refresh_actual_project(output)
+    journal_path = output / sp.ACTUAL_REFRESH_PUBLICATION
+    with monkeypatch.context() as fault:
+        if consumed:
+            unlink = Path.unlink
+            def interrupt_cleanup(self, *args, **kwargs):
+                if self == journal_path:
+                    raise SystemExit('real token consumed before cleanup')
+                return unlink(self, *args, **kwargs)
+            fault.setattr(Path, 'unlink', interrupt_cleanup)
+        else:
+            def interrupt_ack(*args):
+                raise SystemExit('real ACK intent before token')
+            fault.setattr(sp, 'acknowledge_project_refresh', interrupt_ack)
+        with pytest.raises(SystemExit, match='real'):
+            sp._acknowledge_actual_refresh(output, token)
+    assert sp.json_load_strict(journal_path)['phase'] == 'ACKNOWLEDGING'
+    assert promotion.project_refresh_token(sp.project_actual_evidence_root(output)) == (None if consumed else token)
+    return output, manifest, token
+
+
+@pytest.mark.parametrize('consumed', [False, True])
+def test_deferred_ack_resume_preserves_real_receipt_token_and_backups(tmp_path, monkeypatch, consumed):
+    output, _, token = _real_ack_intent_for_deferred_resume(tmp_path, monkeypatch, consumed=consumed)
+    before = _refresh_retained_bytes(output)
+    monkeypatch.setattr(sp, 'run_pipeline_pdfs', lambda *a, **kw: pytest.fail('duplicate decode'))
+    monkeypatch.setattr(sp, '_publish_actual_refresh', lambda *a, **kw: pytest.fail('duplicate publish'))
+    for _ in range(2):
+        journal = sp._resume_actual_refresh_publication(output, cleanup=True, acknowledge=False)
+        assert journal['phase'] == 'ACKNOWLEDGING' and journal['token'] == token
+        assert journal['_recovery_plan'] == {
+            'schema_version': '1.0', 'affected_occurrence_ids': [], 'checked_postconditions': []}
+        recovered = sp.recover_committed_actual_project(output, acknowledge=False)
+        assert recovered['project_refresh'] == 'SUCCESS'
+        assert recovered['project_refresh_token'] == token
+        status = {}
+        assert sp.refresh_actual_project(output, _refresh_acknowledge=False, _refresh_status=status) == output / '注音校對_最終報告.xlsx'
+        assert status['cleared_actual_dependent_event_count'] == 0
+        assert _refresh_retained_bytes(output) == before
+    assert sp.recover_committed_actual_project(output)['project_refresh'] == 'SUCCESS'
+    assert promotion.project_refresh_token(sp.project_actual_evidence_root(output)) is None
+    assert not (output / sp.ACTUAL_REFRESH_PUBLICATION).exists()
+
+
+@pytest.mark.parametrize('mutation', ['missing_pdf', 'changed_pdf', 'unreadable_pdf', 'ack_receipt', 'backup', 'committed'])
+def test_deferred_ack_rejects_source_receipt_backup_and_token_drift_without_cleanup(tmp_path, monkeypatch, mutation):
+    output, manifest, token = _real_ack_intent_for_deferred_resume(tmp_path, monkeypatch)
+    journal = sp.json_load_strict(output / sp.ACTUAL_REFRESH_PUBLICATION)
+    stage = output.parent / journal['stage']
+    if mutation == 'missing_pdf':
+        Path(manifest['pdfs'][0]['pdf']).unlink()
+    elif mutation == 'changed_pdf':
+        Path(manifest['pdfs'][0]['pdf']).write_bytes(b'foreign sealed source')
+    elif mutation == 'unreadable_pdf':
+        sha = sp.sha256_file
+        pdf = Path(manifest['pdfs'][0]['pdf'])
+        def unreadable(path):
+            if Path(path).resolve() == pdf.resolve():
+                raise PermissionError('sealed PDF unreadable')
+            return sha(path)
+        monkeypatch.setattr(sp, 'sha256_file', unreadable)
+    elif mutation == 'ack_receipt':
+        (stage / 'ack-committed.json').write_bytes(b'foreign ack receipt')
+    elif mutation == 'backup':
+        next((stage / 'previous').iterdir()).write_bytes(b'foreign backup')
+    else:
+        path = sp.project_actual_evidence_root(output) / promotion.PROJECT_TRANSACTION_FILE
+        path.write_bytes(b'corrupt committed journal')
+    before = _refresh_retained_bytes(output)
+    monkeypatch.setattr(sp, 'acknowledge_project_refresh', lambda *a: pytest.fail('premature token consumption'))
+    from global_exact_glyph_library import GlobalLibraryValidationError
+    expected_error = (GlobalLibraryValidationError if mutation == 'committed'
+                      else FileNotFoundError if mutation.endswith('_pdf') else ValueError)
+    with pytest.raises(expected_error):
+        sp.recover_committed_actual_project(output, acknowledge=False)
+    assert _refresh_retained_bytes(output) == before
+    assert (output / sp.ACTUAL_REFRESH_PUBLICATION).exists()
+    assert (stage / 'ack-committed.json').exists()
+
+
+@pytest.mark.parametrize('marker', ['ACTUAL_EXCEL_REFRESH_PENDING', 'ACTUAL_EXCEL_RECOVERED', 'foreign', 'damaged'])
+def test_default_actual_recovery_refuses_owner_before_any_mutation(tmp_path, monkeypatch, marker):
+    from pdf_portability import INCOMPLETE_FILE
+    output, _, _ = _real_ack_intent_for_deferred_resume(tmp_path, monkeypatch)
+    # This deliberately untrusted marker is a rejection fixture, not a claimed
+    # genuine owner transition; the integration case below owns positive proof.
+    (output / INCOMPLETE_FILE).write_bytes(
+        b'not valid json' if marker == 'damaged' else json.dumps({'status': marker}).encode())
+    before = _refresh_retained_bytes(output)
+    monkeypatch.setattr(sp, 'recover_pending_project_actual_write', lambda *a: pytest.fail('owner recovery bypass'))
+    monkeypatch.setattr(sp, 'acknowledge_project_refresh', lambda *a: pytest.fail('owner token bypass'))
+    for call in (sp.recover_committed_actual_project, sp.refresh_actual_with_recovery):
+        with pytest.raises(ValueError, match='所屬交易'):
+            call(output)
+        assert _refresh_retained_bytes(output) == before
+
+
+def test_deferred_ack_restarts_preserve_real_global_evidence_and_delivery_receipt(tmp_path, monkeypatch):
+    import global_exact_glyph_library as library
+    from tests.test_global_promotion_v580 import intent, sql_rows
+    output, _ = sealed_project(tmp_path)
+    root = sp.project_actual_evidence_root(output)
+    repo = library.GlobalExactGlyphRepository.resolved(tmp_path / 'isolated-global')
+    with promotion.direct_visual_project_transaction(root) as bind:
+        promotion.enqueue_promotion_intents(root, [intent()])
+        bind({'schema_version': '1.0', 'affected_occurrence_ids': [], 'checked_postconditions': []})
+    token = promotion.project_refresh_token(root)
+    monkeypatch.setattr(sp, 'run_pipeline_pdfs', successful_stage)
+    monkeypatch.setattr(sp, 'deliver_pending_promotion_outbox',
+                        lambda actual_root: promotion.deliver_pending_promotion_outbox(actual_root, repo))
+    expected_bytes = (output / '人工判定資料庫.json').read_bytes()
+    assert not repo.path.exists()
+    # The real recovery producer delivers first, then seals the source snapshot.
+    # Publishing a PENDING outbox before delivery correctly invalidates that seal.
+    first = sp.recover_committed_actual_project(output, acknowledge=False)
+    assert first['project_refresh'] == 'SUCCESS'
+    assert first['global_promotion_delivery']['status'] == 'DELIVERED'
+    assert sp.json_load_strict(output / sp.ACTUAL_REFRESH_PUBLICATION)['source'] == sp._refresh_source_snapshot(output)
+    evidence = sql_rows(repo, 'source_evidence')
+    receipts = sql_rows(repo, 'processed_intent')
+    outbox = promotion.load_promotion_outbox(root)
+    assert len(evidence) == 1 and len(receipts) == 1
+    assert len(outbox['items']) == 1 and outbox['items'][0]['status'] == 'DELIVERED'
+    for _ in range(2):
+        assert sp.recover_committed_actual_project(output, acknowledge=False)['project_refresh'] == 'SUCCESS'
+        assert sql_rows(repo, 'source_evidence') == evidence
+        assert sql_rows(repo, 'processed_intent') == receipts
+        assert promotion.load_promotion_outbox(root) == outbox
+        assert (output / '人工判定資料庫.json').read_bytes() == expected_bytes
+    with monkeypatch.context() as fault:
+        def interrupt_ack(*args):
+            raise SystemExit('real Global delivery then ACK intent')
+        fault.setattr(sp, 'acknowledge_project_refresh', interrupt_ack)
+        with pytest.raises(SystemExit, match='real Global'):
+            sp._acknowledge_actual_refresh(output, token)
+    before = _refresh_retained_bytes(output)
+    for _ in range(2):
+        assert sp.recover_committed_actual_project(output, acknowledge=False)['project_refresh'] == 'SUCCESS'
+        assert sql_rows(repo, 'source_evidence') == evidence
+        assert sql_rows(repo, 'processed_intent') == receipts
+        assert promotion.load_promotion_outbox(root) == outbox
+        assert _refresh_retained_bytes(output) == before
+    assert sp.recover_committed_actual_project(output)['project_refresh'] == 'SUCCESS'
+    assert sql_rows(repo, 'source_evidence') == evidence
+    assert sql_rows(repo, 'processed_intent') == receipts
+    assert promotion.load_promotion_outbox(root) == outbox
+    assert (output / '人工判定資料庫.json').read_bytes() == expected_bytes
+
+
+@pytest.mark.parametrize('boundary', ['before_token', 'before_cleanup'])
+def test_owned_resume_guard_preserves_foreign_marker_and_ack_material(tmp_path, monkeypatch, boundary):
+    from pdf_portability import _assert_actual_marker_owner
+    output, _, token = _real_ack_intent_for_deferred_resume(tmp_path, monkeypatch)
+    marker = output / 'owner-guard.json'
+    marker.write_bytes(b'original-owner')
+    marker_sha = sp.sha256_file(marker)
+    journal_path = output / sp.ACTUAL_REFRESH_PUBLICATION
+    if boundary == 'before_token':
+        marker.write_bytes(b'foreign-owner')
+    else:
+        acknowledge = sp.acknowledge_project_refresh
+        def change_owner_after_token(root, actual_token):
+            acknowledge(root, actual_token)
+            marker.write_bytes(b'foreign-owner')
+        monkeypatch.setattr(sp, 'acknowledge_project_refresh', change_owner_after_token)
+    before = _refresh_retained_bytes(output)
+    with pytest.raises(ValueError, match='其他交易'):
+        sp._resume_actual_refresh_publication(
+            output, cleanup=True, _post_ack_guard=lambda: _assert_actual_marker_owner(marker, marker_sha))
+    assert marker.read_bytes() == b'foreign-owner'
+    assert sp.json_load_strict(journal_path)['phase'] == 'ACKNOWLEDGING'
+    stage = output.parent / sp.json_load_strict(journal_path)['stage']
+    assert (stage / 'ack-committed.json').exists()
+    expected = dict(before)
+    expected[marker] = b'foreign-owner'
+    if boundary == 'before_cleanup':
+        del expected[sp.project_actual_evidence_root(output) / promotion.PROJECT_TRANSACTION_FILE]
+    assert _refresh_retained_bytes(output) == expected
+    assert promotion.project_refresh_token(sp.project_actual_evidence_root(output)) == (
+        token if boundary == 'before_token' else None)

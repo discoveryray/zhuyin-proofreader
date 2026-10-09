@@ -243,13 +243,24 @@ def recover_committed_actual_project(output_dir: Path, *, acknowledge: bool = Tr
     The single-correction caller defers acknowledgement until its additional
     target postcondition succeeds. Explicit restart recovery acknowledges here.
     """
+    from pdf_portability import INCOMPLETE_FILE
+
     output_dir = Path(output_dir)
+    if type(acknowledge) is not bool:
+        raise ValueError("actual refresh acknowledgement policy must be boolean")
+    if acknowledge and (output_dir / INCOMPLETE_FILE).exists():
+        raise ValueError("專案未完成標記仍存在；請先使用所屬交易的恢復入口，未 acknowledgement")
     root = project_actual_evidence_root(output_dir)
-    recover_pending_project_actual_write(root)
-    if committed_project_recovery(root) is None and not (output_dir / ACTUAL_REFRESH_PUBLICATION).exists():
+    from global_glyph_promotion import PROJECT_TRANSACTION_FILE
+    if not (root / PROJECT_TRANSACTION_FILE).exists() and not (output_dir / ACTUAL_REFRESH_PUBLICATION).exists():
         return None
     with project_delivery_lock(root):
-        resumed = _resume_actual_refresh_publication(output_dir.resolve())
+        if acknowledge and (output_dir / INCOMPLETE_FILE).exists():
+            raise ValueError("專案未完成標記仍存在；請先使用所屬交易的恢復入口，未 acknowledgement")
+        recover_pending_project_actual_write(root)
+        if committed_project_recovery(root) is None and not (output_dir / ACTUAL_REFRESH_PUBLICATION).exists():
+            return None
+        resumed = _resume_actual_refresh_publication(output_dir.resolve(), acknowledge=acknowledge)
         if resumed is not None and resumed["phase"] == "ACKNOWLEDGING":
             from global_glyph_promotion import load_promotion_outbox
             items = load_promotion_outbox(root)["items"]
@@ -279,7 +290,8 @@ def recover_committed_actual_project(output_dir: Path, *, acknowledge: bool = Tr
             ledger = materialize_ledger(manifest, load_or_initialize_db(output_dir))
             phase = "refresh_actual_project"
             refresh_status = {}
-            report = refresh_actual_project(output_dir, _refresh_plan=plan, _refresh_status=refresh_status)
+            report = refresh_actual_project(output_dir, _refresh_plan=plan, _refresh_status=refresh_status,
+                                            _refresh_acknowledge=acknowledge)
             removed = refresh_status["cleared_actual_dependent_event_count"]
             phase = "post_refresh_actual_verification"
             manifest = json_load_strict(output_dir / "校對工作階段.json")
@@ -330,7 +342,8 @@ def _finish_direct_actual_commit(output_dir, ledger, result, *, refresh=True, ac
             plan = {"schema_version": "1.0", "affected_occurrence_ids": sorted(affected),
                     "checked_postconditions": sorted(_manual_actual_batch_postconditions(result), key=lambda item: item["occurrence_id"])}
             refresh_status = {}
-            report = refresh_actual_project(output_dir, _refresh_plan=plan, _refresh_status=refresh_status)
+            report = refresh_actual_project(output_dir, _refresh_plan=plan, _refresh_status=refresh_status,
+                                            _refresh_acknowledge=acknowledge)
             removed = refresh_status["cleared_actual_dependent_event_count"]
             result["project_refresh"] = "SUCCESS"
             phase = "acknowledge_project_refresh"
@@ -4411,7 +4424,10 @@ def _verify_actual_refresh_pdf_binding(output_dir, manifest, *, sealed_manifest=
     return _resolve_session_pdfs(output_dir, manifest)
 
 
-def _resume_actual_refresh_publication(output_dir, *, cleanup=False, acknowledged=None):
+def _resume_actual_refresh_publication(output_dir, *, cleanup=False, acknowledged=None,
+                                       acknowledge=True, _post_ack_guard=None):
+    if type(acknowledge) is not bool:
+        raise ValueError("actual refresh acknowledgement policy must be boolean")
     pending = _read_actual_refresh_publication(output_dir, acknowledged=acknowledged)
     if pending is None:
         return
@@ -4439,10 +4455,18 @@ def _resume_actual_refresh_publication(output_dir, *, cleanup=False, acknowledge
                 materialize_ledger(manifest, load_or_initialize_db(output_dir)), recovery_plan["checked_postconditions"])
         _verify_actual_refresh_pdf_binding(output_dir, manifest, sealed_manifest=sealed_manifest)
         if journal["phase"] == "ACKNOWLEDGING":
+            if not acknowledge:
+                if sha256_file(output_dir / ACTUAL_REFRESH_PUBLICATION) != digest:
+                    raise ValueError("actual refresh publication journal 已變動")
+                return {**journal, "_recovery_plan": recovery_plan}
+            if _post_ack_guard is not None:
+                _post_ack_guard()
             if pending_actual is not None:
                 acknowledge_project_refresh(project_actual_evidence_root(output_dir), journal["token"])
         elif not cleanup or pending_actual is not None:
             return journal
+    if _post_ack_guard is not None:
+        _post_ack_guard()
     path = output_dir / ACTUAL_REFRESH_PUBLICATION
     if sha256_file(path) != digest:
         raise ValueError("actual refresh publication journal 已變動")
@@ -4487,7 +4511,7 @@ def _acknowledge_actual_refresh_locked(output_dir, token, *, _post_ack_guard=Non
     acknowledge_project_refresh(project_actual_evidence_root(output_dir), token)
     if _post_ack_guard is not None:
         _post_ack_guard()
-    _resume_actual_refresh_publication(output_dir, cleanup=True)
+    _resume_actual_refresh_publication(output_dir, cleanup=True, _post_ack_guard=_post_ack_guard)
 
 
 def _publish_actual_refresh(output_dir, stage, manifest, *, source, token, before, cleared_count=0, _prewrite_guard=None):
@@ -4548,13 +4572,15 @@ def _publish_actual_refresh(output_dir, stage, manifest, *, source, token, befor
 
 
 def refresh_actual_project(output_dir: Path, *, defer_excel_reports: bool = True,
-                           _prewrite_guard=None, _refresh_plan=None, _refresh_status=None) -> Path:
+                           _prewrite_guard=None, _refresh_plan=None, _refresh_status=None,
+                           _refresh_acknowledge=True) -> Path:
     """Incrementally re-decode current project after dynamic actual evidence changes."""
     output_dir = Path(output_dir).resolve()
     if defer_excel_reports:
         with project_delivery_lock(project_actual_evidence_root(output_dir)):
             return _stage_actual_refresh(output_dir, _prewrite_guard=_prewrite_guard,
-                                         plan=_refresh_plan, status=_refresh_status)
+                                         plan=_refresh_plan, status=_refresh_status,
+                                         acknowledge=_refresh_acknowledge)
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
     # Workbooks may now be stale relative to dynamic actual evidence, but must
@@ -4570,8 +4596,8 @@ def refresh_actual_project(output_dir: Path, *, defer_excel_reports: bool = True
     )
 
 
-def _stage_actual_refresh(output_dir, *, _prewrite_guard=None, plan=None, status=None):
-    published = _resume_actual_refresh_publication(output_dir)
+def _stage_actual_refresh(output_dir, *, _prewrite_guard=None, plan=None, status=None, acknowledge=True):
+    published = _resume_actual_refresh_publication(output_dir, acknowledge=acknowledge)
     if published is not None:
         if published["phase"] == "ACKNOWLEDGING":
             if status is not None:
@@ -4581,7 +4607,7 @@ def _stage_actual_refresh(output_dir, *, _prewrite_guard=None, plan=None, status
             if status is not None:
                 status["cleared_actual_dependent_event_count"] = published["cleared_count"]
             return output_dir / "注音校對_最終報告.xlsx"
-        _resume_actual_refresh_publication(output_dir, cleanup=True)
+        _resume_actual_refresh_publication(output_dir, cleanup=True, acknowledge=acknowledge)
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
     validate_output_artifact_hashes(manifest)

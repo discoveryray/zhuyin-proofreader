@@ -98,7 +98,7 @@ def synthetic_actual_stage(pdfs, destination, *, session_id_override,
     return destination / "注音校對_最終報告.xlsx"
 
 
-def controlled_refresh(output, *, _refresh_plan=None, _refresh_status=None):
+def controlled_refresh(output, *, _refresh_plan=None, _refresh_status=None, _refresh_acknowledge=True):
     """Real source checks, staging, publication and status; only decoder is synthetic.
 
     Capture the original callable at module import so an outer controller patch
@@ -106,7 +106,8 @@ def controlled_refresh(output, *, _refresh_plan=None, _refresh_status=None):
     """
     with patch.object(sp, "run_pipeline_pdfs", side_effect=synthetic_actual_stage):
         return _REAL_REFRESH_ACTUAL_PROJECT(
-            output, _refresh_plan=_refresh_plan, _refresh_status=_refresh_status)
+            output, _refresh_plan=_refresh_plan, _refresh_status=_refresh_status,
+            _refresh_acknowledge=_refresh_acknowledge)
 
 
 class SyntheticActualStageContractTests(unittest.TestCase):

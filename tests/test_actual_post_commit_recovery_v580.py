@@ -129,7 +129,9 @@ class DurableActualRecoveryTests(unittest.TestCase):
             if fail == 'clear':
                 raise OSError('clear failed')
             return real_clear(output, ledger, ids)
-        def refresh(output, *, _refresh_plan, _refresh_status):
+        def refresh(output, *, _refresh_plan, _refresh_status, _refresh_acknowledge=True):
+            self.assertIs(type(_refresh_acknowledge), bool)
+            self.assertIs(_refresh_acknowledge, not defer_ack)
             # Unit boundary represents the new staged clear/refresh result;
             # native output rollback and real stage writes have separate tests.
             _refresh_status['cleared_actual_dependent_event_count'] = clear(

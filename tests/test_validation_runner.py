@@ -1371,3 +1371,438 @@ class CFFLegacyFailureReadTests(unittest.TestCase):
                     runner.restore_history(self.root / ("rejected-" + field))
             self.write(event, {"pull_request": {"number": 42, "base": {"sha": "c" * 40},
                        "head": {"sha": "d" * 40, "ref": "codex/cff-batch-fingerprint"}}})
+
+
+class Pr43PostmergeHistoryTests(unittest.TestCase):
+    """Finite synthetic API/archive fixtures; never real CI or review evidence."""
+
+    def setUp(self):
+        import base64
+        import hashlib
+        import io
+        import zipfile
+        from test_validation_evidence import raw_bundle, ref, write
+        self.write, self.ref = write, ref
+        self.temp = tempfile.TemporaryDirectory(dir=ROOT / "tmp", prefix="p7r-")
+        self.addCleanup(self.temp.cleanup)
+        self.folder = Path(self.temp.name)
+        self.source = self.folder / "source"
+        self.source.mkdir()
+        raw_bundle(self.source)
+        self.spec = copy.deepcopy(runner.PR43_POSTMERGE_HISTORY)
+        # Deliberately retained failure with complete raw metadata; not PASS.
+        for manifest in self.source.rglob("manifest.json"):
+            value = runner.read_json(manifest)
+            context = runner.read_json(manifest.parent / "history-context.json")
+            context["task_id"] = self.spec["task_id"]
+            write(manifest.parent / "history-context.json", context)
+            value["retry_key"] = runner.canonical_digest({"task": self.spec["task_id"], "tree": value["candidate"]["tree"]})
+            if value["group"] == "core":
+                value.update(outcome="failed", exit_code=1)
+            write(manifest.parent / "started.json", value)
+            value["artifacts"] = {key: ref(manifest.parent / entry["path"]) for key, entry in value["artifacts"].items()}
+            write(manifest, value)
+        ledger = dict(schema=runner.LOCAL_SCHEMA, task_id=self.spec["task_id"],
+                      baseline=self.spec["baseline"], repository=runner.REPOSITORY,
+                      source_ref=self.spec["original_source_ref"],
+                      created_at="2026-10-09T00:00:00+00:00", store_id="6" * 32)
+        payload = io.BytesIO()
+        with zipfile.ZipFile(payload, "w", zipfile.ZIP_DEFLATED) as zipped:
+            zipped.writestr("ledger.json", json.dumps(ledger))
+            for name in ("executions", "declarations"):
+                zipped.writestr(name + "/store.json", json.dumps({"schema": "zhuyin-local-store/1", "store_id": ledger["store_id"]}))
+        self.handoff = dict(schema=runner.HANDOFF_SCHEMA, task_id=self.spec["task_id"],
+            source_ref=ledger["source_ref"], archive_sha256=hashlib.sha256(payload.getvalue()).hexdigest(),
+            archive_base64=base64.b64encode(payload.getvalue()).decode())
+        self.old_block = json.dumps(self.handoff)
+        self.spec["original_archive_sha256"] = self.handoff["archive_sha256"]
+        self.spec["original_history_block_sha256"] = hashlib.sha256(self.old_block.encode()).hexdigest()
+        self.old_pr = {"number": 43, "merged": True, "state": "closed", "merge_commit_sha": self.spec["original_merge"],
+            "head": {"sha": self.spec["original_head"], "ref": runner.PR43_ORIGINAL_BRANCH,
+                     "repo": {"full_name": runner.REPOSITORY}},
+            "base": {"sha": self.spec["original_merge_parents"][0], "ref": "develop", "repo": {"full_name": runner.REPOSITORY}},
+            "body": "Preserved original description\n<!-- validation-local-history\n" + self.old_block + "\n-->"}
+        self.head = "a" * 40
+        self.metadata = {**self.spec, "current_pr": 57, "head": self.head}
+        self.event_data = {"pull_request": {"number": 57,
+            "head": {"sha": self.head, "ref": self.spec["branch"], "repo": {"full_name": runner.REPOSITORY}},
+            "base": {"sha": self.spec["original_merge"], "ref": "develop", "repo": {"full_name": runner.REPOSITORY}}}}
+        self.event = self.folder / "event.json"
+        self.save_event()
+        self.candidate = {"head": "b" * 40, "tree": "c" * 40, "parents": [self.spec["original_merge"], self.head]}
+        self.env = {"GITHUB_EVENT_PATH": str(self.event), "GITHUB_REPOSITORY": runner.REPOSITORY,
+                    "GITHUB_RUN_ID": "900", "GITHUB_RUN_ATTEMPT": "1"}
+        self.new_runs = [self.make_run(900, self.head, self.spec["branch"], 57, "in_progress"),
+                         self.make_run(901, "d" * 40, self.spec["branch"], 57, "completed", attempts=2)]
+        self.old_runs = [self.make_run(runner.PR43_ORIGINAL_FULL_RUN, self.spec["original_head"], runner.PR43_ORIGINAL_BRANCH, 43, "completed"),
+                         self.make_run(37789520018, "e" * 40, runner.PR43_ORIGINAL_BRANCH, 43, "completed")]
+        self.old_runs[1]["conclusion"] = "failure"
+        self.push = self.make_run(runner.PR43_ORIGINAL_PUSH_RUN, self.spec["original_merge"], "develop", 43, "completed")
+        self.push["event"] = "push"
+        self.short_folder = self.folder / "short-original"
+        self.short_folder.mkdir()
+        (self.short_folder / "proof.log").write_text("synthetic preserved original raw log", encoding="utf-8")
+        from scripts import validation_evidence as evidence
+        short_env = {"python": "3.13.0", "platform": "Windows", "capture": "fd",
+                     "environment": {key: "" for key in runner.ENV_KEYS}, "dependencies": {}}
+        for line in (ROOT / "requirements-ci-lock.txt").read_text().splitlines():
+            if line.strip() and not line.startswith("#"):
+                key, version = line.split("==")
+                short_env["dependencies"][key.lower().replace("_", "-")] = version
+        write(self.short_folder / "started.json", {"started_at": "2026-10-09T00:00:00+00:00", "command": ["synthetic", "post-merge"]})
+        write(self.short_folder / "short.json", {"schema": evidence.SHORT_SCHEMA, "policy": runner.POLICY,
+              "window_validation": audit.WINDOW_NOTICE, "outcome": "success", "environment": short_env,
+              "candidate": {"head": self.spec["original_merge"], "parents": self.spec["original_merge_parents"], "tree": self.spec["original_merge_tree"]},
+              "ci": {"run_id": runner.PR43_ORIGINAL_PUSH_RUN, "attempt": 1, "job": "short", "event": "push"},
+              "coverage_sha256": runner.digest(self.source / "coverage.json"),
+              "source": {key: ref(self.short_folder / "proof.log") for key in ("archive", "artifact", "assets", "commit", "pr", "pr_assets", "run", "runs")},
+              "checks": [{"name": name, "command": command, "exit_code": 0, "log": ref(self.short_folder / "proof.log")}
+                         for name, command in evidence.short_commands(self.spec["original_merge_parents"][0], self.spec["original_merge"])]})
+        push_stream = io.BytesIO()
+        with zipfile.ZipFile(push_stream, "w", zipfile.ZIP_DEFLATED) as zipped:
+            for path in self.source.rglob("*"):
+                if path.is_file():
+                    zipped.write(path, path.relative_to(self.source).as_posix())
+            for path in self.short_folder.iterdir():
+                zipped.write(path, "short-synthetic/" + path.name)
+        self.push_zip = push_stream.getvalue()
+        self.api_calls = []
+        self.missing_artifact = None
+        self.corrupt_download = None
+        self.conflicting_execution = False
+        self.patches = [patch.dict(runner.PR43_POSTMERGE_HISTORY, self.spec),
+            patch.object(runner, "PR43_ORIGINAL_PUSH_ARCHIVE_SHA256", hashlib.sha256(self.push_zip).hexdigest()),
+            patch.object(runner, "PR43_ORIGINAL_SHORT_SHA256", runner.digest(self.short_folder / "short.json")),
+            patch.object(runner, "PR43_ORIGINAL_COVERAGE_SHA256", runner.digest(self.source / "coverage.json")),
+            patch.object(runner, "snapshot", return_value=self.candidate),
+            patch.object(runner, "git", side_effect=self.git),
+            patch.dict("os.environ", self.env),
+            patch.object(runner.subprocess, "check_output", side_effect=self.query),
+            patch.object(runner.subprocess, "run", side_effect=self.download)]
+        for item in self.patches:
+            item.start()
+            self.addCleanup(item.stop)
+
+    def make_run(self, identity, head, branch, pr, status, attempts=1):
+        return {"id": identity, "head_sha": head, "head_branch": branch, "run_attempt": attempts,
+                "event": "pull_request", "status": status, "conclusion": "success",
+                "head_repository": {"full_name": runner.REPOSITORY}, "pull_requests": [{"number": pr}]}
+
+    def save_event(self):
+        self.event_data["pull_request"]["body"] = "<!-- validation-postmerge-continuation\n" + json.dumps(self.metadata) + "\n-->"
+        self.write(self.event, self.event_data)
+
+    def git(self, *args):
+        identity = args[-1]
+        if args[2] == "--format=%P":
+            return self.spec["original_merge"] if identity == self.head else " ".join(self.spec["original_merge_parents"])
+        return self.candidate["tree"] if identity == self.head else self.spec["original_merge_tree"]
+
+    def query(self, command, **kwargs):
+        response = self.api(command[-1])
+        return response if isinstance(response, bytes) else json.dumps(response)
+
+    def api(self, endpoint):
+        self.api_calls.append(endpoint)
+        if endpoint == "repos/discoveryray/zhuyin-proofreader/actions/artifacts/11595410764/zip":
+            return self.push_zip
+        if endpoint == "repos/discoveryray/zhuyin-proofreader/pulls/43":
+            return self.old_pr
+        if endpoint == f"repos/discoveryray/zhuyin-proofreader/actions/runs/{runner.PR43_ORIGINAL_PUSH_RUN}":
+            return self.push
+        if "/artifacts?" in endpoint:
+            identity = int(endpoint.split("/runs/", 1)[1].split("/", 1)[0])
+            attempts = 2 if identity == 901 else 1
+            items = [{"name": f"validation-evidence-{identity}-{attempt}", "expired": False,
+                      "id": runner.PR43_ORIGINAL_PUSH_ARTIFACT,
+                      "digest": "sha256:" + runner.PR43_ORIGINAL_PUSH_ARCHIVE_SHA256}
+                     for attempt in range(1, attempts + 1) if (identity, attempt) != self.missing_artifact]
+            return {"total_count": len(items), "artifacts": items}
+        from urllib.parse import parse_qs, urlsplit
+        branch = parse_qs(urlsplit(endpoint).query)["branch"][0]
+        rows = self.new_runs if branch == self.spec["branch"] else self.old_runs
+        return {"total_count": len(rows), "workflow_runs": rows}
+
+    def download(self, command, **kwargs):
+        import shutil
+        destination = Path(command[-1])
+        shutil.copytree(self.source, destination)
+        if self.corrupt_download:
+            target = destination / self.corrupt_download
+            if target.is_file():
+                target.write_bytes(target.read_bytes() + b"corrupt")
+        if self.conflicting_execution and command[-3] == "validation-evidence-901-2":
+            manifest = destination / "core/manifest.json"
+            value = runner.read_json(manifest)
+            value["finished_at"] = "2026-10-01T00:00:02+00:00"
+            self.write(manifest, value)
+            # Both records pass the strict reader; their identity conflict is
+            # independently rejected rather than silently selecting the last.
+            runner.read_verified_manifest(manifest)
+        return subprocess.CompletedProcess(command, 0)
+
+    def restore(self, name="restored"):
+        root = self.folder / name
+        runner.restore_history(root)
+        return root, runner.read_json(next(root.glob("history-index-*.json")))
+
+    def test_dual_pr_runs_attempts_and_original_failed_bytes_are_retained(self):
+        original = {p.relative_to(self.source): p.read_bytes() for p in self.source.rglob("*") if p.is_file()}
+        # This is the exact body available before creation; the opened event
+        # assigns the real number. A later body edit cannot repair this snapshot.
+        self.metadata["current_pr"] = "event.pull_request.number"
+        self.event_data["action"] = "opened"
+        self.save_event()
+        opened_snapshot = self.event.read_bytes()
+        root, index = self.restore()
+        self.assertEqual(index["executions"], ["core", "gui"])
+        self.assertEqual(len(list((root / "history").iterdir())), 5)
+        self.assertEqual(len(runner.history(root)), 2)
+        self.assertEqual(sum(value["outcome"] == "failed" for _, value in runner.history(root)), 1)
+        self.assertEqual({row["run_id"] for row in index["postmerge_continuation"]["origins"]}, {900, 901, runner.PR43_ORIGINAL_FULL_RUN, 37789520018, runner.PR43_ORIGINAL_PUSH_RUN})
+        for retained in (root / "history").iterdir():
+            if retained.name.endswith(str(runner.PR43_ORIGINAL_PUSH_RUN) + "-1"):
+                import zipfile
+                raw = retained / "pr-artifact.zip"
+                self.assertEqual(raw.read_bytes(), self.push_zip)
+                with zipfile.ZipFile(raw) as zipped:
+                    self.assertEqual(zipped.read("short-synthetic/started.json"), (self.short_folder / "started.json").read_bytes())
+                    for relative, payload in original.items():
+                        self.assertEqual(zipped.read(relative.as_posix()), payload)
+                self.assertFalse((retained / "short-synthetic/started.json").exists())
+            else:
+                for relative, payload in original.items():
+                    self.assertEqual((retained / relative).read_bytes(), payload)
+        self.assertEqual(runner.read_local_ledger(root / "local-history", self.spec["task_id"])["baseline"], self.spec["baseline"])
+        self.assertNotIn("archive_base64", self.event_data["pull_request"]["body"])
+        self.assertEqual(self.api_calls.count("repos/discoveryray/zhuyin-proofreader/pulls/43"), 1)
+        self.assertTrue(any("branch=codex%2Factual-gpt-bbox-export&" in endpoint for endpoint in self.api_calls))
+        self.assertEqual(index["postmerge_continuation"]["reference"]["current_pr"], 57)
+        self.assertIs(type(index["postmerge_continuation"]["reference"]["current_pr"]), int)
+        # The ordinary explicit identity is still exact, while an arbitrary
+        # future PR number works only when the event and current run agree.
+        self.new_runs[0]["pull_requests"] = [{"number": 58}]
+        self.new_runs[1]["pull_requests"] = [{"number": 58}]
+        self.event_data["pull_request"]["number"] = 58
+        self.save_event()
+        self.new_runs[0]["pull_requests"] = []  # legitimate API omission; exact event/raw run still bind
+        self.old_runs[1]["pull_requests"] = []  # legitimate retained old API history
+        integration_root, creation = self.restore("tmp/validation-evidence")
+        self.assertEqual(creation["postmerge_continuation"]["reference"]["current_pr"], 58)
+        snapshot_bytes = self.event.read_bytes()
+        from scripts import validation_evidence
+        pure = self.folder / "test_creation.py"
+        pure.write_text("def test_creation(): assert 2 + 3 == 5\n", encoding="utf-8")
+        nodeid = pure.relative_to(ROOT).as_posix() + "::test_creation"
+        inventory = {"schema": "zhuyin-test-groups/2", "policy": runner.POLICY,
+            "window_validation": audit.WINDOW_NOTICE, "pytest_ids": ["test_creation.test_creation"],
+            "core_ids": ["test_creation.test_creation"], "cancelled_window_ids": [],
+            "records": [{"identity": "test_creation.test_creation", "nodeid": nodeid, "group": "core"}]}
+        (self.folder / "requirements-ci-lock.txt").write_bytes((ROOT / "requirements-ci-lock.txt").read_bytes())
+        def collect(folder, tests=None):
+            self.write(folder / "inventory.json", inventory)
+            (folder / "collection.log").write_text("isolated creation snapshot inventory\n", encoding="utf-8")
+            return inventory
+        def process(command, folder, name, timeout, env=None):
+            # Execute the genuine headless pytest child from the repository;
+            # only API/Git/inventory boundaries are synthetic in this fixture.
+            with patch.object(runner, "ROOT", ROOT):
+                return ORIGINAL_RUN_PROCESS(command, folder, name, timeout, env)
+        def git(*args):
+            return "" if args == ("status", "--porcelain") else self.git(*args)
+        with patch.object(runner, "ROOT", self.folder), patch.object(runner, "git", side_effect=git), \
+                patch.object(runner, "collect_inventory", side_effect=collect), \
+                patch.object(runner, "run_process", side_effect=process), \
+                patch.dict("os.environ", GITHUB_ACTIONS="true", GITHUB_EVENT_NAME="pull_request", GITHUB_JOB="core"):
+            context = runner.validate_history_context(integration_root, self.candidate)
+            self.assertEqual(context["task_id"], self.spec["task_id"])
+            self.assertEqual(context["postmerge_continuation"]["reference"]["current_pr"], 58)
+            manifest = runner.run_group("core", integration_root, mode="validation", timeout=30)
+            selected = runner.read_verified_manifest(manifest)
+            self.assertEqual(selected["outcome"], "success", selected["verification"])
+            self.assertEqual(selected["ci"], {"run_id": 900, "attempt": 1, "job": "core", "event": "pull_request"})
+            saved_context = runner.read_json(manifest.parent / "history-context.json")
+            self.assertEqual(saved_context["postmerge_continuation"]["reference"]["current_pr"], 58)
+            coverage = runner.aggregate(integration_root, head=self.candidate["head"])
+            output = integration_root / "coverage.json"
+            self.write(output, coverage)
+            self.assertEqual(validation_evidence.verify_coverage(output), coverage)
+            self.assertEqual(sum(value["outcome"] == "failed" for _, value in runner.history(integration_root)), 1)
+        self.assertEqual(self.event.read_bytes(), snapshot_bytes)
+        self.assertIn('"current_pr": "event.pull_request.number"', json.loads(opened_snapshot)["pull_request"]["body"])
+        self.assertNotIn("archive_base64", self.event_data["pull_request"]["body"])
+
+    def test_real_pins_refuse_synthetic_handoff(self):
+        with patch.dict(runner.PR43_POSTMERGE_HISTORY,
+                        original_history_block_sha256="6baf58dcf47f2726c1f4c83fb66e48afd5b4af29a78dbf9186a5fdcc7d184d88",
+                        original_archive_sha256="322ddf29015c63ed646733af9f6c937f0ae4807120f347d135649b6d8ae6660e"):
+            with self.assertRaises(ValueError):
+                self.restore()
+        self.assertFalse((self.folder / "restored/local-history").exists())
+
+    def test_wrong_identity_hash_schema_count_and_unknown_fields_refuse(self):
+        original = copy.deepcopy(self.metadata)
+        for key, value in (("task_id", "other"), ("baseline", "f" * 40), ("authorization_sha256", "0" * 64),
+                           ("original_merge", "f" * 40), ("original_merge_parents", list(reversed(self.spec["original_merge_parents"]))),
+                           ("original_merge_tree", "f" * 40), ("original_source_ref", "unknown"),
+                           ("p1_report_sha256", "0" * 64), ("sixth_state_sha256", "0" * 64),
+                           ("schema", "validation-postmerge-continuation/2"), ("corrective_count", 8), ("corrective_count", 7.0),
+                           ("current_pr", True), ("current_pr", 43), ("current_pr", 58),
+                           ("current_pr", None), ("current_pr", "event.pull_request.number.other"),
+                           ("current_pr", {"event": "pull_request.number"}), ("head", "0" * 40), ("extra", True)):
+            self.metadata = {**original, key: value}
+            self.save_event()
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                self.restore("bad-" + key + "-" + str(len(list(self.folder.glob("bad-*")))))
+        self.metadata = {**original, "current_pr": "event.pull_request.number"}
+        for number in (True, None, 0, 42, 43, 57.0, "57"):
+            self.event_data["pull_request"]["number"] = number
+            self.save_event()
+            with self.subTest(event_number=number), self.assertRaises(ValueError):
+                runner.pr43_postmerge_handoff(self.event_data, self.candidate, self.api, runner.REPOSITORY)
+        self.event_data["pull_request"]["number"] = 57
+        self.metadata = original
+
+    def test_current_scope_and_single_corrective_parent_are_required(self):
+        original = copy.deepcopy(self.event_data)
+        for side, key, value in (("head", "ref", "codex/other"), ("base", "sha", "d" * 40),
+                                 ("head", "repo", {"full_name": "other/repo"}), ("base", "ref", "main")):
+            self.event_data = copy.deepcopy(original)
+            self.event_data["pull_request"][side][key] = value
+            self.save_event()
+            with self.subTest(side=side, key=key), self.assertRaises(ValueError):
+                runner.pr43_postmerge_handoff(self.event_data, self.candidate, self.api, runner.REPOSITORY)
+        self.event_data = original
+        self.save_event()
+        for parents in ([], [self.spec["original_merge"], "d" * 40], ["d" * 40]):
+            def wrong_git(*args):
+                return " ".join(parents) if args[-1] == self.head and args[2] == "--format=%P" else self.git(*args)
+            with self.subTest(parents=parents), patch.object(runner, "git", side_effect=wrong_git), self.assertRaisesRegex(ValueError, "parents/tree"):
+                self.restore("parent-" + str(len(parents)))
+
+    def test_changed_missing_duplicate_old_block_and_corrupt_archive_refuse(self):
+        original = self.old_pr["body"]
+        for index, body in enumerate(("", original + original, original.replace(self.old_block, self.old_block.replace('"schema":', '"schema" :')))):
+            self.old_pr["body"] = body
+            with self.subTest(index=index), self.assertRaises(ValueError):
+                self.restore("block-" + str(index))
+        self.old_pr["body"] = original
+        self.handoff["archive_base64"] = "corrupt"
+        self.old_block = json.dumps(self.handoff)
+        self.spec["original_history_block_sha256"] = __import__("hashlib").sha256(self.old_block.encode()).hexdigest()
+        runner.PR43_POSTMERGE_HISTORY["original_history_block_sha256"] = self.spec["original_history_block_sha256"]
+        self.metadata = {**self.spec, "current_pr": 57, "head": self.head}
+        self.old_pr["body"] = "<!-- validation-local-history\n" + self.old_block + "\n-->"
+        self.save_event()
+        with self.assertRaises((ValueError, __import__("binascii").Error)):
+            self.restore("corrupt-archive")
+
+    def test_original_merge_and_full_ci_identity_or_missing_history_refuse(self):
+        old = copy.deepcopy(self.old_pr)
+        self.old_pr["merge_commit_sha"] = "f" * 40
+        with self.assertRaises(ValueError):
+            self.restore("wrong-merge")
+        self.old_pr = old
+        for index, rows in enumerate(([], [self.old_runs[1]], [dict(self.old_runs[0], run_attempt=2), self.old_runs[1]])):
+            with patch.object(self, "old_runs", rows), self.subTest(index=index), self.assertRaises(ValueError):
+                self.restore("full-" + str(index))
+        for key, value in (("head_sha", "f" * 40), ("event", "pull_request"), ("conclusion", "failure"), ("run_attempt", 2)):
+            with patch.dict(self.push, {key: value}), self.subTest(key=key), self.assertRaises(ValueError):
+                self.restore("push-" + key)
+
+    def test_missing_expired_and_duplicate_attempt_artifacts_refuse(self):
+        for identity, attempt in ((901, 1), (901, 2), (runner.PR43_ORIGINAL_FULL_RUN, 1), (runner.PR43_ORIGINAL_PUSH_RUN, 1)):
+            self.missing_artifact = (identity, attempt)
+            with self.subTest(identity=identity, attempt=attempt), self.assertRaisesRegex(ValueError, "history unavailable"):
+                self.restore("missing-" + str(identity) + "-" + str(attempt))
+        self.missing_artifact = None
+        original_api = self.api
+        for name in ("expired", "duplicate", "identity", "digest"):
+            def changed_api(endpoint):
+                response = original_api(endpoint)
+                if "/artifacts?" in endpoint:
+                    if name == "expired":
+                        response["artifacts"][0]["expired"] = True
+                    elif name == "duplicate":
+                        response["artifacts"].append(dict(response["artifacts"][0]))
+                        response["total_count"] += 1
+                    elif name == "identity":
+                        response["artifacts"][0]["id"] = 0
+                    else:
+                        response["artifacts"][0]["digest"] = "sha256:" + "0" * 64
+                return response
+            with patch.object(self, "api", side_effect=changed_api), self.subTest(name=name), self.assertRaises(ValueError):
+                self.restore(name)
+
+    def test_unfinished_wrong_scope_and_duplicate_runs_refuse(self):
+        original_runs = copy.deepcopy(self.new_runs)
+        for links in ({}, None, [{"number": True}], [{"number": 58}],
+                      [{"number": 57}, {"number": 57}], [{"number": 57}, {"number": 58}]):
+            self.new_runs = copy.deepcopy(original_runs)
+            self.new_runs[0]["pull_requests"] = links
+            with self.subTest(current_pr_links=links), self.assertRaises(ValueError):
+                self.restore("links-" + str(len(list(self.folder.glob("links-*")))))
+        self.new_runs = copy.deepcopy(original_runs)
+        self.new_runs[0].pop("pull_requests")
+        with self.assertRaises(ValueError):
+            self.restore("missing-current-pr-links")
+        for links in ([{"number": 57}, {"number": 58}], [{"number": 58}], [{"number": True}]):
+            self.new_runs = copy.deepcopy(original_runs)
+            self.new_runs[1]["pull_requests"] = links
+            with self.subTest(prior_pr_links=links), self.assertRaises(ValueError):
+                self.restore("prior-links-" + str(len(list(self.folder.glob("prior-links-*")))))
+        self.new_runs = original_runs
+        changes = [dict(self.new_runs[1], status="in_progress"), dict(self.new_runs[1], head_branch="foreign"),
+                   dict(self.new_runs[1], head_repository={"full_name": "other/repo"}),
+                   dict(self.new_runs[1], pull_requests=[{"number": 58}]), dict(self.new_runs[0])]
+        for index, row in enumerate(changes):
+            with patch.object(self, "new_runs", [self.new_runs[0], row]), self.subTest(index=index), self.assertRaises(ValueError):
+                self.restore("run-" + str(index))
+
+    def test_corrupt_manifest_short_coverage_and_raw_receipts_refuse(self):
+        for index, path in enumerate(("core/raw.log", "coverage.json")):
+            self.corrupt_download = path
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                self.restore("bytes-" + str(index))
+        self.corrupt_download = None
+        import io, zipfile, hashlib
+        original_zip = self.push_zip
+        for mode in ("short", "proof", "unknown_started", "missing_closure", "duplicate_member", "unsafe_member", "zip"):
+            changed = io.BytesIO()
+            if mode == "zip":
+                self.push_zip = b"not a zip archive"
+            else:
+                with zipfile.ZipFile(io.BytesIO(original_zip)) as source, zipfile.ZipFile(changed, "w", zipfile.ZIP_DEFLATED) as target:
+                    for name in source.namelist():
+                        if mode == "missing_closure" and name == "core/raw.log":
+                            continue
+                        data = source.read(name)
+                        if mode == "short" and name == "short-synthetic/short.json":
+                            data += b"corrupt"
+                        if mode == "proof" and name == "short-synthetic/proof.log":
+                            data += b"corrupt"
+                        target.writestr(name, data)
+                    if mode == "unknown_started":
+                        target.writestr("unknown/started.json", "{}")
+                    if mode == "duplicate_member":
+                        target.writestr("core/raw.log", b"duplicate")
+                    if mode == "unsafe_member":
+                        target.writestr("../unknown.json", "{}")
+                self.push_zip = changed.getvalue()
+            with patch.object(runner, "PR43_ORIGINAL_PUSH_ARCHIVE_SHA256", hashlib.sha256(self.push_zip).hexdigest()), self.subTest(mode=mode), self.assertRaises((ValueError, zipfile.BadZipFile)):
+                self.restore("zip-" + mode)
+        self.push_zip = original_zip
+        self.conflicting_execution = True
+        with self.assertRaisesRegex(ValueError, "conflicting retained execution"):
+            self.restore("conflicting-execution")
+
+    def test_no_reference_or_mixed_archive_never_bootstraps_continuation(self):
+        self.event_data["pull_request"]["body"] = ""
+        self.write(self.event, self.event_data)
+        with self.assertRaisesRegex(ValueError, "exactly one bounded PR43"):
+            self.restore("missing-reference")
+        self.save_event()
+        self.event_data["pull_request"]["body"] += self.old_pr["body"]
+        self.write(self.event, self.event_data)
+        with self.assertRaisesRegex(ValueError, "without a new archive"):
+            self.restore("mixed-archive")

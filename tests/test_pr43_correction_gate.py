@@ -376,3 +376,195 @@ class Pr43SixthGateTests(unittest.TestCase):
         for state in cases:
             with self.subTest(state=state):
                 with self.assertRaises(gate.EvidenceError): gate.validate_state(state)
+
+
+class Pr43PostmergeGateTests(unittest.TestCase):
+    """Finite C7 synthetic objects; patched pins never assert real authorization."""
+    commit = Pr43CorrectionGateTests.commit
+    candidate = Pr43CorrectionGateTests.candidate
+    sixth = Pr43SixthGateTests.sixth
+
+    def setUp(self):
+        from test_pr_review_gate import review_evidence
+        Pr43SixthGateTests.setUp(self)
+        self.sixth(after=True)
+        integration, base = self.state["current"]["head"], self.state["current"]["base"]
+        merge = self.commit([base, integration], "actual-original-merge")
+        for name, value in (("PR43_INTEGRATION_HEAD", integration), ("PR43_MERGE_BASE", base),
+                            ("PR43_ACTUAL_MERGE", merge["sha"]), ("PR43_MERGE_TREE", "a" * 40)):
+            patch.object(gate, name, value).start()
+        codes = []
+        for number in (1, 2):
+            code = review_evidence(number)
+            code.update(baseline=gate.PR43_BASELINE, base=base, head=integration,
+                        verdict="CODE_REVIEWED", ci=None, finalizes_report_ref=None,
+                        coverage_sha256=None, report_ref=f"fixture://integration-code-{number}")
+            codes.append(code)
+        self.state["reviews"].extend(codes)
+        for code in codes:
+            report = deepcopy(code)
+            report.update(verdict="PASS", report_ref=code["report_ref"] + "/pass",
+                          finalizes_report_ref=code["report_ref"], resolution_evidence_ref="fixture://old-resolution",
+                          coverage_sha256="c" * 64, review_mode="evidence_gap", full_diff_reviewed=False)
+            if report["round"] == 2:
+                report["ci"] = {"run_id": 37873515033, "attempt": 1, "tested_sha": "e" * 40}
+            self.state["reviews"].append(report)
+        self.state["pr"].update(state="merged", new_blockers=["confirmed original postmerge P1"], protection_satisfied=False)
+        self.state["current"]["base"] = merge["sha"]
+        self.state["merge"] = {"sha": merge["sha"], "parents": [base, integration], "tree": "a" * 40,
+                               "develop_head": merge["sha"], "develop_contains_merge": True,
+                               "evidence_ref": "fixture://actual-merge"}
+        self.old_merged = deepcopy(self.state)
+        short = {"candidate": {"head": merge["sha"], "tree": "a" * 40, "parents": [base, integration]},
+                 "ci": {"run_id": 37881982664, "attempt": 1, "event": "push", "job": "short"}, "outcome": "success"}
+        finding = {"task": gate.PR43_TASK, "baseline": gate.PR43_BASELINE, "reviewed_head": integration,
+                   "actual_merge": merge["sha"], "verdict": "BLOCKED", "blocker_kind": "code",
+                   "findings": ["synthetic confirmed P1"], "supersedes_report_ref": None, "finalizes_report_ref": None}
+        payloads = {"snapshot": self.old_merged, "short": short, "finding": finding}
+        self.post_refs, pins = {}, {}
+        self.production_pins = dict(gate.PR43_POSTMERGE_SOURCES)
+        for name in gate.PR43_POSTMERGE_SOURCES:
+            raw = (Path(merge["object_ref"]).read_bytes() if name == "merge_object" else
+                   json.dumps(payloads[name]).encode() if name in payloads else ("SYNTHETIC " + name).encode())
+            path = self.root / ("postmerge-" + name); path.write_bytes(raw)
+            self.post_refs[name] = str(path); pins[name] = hashlib.sha256(raw).hexdigest()
+        patch.object(gate, "PR43_POSTMERGE_SOURCES", pins).start()
+        self.c7 = self.commit([merge["sha"]], "seventh-correction")
+        self.state["task"]["head_branch"] = gate.PR43_POSTMERGE_BRANCH
+        self.state["current"].update(base=merge["sha"], head=self.c7["sha"])
+        self.state["corrections"].append({"number": 7, "from_head": merge["sha"],
+                                         "to_head": self.c7["sha"], "evidence_ref": self.c7["object_ref"]})
+        self.state["correction_exception"] = {"schema": gate.PR43_POSTMERGE_SCHEMA, "limit": 7,
+            "sources": self.post_refs.copy(), "candidate": self.c7.copy(), "pr_observation_ref": None}
+        self.state.update(pr=None, pr_ci=None, merge=None, push_ci=None, coverage=None, short_validation=None)
+
+    def add_pr(self):
+        self.state["pr"] = deepcopy(self.old_merged["pr"])
+        self.state["pr"].update(number=47, state="open", head_branch=gate.PR43_POSTMERGE_BRANCH,
+                                head_sha=self.c7["sha"], base_sha=gate.PR43_ACTUAL_MERGE,
+                                new_blockers=[], findings_checked=True)
+        raw = {"number": 47, "base": {"ref": "develop", "sha": gate.PR43_ACTUAL_MERGE,
+                "repo": {"full_name": gate.REPOSITORY}}, "head": {"ref": gate.PR43_POSTMERGE_BRANCH,
+                "sha": self.c7["sha"], "repo": {"full_name": gate.REPOSITORY}}}
+        self.raw_pr = self.root / "pr-get.json"; self.raw_pr.write_text(json.dumps(raw))
+        self.raw_list = self.root / "pr-list.json"; self.raw_list.write_text(json.dumps([raw]))
+        observation = {"repository": gate.REPOSITORY, "list_evidence_ref": str(self.raw_list),
+            "pull_requests": [{**{k: self.state["pr"][k] for k in
+                ("number", "base_branch", "head_branch", "base_sha", "head_sha")}, "evidence_ref": str(self.raw_pr)}]}
+        self.observation = self.root / "pr-observation.json"; self.observation.write_text(json.dumps(observation))
+        self.state["correction_exception"]["pr_observation_ref"] = str(self.observation)
+
+    def new_code(self, number):
+        report = deepcopy(self.state["reviews"][6 + number - 1])
+        report.update(base=gate.PR43_ACTUAL_MERGE, head=self.c7["sha"], report_ref=f"fixture://C7-code-{number}")
+        return report
+
+    def test_pre_pr_and_unique_new_pr_require_both_new_reviews_and_ci(self):
+        before = deepcopy(self.state)
+        self.assertEqual(gate.next_action(self.state)["action"], "REQUEST_REVIEW_1")
+        self.assertEqual(self.state, before)
+        self.state["reviews"].append(self.new_code(1))
+        self.assertEqual(gate.next_action(self.state)["action"], "ENSURE_DRAFT_PR")
+        self.add_pr()
+        self.assertEqual(gate.next_action(self.state)["action"], "REQUEST_REVIEW_2")
+        self.state["reviews"].append(self.new_code(2))
+        self.assertEqual(gate.next_action(self.state)["action"], "WAIT_PR_CI")
+        self.assertEqual(self.state["reviews"][:10], before["reviews"])
+        self.assertEqual(self.state["corrections"][:6], before["corrections"][:6])
+
+    def test_identity_prefix_eighth_and_old_merge_cannot_clear_blocker(self):
+        self.add_pr()
+        cases = []
+        for container, key, value in (("task", "id", "other"), ("task", "repository", "other/repo"),
+                ("task", "baseline", "f" * 40), ("task", "head_branch", gate.PR43_BRANCH),
+                ("current", "head", gate.PR43_ACTUAL_MERGE), ("current", "base", "f" * 40),
+                ("pr", "number", 43), ("correction_exception", "limit", 8),
+                ("correction_exception", "limit", True), ("correction_exception", "schema", "pr43-postmerge-correction/2")):
+            state = deepcopy(self.state); state[container][key] = value; cases.append(state)
+        for index in range(6):
+            state = deepcopy(self.state); state["corrections"][index]["evidence_ref"] += "/changed"; cases.append(state)
+        for index in range(10):
+            state = deepcopy(self.state); state["reviews"].pop(index); cases.append(state)
+        state = deepcopy(self.state); state["corrections"].append(dict(state["corrections"][-1], number=8)); cases.append(state)
+        state = deepcopy(self.state); state["corrections"][6]["from_head"] = gate.PR43_INTEGRATION_HEAD; cases.append(state)
+        state = deepcopy(self.state); state["implementers"].pop(); cases.append(state)
+        for state in cases:
+            with self.subTest(state=state):
+                with self.assertRaises(gate.EvidenceError): gate.validate_state(state)
+        self.assertEqual(gate.next_action(self.old_merged)["action"], "STOP")
+        self.state["pr"]["new_blockers"] = ["confirmed C7 code blocker"]
+        result = gate.next_action(self.state)
+        self.assertEqual(result["action"], "STOP")
+        self.assertIn("seven corrective rounds exhausted", result["reason"])
+
+    def test_raw_candidate_parents_hash_tree_and_scope_refuse(self):
+        original = deepcopy(self.state)
+        for parents in ([gate.PR43_INTEGRATION_HEAD], [gate.PR43_ACTUAL_MERGE, "f" * 40], ["f" * 40]):
+            self.state = deepcopy(original)
+            record = self.commit(parents, "bad-candidate-" + str(len(parents)))
+            self.state["correction_exception"]["candidate"] = record
+            self.state["corrections"][6].update(to_head=record["sha"], evidence_ref=record["object_ref"])
+            self.state["current"]["head"] = record["sha"]
+            with self.assertRaises(gate.EvidenceError): gate.validate_state(self.state)
+        self.state = deepcopy(original)
+        self.state["reviews"].append(deepcopy(self.state["reviews"][8]))
+        self.state["reviews"][-1]["report_ref"] += "/fake-new-pass"
+        with self.assertRaises(gate.EvidenceError): gate.validate_state(self.state)
+        self.state = deepcopy(original)
+        Path(self.c7["object_ref"]).write_bytes(Path(self.c7["object_ref"]).read_bytes() + b"tamper")
+        with self.assertRaisesRegex(gate.EvidenceError, "object hash differs"): gate.validate_state(self.state)
+
+    def test_all_pinned_sources_missing_corrupt_or_real_allowlist_refuse(self):
+        for name, ref in self.post_refs.items():
+            with self.subTest(name=name):
+                path = Path(ref); raw = path.read_bytes(); path.write_bytes(raw + b"tamper")
+                with self.assertRaisesRegex(gate.EvidenceError, "source hash differs"): gate.validate_state(self.state)
+                path.write_bytes(raw)
+                state = deepcopy(self.state); state["correction_exception"]["sources"][name] = str(self.root / "missing")
+                with self.assertRaisesRegex(gate.EvidenceError, "unavailable"): gate.validate_state(state)
+        with patch.object(gate, "PR43_POSTMERGE_SOURCES", self.production_pins):
+            with self.assertRaisesRegex(gate.EvidenceError, "source hash differs"): gate.validate_state(self.state)
+
+    def test_pr_raw_get_list_number_repository_base_head_and_duplicates_refuse(self):
+        self.add_pr()
+        original = deepcopy(self.state)
+        raw = json.loads(self.raw_pr.read_text())
+        list_row = {**raw, "list_only_metadata": "synthetic API shape difference"}
+        self.raw_list.write_text(json.dumps([list_row]))
+        gate.validate_state(self.state)
+        self.raw_list.write_text(json.dumps([raw]))
+        variants = []
+        for section, field, value in (("base", "sha", "f" * 40), ("head", "sha", "f" * 40),
+                                     ("base", "ref", "main"), ("head", "ref", gate.PR43_BRANCH),
+                                     ("base", "repo", {"full_name": "other/repo"}),
+                                     ("head", "repo", {"full_name": "other/repo"})):
+            value_raw = deepcopy(raw); value_raw[section][field] = value; variants.append(value_raw)
+        for number in (43, 48, True):
+            value_raw = deepcopy(raw); value_raw["number"] = number; variants.append(value_raw)
+        for value_raw in variants:
+            self.raw_pr.write_text(json.dumps(value_raw)); self.raw_list.write_text(json.dumps([value_raw]))
+            with self.assertRaises(gate.EvidenceError): gate.validate_state(self.state)
+        self.raw_pr.write_text(json.dumps(raw))
+        for rows in ([], [raw, raw]):
+            self.raw_list.write_text(json.dumps(rows))
+            with self.assertRaises(gate.EvidenceError): gate.validate_state(self.state)
+        self.raw_list.write_text(json.dumps([raw])); self.raw_pr.unlink()
+        with self.assertRaisesRegex(gate.EvidenceError, "unavailable"): gate.validate_state(original)
+
+    def test_pre_pr_pass_and_old_ci_reuse_and_new_scope_code_remain_blocked(self):
+        for field in ("pr_ci", "push_ci", "merge", "coverage", "short_validation"):
+            state = deepcopy(self.state); state[field] = "invented"
+            with self.assertRaises(gate.EvidenceError): gate.validate_state(state)
+        state = deepcopy(self.state)
+        report = self.new_code(1); report.update(verdict="PASS", coverage_sha256="a" * 64)
+        state["reviews"].append(report)
+        with self.assertRaisesRegex(gate.EvidenceError, "pre-PR cannot claim formal PASS"): gate.validate_state(state)
+        self.add_pr()
+        for run in (37873515033, 37881982664):
+            state = deepcopy(self.state); state["pr_ci"] = {"run_id": run}
+            with self.assertRaisesRegex(gate.EvidenceError, "original CI cannot"): gate.validate_state(state)
+        report = self.new_code(1); block_review(report)
+        self.state["reviews"].append(report)
+        result = gate.next_action(self.state)
+        self.assertEqual(result["action"], "STOP")
+        self.assertIn("seven corrective rounds exhausted", result["reason"])
