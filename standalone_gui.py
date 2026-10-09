@@ -203,6 +203,45 @@ def review_child_worker(cmd, env, messages, token):
     messages.put(("__REVIEW_DONE__", token, code, tail))
 
 
+def gpt_export_result(kind, code, output):
+    """Confirm only this invocation's final CLI result, never scan old exports.
+
+    Called by the background worker; all output-file reads stay off the UI poll.
+    The expected producer always writes a workbook, including for zero items.
+    Its exported_review_count is presentation metadata, not pronunciation truth.
+    """
+    log_hint = "可從『更多… → 顯示／隱藏執行紀錄』查看完整原因。"
+    if code != 0:
+        return ("GPT 匯出失敗", f"代碼 {code}：{output or '程式沒有回傳錯誤原因。'}\n{log_hint}", True)
+    if kind == "actual" and output.startswith("目前沒有 ACTUAL_DECODE_ERROR／ACTUAL_UNRESOLVED 可匯出；actual 待判定為 0"):
+        return ("沒有 actual 待判定項目", output, False)
+    try:
+        filename = {"expected": "待判定候選_給GPT.xlsx", "actual": "actual待判定_GPT包.zip"}[kind]
+        path = Path(output)
+        if path.name != filename:
+            raise ValueError(f"程式沒有回傳可確認的輸出檔案：{output or '（空白）'}")
+        # is_file alone cannot establish readability. Opening is read-only.
+        if not path.is_file():
+            raise ValueError(f"輸出檔案不存在或不是檔案：{path}")
+        with path.open("rb") as stream:
+            stream.read(1)
+        if kind == "expected":
+            from openpyxl import load_workbook
+            workbook = load_workbook(path, read_only=True, data_only=True)
+            try:
+                counts = [row[1] for row in workbook["匯入中繼資料"].iter_rows(values_only=True)
+                          if len(row) >= 2 and row[0] == "exported_review_count"]
+                if len(counts) != 1 or type(counts[0]) is not int or counts[0] < 0:
+                    raise ValueError("輸出檔案缺少有效的待判定項目數")
+                if counts[0] == 0:
+                    return ("沒有 expected／差異待判定項目", f"本次空白證據表：{path}", False)
+            finally:
+                workbook.close()
+        return ("GPT 匯出完成", f"檔案已儲存至：{path}", False)
+    except Exception as exc:
+        return ("GPT 匯出結果無法確認", f"{exc}\n{log_hint}", True)
+
+
 class App:
     def __init__(self, root):
         self.root = root
@@ -491,8 +530,11 @@ class App:
 
     def export_gpt(self):
         out = self.output.get().strip()
-        if out:
-            self.start(self.proof_cmd(["--export-gpt", "-o", out]))
+        if not out:
+            self.run_status.config(text="未選擇校對專案資料夾，無法匯出 GPT 檔案。")
+            messagebox.showerror("缺少專案資料夾", "請先選擇校對專案資料夾。")
+            return
+        self.start(self.proof_cmd(["--export-gpt", "-o", out]), export_kind="expected")
 
     def import_gpt_auto(self):
         out = self.output.get().strip()
@@ -556,9 +598,10 @@ class App:
     def export_actual_gpt(self):
         out = self.output.get().strip()
         if not out:
+            self.run_status.config(text="未選擇校對專案資料夾，無法匯出 GPT 檔案。")
             messagebox.showerror("缺少專案資料夾", "請先選擇校對專案資料夾。")
             return
-        self.start(self.proof_cmd(["--export-actual-gpt", "-o", out]))
+        self.start(self.proof_cmd(["--export-actual-gpt", "-o", out]), export_kind="actual")
 
     def import_actual_gpt(self):
         return self.import_gpt_auto()
@@ -697,10 +740,11 @@ class App:
         except Exception as exc:
             messagebox.showerror("開啟失敗", str(exc))
 
-    def start(self, cmd, button=None, extra_env=None):
+    def start(self, cmd, button=None, extra_env=None, export_kind=None):
         if button is not None:
             button.config(state="disabled")
-        self.run_status.config(text="處理中…詳細紀錄可從『更多…』開啟。")
+        self.run_status.config(text=("正在匯出 GPT 檔案…詳細紀錄可從『更多…』開啟。" if export_kind else
+                                     "處理中…詳細紀錄可從『更多…』開啟。"))
 
         def worker():
             try:
@@ -709,7 +753,7 @@ class App:
                 env["PYTHONIOENCODING"] = "utf-8"
                 if extra_env:
                     env.update({str(k): str(v) for k, v in extra_env.items()})
-                p = subprocess.Popen(
+                with subprocess.Popen(
                     cmd,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.STDOUT,
@@ -717,18 +761,28 @@ class App:
                     encoding="utf-8",
                     errors="replace",
                     env=env,
-                )
-                self.proc = p
-                for line in p.stdout:
-                    self.q.put(line)
-                code = p.wait()
+                ) as p:
+                    self.proc = p
+                    last_output = ""
+                    for line in p.stdout:
+                        self.q.put(line)
+                        if line.strip():
+                            last_output = line.strip()
+                    code = p.wait()
                 self.q.put(f"\n[程式結束，代碼 {code}]\n")
-                self.q.put(("__DONE__", button, code))
+                result = gpt_export_result(export_kind, code, last_output) if export_kind else None
+                self.q.put(("__DONE__", button, code, result) if export_kind else ("__DONE__", button, code))
             except Exception as exc:
                 self.q.put(f"\n執行失敗：{exc}\n")
-                self.q.put(("__DONE__", button, -1))
+                result = gpt_export_result(export_kind, -1, str(exc)) if export_kind else None
+                self.q.put(("__DONE__", button, -1, result) if export_kind else ("__DONE__", button, -1))
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _show_export_result(self, result):
+        title, detail, failed = result
+        self.run_status.config(text=f"{title}：{detail}")
+        (messagebox.showerror if failed else messagebox.showinfo)(title, detail)
 
     def poll(self):
         try:
@@ -741,7 +795,10 @@ class App:
                         x[1].config(state="normal")
                     self.refresh_project_status()
                     code = int(x[2]) if len(x) >= 3 else 0
-                    if code == 0:
+                    result = x[3] if len(x) >= 4 else None
+                    if result is not None:
+                        self._show_export_result(result)
+                    elif code == 0:
                         self.run_status.config(text="處理已結束；『目前專案』已重新讀取最新狀態。")
                     else:
                         self.run_status.config(text=f"操作失敗（代碼 {code}）；專案資料未因失敗匯入而更新。請開啟執行紀錄查看原因。")
