@@ -6,6 +6,7 @@ import re
 import sys
 import threading
 import time
+import traceback
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
@@ -861,21 +862,69 @@ class ConfirmedItemsDialog(_ReviewDialog):
             self.destroy()
 
 
+def load_review_project(output_dir, progress):
+    """Prepare the verified queue once; actual staging remains background work."""
+    progress("讀取校對工作階段")
+    service = ReviewSaveService(output_dir)
+    progress("驗證工作階段、來源與輸出資產完整性")
+    snapshot = service.load_resume_snapshot()
+    manifest, db = copy.deepcopy(snapshot.manifest), copy.deepcopy(snapshot.db)
+    progress("核對跨專案判定衝突")
+    from pdf_portability import validate_conflict_state, actual_excel_conflict_state
+    conflicts = validate_conflict_state(output_dir, manifest, db)
+    actual_conflicts = set(actual_excel_conflict_state(output_dir, manifest, db))
+    progress("整理已核對的校對項目")
+    summary = {"staging_validation_pending": True}
+    prepared = prepare_review_queue(manifest, copy.deepcopy(snapshot.ledger), [], 0, set(), set(),
+                                    actual_conflict_review_ids=actual_conflicts)
+    progress("校對清單已備妥；actual 暫存將在背景核對")
+    return dict(manifest=manifest, db=db, summary=summary, prepared=prepared,
+                conflicts=conflicts, actual_conflicts=actual_conflicts,
+                service=service, snapshot=snapshot,
+                source_actual_pending=(output_dir / "來源actual待重新核對.json").exists())
+
+
+class ReviewStartupCancelled(Exception):
+    """The startup owner closed before the next loading phase."""
+
+
+def review_startup_worker(output_dir, messages, cancelled):
+    # Only plain paths, data and a queue cross the worker boundary.
+    def progress(phase):
+        if cancelled.is_set():
+            raise ReviewStartupCancelled()
+        messages.put(("progress", phase))
+        _review_log(f"[人工校對] {phase}")
+    try:
+        result = load_review_project(output_dir, progress)
+    except ReviewStartupCancelled:
+        return
+    except Exception as exc:
+        _review_log(f"[人工校對載入失敗] {exc}\n{traceback.format_exc()}", error=True)
+        messages.put(("error", str(exc)))
+    else:
+        if not cancelled.is_set():
+            messages.put(("result", result))
+
+
+def _review_log(text, *, error=False):
+    try:
+        print(text, file=sys.stderr if error else sys.stdout, flush=True)
+    except Exception:
+        # A launcher pipe/console closing does not invalidate loaded evidence.
+        pass
+
+
 class ReviewApp:
     def __init__(self, root, output_dir: Path):
         self.root = root
         self.output_dir = output_dir
-        if (output_dir / "跨電腦接續未完成.json").exists():
-            raise ValueError("跨電腦接續未完成：不能在部分建立的目標專案保存判定")
-        self.manifest = json_load_strict(output_dir / "校對工作階段.json")
-        # Keep the seal check before the durable DB initializer. Full source
-        # and artifact hashing is shared by queue/staging in reload_records.
-        validate_manifest_integrity(self.manifest)
-        self.db = load_or_initialize_db(output_dir)
-        from pdf_portability import validate_conflict_state
-        self.unresolved_portability_conflicts = validate_conflict_state(output_dir, self.manifest, self.db)
-        from pdf_portability import actual_excel_conflict_state
-        self.actual_excel_conflict_review_ids = set(actual_excel_conflict_state(output_dir, self.manifest, self.db))
+        self.manifest, self.db = {}, {}
+        self.unresolved_portability_conflicts = set()
+        self.actual_excel_conflict_review_ids = set()
+        self._startup_in_progress = False
+        self._startup_failed = False
+        self.exit_code = 0
         self.index = 0
         self.photo = None
         self.records = []
@@ -905,6 +954,7 @@ class ReviewApp:
         top.pack(fill="x", padx=12, pady=(10, 4))
         self.status = WrappedLabel(top, text="", font=("Microsoft JhengHei UI", 11, "bold"))
         self.status.pack(fill="x")
+        self.retry_startup_button = tk.Button(top, text="重新載入校對專案", command=self._start_review_loading)
         navigation = ActionRows(top)
         navigation.pack(fill="x")
         self.revisit_button = tk.Button(navigation, text="重新查看稍後處理（0）", command=self.revisit_deferred, state="disabled")
@@ -968,9 +1018,81 @@ class ReviewApp:
         )
         self.staging_status.pack(fill="x")
 
-        self.reload_records(defer_staging=True)
+        self._disable_save_controls()
+        self._start_review_loading()
+
+    def _start_review_loading(self):
+        if (getattr(self, "_startup_in_progress", False) or getattr(self, "_async_disposed", False)
+                or getattr(self, "_apply_in_progress", False) or getattr(self, "_save_in_progress", False)):
+            return
+        self._startup_in_progress = True
+        self._startup_failed = False
+        self.retry_startup_button.pack_forget()
+        request = {"started": time.perf_counter(), "phase": "準備載入校對專案"}
+        self._startup_request = request
+        self._startup_cancelled = threading.Event()
+        messages = queue.Queue()
+        self.status.config(text="正在載入校對專案，完成完整性核對後即可開始…")
+        try:
+            self._startup_worker = threading.Thread(target=review_startup_worker,
+                                                    args=(self.output_dir, messages, self._startup_cancelled), daemon=False)
+            self._schedule_async_poll(self._poll_review_loading, request, messages)
+            self._startup_worker.start()
+        except Exception as exc:
+            self._review_loading_failed(str(exc))
+
+    def _review_loading_failed(self, error):
+        self._startup_in_progress = False
+        self._startup_failed = True
+        self.exit_code = 1
+        self._startup_request = None
+        self._resume_source_error = error
+        self._publish_staging_summary(self._source_error_staging_summary(error))
+        self._show_staging_status()
+        self.status.config(text=f"校對專案載入失敗：{error}。可重新載入或關閉。")
+        self.retry_startup_button.pack(anchor="w")
+        messagebox.showerror("無法載入人工校對", error, parent=self.root)
+
+    def _poll_review_loading(self, request, messages):
+        if getattr(self, "_async_disposed", False) or getattr(self, "_startup_request", None) is not request:
+            return
+        try:
+            while True:
+                kind, payload = messages.get_nowait()
+                if kind == "progress":
+                    request["phase"] = payload
+                elif kind == "error":
+                    self._review_loading_failed(payload)
+                    return
+                else:
+                    try:
+                        self._publish_review_project(payload)
+                    except Exception as exc:
+                        self._disable_save_controls()
+                        self._review_loading_failed(str(exc))
+                    return
+        except queue.Empty:
+            elapsed = int(time.perf_counter() - request["started"])
+            self.status.config(text=f"正在{request['phase']}…（已等候 {elapsed} 秒；可關閉）")
+            self._schedule_async_poll(self._poll_review_loading, request, messages)
+
+    def _publish_review_project(self, result):
+        self.manifest, self.db = result["manifest"], result["db"]
+        self.unresolved_portability_conflicts = result["conflicts"]
+        self.actual_excel_conflict_review_ids = result["actual_conflicts"]
+        self._startup_in_progress = self._startup_failed = False
+        self._startup_request = None
+        self.exit_code = 0
+        self._restore_save_controls()
+        self._save_service = result["service"]
+        self._resume_source_error = None
+        self._publish_staging_summary(result["summary"])
+        self._publish_review_queue(result["prepared"])
+        self.last_resume_timings = dict(result["snapshot"].timings)
+        self._start_staging_validation(result["snapshot"])
         self.show()
-        if (output_dir / "來源actual待重新核對.json").exists():
+        _review_log("[人工校對] 已載入，可以開始校對")
+        if result["source_actual_pending"]:
             messagebox.showwarning(
                 "來源 actual 暫存待重新核對",
                 "來源專案的 actual 暫存與原始識別已保存，但沒有套用到當地 PDF。"
@@ -1283,6 +1405,8 @@ class ReviewApp:
 
     def _save_busy(self):
         return (getattr(self, "_save_in_progress", False)
+                or getattr(self, "_startup_in_progress", False)
+                or getattr(self, "_startup_failed", False)
                 or getattr(self, "_save_recovery_required", False)
                 or getattr(self, "_async_disposed", False))
 
@@ -1300,6 +1424,11 @@ class ReviewApp:
         self._cancel_staging_validation()
         self._project_generation = getattr(self, "_project_generation", 0) + 1
         self._save_request = None
+        self._startup_request = None
+        self._startup_in_progress = False
+        cancelled = getattr(self, "_startup_cancelled", None)
+        if cancelled is not None:
+            cancelled.set()
         for timer_id in self._async_after_ids:
             self.root.after_cancel(timer_id)
         self._async_after_ids.clear()
@@ -1346,13 +1475,19 @@ class ReviewApp:
         navigation = getattr(self, "navigation", None)
         if navigation is not None:
             widgets.extend(navigation.winfo_children())
-        self._saved_control_states = []
+        saved = getattr(self, "_saved_control_states", [])
+        first_snapshot = not saved
+        seen = {id(widget) for widget, _state in saved}
+        self._saved_control_states = saved
         for widget in widgets:
             if widget is not None and hasattr(widget, "cget"):
-                self._saved_control_states.append((widget, widget.cget("state")))
+                if id(widget) not in seen:
+                    saved.append((widget, widget.cget("state")))
+                    seen.add(id(widget))
                 widget.config(state="disabled")
         if hasattr(self, "status"):
-            self._saved_status_text = self.status.cget("text")
+            if first_snapshot:
+                self._saved_status_text = self.status.cget("text")
             self.status.config(text="正在儲存人工判定與更新待辦，請稍候…")
 
     def _restore_save_controls(self):
@@ -1399,6 +1534,9 @@ class ReviewApp:
                    "started": started}
         self._save_request = request
         completed = queue.Queue(maxsize=1)
+        progress = queue.Queue()
+        request["progress"] = progress
+        request["phase"] = "準備儲存人工判定"
         service = self._save_service
         manifest, previous, index, deferred, character_order = self._queue_inputs()
         actual_conflict_review_ids = set(getattr(self, "actual_excel_conflict_review_ids", set()))
@@ -1408,7 +1546,9 @@ class ReviewApp:
             try:
                 result = service.save_event(request["review_id"], event,
                                             expected_manifest=manifest, expected_db=request["db"],
+                                            progress=progress.put,
                                             **({"defer_staging_validation": True} if pending_staging else {}))
+                progress.put("判定已寫入，正在整理待辦")
                 queue_started = time.perf_counter()
                 prepared = prepare_review_queue(
                     manifest, result.ledger, previous, index,
@@ -1442,6 +1582,16 @@ class ReviewApp:
         # the destroyed Tk owner alive until arbitrary worker-thread GC.
         if getattr(self, "_save_request", None) is not request:
             return
+        progress = request.get("progress")
+        if progress is not None:
+            try:
+                while True:
+                    request["phase"] = progress.get_nowait()
+            except queue.Empty:
+                pass
+            if hasattr(self, "status"):
+                elapsed = int(time.perf_counter() - request["started"])
+                self.status.config(text=f"{request['phase']}…（已等候 {elapsed} 秒）")
         try:
             result, prepared, error = completed.get_nowait()
         except queue.Empty:
@@ -1775,7 +1925,14 @@ class ReviewApp:
     def apply_staged_actuals(self):
         if getattr(self, "staging_summary", {}).get("staging_validation_pending"):
             return
-        if self._save_busy() or getattr(self, "_apply_in_progress", False) or getattr(self, "_review_action_in_progress", False):
+        # A failed startup may still expose independently verified committed
+        # recovery. It never enables a fresh actual decision or an expected save.
+        startup_recovery = (getattr(self, "_startup_failed", False)
+                            and getattr(self, "staging_summary", {}).get("actual_recovery_pending"))
+        busy = (any(getattr(self, name, False) for name in
+                    ("_save_in_progress", "_save_recovery_required", "_async_disposed", "_startup_in_progress"))
+                if startup_recovery else self._save_busy())
+        if busy or getattr(self, "_apply_in_progress", False) or getattr(self, "_review_action_in_progress", False):
             return
         self._apply_in_progress = True
         recovery_only = bool(getattr(self, "_resume_source_error", None))
@@ -1896,6 +2053,12 @@ class ReviewApp:
                 self.db = load_or_initialize_db(self.output_dir)
                 self.index = old_index
                 self.reload_records()
+                if not getattr(self, "_resume_source_error", None):
+                    self._startup_failed = False
+                    self.exit_code = 0
+                    if hasattr(self, "retry_startup_button"):
+                        self.retry_startup_button.pack_forget()
+                    self._restore_save_controls()
                 self.show()
             except Exception as exc:
                 messagebox.showerror(
@@ -2129,9 +2292,9 @@ def main():
             return 0
         output = Path(directory)
     root = tk.Tk()
-    ReviewApp(root, output)
+    app = ReviewApp(root, output)
     root.mainloop()
-    return 0
+    return app.exit_code
 
 
 if __name__ == "__main__":

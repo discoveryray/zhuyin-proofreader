@@ -204,25 +204,33 @@ class ReviewSaveService:
         return content, hashes
 
     def save_event(self, review_id, event, *, expected_manifest=None, expected_db=None,
-                   defer_staging_validation=False):
-        # Reject a second save, but allow the admitted worker to wait for a
-        # read-only staging capture. Cancellation does not release that lock.
+                   defer_staging_validation=False, progress=None):
+        def notify(phase):
+            # Advisory callbacks never turn a durable save into a failure.
+            if progress is not None:
+                try:
+                    progress(phase)
+                except Exception:
+                    pass
+        # Admission is separate from waiting on a read-only staging capture.
         if not self._save_lock.acquire(blocking=False):
             raise RuntimeError("人工判定正在保存中，請勿重複操作")
         try:
             # Use the same project lock as actual apply/recovery. It prevents
             # those transactions racing a save of a now-obsolete expected row.
+            notify("等待專案儲存鎖（尚未寫入）")
             with self._lock, sp.project_delivery_lock(sp.project_actual_evidence_root(self.output_dir)):
                 return self._save(review_id, event, expected_manifest, expected_db,
-                                  defer_staging_validation=defer_staging_validation)
+                                  defer_staging_validation=defer_staging_validation, notify=notify)
         finally:
             self._save_lock.release()
 
-    def _prepare_snapshot(self, timings, expected_manifest, expected_db):
+    def _prepare_snapshot(self, timings, expected_manifest, expected_db, notify=lambda phase: None):
         if (self.output_dir / "跨電腦接續未完成.json").exists():
             raise StaleReviewProjectError("跨電腦接續未完成；未保存人工判定")
         manifest_path = self.output_dir / "校對工作階段.json"
         db_path = self.output_dir / "人工判定資料庫.json"
+        notify("讀取並驗證工作階段（尚未寫入）")
         manifest_raw = _read(manifest_path)
         manifest_sha = _digest(manifest_raw)
         if self._manifest is None or manifest_sha != self._manifest_sha:
@@ -240,6 +248,7 @@ class ReviewSaveService:
             manifest = self._manifest
         if expected_manifest is not None and manifest != expected_manifest:
             raise StaleReviewProjectError("畫面工作階段與目前專案不同；未保存")
+        notify("完整核對來源與依賴內容（尚未寫入）")
         content, hashes = self._capture(timings, initial_documents={manifest_path: manifest_raw})
         if hashes[str(manifest_path)] != manifest_sha:
             raise StaleReviewProjectError("驗證期間工作階段已變更；未保存")
@@ -270,6 +279,7 @@ class ReviewSaveService:
         # Session/DB changes additionally have to match the displayed snapshot.
         full = (self._dependencies != hashes or self._manifest is None or self._db is None)
         phase = time.perf_counter()
+        notify("驗證人工判定與校對項目（尚未寫入）")
         if full:
             baseline, ledger = sp.prepare_review_ledger(manifest, db)
             index = {row["review_id"]: n for n, row in enumerate(baseline)}
@@ -329,11 +339,12 @@ class ReviewSaveService:
         snapshot.timings["actual_staging_validation"] = time.perf_counter() - phase
         return summary
 
-    def _save(self, review_id, event, expected_manifest, expected_db, *, defer_staging_validation=False):
+    def _save(self, review_id, event, expected_manifest, expected_db, *, defer_staging_validation=False,
+              notify=lambda phase: None):
         started = time.perf_counter()
         timings = {}
         (manifest, db, baseline, ledger, index, content, hashes,
-         candidate_anchor) = self._prepare_snapshot(timings, expected_manifest, expected_db)
+         candidate_anchor) = self._prepare_snapshot(timings, expected_manifest, expected_db, notify)
         manifest_sha = hashes[str(self.output_dir / "校對工作階段.json")]
         db_path = self.output_dir / "人工判定資料庫.json"
         db_sha = hashes[str(db_path)]
@@ -405,6 +416,7 @@ class ReviewSaveService:
             summary = {"staging_validation_pending": True, "staged_checked_occurrence_ids": []}
         else:
             try:
+                notify("核對 actual 暫存（尚未寫入）")
                 staging_path = sp.project_actual_evidence_root(self.output_dir) / "manual_actual_staging.json"
                 staging = (ar._validate_manual_actual_staging_document(_json(content[staging_path], staging_path))
                            if content[staging_path] is not None else ar._empty_manual_actual_staging())
@@ -416,6 +428,7 @@ class ReviewSaveService:
         timings["actual_staging_validation"] = time.perf_counter() - phase
         # Recheck every dependency immediately before the atomic replacement;
         # no side effect has happened yet if any input changed during validation.
+        notify("寫入前再次完整核對依賴（尚未寫入）")
         _, final_hashes = self._capture(timings)
         if final_hashes != hashes:
             raise StaleReviewProjectError("驗證期間專案來源或暫存已變更；未保存，請重新載入")
@@ -425,8 +438,10 @@ class ReviewSaveService:
         # may evict the calculation cache, but cannot erase the verified anchor.
         self._evidence_anchor = candidate_anchor
         phase = time.perf_counter()
+        notify("正在原子寫入人工判定")
         saved_sha = sp.json_save(db_path, staged_db, expected_sha256=db_sha)
         timings["json_save"] = time.perf_counter() - phase
+        notify("人工判定已寫入")
         # No further fallible UI/staging work may turn this into a failed save.
         # The next operation verifies durable bytes again before reusing cache.
         hashes[str(db_path)] = saved_sha
