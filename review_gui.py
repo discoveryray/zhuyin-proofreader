@@ -2032,7 +2032,7 @@ class ReviewApp:
                 try:
                     self.manifest = json_load_strict(self.output_dir / "校對工作階段.json")
                     validate_manifest_integrity(self.manifest)
-                    validate_output_artifact_hashes(self.manifest)
+                    validate_output_artifact_hashes(self.manifest, output_dir=self.output_dir)
                     self.db = load_or_initialize_db(self.output_dir)
                     self.reload_records()
                     self.show()
@@ -2049,7 +2049,7 @@ class ReviewApp:
             try:
                 self.manifest = json_load_strict(self.output_dir / "校對工作階段.json")
                 validate_manifest_integrity(self.manifest)
-                validate_output_artifact_hashes(self.manifest)
+                validate_output_artifact_hashes(self.manifest, output_dir=self.output_dir)
                 self.db = load_or_initialize_db(self.output_dir)
                 self.index = old_index
                 self.reload_records()

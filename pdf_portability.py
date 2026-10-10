@@ -22,6 +22,7 @@ from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+from sealed_workbook_paths import bound_operation, bind_workbooks, snapshot_entries, owned_path, remember_snapshot, LOCATION_CONTRACT
 
 import fitz
 
@@ -66,8 +67,9 @@ def _stable_excel_import(importer):
     """Read user Excel bytes once before any workbook metadata or decision read."""
     @functools.wraps(importer)
     def wrapped(target_dir, xlsx, *args, **kwargs):
+        from sealed_workbook_paths import binding_scope
         original = Path(xlsx).resolve()
-        with _workbook_snapshot(original) as (snapshot, digest):
+        with binding_scope(), _workbook_snapshot(original) as (snapshot, digest):
             return importer(target_dir, snapshot, *args,
                             _original_xlsx=original, _snapshot_sha=digest, **kwargs)
     return wrapped
@@ -171,25 +173,23 @@ def _verify_available_session_pdfs(output_dir: Path, manifest) -> None:
 def _project_transfer_locks(*directories):
     """Acquire source and target roots in the same order for every transfer."""
     import standalone_proofread as sp
+    from sealed_workbook_paths import binding_scope
     roots = {sp.project_actual_evidence_root(Path(path).resolve()) for path in directories}
-    with ExitStack() as stack:
+    with binding_scope(), ExitStack() as stack:
         for root in sorted(roots, key=lambda path: str(path).casefold()):
             stack.enter_context(sp.project_delivery_lock(root))
         yield
 
 
-def _artifact(output_dir: Path, info: Mapping[str, Any], kind: str) -> Path:
-    stored = Path(str(info.get(f"{kind}_workbook") or ""))
-    subdir = "01_實際注音" if kind == "actual" else "02_候選報告"
-    local = output_dir / subdir / stored.name
-    wanted = str(info.get(f"{kind}_workbook_sha256") or "")
-    candidates = {str(path.resolve()): path for path in (stored, local) if path.is_file()}
-    matches = [path for path in candidates.values() if wanted and _sha(path) == wanted]
-    if not matches:
-        raise ValueError(f"DATA_INTEGRITY_ERROR：來源工作簿遺失或 SHA 不符：{stored.name}")
-    return matches[0]
+def _artifact(output_dir: Path, info: Mapping[str, Any], kind: str, *, manifest=None) -> Path:
+    import standalone_proofread as sp
+    from sealed_workbook_paths import workbook_path
+    if manifest is None:
+        manifest = sp.json_load_strict(Path(output_dir) / "校對工作階段.json")
+    return workbook_path(output_dir, manifest, info, kind)
 
 
+@bound_operation
 def _load_project(output_dir: Path, *, allow_incomplete: bool = False,
                   allow_unresolved_conflict: bool = False,
                   allow_actual_excel_conflict: bool = False):
@@ -200,9 +200,7 @@ def _load_project(output_dir: Path, *, allow_incomplete: bool = False,
         raise ValueError(f"跨電腦接續未完成，不能當作完整來源或匯入目標：{output_dir}")
     manifest = sp.json_load_strict(output_dir / "校對工作階段.json")
     sp.validate_manifest_integrity(manifest)
-    for info in manifest.get("pdfs", []):
-        _artifact(output_dir, info, "actual")
-        _artifact(output_dir, info, "candidate")
+    bind_workbooks(output_dir, manifest)
     raw_db = sp.json_load_strict(output_dir / "人工判定資料庫.json")
     if not isinstance(raw_db, dict):
         raise ValueError("DATA_INTEGRITY_ERROR：人工判定資料庫根節點必須是物件")
@@ -617,6 +615,7 @@ def _decode_excel_content_proof(chunks, *, label: str):
     return raw, payload
 
 
+@bound_operation
 def write_excel_content_proof(workbook, output_dir: Path, manifest, db, *, kind: str,
                               snapshot_db=None, attestations=None,
                               allow_internal_incomplete: bool = False) -> None:
@@ -1539,6 +1538,7 @@ def _presentation_current_receipts(target_dir: Path):
             for name in PRESENTATION_RECEIPTS}
 
 
+@bound_operation
 def resume_portable_project(output_dir: Path, *, _expected_marker_sha: str | None = None):
     """Redo only a fully bound committed presentation, or undo precommit receipts."""
     import standalone_proofread as sp
@@ -1557,7 +1557,7 @@ def resume_portable_project(output_dir: Path, *, _expected_marker_sha: str | Non
             raise ValueError("未完成專案封印檔已變動；未恢復或清標記")
         manifest = sp.json_load_strict(manifest_path)
         sp.validate_manifest_integrity(manifest)
-        sp.validate_output_artifact_hashes(manifest)
+        sp.validate_output_artifact_hashes(manifest, output_dir=output_dir)
         if manifest["manifest_integrity_sha256"] != marker["manifest_integrity_sha256"]:
             raise ValueError("未完成專案封印與發布計畫不符")
         db_path = output_dir / "人工判定資料庫.json"
@@ -1624,6 +1624,7 @@ def _require_mapped_textbook_context(source, target, label: str) -> None:
 
 
 @_stable_excel_import
+@bound_operation
 def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False,
                           _original_xlsx: Path, _snapshot_sha: str):
     """Import filled expected rows after full-page and occurrence-local mapping."""
@@ -1905,6 +1906,7 @@ def _guard_actual_excel_sources(xlsx, source_ledger, target_dir, target_manifest
 
 
 @_stable_excel_import
+@bound_operation
 def import_actual_excel(target_dir: Path, xlsx: Path, *,
                         _original_xlsx: Path, _snapshot_sha: str):
     """Carry source visual decisions as local occurrence evidence, never a vote."""
@@ -2184,7 +2186,7 @@ def import_actual_excel(target_dir: Path, xlsx: Path, *,
             raise ValueError("目標 actual Excel 交易待專用恢復；未開始新匯入")
         live_manifest = sp.json_load_strict(target_dir / "校對工作階段.json")
         sp.validate_manifest_integrity(live_manifest)
-        sp.validate_output_artifact_hashes(live_manifest)
+        sp.validate_output_artifact_hashes(live_manifest, output_dir=target_dir)
         if live_manifest["manifest_integrity_sha256"] != target_manifest["manifest_integrity_sha256"]:
             raise ValueError("目標封印於 actual Excel 匯入期間變動；未寫入")
         live_db = sp.normalize_db(sp.json_load_strict(target_dir / "人工判定資料庫.json"))
@@ -2348,8 +2350,9 @@ def _validate_actual_excel_marker(output_dir: Path, marker: Any) -> None:
                 or marker["recovery_plan_sha256"] != hashlib.sha256(_canonical(plan)).hexdigest()):
             raise ValueError("actual Excel 恢復計畫與標記不符")
         snapshot = marker["sealed_workbooks"]
-        if not isinstance(snapshot, dict) or set(snapshot) != {
-                "manifest_integrity_sha256", "manifest_bytes", "entries"}:
+        if not isinstance(snapshot, dict) or set(snapshot) not in (
+                {"manifest_integrity_sha256", "manifest_bytes", "entries"},
+                {"manifest_integrity_sha256", "manifest_bytes", "entries", "location_contract"}):
             raise ValueError("actual Excel 封印工作簿恢復材料不完整")
         old_raw = base64.b64decode(snapshot["manifest_bytes"], validate=True)
         old_manifest = json.loads(old_raw)
@@ -2359,12 +2362,8 @@ def _validate_actual_excel_marker(output_dir: Path, marker: Any) -> None:
                 or snapshot["manifest_integrity_sha256"] != old_manifest.get("manifest_integrity_sha256")):
             raise ValueError("actual Excel 舊封印與恢復標記不符")
         sp.validate_manifest_integrity(old_manifest)
-        expected_entries = []
-        for info in old_manifest.get("pdfs", []):
-            for kind in ("actual", "candidate"):
-                path = Path(str(info.get(f"{kind}_workbook") or "")).resolve()
-                relative = path.relative_to(Path(output_dir).resolve())
-                expected_entries.append((str(relative), str(info.get(f"{kind}_workbook_sha256") or "")))
+        expected_entries = [(relative, wanted) for path, relative, wanted in
+                            snapshot_entries(output_dir, old_manifest, snapshot)]
         entries = snapshot["entries"]
         if not isinstance(entries, list) or len(entries) != len(expected_entries):
             raise ValueError("actual Excel 舊封印備份數量不符")
@@ -2378,29 +2377,28 @@ def _validate_actual_excel_marker(output_dir: Path, marker: Any) -> None:
         raise ValueError(f"actual Excel 恢復材料不完整或不符；保留原標記：{exc}") from exc
 
 
+@bound_operation
 def _sealed_workbook_snapshot(output_dir: Path, manifest: Mapping[str, Any]):
     """Keep exact pre-commit workbook bytes for a dedicated COMMITTED redo."""
     output_dir = Path(output_dir).resolve()
     manifest_bytes = (output_dir / "校對工作階段.json").read_bytes()
+    if json.loads(manifest_bytes) != manifest:
+        raise ValueError("actual Excel 備份 manifest 與 selected project 不符")
     entries = []
-    for info in manifest.get("pdfs", []):
-        for kind in ("actual", "candidate"):
-            path = Path(str(info.get(f"{kind}_workbook") or "")).resolve()
-            try:
-                relative = path.relative_to(output_dir)
-            except ValueError as exc:
-                raise ValueError("actual Excel 封印工作簿不在專案目錄內") from exc
-            expected_sha = str(info.get(f"{kind}_workbook_sha256") or "")
-            raw = path.read_bytes()
-            if hashlib.sha256(raw).hexdigest() != expected_sha:
-                raise ValueError("actual Excel 舊封印工作簿備份 hash 不符")
-            entries.append({"path": str(relative), "sha256": expected_sha,
-                            "bytes": base64.b64encode(raw).decode("ascii")})
-    return {"manifest_integrity_sha256": manifest["manifest_integrity_sha256"],
+    for index, kind, relative, expected_sha in bind_workbooks(output_dir, manifest):
+        path = owned_path(output_dir, relative)
+        raw = path.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != expected_sha:
+            raise ValueError("actual Excel 舊封印工作簿備份 hash 不符")
+        entries.append({"path": str(relative), "sha256": expected_sha,
+                        "bytes": base64.b64encode(raw).decode("ascii")})
+    return {"location_contract": LOCATION_CONTRACT,
+            "manifest_integrity_sha256": manifest["manifest_integrity_sha256"],
             "manifest_bytes": base64.b64encode(manifest_bytes).decode("ascii"),
             "entries": entries}
 
 
+@bound_operation
 def _restore_sealed_workbooks_for_actual_resume(output_dir: Path, marker: Mapping[str, Any], pending):
     """Bind COMMITTED source/journal, then restore only old sealed derived workbooks."""
     import actual_review as ar
@@ -2424,15 +2422,7 @@ def _restore_sealed_workbooks_for_actual_resume(output_dir: Path, marker: Mappin
             or snapshot.get("manifest_integrity_sha256") != old_manifest.get("manifest_integrity_sha256")):
         raise ValueError("actual Excel COMMITTED 舊封印與標記不符")
     sp.validate_manifest_integrity(old_manifest)
-    expected = []
-    for info in old_manifest.get("pdfs", []):
-        for kind in ("actual", "candidate"):
-            path = Path(str(info.get(f"{kind}_workbook") or "")).resolve()
-            try:
-                relative = path.relative_to(output_dir)
-            except ValueError as exc:
-                raise ValueError("actual Excel 封印工作簿不在專案目錄內") from exc
-            expected.append((path, str(relative), str(info.get(f"{kind}_workbook_sha256") or "")))
+    expected = snapshot_entries(output_dir, old_manifest, snapshot)
     if len(snapshot["entries"]) != len(expected):
         raise ValueError("actual Excel 舊封印工作簿備份數量不符")
     validated = []
@@ -2483,14 +2473,16 @@ def _restore_sealed_workbooks_for_actual_resume(output_dir: Path, marker: Mappin
                 or [(row.get("occurrence_id"), row.get("review_id")) for row in manifest.get("records", [])]
                 != [(row.get("occurrence_id"), row.get("review_id")) for row in old_manifest.get("records", [])]):
             raise ValueError("actual Excel COMMITTED 已重封專案的來源識別不符")
-        sp.validate_output_artifact_hashes(manifest)
+        sp.validate_output_artifact_hashes(manifest, output_dir=output_dir)
         return
     for path, raw, wanted in validated:
         if not path.is_file() or _sha(path) != wanted:
             _restore_exact_file(path, raw)
-    sp.validate_output_artifact_hashes(manifest)
+    remember_snapshot(output_dir, old_manifest, expected)
+    sp.validate_output_artifact_hashes(manifest, output_dir=output_dir)
 
 
+@bound_operation
 def resume_actual_excel_project(output_dir: Path):
     """Resolve only the durable actual-Excel marker, never a publication marker."""
     import standalone_proofread as sp
@@ -2683,8 +2675,10 @@ def _mapped_occurrence_overrides(source_dir: Path, source_manifest, target_manif
     # to the sealed workbook, even if an external writer bypasses that lock.
     with sp.project_delivery_lock(source_root):
         sealed_by_pdf = []
-        for info, name in zip(source_manifest.get("pdfs", []), source_names):
-            workbook = _artifact(source_dir, info, "actual")
+        bindings = {(index, kind): relative for index, kind, relative, wanted
+                    in bind_workbooks(source_dir, source_manifest)}
+        for index, (info, name) in enumerate(zip(source_manifest.get("pdfs", []), source_names)):
+            workbook = owned_path(source_dir, bindings[index, "actual"])
             with _workbook_snapshot(workbook, expected_sha256=info["actual_workbook_sha256"]) as (workbook, _):
                 metadata = sp.workbook_metadata(workbook)
                 if metadata.get("pdf_sha256") != info.get("pdf_sha256"):
