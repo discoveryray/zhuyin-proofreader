@@ -4,6 +4,7 @@ from contextvars import ContextVar
 from pathlib import Path, PureWindowsPath
 import hashlib
 import re
+from inspect import Parameter, signature
 from functools import wraps
 
 ROLES = {"actual": "01_實際注音", "candidate": "02_候選報告"}
@@ -23,11 +24,23 @@ def binding_scope():
         _bindings.reset(token)
 
 
-def bound_operation(operation):
+def bound_operation(operation=None, *, project_parameter="output_dir"):
+    """Validate the explicitly named selected-project parameter before entry.
+
+    Bare historical use has only the finite ``output_dir`` convention; other
+    parameter names require explicit configuration, never positional guessing.
+    """
+    if operation is None:
+        return lambda function: bound_operation(function, project_parameter=project_parameter)
+    operation_signature = signature(operation)
+    parameter = operation_signature.parameters.get(project_parameter)
+    if parameter is None or parameter.kind in {Parameter.VAR_POSITIONAL, Parameter.VAR_KEYWORD}:
+        raise ValueError("bound operation 必須明確指定存在的 project parameter")
     @wraps(operation)
     def wrapped(*args, **kwargs):
-        if args:
-            trusted_root(args[0])
+        arguments = operation_signature.bind(*args, **kwargs)
+        arguments.apply_defaults()
+        trusted_root(arguments.arguments[project_parameter])
         with binding_scope():
             return operation(*args, **kwargs)
     return wrapped

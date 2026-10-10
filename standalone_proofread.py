@@ -246,7 +246,7 @@ def _publish_local_actual_conflict_resolution(output_dir: Path, report: Path) ->
     return regenerate_report(output_dir)
 
 
-@bound_operation
+@bound_operation(project_parameter="output_dir")
 def recover_committed_actual_project(output_dir: Path, *, acknowledge: bool = True):
     """Explicit restart recovery; staging is never reapplied here.
 
@@ -825,7 +825,7 @@ def workbook_metadata(path: Path, sheet: str = "v5.2中繼資料") -> dict[str, 
         wb.close()
 
 
-@bound_operation
+@bound_operation(project_parameter="output_dir")
 def output_is_reusable(
     output_dir: Path,
     pdf: Path,
@@ -880,7 +880,7 @@ def output_is_reusable(
                 return False
     return False
 
-@bound_operation
+@bound_operation(project_parameter="output_dir")
 def load_reuse_baseline_manifest(output_dir: Path) -> dict[str, Any] | None:
     """Load and seal-check the previous session before any incremental writes."""
     try:
@@ -1151,7 +1151,7 @@ def needs_expected_review(entry: Mapping[str, Any]) -> bool:
     return state in {"DIFFERENCE_PENDING_CONFIRMATION", "REVIEW_PENDING"}
 
 
-@bound_operation
+@bound_operation(project_parameter="output_dir")
 def export_pending_for_gpt(output_dir: Path, *, _allow_unpublished_pipeline: bool = False,
                            _allow_internal_portable: bool = False) -> Path:
     manifest = json_load_strict(output_dir / "校對工作階段.json")
@@ -1461,7 +1461,7 @@ def _read_actual_source_db(output_dir):
 
 
 @_serialized_user_project_entry
-@bound_operation
+@bound_operation(project_parameter="output_dir")
 def import_actual_occurrence_decisions(output_dir: Path, csv_path: Path, *, package_meta: Mapping[str, Any]) -> tuple[int, int, Path]:
     """Import occurrence-scoped visual actual decisions from a GPT bundle.
 
@@ -1598,7 +1598,7 @@ def import_actual_occurrence_decisions(output_dir: Path, csv_path: Path, *, pack
 
 
 @_serialized_user_project_entry
-@bound_operation
+@bound_operation(project_parameter="output_dir")
 def import_gpt_decision_bundle(output_dir: Path, bundle: Path) -> tuple[int, int, int, int, Path]:
     """One-file round import with expected preflight and lane-ordered commit.
 
@@ -1710,7 +1710,7 @@ def _snapshot_gpt_decisions_entry(operation):
 
 @_serialized_user_project_entry
 @_snapshot_gpt_decisions_entry
-@bound_operation
+@bound_operation(project_parameter="output_dir")
 def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False,
                          _original_xlsx: Path, _snapshot_sha: str) -> tuple[int, int, Path]:
     _reject_incomplete_portable_project(output_dir)
@@ -3194,7 +3194,7 @@ def materialize_ledger(manifest: Mapping[str, Any], db: Mapping[str, Any]) -> li
 
 
 @_serialized_user_project_entry
-@bound_operation
+@bound_operation(project_parameter="output_dir")
 def bind_legacy_gui_expected_resolutions(output_dir: Path, workbook: Path, *, review_ids: list[str],
                                         expected_manifest_sha256: str, expected_db_sha256: str,
                                         expected_workbook_sha256: str, dry_run: bool = False) -> dict[str, Any]:
@@ -3623,7 +3623,7 @@ def _serialized_report_publication(render):
 
 
 @_serialized_report_publication
-@bound_operation
+@bound_operation(project_parameter="output_dir")
 def generate_report(
     output_dir: Path,
     manifest: dict[str, Any],
@@ -4047,7 +4047,7 @@ def _resolve_session_pdfs(output_dir: Path, manifest: Mapping[str, Any]) -> list
     return resolved
 
 
-@bound_operation
+@bound_operation(project_parameter="output_dir")
 def export_actual_pending_for_gpt(output_dir: Path) -> Path | None:
     output_dir = Path(output_dir)
     _reject_incomplete_portable_project(output_dir)
@@ -4176,7 +4176,7 @@ def _manual_actual_summary_from_verified_snapshot(output_dir, staging, manifest,
     return summary
 
 
-@bound_operation
+@bound_operation(project_parameter="output_dir")
 def manual_actual_staging_summary(output_dir: Path, *, ledger=None) -> dict[str, Any]:
     """Read durable intent; a GUI ledger requests live validation before hiding.
 
@@ -4207,7 +4207,7 @@ def manual_actual_staging_summary(output_dir: Path, *, ledger=None) -> dict[str,
     return summary
 
 
-@bound_operation
+@bound_operation(project_parameter="output_dir")
 def stage_manual_actual_correction(
     output_dir: Path,
     review_id: str,
@@ -4514,7 +4514,7 @@ def _verify_actual_refresh_pdf_binding(output_dir, manifest, *, sealed_manifest=
     return _resolve_session_pdfs(output_dir, manifest)
 
 
-@bound_operation
+@bound_operation(project_parameter="output_dir")
 def _resume_actual_refresh_publication(output_dir, *, cleanup=False, acknowledged=None,
                                        acknowledge=True, _post_ack_guard=None):
     if type(acknowledge) is not bool:
@@ -4605,7 +4605,7 @@ def _acknowledge_actual_refresh_locked(output_dir, token, *, _post_ack_guard=Non
     _resume_actual_refresh_publication(output_dir, cleanup=True, _post_ack_guard=_post_ack_guard)
 
 
-@bound_operation
+@bound_operation(project_parameter="output_dir")
 def _publish_actual_refresh(output_dir, stage, manifest, *, source, token, before, cleared_count=0, _prewrite_guard=None):
     if _prewrite_guard is not None:
         _prewrite_guard()
@@ -4663,7 +4663,7 @@ def _publish_actual_refresh(output_dir, stage, manifest, *, source, token, befor
         _resume_actual_refresh_publication(output_dir, cleanup=True)
 
 
-@bound_operation
+@bound_operation(project_parameter="output_dir")
 def refresh_actual_project(output_dir: Path, *, defer_excel_reports: bool = True,
                            _prewrite_guard=None, _refresh_plan=None, _refresh_status=None,
                            _refresh_acknowledge=True) -> Path:
@@ -4689,7 +4689,7 @@ def refresh_actual_project(output_dir: Path, *, defer_excel_reports: bool = True
     )
 
 
-@bound_operation
+@bound_operation(project_parameter="output_dir")
 def _stage_actual_refresh(output_dir, *, _prewrite_guard=None, plan=None, status=None, acknowledge=True):
     published = _resume_actual_refresh_publication(output_dir, acknowledge=acknowledge)
     if published is not None:
@@ -4785,14 +4785,14 @@ def _validate_actual_import_target(output_dir: Path, manifest, db):
         _resolve_session_pdfs(output_dir, live_manifest)
 
 
-@bound_operation
+@bound_operation(project_parameter="output_dir")
 def import_actual_gpt_decisions(output_dir: Path, xlsx: Path) -> tuple[int, int, Path]:
     from pdf_portability import _stable_excel_import
     output_dir = resolve_existing_project_dir(Path(output_dir))
     return _stable_excel_import(_import_actual_gpt_decisions_snapshot)(output_dir, xlsx)
 
 
-@bound_operation
+@bound_operation(project_parameter="output_dir")
 def _import_actual_gpt_decisions_snapshot(output_dir: Path, xlsx: Path, *,
                                          _original_xlsx: Path, _snapshot_sha: str):
     output_dir = Path(output_dir)
@@ -4815,7 +4815,7 @@ def _import_actual_gpt_decisions_snapshot(output_dir: Path, xlsx: Path, *,
             output_dir, xlsx, _original_xlsx=_original_xlsx, _snapshot_sha=_snapshot_sha)
 
 
-@bound_operation
+@bound_operation(project_parameter="output_dir")
 def _import_same_session_actual_snapshot(output_dir: Path, xlsx: Path, *,
                                          _original_xlsx: Path, _snapshot_sha: str):
     # The routing read is advisory. Reload the complete same-session target
@@ -4857,7 +4857,7 @@ def _import_same_session_actual_snapshot(output_dir: Path, xlsx: Path, *,
 
 
 
-@bound_operation
+@bound_operation(project_parameter="output_dir")
 def apply_manual_actual_correction(
     output_dir: Path,
     review_id: str,
@@ -5059,7 +5059,7 @@ def _verify_manual_actual_batch_postconditions(
             )
 
 
-@bound_operation
+@bound_operation(project_parameter="output_dir")
 def apply_staged_manual_actual_corrections(output_dir: Path) -> dict[str, Any]:
     """Apply the durable GUI queue once, clear once, refresh once, then verify."""
     output_dir = Path(output_dir)
@@ -5544,7 +5544,7 @@ def _refresh_manifest_from_outputs_legacy_disabled(output_dir: Path, old_manifes
 
 
 @_serialized_user_project_entry
-@bound_operation
+@bound_operation(project_parameter="output_dir")
 def regenerate_report(output_dir: Path) -> Path:
     _reject_incomplete_portable_project(output_dir)
     old_manifest=json_load_strict(output_dir/"校對工作階段.json")
@@ -5638,7 +5638,7 @@ def _reject_incomplete_portable_project(output_dir: Path) -> None:
 
 
 @_serialized_user_project_entry
-@bound_operation
+@bound_operation(project_parameter="output_dir")
 def repair_project_state(output_dir: Path, *, runtime_root: Path | None = None) -> Path:
     """Rebuild expected candidates and completion state without forcing actual decode.
 

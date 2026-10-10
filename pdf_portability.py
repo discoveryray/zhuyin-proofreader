@@ -189,7 +189,7 @@ def _artifact(output_dir: Path, info: Mapping[str, Any], kind: str, *, manifest=
     return workbook_path(output_dir, manifest, info, kind)
 
 
-@bound_operation
+@bound_operation(project_parameter="output_dir")
 def _load_project(output_dir: Path, *, allow_incomplete: bool = False,
                   allow_unresolved_conflict: bool = False,
                   allow_actual_excel_conflict: bool = False):
@@ -761,7 +761,7 @@ def _decode_excel_content_proof(chunks, *, label: str):
     return raw, payload
 
 
-@bound_operation
+@bound_operation(project_parameter="output_dir")
 def write_excel_content_proof(workbook, output_dir: Path, manifest, db, *, kind: str,
                               snapshot_db=None, attestations=None,
                               allow_internal_incomplete: bool = False) -> None:
@@ -1684,7 +1684,7 @@ def _presentation_current_receipts(target_dir: Path):
             for name in PRESENTATION_RECEIPTS}
 
 
-@bound_operation
+@bound_operation(project_parameter="output_dir")
 def resume_portable_project(output_dir: Path, *, _expected_marker_sha: str | None = None):
     """Redo only a fully bound committed presentation, or undo precommit receipts."""
     import standalone_proofread as sp
@@ -1770,7 +1770,7 @@ def _require_mapped_textbook_context(source, target, label: str) -> None:
 
 
 @_stable_excel_import
-@bound_operation
+@bound_operation(project_parameter="target_dir")
 def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False,
                           _original_xlsx: Path, _snapshot_sha: str):
     """Import filled expected rows after full-page and occurrence-local mapping."""
@@ -2087,7 +2087,7 @@ def _guard_actual_excel_sources(xlsx, source_ledger, target_dir, target_manifest
 
 
 @_stable_excel_import
-@bound_operation
+@bound_operation(project_parameter="target_dir")
 def import_actual_excel(target_dir: Path, xlsx: Path, *,
                         _original_xlsx: Path, _snapshot_sha: str):
     """Carry source visual decisions as local occurrence evidence, never a vote."""
@@ -2558,7 +2558,7 @@ def _validate_actual_excel_marker(output_dir: Path, marker: Any) -> None:
         raise ValueError(f"actual Excel 恢復材料不完整或不符；保留原標記：{exc}") from exc
 
 
-@bound_operation
+@bound_operation(project_parameter="output_dir")
 def _sealed_workbook_snapshot(output_dir: Path, manifest: Mapping[str, Any]):
     """Keep exact pre-commit workbook bytes for a dedicated COMMITTED redo."""
     output_dir = Path(output_dir).resolve()
@@ -2579,7 +2579,7 @@ def _sealed_workbook_snapshot(output_dir: Path, manifest: Mapping[str, Any]):
             "entries": entries}
 
 
-@bound_operation
+@bound_operation(project_parameter="output_dir")
 def _restore_sealed_workbooks_for_actual_resume(output_dir: Path, marker: Mapping[str, Any], pending):
     """Bind COMMITTED source/journal, then restore only old sealed derived workbooks."""
     import actual_review as ar
@@ -2663,7 +2663,7 @@ def _restore_sealed_workbooks_for_actual_resume(output_dir: Path, marker: Mappin
     sp.validate_output_artifact_hashes(manifest, output_dir=output_dir)
 
 
-@bound_operation
+@bound_operation(project_parameter="output_dir")
 def resume_actual_excel_project(output_dir: Path):
     """Resolve only the durable actual-Excel marker, never a publication marker."""
     import standalone_proofread as sp
