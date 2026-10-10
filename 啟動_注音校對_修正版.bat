@@ -28,6 +28,7 @@ if errorlevel 1 (
   exit /b 1
 )
 echo 修正版程式目錄：%CD%
+echo 本機修正版：可人工確認本筆目前注音為應標注音；待裁決亦適用。
 "%PYTHON_EXE%" -X utf8 "%TASK_ROOT%standalone_gui.py"
 set "RUN_RESULT=%ERRORLEVEL%"
 if not "%RUN_RESULT%"=="0" pause

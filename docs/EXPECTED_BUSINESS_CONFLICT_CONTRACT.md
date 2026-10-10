@@ -14,4 +14,6 @@
 
 同檔重匯只記已處理重複，不新增 supplements/conflicts，不重新啟用本地否決的舊來源。三值回傳保留相容性，另附已保存、新增、一致補充、重複、待裁決、保留待人工及未操作列統計。一般已保存衝突正常回傳；異常交易仍拋出錯誤並保留／回復既有資料。
 
+功能第 5 輪追加明確人工選擇：已有 expected 或待裁決時，可由使用者確認有效的目前 actual 讀音作為本筆 expected。這只將當次選取讀音固定在既有本筆人工判定紀錄，不自動推導、不新增可重用規則；日後 actual 改變不改此 expected。保存前另核對已選讀音與顯示證據 snapshot、當前 sealed identity／來源及已套用 actual，未套用暫存或證據失效拒絕；`ENTER_EXPECTED` 不增加 actual 依賴。快捷裁決使用既有 receipt token／CAS 並保存原人工事件的單層 undo 來源，重匯不復活否決來源。完成項不因快捷重新加入待辦；既有明確 redecision 與 receipt pending 入口維持。
+
 限制：proofless 同 session 歷史入口保持原嚴格行為。本輪不驗 GUI、真實教材匯入、完整套件、review／CI／PR／merge。短測 producer fixture 採有限 writer 入口 shim：顯式 `trusted_root(output_dir)`＋`binding_scope`，呼叫原 producer body，所有原 seal／SHA／bound-row 檢查仍執行，且在受測 import 開始前移除。既有 production writer 的 root-first decorator 收到 Workbook 的 TypeError 保留原失敗紀錄，未在本輪擴修，故不宣稱 production export 通過。

@@ -26,6 +26,8 @@ from standalone_proofread import (
     build_gui_confirmation,
     build_reusable_rule,
     build_manual_expected_event,
+    can_confirm_current_actual_as_expected,
+    confirm_current_actual_unavailable_reason,
     committed_project_recovery,
     friendly_state,
     json_load,
@@ -234,16 +236,7 @@ def review_lane(entry):
 
 
 def can_confirm_current_expected(entry):
-    if entry.get("expected_business_conflict_pending") is True:
-        return False
-    redecision = valid_manual_expected_decision(entry)
-    return (
-        (review_lane(entry) == "expected" and entry.get("state") in NON_TERMINAL_STATES
-         or redecision and entry.get("state") not in HARD_BLOCKING_STATES)
-        and infer_actual_status(entry) == "RESOLVED"
-        and bool(canonical_bopomofo(entry.get("actual")))
-        and bool(str(entry.get("actual_evidence") or "").strip())
-    )
+    return can_confirm_current_actual_as_expected(entry)
 
 
 def _waits_for_actual(item, checked):
@@ -330,10 +323,13 @@ def guarded_review_action(method):
     def run(self, *args, **kwargs):
         if (getattr(self, "_review_action_in_progress", False)
                 or self._save_busy()
-                or (getattr(self, "staging_summary", {}).get("staging_validation_pending")
-                    and method.__name__ != "resolve_expected")
                 or getattr(self, "_apply_in_progress", False)
                 or time.monotonic() < getattr(self, "_review_action_cooldown_until", 0)):
+            return
+        if (getattr(self, "staging_summary", {}).get("staging_validation_pending")
+                and method.__name__ != "resolve_expected"):
+            if method.__name__ == "confirm_current_expected":
+                messagebox.showwarning("目前注音尚不可確認", "actual 暫存仍在核對，請先等待核對完成", parent=self.root)
             return
         self._review_action_in_progress = True
         self._last_event_saved = self._last_actual_staged = False
@@ -1022,6 +1018,7 @@ class ReviewApp:
         self.more_button.config(menu=self.more_menu)
         self.more_menu.add_command(label="此處不需校對…", command=self.exclude)
         self.more_menu.add_command(label="實際注音辨識有誤…", command=self.correct_actual)
+        self.more_menu.add_command(label="輸入其他應標注音…", command=self.resolve_expected)
         self.more_menu.add_command(label="撤銷本筆人工判定", command=self.clear)
         self.more_menu.add_command(label="返回待辦", command=self.return_to_pending)
         self.more_menu.add_command(label="另行建立上筆應標可重用規則…", command=self.create_reusable_expected_rule)
@@ -1531,7 +1528,7 @@ class ReviewApp:
                 and getattr(self, "_rendered_review_id", None) != entry.get("review_id")):
             # A resize/render may fail while the save worker is running. Do not
             # restore the shortcut's old enabled state after a failed write.
-            self.primary.config(state="disabled")
+            getattr(self, "_confirm_current_expected_button", self.primary).config(state="disabled")
         if hasattr(self, "status") and hasattr(self, "_saved_status_text"):
             self.status.config(text=self._saved_status_text)
 
@@ -1563,6 +1560,9 @@ class ReviewApp:
                        and not getattr(self, "_focused_from_undo", False)),
                    "return_after_undo": focus_after_save,
                    "pending_staging": pending_staging,
+                   "confirm_current_actual_snapshot": copy.deepcopy(actual_confirmation_snapshot(entry))
+                   if isinstance(event, dict) and (event.get("manual_expected_decision") or {}).get("operation")
+                   == "CONFIRM_CURRENT_AS_EXPECTED" else None,
                    "started": started}
         self._save_request = request
         completed = queue.Queue(maxsize=1)
@@ -1579,6 +1579,9 @@ class ReviewApp:
                 result = service.save_event(request["review_id"], event,
                                             expected_manifest=manifest, expected_db=request["db"],
                                             progress=progress.put,
+                                            **({"confirm_current_actual_snapshot": request["confirm_current_actual_snapshot"]}
+                                               if isinstance(event, dict) and (event.get("manual_expected_decision") or {}).get("operation")
+                                               == "CONFIRM_CURRENT_AS_EXPECTED" else {}),
                                             **({"defer_staging_validation": True} if pending_staging else {}))
                 progress.put("判定已寫入，正在整理待辦")
                 queue_started = time.perf_counter()
@@ -1737,6 +1740,7 @@ class ReviewApp:
     @guarded_review_action
     def confirm_current_expected(self, review_id=None):
         if getattr(self, "staging_summary", {}).get("staging_validation_pending"):
+            messagebox.showwarning("目前注音尚不可確認", "actual 暫存仍在核對，請先等待核對完成", parent=self.root)
             return
         if time.monotonic() < getattr(self, "_shortcut_cooldown_until", 0):
             return
@@ -1744,10 +1748,16 @@ class ReviewApp:
         if not entry or (review_id is not None and entry.get("review_id") != review_id):
             return
         if not can_confirm_current_expected(entry):
+            messagebox.showwarning("目前注音尚不可確認", confirm_current_actual_unavailable_reason(entry), parent=self.root)
             return
         if str(entry.get("occurrence_id") or "") in self.staged_checked_occurrence_ids:
+            messagebox.showwarning("目前注音尚不可確認", "本筆 actual 已暫存但尚未套用，不能採用套用前的讀音", parent=self.root)
             return
         if getattr(self, "_rendered_review_id", None) != entry.get("review_id"):
+            messagebox.showwarning("目前注音尚不可確認", "目前項目的原頁尚未成功顯示，請重新核對來源", parent=self.root)
+            return
+        if getattr(self, "_resume_source_error", None):
+            messagebox.showwarning("目前注音尚不可確認", "來源尚未通過驗證：" + str(self._resume_source_error), parent=self.root)
             return
         try:
             event = build_manual_expected_event(entry, operation="CONFIRM_CURRENT_AS_EXPECTED")
@@ -2211,6 +2221,10 @@ class ReviewApp:
         elif state == "DIFFERENCE_PENDING_CONFIRMATION":
             primary_command = self.confirm_difference
             secondary_command = self.resolve_expected
+            if (can_confirm_current_expected(entry)
+                    and str(entry.get("occurrence_id") or "") not in self.staged_checked_occurrence_ids):
+                secondary_text = "確認目前注音就是應標注音"
+                secondary_command = lambda rid=entry["review_id"]: self.confirm_current_expected(rid)
         elif state == "REVIEW_PENDING":
             primary_command = self.resolve_expected
         if getattr(self, "_resume_source_error", None):
@@ -2221,6 +2235,8 @@ class ReviewApp:
             primary_command = self.resolve_expected if lane == "expected" else None
             secondary_text = secondary_command = None
         self.primary.config(text=primary_text, width=0, state="normal" if primary_command else "disabled", command=primary_command or (lambda: None))
+        self._confirm_current_expected_button = (
+            self.primary if primary_text == "確認目前注音就是應標注音" else self.secondary)
         buttons = [self.primary]
         if secondary_text and secondary_command:
             self.secondary.config(text=secondary_text, state="normal", command=secondary_command)
@@ -2303,7 +2319,7 @@ class ReviewApp:
             if self.image.load(entry):
                 self._rendered_review_id = entry.get("review_id")
             elif can_confirm_current_expected(entry):
-                self.primary.config(state="disabled")
+                getattr(self, "_confirm_current_expected_button", self.primary).config(state="disabled")
         finally:
             if getattr(self, "_save_in_progress", False):
                 self.last_save_timings["preview_render"] = time.perf_counter() - started
@@ -2312,7 +2328,7 @@ class ReviewApp:
         self._rendered_review_id = None
         entry = self.current()
         if entry and can_confirm_current_expected(entry):
-            self.primary.config(state="disabled")
+            getattr(self, "_confirm_current_expected_button", self.primary).config(state="disabled")
 
 
 def main():

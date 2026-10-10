@@ -208,7 +208,7 @@ class ReviewSaveService:
         return content, hashes
 
     def save_event(self, review_id, event, *, expected_manifest=None, expected_db=None,
-                   defer_staging_validation=False, progress=None):
+                   defer_staging_validation=False, progress=None, confirm_current_actual_snapshot=None):
         def notify(phase):
             # Advisory callbacks never turn a durable save into a failure.
             if progress is not None:
@@ -225,7 +225,8 @@ class ReviewSaveService:
             notify("等待專案儲存鎖（尚未寫入）")
             with self._lock, sp.project_delivery_lock(sp.project_actual_evidence_root(self.output_dir)):
                 return self._save(review_id, event, expected_manifest, expected_db,
-                                  defer_staging_validation=defer_staging_validation, notify=notify)
+                                  defer_staging_validation=defer_staging_validation, notify=notify,
+                                  confirm_current_actual_snapshot=copy.deepcopy(confirm_current_actual_snapshot))
         finally:
             self._save_lock.release()
 
@@ -346,7 +347,7 @@ class ReviewSaveService:
         return summary
 
     def _save(self, review_id, event, expected_manifest, expected_db, *, defer_staging_validation=False,
-              notify=lambda phase: None):
+              notify=lambda phase: None, confirm_current_actual_snapshot=None):
         started = time.perf_counter()
         timings = {}
         receipt = self.output_dir / "跨專案判定衝突.json"
@@ -361,6 +362,19 @@ class ReviewSaveService:
         db_sha = hashes[str(db_path)]
         if review_id not in index:
             raise ValueError("找不到目前 review_id；已取消寫入")
+        confirms_current = (isinstance(event, dict)
+                            and isinstance(event.get("manual_expected_decision"), dict)
+                            and event["manual_expected_decision"].get("operation") == "CONFIRM_CURRENT_AS_EXPECTED")
+        if confirms_current:
+            current = ledger[index[review_id]]
+            from pdf_portability import expected_conflict_review_view
+            current = expected_conflict_review_view(self.output_dir, manifest, db, [current])[0]
+            if (not sp.can_confirm_current_actual_as_expected(current)
+                    or event.get("expected_set") != [sp.canonical_bopomofo(current.get("actual"))]):
+                raise StaleReviewProjectError("目前 actual 已失效或不同於本次選取讀音；未保存，請重新核對")
+            if (confirm_current_actual_snapshot is not None
+                    and confirm_current_actual_snapshot != sp.actual_confirmation_snapshot(current)):
+                raise StaleReviewProjectError("目前 actual 證據與畫面 snapshot 不同；未保存，請重新載入")
         phase = time.perf_counter()
         staged_db = {**db, "events": dict(db.get("events", {}))}
         if event is None:
@@ -440,6 +454,9 @@ class ReviewSaveService:
             except Exception as exc:
                 summary = {"staging_error": str(exc), "staged_checked_occurrence_ids": []}
         timings["actual_staging_validation"] = time.perf_counter() - phase
+        if confirms_current and (summary.get("staging_error") or summary.get("staging_validation_pending")
+                                 or current["occurrence_id"] in summary.get("staged_checked_occurrence_ids", [])):
+            raise ValueError("actual 暫存尚未通過驗證或本筆尚未套用；未保存目前注音判定")
         # Recheck every dependency immediately before the atomic replacement;
         # no side effect has happened yet if any input changed during validation.
         notify("寫入前再次完整核對依賴（尚未寫入）")

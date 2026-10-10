@@ -2668,6 +2668,46 @@ def load_or_initialize_db(output_dir: Path) -> dict[str, Any]:
         return normalize_db({})
 
 
+def confirm_current_actual_unavailable_reason(entry: Mapping[str, Any]) -> str:
+    """Allow an explicit local choice, including an existing expected conflict.
+
+    Completed items are not reopened; the existing explicit redecision path
+    and receipt-backed pending workflow remain eligible.
+    """
+    state = entry.get("state")
+    if state in HARD_BLOCKING_STATES or entry.get("blocking_state") in HARD_BLOCKING_STATES:
+        return "來源或資料尚未通過驗證（" + str(entry.get("blocking_state") or state) + "），不能確認目前注音"
+    if not (state in NON_TERMINAL_STATES
+            or state in {"PASS", "TEXTBOOK_ERROR_CONFIRMED"}
+            and (valid_manual_expected_decision(entry)
+                 or entry.get("expected_business_conflict_pending") is True)):
+        return "此項目已完成或不屬於可裁決的待辦"
+    target = manual_expected_target(entry)
+    if (not all(target[key] for key in ("occurrence_id", "review_id", "char", "physical_page"))
+            or target["review_id"] != ledger_make_review_id(target["occurrence_id"])
+            or not re.fullmatch(r"[0-9a-f]{64}", target["pdf_sha256"])):
+        return "目前項目的來源或位置識別不完整"
+    import math
+    try:
+        page = float(target["physical_page"])
+        coords = [float(target[key]) for key in ("x0", "y0", "x1", "y1")]
+        if (not math.isfinite(page) or not page.is_integer() or page < 1
+                or not all(math.isfinite(value) for value in coords)
+                or coords[0] > coords[2] or coords[1] >= coords[3]):
+            return "目前項目的頁碼或位置資料無效"
+    except (ValueError, TypeError, OverflowError):
+        return "目前項目的頁碼或位置資料無效"
+    if (infer_actual_status(entry) != "RESOLVED"
+            or not canonical_bopomofo(entry.get("actual"))
+            or not str(entry.get("actual_evidence") or "").strip()):
+        return "目前注音尚未有效確定或缺少 actual 證據"
+    return ""
+
+
+def can_confirm_current_actual_as_expected(entry: Mapping[str, Any]) -> bool:
+    return not confirm_current_actual_unavailable_reason(entry)
+
+
 def build_manual_expected_event(
     entry: Mapping[str, Any], *, operation: str, expected_set: Any = None,
     rationale: str = "", note: str = "",
@@ -2686,10 +2726,9 @@ def build_manual_expected_event(
         raise InvalidTransitionError("此項目目前不可保存人工應標判定")
     if operation == "CONFIRM_CURRENT_AS_EXPECTED":
         reading = canonical_bopomofo(entry.get("actual"))
-        if (not redecision and infer_expected_status(entry) not in {"UNRESOLVED", "AMBIGUOUS", "CONFLICT"}
-                or infer_actual_status(entry) != "RESOLVED" or not reading
-                or not str(entry.get("actual_evidence") or "").strip()):
-            raise InvalidTransitionError("目前注音尚未有效確定，不能快捷確認")
+        reason = confirm_current_actual_unavailable_reason(entry)
+        if reason:
+            raise InvalidTransitionError(reason)
         expected_set = [reading]
     elif operation != "ENTER_EXPECTED":
         raise InvalidTransitionError("未知的人工應標操作")
