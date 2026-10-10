@@ -72,6 +72,8 @@ def project(root: Path, source_pdf: Path, *, session: str, event_positions=(), b
     boxes = boxes or ((20, 20, 40, 45), (90, 20, 110, 45))
     for index, (x0, y0, x1, y1) in enumerate(boxes, 1):
         rows.append({
+            "ledger_schema_version": LEDGER_SCHEMA_VERSION,
+            "workbook_schema_version": WORKBOOK_SCHEMA_VERSION,
             "pdf_sha256": digest, "pdf": str(source_pdf), "pdf_name": source_pdf.name,
             "實體頁碼": 1, "課本頁": 1, "字元": "角", "實際注音": "ㄐㄩㄝˊ",
             "解碼依據": "glyph evidence", "穩定注音鍵": f"F#{index}", "font": "F", "font_xref": 1,

@@ -13,11 +13,13 @@ import binascii
 import functools
 import hashlib
 import json
+import math
 import os
 import tempfile
 import uuid
 import zlib
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -1056,6 +1058,17 @@ def _pages_equivalent(source_pages, target_pages):
                     for source, target in zip(source_pages, target_pages)))
 
 
+class _ExactBatchGeometry(dict):
+    """Admission retained only after physical SHA and complete page checks."""
+
+    def __init__(self, pages, source_manifest, target_manifest, mapping):
+        super().__init__(pages)
+        self.source_digest = hashlib.sha256(_canonical(source_manifest)).hexdigest()
+        self.target_digest = hashlib.sha256(_canonical(target_manifest)).hexdigest()
+        self.mapping = tuple(sorted(mapping.items()))
+        self.pages_digest = hashlib.sha256(_canonical(pages)).hexdigest()
+
+
 def _match_pdfs(proof: Mapping[str, Any], source_manifest: Mapping[str, Any],
                 target_manifest: Mapping[str, Any], target_dir: Path):
     source_pdfs = list(proof["pdfs"])
@@ -1087,7 +1100,7 @@ def _match_pdfs(proof: Mapping[str, Any], source_manifest: Mapping[str, Any],
                 raise ValueError(f"同 SHA PDF 頁面內容／文字證據不符：{source['pdf_name']}；未移轉")
             mapping[sha] = sha
             geometry[sha] = (source["pages"], pages)
-        return mapping, geometry
+        return mapping, _ExactBatchGeometry(geometry, source_manifest, target_manifest, mapping)
     for source in source_pdfs:
         missing_text = any("candidate_text_sha256" not in page for page in source["pages"])
         candidates = []
@@ -1150,7 +1163,170 @@ def _anchor(entry: Mapping[str, Any], pages):
     return (page, *(round(value, 2) for value in displayed), str(entry.get("char") or ""))
 
 
+class _CanonicalReviewMap(dict):
+    contract = "same-pdf-canonical-roster/1"
+    fallback_adapter_contract = "sealed-top-true-source-N/1"
+
+
+_ROSTER_IDENTITY_ALIASES = {
+    "physical_page": ("實體頁碼", "physical_page"),
+    "stable_key": ("穩定注音鍵", "stable_key"), "font": ("font",),
+    "font_xref": ("font_xref",), "glyph_id": ("glyph_id_字形索引", "glyph_id", "候選glyph_id"),
+    "zhuyin_component_id": ("注音元件ID", "候選注音元件ID", "zhuyin_component_id"),
+    "char": ("字元", "target_char", "char"),
+    **{key: (key,) for key in ("x0", "y0", "x1", "y1")},
+}
+
+
+def _roster_number(value):
+    if value is None or isinstance(value, bool) or value == "":
+        raise ValueError("canonical roster 缺少合法數值")
+    try:
+        number = Decimal(str(value))
+    except InvalidOperation as exc:
+        raise ValueError("canonical roster 數值損壞") from exc
+    if not number.is_finite() or not math.isfinite(float(number)):
+        raise ValueError("canonical roster 非有限數值")
+    return number
+
+
+def _canonical_roster(manifest, pages_by_sha, side):
+    """Prove original identity and raw positioning, without rewriting evidence."""
+    import occurrence_ledger as ol
+    roster, reviews, adapters = {}, set(), []
+    for entry in manifest.get("records", []):
+        source = entry.get("source_record")
+        if not isinstance(source, dict):
+            raise ValueError("canonical roster 缺少 source_record")
+        sha = entry.get("pdf_sha256")
+        if sha not in pages_by_sha or source.get("pdf_sha256") not in (None, "", sha):
+            raise ValueError("canonical roster PDF partition 矛盾")
+        for obj, required in ((source, {"ledger_schema_version": ol.LEDGER_SCHEMA_VERSION,
+                                       "workbook_schema_version": ol.WORKBOOK_SCHEMA_VERSION}),
+                              (entry, {"ledger_schema_version": ol.LEDGER_SCHEMA_VERSION,
+                                       "review_id_schema_version": ol.REVIEW_ID_SCHEMA_VERSION})):
+            if any(obj.get(key) != value for key, value in required.items()):
+                raise ValueError("canonical roster 未知 record schema")
+        for key, aliases in _ROSTER_IDENTITY_ALIASES.items():
+            if not any(alias in source for alias in aliases):
+                raise ValueError(f"canonical roster 原始身份缺少 {key}")
+            values = [str(source[a]).strip() for a in aliases if source.get(a) not in (None, "")]
+            if len(set(values)) > 1:
+                raise ValueError(f"canonical roster 原始身份 alias 矛盾：{key}")
+            if key not in ("physical_page", "x0", "y0", "x1", "y1") and (
+                    ol._row_value(source, *aliases) != ol._row_value(entry, *aliases)):
+                raise ValueError(f"canonical roster top/source_record 原始身份矛盾：{key}")
+        payload = ol._identity_payload(sha, source)
+        if payload != ol._identity_payload(sha, entry):
+            raise ValueError("canonical roster top/source_record identity 矛盾")
+        for key in ("occurrence_id", "review_id", "identity_confidence"):
+            if not source.get(key) or source.get(key) != entry.get(key):
+                raise ValueError(f"canonical roster top/source_record {key} 矛盾")
+        if (source.get("identity_collision_base") or entry.get("identity_collision_base")
+                or source.get("identity_confidence") != "PDF_STABLE"):
+            raise ValueError("canonical roster collision／confidence 不相容")
+        if any(key not in obj or obj[key] in (None, "") for obj in (source, entry)
+               for key in ("identity_row_fallback",)):
+            raise ValueError("canonical roster 缺少 fallback metadata")
+        raw_flag, top_flag = source["identity_row_fallback"], entry["identity_row_fallback"]
+        raw_fallback = ol.parse_identity_row_fallback(raw_flag)
+        top_fallback = ol.parse_identity_row_fallback(top_flag)
+        adapter = type(top_flag) is bool and top_flag is True and type(raw_flag) is str and raw_flag == "N"
+        if raw_fallback or (top_fallback and not adapter) or (raw_fallback != top_fallback and not adapter):
+            raise ValueError("canonical roster fallback／旗標矛盾不在有限 adapter 契約")
+        occurrence_id, confidence, fallback = ol.make_occurrence_id(sha, source)
+        review_id = ol.make_review_id(occurrence_id)
+        if (fallback or confidence != "PDF_STABLE" or occurrence_id != entry["occurrence_id"]
+                or review_id != entry["review_id"]):
+            raise ValueError("canonical roster 保存 ID 與原始 canonical identity 不符")
+        if occurrence_id in roster or review_id in reviews:
+            raise ValueError("canonical roster canonical base／review ID 不唯一")
+        coords = tuple(_roster_number(source.get(k)) for k in ("x0", "y0", "x1", "y1"))
+        if coords != tuple(_roster_number(entry.get(k)) for k in ("x0", "y0", "x1", "y1")):
+            raise ValueError("canonical roster 原始 bbox 矛盾")
+        page = _roster_number(ol._row_value(source, *_ROSTER_IDENTITY_ALIASES["physical_page"]))
+        pages = pages_by_sha[sha]
+        if (page != page.to_integral_value() or not 1 <= page <= len(pages)
+                or coords[2] < coords[0] or coords[3] <= coords[1]):
+            raise ValueError("canonical roster 頁碼或 bbox 無效")
+        geometry = pages[int(page) - 1]
+        matrix = geometry.get("display_matrix")
+        if not isinstance(matrix, list) or len(matrix) != 6:
+            raise ValueError("canonical roster 顯示 matrix 缺失")
+        matrix = tuple(_roster_number(v) for v in matrix)
+        determinant = matrix[0] * matrix[3] - matrix[1] * matrix[2]
+        width, height = (_roster_number(geometry.get(k)) for k in ("width", "height"))
+        if determinant == 0 or width <= 0 or height <= 0 or not all(math.isfinite(float(v)) for v in matrix):
+            raise ValueError("canonical roster 顯示 geometry 無效")
+        raw_identity = tuple((alias, source[alias]) for aliases in _ROSTER_IDENTITY_ALIASES.values()
+                             for alias in aliases if alias in source)
+        signature = (payload, raw_identity, coords, page, matrix, width, height)
+        roster[occurrence_id] = (entry, signature)
+        reviews.add(review_id)
+        if adapter:
+            adapters.append((side, occurrence_id, review_id))
+    return roster, adapters
+
+
+def _canonical_roster_mapping(source_manifest, target_manifest, pdf_map, geometry):
+    import occurrence_ledger as ol
+    import standalone_proofread as sp
+    required = {"session_schema_version": ol.SESSION_SCHEMA_VERSION,
+                "workbook_schema_version": ol.WORKBOOK_SCHEMA_VERSION,
+                "ledger_schema_version": ol.LEDGER_SCHEMA_VERSION,
+                "review_id_schema_version": ol.REVIEW_ID_SCHEMA_VERSION}
+    if not isinstance(geometry, _ExactBatchGeometry):
+        return None  # General content pairing and historical adapters are unchanged.
+    historical = False
+    for manifest in (source_manifest, target_manifest):
+        if not any(k in manifest for k in required):
+            historical = True
+            continue  # Existing schema-less pairing receives no new admission.
+        for key, current in required.items():
+            value = manifest.get(key)
+            if value != current:
+                # Retain only an earlier patch in the existing schema family;
+                # unknown/missing/future schemas cannot claim legacy admission.
+                known_patches = {"workbook_schema_version": ("2.6.0",)}
+                if value in known_patches.get(key, ()):
+                    historical = True
+                else:
+                    raise ValueError("canonical roster 未知 manifest schema")
+    if historical:
+        return None
+    for manifest in (source_manifest, target_manifest):
+        sp.validate_manifest_integrity(manifest)
+    source_shas = [item.get("pdf_sha256") for item in source_manifest.get("pdfs", [])]
+    target_shas = [item.get("pdf_sha256") for item in target_manifest.get("pdfs", [])]
+    if (len(set(source_shas)) != len(source_shas) or len(set(target_shas)) != len(target_shas)
+            or set(source_shas) != set(target_shas) or set(source_shas) != set(geometry)
+            or pdf_map != {sha: sha for sha in source_shas}):
+        raise ValueError("canonical roster sealed PDF partitions／完整 mapping 不符")
+    if (geometry.source_digest != hashlib.sha256(_canonical(source_manifest)).hexdigest()
+            or geometry.target_digest != hashlib.sha256(_canonical(target_manifest)).hexdigest()
+            or geometry.mapping != tuple(sorted(pdf_map.items()))
+            or geometry.pages_digest != hashlib.sha256(_canonical(geometry)).hexdigest()):
+        raise ValueError("canonical roster physical/page admission 已變動")
+    source, sa = _canonical_roster(source_manifest, {sha: pair[0] for sha, pair in geometry.items()}, "source")
+    target, ta = _canonical_roster(target_manifest, {sha: pair[1] for sha, pair in geometry.items()}, "target")
+    if source.keys() != target.keys():
+        raise ValueError("canonical roster 完整 occurrence roster 不同")
+    mapped = _CanonicalReviewMap()
+    for oid, (entry, signature) in source.items():
+        other, other_signature = target[oid]
+        if signature != other_signature:
+            raise ValueError(f"canonical roster 原始定位 signature 不同：{oid}")
+        mapped[entry["review_id"]] = (entry, other)
+    mapped.fallback_adapter_ids = tuple(sa + ta)
+    print(f"{mapped.contract}: records={len(mapped)}; {mapped.fallback_adapter_contract}: "
+          f"observations={len(mapped.fallback_adapter_ids)}", flush=True)
+    return mapped
+
+
 def _map_reviews(source_manifest: Mapping[str, Any], target_manifest: Mapping[str, Any], pdf_map, geometry):
+    canonical = _canonical_roster_mapping(source_manifest, target_manifest, pdf_map, geometry)
+    if canonical is not None:
+        return canonical
     source_by_target = {target_sha: source_sha for source_sha, target_sha in pdf_map.items()}
     target_by_anchor = {}
     for entry in target_manifest.get("records", []):
