@@ -151,6 +151,68 @@ def test_verified_geometry_cannot_be_changed_after_admission(tmp_path):
         p._map_reviews(source, target, pdf_map, geometry)
 
 
+@pytest.mark.parametrize("side", ["source", "target"])
+@pytest.mark.parametrize("case", ["lower_glyph_alias", "masked_char", "masked_page", "missing_formal_char",
+    "missing_formal_page", "blank_formal_char", "blank_formal_page", "masked_stable_key",
+    "masked_component", "top_raw_char_whitespace", "null_formal_char"])
+def test_all_top_aliases_and_formal_projection_must_match_original(tmp_path, side, case):
+    source, proof = roster_batch(tmp_path)
+    target = copy.deepcopy(source)
+    manifest = source if side == "source" else target
+    entry = manifest["records"][0]
+    if case == "lower_glyph_alias": entry["候選glyph_id"] = 99
+    elif case == "masked_char": entry.update({"字元": "一", "char": "角"})
+    elif case == "masked_page": entry.update({"實體頁碼": 1, "physical_page": 2})
+    elif case == "missing_formal_char": entry["字元"] = entry.pop("char")
+    elif case == "missing_formal_page": entry["實體頁碼"] = entry.pop("physical_page")
+    elif case == "blank_formal_char": entry.update({"字元": "一", "char": ""})
+    elif case == "blank_formal_page": entry.update({"實體頁碼": 1, "physical_page": ""})
+    elif case == "masked_stable_key": entry.update({"穩定注音鍵": "same", "stable_key": "same|row=7"})
+    elif case == "masked_component": entry.update({"注音元件ID": "", "候選注音元件ID": 99})
+    elif case == "top_raw_char_whitespace": entry.update({"字元": "一", "char": " 一 "})
+    elif case == "null_formal_char": entry.update({"字元": "一", "char": None})
+    sealed(manifest)
+    before = p._canonical([source, target])
+    with pytest.raises(ValueError, match="alias|projection|identity|原始身份|合法數值"):
+        mapped(source, target, proof, tmp_path)
+    assert p._canonical([source, target]) == before
+
+
+@pytest.mark.parametrize("side", ["source", "target"])
+def test_consistent_registered_top_aliases_preserve_canonical_mapping(tmp_path, side):
+    source, proof = roster_batch(tmp_path)
+    target = copy.deepcopy(source)
+    manifest = source if side == "source" else target
+    for entry in manifest["records"]:
+        for key, aliases in p._ROSTER_IDENTITY_ALIASES.items():
+            for alias in aliases:
+                entry[alias] = entry[key]
+    sealed(manifest)
+    before = p._canonical([source, target])
+    result = mapped(source, target, proof, tmp_path)
+    assert len(result) == 4 and len(result.fallback_adapter_ids) == 8
+    assert p._canonical([source, target]) == before
+
+
+@pytest.mark.parametrize("side", ["source", "target"])
+@pytest.mark.parametrize("value", [None, ""], ids=["null", "empty"])
+def test_nullable_component_uses_existing_empty_projection(tmp_path, side, value):
+    source, proof = roster_batch(tmp_path)
+    target = copy.deepcopy(source)
+    for candidate in (source, target):
+        for entry in candidate["records"]:
+            entry["source_record"]["zhuyin_component_id"] = value
+    manifest = source if side == "source" else target
+    for entry in manifest["records"]:
+        entry["zhuyin_component_id"] = value
+    sealed(source)
+    sealed(target)
+    before = p._canonical([source, target])
+    result = mapped(source, target, proof, tmp_path)
+    assert len(result) == 4 and len(result.fallback_adapter_ids) == 8
+    assert p._canonical([source, target]) == before
+
+
 @pytest.mark.parametrize("value, expected", [(False, False), (True, True), ("N", False), ("Y", True),
     ("FALSE", False), ("TRUE", True), ("0", False), ("1", True), (0, False), (1, True)],
     ids=["bool_false", "bool_true", "N", "Y", "FALSE", "TRUE", "str0", "str1", "int0", "int1"])

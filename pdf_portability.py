@@ -1210,9 +1210,19 @@ def _canonical_roster(manifest, pages_by_sha, side):
         for key, aliases in _ROSTER_IDENTITY_ALIASES.items():
             if not any(alias in source for alias in aliases):
                 raise ValueError(f"canonical roster 原始身份缺少 {key}")
-            values = [str(source[a]).strip() for a in aliases if source.get(a) not in (None, "")]
-            if len(set(values)) > 1:
-                raise ValueError(f"canonical roster 原始身份 alias 矛盾：{key}")
+            for part, obj in (("source_record", source), ("top", entry)):
+                values = [str(obj[a]).strip() for a in aliases if obj.get(a) not in (None, "")]
+                if len(set(values)) > 1:
+                    raise ValueError(f"canonical roster {part} 身份 alias 矛盾：{key}")
+            if key not in entry:
+                raise ValueError(f"canonical roster 缺少正式 top projection：{key}")
+            original = ol._row_value(source, *aliases)
+            if key in ("physical_page", "x0", "y0", "x1", "y1"):
+                projection_matches = _roster_number(entry[key]) == _roster_number(original)
+            else:
+                projection_matches = ol._row_value(entry, key) == original
+            if not projection_matches:
+                raise ValueError(f"canonical roster 正式 top/source_record projection 矛盾：{key}")
             if key not in ("physical_page", "x0", "y0", "x1", "y1") and (
                     ol._row_value(source, *aliases) != ol._row_value(entry, *aliases)):
                 raise ValueError(f"canonical roster top/source_record 原始身份矛盾：{key}")
