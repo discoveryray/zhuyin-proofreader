@@ -173,6 +173,14 @@ class ActualImportResult(tuple):
         return result
 
 
+class ExpectedImportResult(tuple):
+    """Three-value API plus saved business-conflict/supplement counts."""
+    def __new__(cls, count, skipped, report, status):
+        result = super().__new__(cls, (count, skipped, report))
+        result.status = dict(status)
+        return result
+
+
 def _serialized_user_project_entry(operation):
     """Hold the project lock from the first user-facing gate through delivery."""
     @wraps(operation)
@@ -1725,8 +1733,13 @@ def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False,
         mismatched["review_id_schema_version"] = (REVIEW_ID_SCHEMA_VERSION, metadata.get("review_id_schema_version"))
     if mismatched:
         raise ValueError(f"匯入 workbook session/evidence 不相容：{mismatched}")
-    if str(metadata.get("session_id") or "") != str(manifest.get("session_id") or ""):
-        from pdf_portability import import_expected_excel
+    from pdf_portability import import_expected_excel, EXCEL_PROOF_SHEET
+    workbook = load_workbook(xlsx, read_only=True, data_only=True)
+    try:
+        portable_expected = EXCEL_PROOF_SHEET in workbook.sheetnames
+    finally:
+        workbook.close()
+    if portable_expected or str(metadata.get("session_id") or "") != str(manifest.get("session_id") or ""):
         return import_expected_excel.__wrapped__(output_dir, xlsx, dry_run=dry_run,
             _original_xlsx=_original_xlsx, _snapshot_sha=_snapshot_sha)
     # Tool version is intentionally ignored. The exported expected fingerprint
@@ -2666,7 +2679,8 @@ def build_manual_expected_event(
     """
     redecision = valid_manual_expected_decision(entry)
     if (entry.get("state") not in NON_TERMINAL_STATES
-            and not (redecision and entry.get("state") in {"PASS", "TEXTBOOK_ERROR_CONFIRMED"})) or entry.get("state") in {
+            and not ((redecision or entry.get("expected_business_conflict_pending") is True)
+                     and entry.get("state") in {"PASS", "TEXTBOOK_ERROR_CONFIRMED"})) or entry.get("state") in {
         "SOURCE_INVALID", "DATA_INTEGRITY_ERROR", "REGRESSION_BLOCKED",
     }:
         raise InvalidTransitionError("此項目目前不可保存人工應標判定")
@@ -3245,7 +3259,10 @@ def bind_legacy_gui_expected_resolutions(output_dir: Path, workbook: Path, *, re
 
 def save_pending_json(output_dir: Path, manifest: dict[str, Any], db: dict[str, Any]) -> int:
     ledger = materialize_ledger(manifest, db)
-    pending = [dict(entry) for entry in ledger if entry.get("state") in NON_TERMINAL_STATES]
+    from pdf_portability import expected_conflict_review_view
+    ledger = expected_conflict_review_view(output_dir, manifest, db, ledger)
+    pending = [dict(entry) for entry in ledger if entry.get("state") in NON_TERMINAL_STATES
+               or entry.get("expected_business_conflict_pending") is True]
     gaps = [dict(entry) for entry in ledger if infer_expected_status(entry) == "UNRESOLVED"]
     json_save(output_dir / "待人工確認.json", {
         "version": VERSION,
@@ -3620,8 +3637,9 @@ def generate_report(
         manifest.get("regression_gate") or {},
         source_validation_ok=bool(source_validation.get("ok")),
     )
-    from pdf_portability import hold_actual_excel_completion
+    from pdf_portability import hold_actual_excel_completion, hold_expected_conflict_completion
     gate = hold_actual_excel_completion(output_dir, manifest, db, gate)
+    gate = hold_expected_conflict_completion(output_dir, manifest, db, gate)
 
     wb = Workbook()
     ws = wb.active
@@ -5389,8 +5407,9 @@ def run_pipeline_pdfs(
             ledger = materialize_ledger(manifest, db)
             reconciliation = reconcile_ledger(ledger, manifest.get("actual_source_ids") or [])
             gate = completion_gate(ledger, reconciliation, manifest.get("regression_gate") or {}, source_validation_ok=True)
-            from pdf_portability import hold_actual_excel_completion
+            from pdf_portability import hold_actual_excel_completion, hold_expected_conflict_completion
             gate = hold_actual_excel_completion(_source_project_dir or output_dir, manifest, db, gate)
+            gate = hold_expected_conflict_completion(_source_project_dir or output_dir, manifest, db, gate)
             if _prewrite_guard is not None:
                 _prewrite_guard()
             if defer_excel_reports:
@@ -5738,10 +5757,22 @@ def main():
                         flush=True,
                     )
                 else:
-                    n, skipped, report = import_gpt_decisions(outdir, import_path)
+                    expected_result = import_gpt_decisions(outdir, import_path)
+                    n, skipped, report = expected_result
+                    business = getattr(expected_result, "status", {})
+                    business_text = (f"本次已保存：新增 {business['imported']} 筆；"
+                                     f"一致保留／補充 {business['consistent_supplements']} 筆；"
+                                     f"已處理重複 {business['duplicates']} 筆（未新增判定）；"
+                                     f"新增衝突 {business['new_conflicts']} 筆；"
+                                     f"待本地裁決 {business['pending_conflicts']} 筆。\n"
+                                     f"原待辦保留：保留待人工 {business['retained_manual']} 筆；"
+                                     f"未操作列 {business['skipped_unoperated']} 筆。\n"
+                                     + ("請按「繼續校對」，查看雙方證據後用「輸入其他應標注音」裁決。\n"
+                                        if business['pending_conflicts'] else "")
+                                     if business else "")
                     print(
                         f"自動辨識：{import_path.name} = expected／差異 GPT 證據檔。"
-                        f"匯入 {n} 筆，略過 {skipped} 筆未操作列。\n{report}\n"
+                        f"{business_text if business else f'匯入 {n} 筆，略過 {skipped} 筆。'}\n{report}\n"
                         "完成狀態請以本次產生的報告／pipeline_status.json 為準；"
                         "若剛升級規則，請按「修復／更新報告」。",
                         flush=True,

@@ -168,9 +168,12 @@ class ReviewSaveService:
             if not wanted or (path in sources and sources[path] != wanted):
                 raise ValueError("SOURCE_INVALID：同一 PDF 的來源 hash 缺失或不一致")
             sources[path] = wanted
-        for item in manifest.get("pdfs", []):
+        from sealed_workbook_paths import bind_workbooks, owned_path
+        bindings = {(index, kind): relative for index, kind, relative, wanted
+                    in bind_workbooks(self.output_dir, manifest)}
+        for index, item in enumerate(manifest.get("pdfs", [])):
             for kind in ("actual", "candidate"):
-                path = Path(str(item.get(f"{kind}_workbook") or "")).resolve()
+                path = owned_path(self.output_dir, bindings[index, kind])
                 wanted = str(item.get(f"{kind}_workbook_sha256") or "")
                 if not wanted or (path in artifacts and artifacts[path] != wanted):
                     raise ValueError("DATA_INTEGRITY_ERROR：輸出資產 hash 缺失或不一致")
@@ -185,6 +188,7 @@ class ReviewSaveService:
         paths.update(self._source_specs)
         paths.update(self._artifact_specs)
         paths.update({self.output_dir / "校對工作階段.json", self.output_dir / "人工判定資料庫.json",
+                      self.output_dir / "跨專案判定衝突.json",
                       sp.REUSABLE_EXPECTED_RULES,
                       root / "manual_actual_staging.json", root / "global_exact_glyph_project_transaction.json",
                       root / "global_exact_glyph_promotion_outbox.json"})
@@ -285,6 +289,8 @@ class ReviewSaveService:
             index = {row["review_id"]: n for n, row in enumerate(baseline)}
         else:
             baseline, ledger, index = self._baseline, self._ledger, self._index
+        import pdf_portability
+        pdf_portability.validate_conflict_state(self.output_dir, manifest, db)
         timings["ledger_full_rebuild"] = time.perf_counter() - phase if full else 0.0
         return manifest, db, baseline, ledger, index, content, hashes, candidate_anchor
 
@@ -343,6 +349,11 @@ class ReviewSaveService:
               notify=lambda phase: None):
         started = time.perf_counter()
         timings = {}
+        receipt = self.output_dir / "跨專案判定衝突.json"
+        if self._dependencies is not None:
+            current_receipt_sha = sp.sha256_file(receipt) if receipt.exists() else ""
+            if current_receipt_sha != self._dependencies[str(receipt)]:
+                raise StaleReviewProjectError("畫面載入後衝突來源已變更；未裁決，請重新載入雙方證據")
         (manifest, db, baseline, ledger, index, content, hashes,
          candidate_anchor) = self._prepare_snapshot(timings, expected_manifest, expected_db, notify)
         manifest_sha = hashes[str(self.output_dir / "校對工作階段.json")]
@@ -386,6 +397,9 @@ class ReviewSaveService:
                 if staged_event.get("expected_resolution_binding") != prior_binding:
                     raise ValueError("GUI 確認必須保留既有已驗證 expected binding；不得新增／丟棄來源")
             resolved = sp._apply_review_event(baseline[index[review_id]], staged_event, expected_manifest=manifest)
+            if resolved.get("review_event_replay_status") and review_id in unresolved_conflicts:
+                raise ValueError("衝突裁決事件不能安全重播；原雙方證據仍保留")
+            pdf_portability.validate_conflict_state(self.output_dir, manifest, staged_db)
             if (staged_event.get("action") == "確認現版差異"
                     and (resolved.get("state") != "TEXTBOOK_ERROR_CONFIRMED"
                          or resolved.get("review_event_replay_status"))):

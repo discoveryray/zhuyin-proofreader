@@ -404,6 +404,149 @@ def _actual_excel_conflict_status(status: Mapping[str, Any], conflicts: list[dic
     return updated
 
 
+EXPECTED_BUSINESS_CONTRACT = "expected-business-conflict/1"
+
+
+def _expected_target_basis(manifest, entry, event):
+    import standalone_proofread as sp
+    return {"kind": "review_event" if event else "sealed_resolver_record",
+            "manifest_integrity_sha256": manifest["manifest_integrity_sha256"],
+            "session_id": manifest["session_id"],
+            "expected_asset_fingerprint": manifest.get("expected_asset_fingerprint", ""),
+            "target": sp.manual_expected_target(entry),
+            "expected_snapshot": sp.confirmation_expected_snapshot(entry),
+            "event": copy.deepcopy(event) if event else None}
+
+
+def _expected_business_record(source_manifest, target_manifest, target, event, identity, prior):
+    return {"contract": EXPECTED_BUSINESS_CONTRACT,
+            "target_review_id": target["review_id"],
+            "source_review_id": identity["review_id"],
+            "source_session_id": source_manifest["session_id"],
+            "source_pdf_sha256": identity["pdf_sha256"],
+            "source_occurrence_id": identity["occurrence_id"],
+            "target_session_id": target_manifest["session_id"],
+            "target_pdf_sha256": target["pdf_sha256"],
+            "target_occurrence_id": target["occurrence_id"],
+            "source_identity": copy.deepcopy(identity),
+            "source_event": {**copy.deepcopy(event), "portability_source": copy.deepcopy(identity)},
+            "target_basis": _expected_target_basis(target_manifest, target, prior)}
+
+
+def _sealed_expected_receipt(conflicts, supplements):
+    payload = {"version": 2, "contract": EXPECTED_BUSINESS_CONTRACT,
+               "conflicts": conflicts, "supplements": supplements}
+    return {**payload, "integrity_sha256": hashlib.sha256(_canonical(payload)).hexdigest()}
+
+
+def _validated_expected_receipt(receipt, manifest):
+    import standalone_proofread as sp
+    if not isinstance(receipt, dict) or type(receipt.get("version")) is not int:
+        raise ValueError("跨專案判定衝突紀錄格式無法驗證")
+    if receipt["version"] == 1:
+        if not isinstance(receipt.get("conflicts"), list) or not receipt["conflicts"]:
+            raise ValueError("跨專案判定衝突紀錄格式無法驗證")
+        return receipt
+    if (receipt["version"] != 2 or set(receipt) != {
+            "version", "contract", "conflicts", "supplements", "integrity_sha256"}
+            or receipt["contract"] != EXPECTED_BUSINESS_CONTRACT
+            or not isinstance(receipt["conflicts"], list) or not isinstance(receipt["supplements"], list)
+            or not (receipt["conflicts"] or receipt["supplements"])
+            or receipt["integrity_sha256"] != hashlib.sha256(_canonical(
+                {k: v for k, v in receipt.items() if k != "integrity_sha256"})).hexdigest()):
+        raise ValueError("expected business receipt 格式／integrity 無法驗證")
+    sp.validate_manifest_integrity(manifest)
+    by_id = {entry["review_id"]: entry for entry in sp.materialize_ledger(manifest, sp.normalize_db({}))}
+    seen = set()
+    for item in [*receipt["conflicts"], *receipt["supplements"]]:
+        if isinstance(item, dict) and "contract" not in item and item in receipt["conflicts"]:
+            # Exact historical event/event receipt entries retain their v1 checks below.
+            continue
+        keys = {"contract", "target_review_id", "source_review_id", "source_session_id",
+                "source_pdf_sha256", "source_occurrence_id", "target_session_id",
+                "target_pdf_sha256", "target_occurrence_id", "source_identity", "source_event", "target_basis"}
+        if not isinstance(item, dict) or set(item) != keys or item["contract"] != EXPECTED_BUSINESS_CONTRACT:
+            raise ValueError("expected business receipt entry 契約無效")
+        entry = by_id.get(item["target_review_id"])
+        identity, source_event, basis = item["source_identity"], item["source_event"], item["target_basis"]
+        if (entry is None or not isinstance(identity, dict) or not isinstance(source_event, dict)
+                or not isinstance(basis, dict) or set(basis) != {
+                    "kind", "manifest_integrity_sha256", "session_id", "expected_asset_fingerprint",
+                    "target", "expected_snapshot", "event"}
+                or basis["kind"] not in {"review_event", "sealed_resolver_record"}
+                or (basis["kind"] == "review_event") != isinstance(basis["event"], dict)
+                or (basis["kind"] == "sealed_resolver_record" and basis["event"] is not None)
+                or not isinstance(basis["manifest_integrity_sha256"], str)
+                or len(basis["manifest_integrity_sha256"]) != 64
+                or any(char not in "0123456789abcdef" for char in basis["manifest_integrity_sha256"])
+                or item["target_session_id"] != manifest["session_id"]
+                or item["target_occurrence_id"] != entry["occurrence_id"]
+                or item["target_pdf_sha256"] != entry["pdf_sha256"]
+                or source_event.get("portability_source") != identity
+                or any(identity.get(key) != item[field] for key, field in (
+                    ("session_id", "source_session_id"), ("pdf_sha256", "source_pdf_sha256"),
+                    ("occurrence_id", "source_occurrence_id"), ("review_id", "source_review_id"),
+                    ("target_session_id", "target_session_id"), ("target_pdf_sha256", "target_pdf_sha256"),
+                    ("target_occurrence_id", "target_occurrence_id"), ("target_review_id", "target_review_id")))
+                or not isinstance(identity.get("source_excel_sha256"), str)
+                or len(identity["source_excel_sha256"]) != 64
+                or any(char not in "0123456789abcdef" for char in identity["source_excel_sha256"])
+                or not isinstance(item["source_pdf_sha256"], str) or len(item["source_pdf_sha256"]) != 64
+                or any(char not in "0123456789abcdef" for char in item["source_pdf_sha256"])
+                or any(not isinstance(item[key], str) or not item[key]
+                       for key in ("source_session_id", "source_occurrence_id", "source_review_id"))
+                or type(identity.get("source_excel_row")) is not int or identity["source_excel_row"] < 2):
+            raise ValueError("expected business receipt source／target 身份無法驗證")
+        key = (identity["source_excel_sha256"], identity["source_excel_row"], item["target_review_id"])
+        if key in seen:
+            raise ValueError("expected business receipt 來源記錄重複")
+        seen.add(key)
+        sp.expected_resolution_payload(source_event)
+        if (item in receipt["supplements"]
+                and sp.normalize_expected_set(source_event.get("expected_set")) !=
+                    sp.normalize_expected_set(basis["expected_snapshot"].get("expected_set"))):
+            raise ValueError("expected 一致補充的保存讀音不一致")
+        resolved = (sp._apply_review_event(entry, basis["event"], expected_manifest=manifest)
+                    if basis["event"] is not None else entry)
+        current_basis = _expected_target_basis(manifest, resolved, basis["event"])
+        # The historical whole-manifest seal is audit, not an actual->expected
+        # dependency. Current manifest, expected fingerprint/target/snapshot and
+        # original event still independently pass their own contracts.
+        current_basis["manifest_integrity_sha256"] = basis["manifest_integrity_sha256"]
+        if resolved.get("review_event_replay_status") or basis != current_basis:
+            raise ValueError("expected business receipt 原始目標 expected 來源失效")
+    return receipt
+
+
+def expected_conflict_review_view(output_dir, manifest, db, ledger):
+    """Workflow annotation only: never modify either formal evidence lane."""
+    pending = set(validate_conflict_state(output_dir, manifest, db))
+    receipt_path = Path(output_dir) / CONFLICT_FILE
+    conflicts = []
+    if pending:
+        import standalone_proofread as sp
+        conflicts = sp.json_load_strict(receipt_path)["conflicts"]
+    return [{**entry, **({"expected_business_conflict_pending": True,
+                          "expected_business_conflicts": copy.deepcopy([
+                              item for item in conflicts if item["target_review_id"] == entry["review_id"]])}
+                        if entry["review_id"] in pending else {})} for entry in ledger]
+
+
+def hold_expected_conflict_completion(output_dir, manifest, db, gate):
+    pending = validate_conflict_state(output_dir, manifest, db)
+    if not pending:
+        return gate
+    from occurrence_ledger import PROCESSING_FINISHED, PROOFREAD_COMPLETE
+    held = copy.deepcopy(gate)
+    held["hard_gates"]["expected_business_conflicts_zero"] = False
+    held["failed_gates"] = list(dict.fromkeys([*held["failed_gates"], "expected_business_conflicts_zero"]))
+    held["complete"] = False
+    if held["status"] == PROOFREAD_COMPLETE:
+        held["status"] = PROCESSING_FINISHED
+    held["expected_business_conflict_review_ids"] = sorted(set(pending))
+    return held
+
+
 def validate_conflict_state(output_dir: Path, manifest: Mapping[str, Any], db: Mapping[str, Any]):
     """A conflicted row is inactive until a fresh local event cites its receipt."""
     import standalone_proofread as sp
@@ -411,10 +554,7 @@ def validate_conflict_state(output_dir: Path, manifest: Mapping[str, Any], db: M
     path = Path(output_dir) / CONFLICT_FILE
     if not path.exists():
         return []
-    receipt = sp.json_load_strict(path)
-    if (not isinstance(receipt, dict) or receipt.get("version") != 1
-            or not isinstance(receipt.get("conflicts"), list) or not receipt["conflicts"]):
-        raise ValueError("跨專案判定衝突紀錄格式無法驗證")
+    receipt = _validated_expected_receipt(sp.json_load_strict(path), manifest)
     valid_ids = {entry["review_id"] for entry in manifest.get("records", [])}
     unresolved = []
     def locally_resolves(event, conflict):
@@ -430,7 +570,8 @@ def validate_conflict_state(output_dir: Path, manifest: Mapping[str, Any], db: M
         if (not isinstance(conflict, dict)
                 or conflict.get("target_review_id") not in valid_ids
                 or not isinstance(conflict.get("source_event"), dict)
-                or not isinstance(conflict.get("target_event"), dict)
+                or not (isinstance(conflict.get("target_event"), dict)
+                        or conflict.get("contract") == EXPECTED_BUSINESS_CONTRACT)
                 or not conflict.get("source_pdf_sha256")
                 or not conflict.get("target_pdf_sha256")):
             raise ValueError("跨專案判定衝突來源或位置識別不完整")
@@ -440,12 +581,17 @@ def validate_conflict_state(output_dir: Path, manifest: Mapping[str, Any], db: M
         # earlier receipt it resolved; neither source verdict is discarded.
         historical_resolution = any(
             later.get("target_review_id") == review_id
-            and locally_resolves(later.get("target_event"), conflict)
+            and locally_resolves(later.get("target_event", (later.get("target_basis") or {}).get("event")), conflict)
             for later in receipt["conflicts"][index + 1:]
             if isinstance(later, dict))
         if historical_resolution:
             continue
         event = db["events"].get(review_id)
+        if (conflict.get("contract") == EXPECTED_BUSINESS_CONTRACT
+                and event == conflict["target_basis"]["event"]):
+            # Retained formal target truth does not clear the workflow hold.
+            unresolved.append(review_id)
+            continue
         if event is None or event.get("action") == "保留待人工":
             unresolved.append(review_id)
         else:
@@ -1631,7 +1777,7 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
     import standalone_proofread as sp
 
     target_dir, xlsx = Path(target_dir).resolve(), Path(xlsx).resolve()
-    target_manifest, target_db = _load_project(target_dir)
+    target_manifest, target_db = _load_project(target_dir, allow_unresolved_conflict=True)
     metadata = sp.workbook_metadata(xlsx, "匯入中繼資料")
     source_manifest, _, source_ledger, reviews, pdf_map, exported_at, _, geometry = load_excel_content_proof(
         xlsx, target_dir, target_manifest, kind="expected",
@@ -1656,10 +1802,12 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
                          sp.materialize_ledger(target_manifest, sp.normalize_db({}))}
     actions = []
     skipped = 0
+    retained_manual = 0
     for number, row in enumerate(rows, 2):
         action = str(row.get("action") or "").strip()
         if not action or action == "保留待人工":
             skipped += 1
+            retained_manual += action == "保留待人工"
             continue
         source = source_by_id.get(str(row.get("review_id") or ""))
         if source is None or str(row.get("occurrence_id") or "") != source["occurrence_id"]:
@@ -1673,14 +1821,12 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
         target = target_by_id[pair[1]["review_id"]]
         prior_event = target_db["events"].get(target["review_id"]) or {}
         target_for_validation = target_base_by_id[target["review_id"]] if prior_event else target
-        prior_sources = [prior_event.get("portability_source"),
-                         *prior_event.get("portability_duplicate_sources", [])]
-        if any(isinstance(item, dict) and item.get("source_excel_sha256") == _snapshot_sha
-               and item.get("review_id") == source["review_id"]
-               and item.get("source_excel_row") == number for item in prior_sources):
-            skipped += 1
-            continue
         _require_mapped_textbook_context(source, target, f"Excel row {number} ")
+        original_context = source.get("source_record") or {}
+        same_conditions = (any(str(original_context.get(key) or "").strip()
+                               for key in ("所在行", "局部詞境"))
+                           or (bool(str(source.get("context_evidence") or "").strip())
+                               and source.get("context_evidence") == target.get("context_evidence")))
         expected_only = action in {"補建expected證據", "解決expected證據"}
         if action not in sp.DECISIONS:
             raise ValueError(f"Excel row {number} action 無效")
@@ -1693,7 +1839,8 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
                     source.get(key) != target.get(key) for key in
                     ("actual", "actual_evidence", "expected_set", "expected_evidence", "context_evidence")):
                 raise ValueError(f"Excel row {number} 目標當前 actual/expected 證據不同；六個確認 gate 不可沿用")
-        _require_transferable_expected_lane(action, target, prior_event, f"Excel row {number} ")
+        if not expected_only:
+            _require_transferable_expected_lane(action, target, prior_event, f"Excel row {number} ")
         event = {
             "action": action, "expected_set": str(row.get("proposed_expected_set") or "").strip(),
             "expected_evidence": str(row.get("proposed_expected_evidence") or "").strip(),
@@ -1709,7 +1856,12 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
             if value not in {"", "Y", "N"}:
                 raise ValueError(f"Excel row {number} gate {gate} 必須是 Y/N")
             event[gate] = value == "Y"
-        for entry, label in ((source, "來源"), (target_for_validation, "目標")):
+        # A resolved target is independently validated by project materialization.
+        # Replaying a source fill operation over its formal truth is not validation.
+        checks = [(source, "來源")]
+        if not expected_only or sp.infer_expected_status(target_for_validation) != "RESOLVED":
+            checks.append((target_for_validation, "目標"))
+        for entry, label in checks:
             replay = sp._apply_review_event(entry, event)
             if replay.get("review_event_replay_status"):
                 raise ValueError(f"Excel row {number} {label}判定失效：{replay['review_event_replay_status']}")
@@ -1722,7 +1874,7 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
         identity["source_excel_sha256"] = _snapshot_sha
         identity["source_excel_row"] = number
         identity["source_excel_decision"] = copy.deepcopy(row)
-        actions.append((target, event, identity))
+        actions.append((target, event, identity, same_conditions))
     if dry_run:
         with sp.project_delivery_lock(sp.project_actual_evidence_root(target_dir)):
             _verify_mapped_target_pdfs(target_dir, target_manifest, pdf_map, geometry)
@@ -1756,18 +1908,41 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
         if receipt_snapshots[CONFLICT_FILE][0] is not None:
             # The receipt and target DB are one logical state. Validate both
             # under the same project lock before extending conflict history.
-            if validate_conflict_state(target_dir, live_manifest, target_db):
-                raise ValueError("Excel 匯入期間目標出現未裁決衝突，不能轉入新判定")
+            validate_conflict_state(target_dir, live_manifest, target_db)
             prior_conflicts = copy.deepcopy(receipt_snapshots[CONFLICT_FILE][1]["conflicts"])
+        prior_supplements = copy.deepcopy((receipt_snapshots[CONFLICT_FILE][1] or {}).get("supplements", []))
+        prior_pending_ids = set(validate_conflict_state(target_dir, live_manifest, target_db))
         candidate = copy.deepcopy(target_db)
-        imported, duplicates, conflicts = 0, 0, []
-        for target, event, identity in actions:
+        imported, duplicates, conflicts, supplements = 0, 0, [], []
+        for target, event, identity, same_conditions in actions:
             review_id = target["review_id"]
             if _historical_import_replay(prior_conflicts, identity, event, event,
                                          decision_payload=_excel_expected_decision):
                 duplicates += 1
                 continue
+            if any(item.get("source_identity") == identity
+                   and _excel_expected_decision(item.get("source_event", {})) == _excel_expected_decision(event)
+                   for item in [*prior_supplements, *prior_conflicts]):
+                duplicates += 1
+                continue
             current = candidate["events"].get(review_id)
+            known = ([current.get("portability_source"), *current.get("portability_duplicate_sources", [])]
+                     if current is not None else [])
+            if identity in known:
+                duplicates += 1
+                continue
+            pending_here = review_id in prior_pending_ids
+            if event["action"] in sp.EXPECTED_RESOLUTION_ACTIONS and (
+                    sp.infer_expected_status(target) == "RESOLVED" or pending_here):
+                record = _expected_business_record(source_manifest, target_manifest, target, event, identity, current)
+                if (not pending_here and same_conditions
+                        and list(sp.normalize_expected_set(target.get("expected_set"))) ==
+                            list(sp.normalize_expected_set(event.get("expected_set")))
+                        ):
+                    supplements.append(record)
+                else:
+                    conflicts.append(record)
+                continue
             if current is not None:
                 known = [current.get("portability_source"),
                          *current.get("portability_duplicate_sources", [])]
@@ -1797,7 +1972,7 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
         ledger = sp.materialize_ledger(target_manifest, candidate)
         if any(row.get("review_event_replay_status") for row in ledger):
             raise ValueError("Excel 匯入後判定無法在目標安全重播")
-        if imported or duplicates or conflicts:
+        if imported or duplicates or conflicts or supplements:
             receipt_path = target_dir / CONFLICT_FILE
             presentation_paths = [target_dir / name for name in
                                   ("待人工確認.json", "注音校對_最終報告.xlsx", "pipeline_status.json")]
@@ -1806,8 +1981,11 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
             marker_before = marker_path.read_bytes() if marker_path.exists() else None
             receipt_before = receipt_snapshots[CONFLICT_FILE][0]
             original_files[receipt_path] = receipt_before
-            planned_conflicts = ({"version": 1, "conflicts": [*prior_conflicts, *conflicts]}
-                                 if conflicts else None)
+            planned_conflicts = (_sealed_expected_receipt([*prior_conflicts, *conflicts],
+                                                         [*prior_supplements, *supplements])
+                                 if conflicts or supplements else None)
+            if planned_conflicts is not None:
+                _validated_expected_receipt(planned_conflicts, live_manifest)
             owned_marker = _new_presentation_marker(
                 target_dir, live_manifest, before, candidate,
                 {CONFLICT_FILE: planned_conflicts} if planned_conflicts is not None else {},
@@ -1822,7 +2000,7 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
                 marker_sha = sp.json_save(marker_path, owned_marker, expected_sha256="")
                 _assert_actual_marker_owner(marker_path, marker_sha)
                 validate_write()
-                if conflicts:
+                if planned_conflicts is not None:
                     receipt_shas[CONFLICT_FILE] = sp.json_save(
                         receipt_path, planned_conflicts, expected_sha256=receipt_shas[CONFLICT_FILE])
                 if sp.json_load_strict(marker_path) != owned_marker:
@@ -1839,7 +2017,7 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
                     _restore_exact_file(receipt_path, receipt_before)
                     _restore_exact_file(marker_path, marker_before)
                 raise
-    if imported or duplicates or conflicts:
+    if imported or duplicates or conflicts or supplements:
         try:
             resume_portable_project(target_dir, _expected_marker_sha=marker_sha)
         except Exception:
@@ -1857,9 +2035,12 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
                 _restore_exact_file(target_dir / INCOMPLETE_FILE,
                                     original_files[target_dir / INCOMPLETE_FILE])
             raise
-    if conflicts:
-        raise ValueError(f"Excel expected 同位置有 {len(conflicts)} 筆不同判定；兩份來源已保留於 {CONFLICT_FILE}，目標位置已標待人工裁決（不是寫入回滾）")
-    return imported, skipped + duplicates, target_dir / "注音校對_最終報告.xlsx"
+    pending = validate_conflict_state(target_dir, target_manifest, candidate)
+    return sp.ExpectedImportResult(imported, skipped + duplicates, target_dir / "注音校對_最終報告.xlsx",
+        {"imported": imported, "consistent_supplements": len(supplements), "duplicates": duplicates,
+         "skipped_unoperated": skipped - retained_manual, "retained_manual": retained_manual,
+         "new_conflicts": len(conflicts),
+         "pending_conflicts": len(set(pending)), "status": "PENDING_LOCAL_ADJUDICATION" if pending else "SAVED"})
 
 
 def _guard_actual_excel_sources(xlsx, source_ledger, target_dir, target_manifest, pdf_map):
@@ -2899,13 +3080,13 @@ def import_project_decisions(source_dir: Path, target_dir: Path, *,
                                   if receipt_snapshots[CONFLICT_FILE][0] is not None
                                   else {"version": 1, "conflicts": []})
             if (not isinstance(existing_conflicts, dict)
-                    or existing_conflicts.get("version") != 1
+                    or existing_conflicts.get("version") not in {1, 2}
                     or not isinstance(existing_conflicts.get("conflicts"), list)):
                 raise ValueError("目標既有衝突紀錄格式無法驗證；未覆寫")
-            planned_receipts[CONFLICT_FILE] = {
-                "version": 1,
-                "conflicts": [*existing_conflicts["conflicts"], *conflict_records],
-            }
+            combined = [*existing_conflicts["conflicts"], *conflict_records]
+            planned_receipts[CONFLICT_FILE] = (
+                _sealed_expected_receipt(combined, copy.deepcopy(existing_conflicts["supplements"]))
+                if existing_conflicts["version"] == 2 else {"version": 1, "conflicts": combined})
         if source_actual["status"] == "RECHECK_LOCAL_PDF_REQUIRED":
             # Every original group remains a read-only receipt across hops.
             # No checked ID becomes a fresh local direct visual or Global vote.

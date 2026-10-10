@@ -224,6 +224,8 @@ LANE_ORDER = {lane: index for index, lane in enumerate(LANE_LABELS)}
 def review_lane(entry):
     if entry.get("state") in HARD_BLOCKING_STATES or entry.get("state") in EXCLUDED_STATES:
         return "other"
+    if entry.get("expected_business_conflict_pending") is True:
+        return "expected"
     if infer_expected_status(entry) in {"UNRESOLVED", "AMBIGUOUS", "CONFLICT"}:
         return "expected"
     if infer_actual_status(entry) in {"UNRESOLVED", "DECODE_ERROR"}:
@@ -232,6 +234,8 @@ def review_lane(entry):
 
 
 def can_confirm_current_expected(entry):
+    if entry.get("expected_business_conflict_pending") is True:
+        return False
     redecision = valid_manual_expected_decision(entry)
     return (
         (review_lane(entry) == "expected" and entry.get("state") in NON_TERMINAL_STATES
@@ -243,6 +247,8 @@ def can_confirm_current_expected(entry):
 
 
 def _waits_for_actual(item, checked):
+    if item.get("expected_business_conflict_pending") is True:
+        return False
     # A pending-comparison view only; it never changes a ledger state.
     return (str(item.get("occurrence_id") or "") in checked
             and infer_expected_status(item) == "RESOLVED"
@@ -270,7 +276,8 @@ def prepare_review_queue(manifest, ledger, previous, index, checked, deferred,
     }
     conflict_ids = set(actual_conflict_review_ids)
     pending = [item for item in ledger if (item.get("state") in NON_TERMINAL_STATES
-                                           or item.get("review_id") in conflict_ids)
+                                           or item.get("review_id") in conflict_ids
+                                           or item.get("expected_business_conflict_pending") is True)
                and not _waits_for_actual(item, checked)]
     live_keys = {(review_lane(item), str(item.get("occurrence_id") or "")) for item in pending}
     deferred = deferred & live_keys
@@ -358,6 +365,25 @@ class _ReviewDialog(tk.Toplevel):
                     value.clear()
 
 
+def expected_conflict_summary(entry):
+    lines = []
+    for conflict in entry.get("expected_business_conflicts", []):
+        source = conflict["source_event"]
+        basis = conflict.get("target_basis")
+        target = basis["expected_snapshot"] if basis else conflict["target_event"]
+        origin = basis["kind"] if basis else "review_event"
+        def readings(value):
+            return value if isinstance(value, str) else " | ".join(value or [])
+        lines.extend([
+            f"匯入來源應標：{readings(source.get('expected_set'))}；依據：{source.get('expected_evidence', '')}",
+            f"來源語境：{source.get('context_evidence', '')}",
+            f"原目標應標（{'程式規則' if origin == 'sealed_resolver_record' else '人工判定'}）："
+            f"{readings(target.get('expected_set'))}；依據：{target.get('expected_evidence', '')}",
+            f"目標語境：{target.get('context_evidence', '')}",
+        ])
+    return "\n".join(lines)
+
+
 class ExpectedDialog(_ReviewDialog):
     _variable_attributes = ("expected", "evidence", "context", "reason")
 
@@ -402,6 +428,10 @@ class ExpectedDialog(_ReviewDialog):
             f"課本目前注音：{entry.get('actual', '')}"
         )
         WrappedLabel(summary, text=text, justify="left", anchor="w", wraplength=660).pack(fill="x", padx=10, pady=8)
+        if entry.get("expected_business_conflict_pending") is True:
+            WrappedLabel(summary, text="兩份證據均已保存，原目標判定仍保留。請依本位置獨立裁決：\n"
+                         + expected_conflict_summary(entry), justify="left", anchor="w",
+                         wraplength=660).pack(fill="x", padx=10, pady=8)
 
         form = tk.Frame(body)
         form.pack(fill="x", padx=16, pady=4)
@@ -870,12 +900,13 @@ def load_review_project(output_dir, progress):
     snapshot = service.load_resume_snapshot()
     manifest, db = copy.deepcopy(snapshot.manifest), copy.deepcopy(snapshot.db)
     progress("核對跨專案判定衝突")
-    from pdf_portability import validate_conflict_state, actual_excel_conflict_state
+    from pdf_portability import validate_conflict_state, actual_excel_conflict_state, expected_conflict_review_view
     conflicts = validate_conflict_state(output_dir, manifest, db)
     actual_conflicts = set(actual_excel_conflict_state(output_dir, manifest, db))
     progress("整理已核對的校對項目")
     summary = {"staging_validation_pending": True}
-    prepared = prepare_review_queue(manifest, copy.deepcopy(snapshot.ledger), [], 0, set(), set(),
+    review_view = expected_conflict_review_view(output_dir, manifest, db, snapshot.ledger)
+    prepared = prepare_review_queue(manifest, review_view, [], 0, set(), set(),
                                     actual_conflict_review_ids=actual_conflicts)
     progress("校對清單已備妥；actual 暫存將在背景核對")
     return dict(manifest=manifest, db=db, summary=summary, prepared=prepared,
@@ -1223,9 +1254,10 @@ class ReviewApp:
 
     def _set_actionable_records_from_ledger(self, ledger, *, advance_from=None):
         if hasattr(self, "output_dir") and hasattr(self, "db"):
-            from pdf_portability import actual_excel_conflict_state
+            from pdf_portability import actual_excel_conflict_state, expected_conflict_review_view
             self.actual_excel_conflict_review_ids = set(actual_excel_conflict_state(
                 self.output_dir, self.manifest, self.db))
+            ledger = expected_conflict_review_view(self.output_dir, self.manifest, self.db, ledger)
         else:
             # Pure queue/navigation fixtures have no persisted project to read.
             self.actual_excel_conflict_review_ids = set()
@@ -1550,8 +1582,10 @@ class ReviewApp:
                                             **({"defer_staging_validation": True} if pending_staging else {}))
                 progress.put("判定已寫入，正在整理待辦")
                 queue_started = time.perf_counter()
+                from pdf_portability import expected_conflict_review_view
+                review_view = expected_conflict_review_view(request["output_dir"], manifest, result.db, result.ledger)
                 prepared = prepare_review_queue(
-                    manifest, result.ledger, previous, index,
+                    manifest, review_view, previous, index,
                     set(result.staging_summary.get("staged_checked_occurrence_ids") or []),
                     deferred, character_order, advance_from=request["review_id"],
                     actual_conflict_review_ids=actual_conflict_review_ids)
