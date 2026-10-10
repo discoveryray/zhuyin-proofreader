@@ -13,13 +13,16 @@ import binascii
 import functools
 import hashlib
 import json
+import math
 import os
 import tempfile
 import uuid
 import zlib
 from datetime import datetime
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, Mapping, Sequence
+from sealed_workbook_paths import bound_operation, bind_workbooks, snapshot_entries, owned_path, remember_snapshot, LOCATION_CONTRACT
 
 import fitz
 
@@ -33,6 +36,7 @@ ACTUAL_EXCEL_MARKER_VERSION = 1
 CONFLICT_FILE = "跨專案判定衝突.json"
 EXCEL_PROOF_SHEET = "跨電腦內容證據"
 EXCEL_PROOF_VERSION = 1
+EXCEL_CONTENT_PROOF_MAX_BYTES = 256 * 1024 * 1024
 PRESENTATION_PLAN_VERSION = 1
 PRESENTATION_RECEIPTS = (CONFLICT_FILE, PENDING_ACTUAL_FILE)
 
@@ -63,8 +67,9 @@ def _stable_excel_import(importer):
     """Read user Excel bytes once before any workbook metadata or decision read."""
     @functools.wraps(importer)
     def wrapped(target_dir, xlsx, *args, **kwargs):
+        from sealed_workbook_paths import binding_scope
         original = Path(xlsx).resolve()
-        with _workbook_snapshot(original) as (snapshot, digest):
+        with binding_scope(), _workbook_snapshot(original) as (snapshot, digest):
             return importer(target_dir, snapshot, *args,
                             _original_xlsx=original, _snapshot_sha=digest, **kwargs)
     return wrapped
@@ -168,25 +173,23 @@ def _verify_available_session_pdfs(output_dir: Path, manifest) -> None:
 def _project_transfer_locks(*directories):
     """Acquire source and target roots in the same order for every transfer."""
     import standalone_proofread as sp
+    from sealed_workbook_paths import binding_scope
     roots = {sp.project_actual_evidence_root(Path(path).resolve()) for path in directories}
-    with ExitStack() as stack:
+    with binding_scope(), ExitStack() as stack:
         for root in sorted(roots, key=lambda path: str(path).casefold()):
             stack.enter_context(sp.project_delivery_lock(root))
         yield
 
 
-def _artifact(output_dir: Path, info: Mapping[str, Any], kind: str) -> Path:
-    stored = Path(str(info.get(f"{kind}_workbook") or ""))
-    subdir = "01_實際注音" if kind == "actual" else "02_候選報告"
-    local = output_dir / subdir / stored.name
-    wanted = str(info.get(f"{kind}_workbook_sha256") or "")
-    candidates = {str(path.resolve()): path for path in (stored, local) if path.is_file()}
-    matches = [path for path in candidates.values() if wanted and _sha(path) == wanted]
-    if not matches:
-        raise ValueError(f"DATA_INTEGRITY_ERROR：來源工作簿遺失或 SHA 不符：{stored.name}")
-    return matches[0]
+def _artifact(output_dir: Path, info: Mapping[str, Any], kind: str, *, manifest=None) -> Path:
+    import standalone_proofread as sp
+    from sealed_workbook_paths import workbook_path
+    if manifest is None:
+        manifest = sp.json_load_strict(Path(output_dir) / "校對工作階段.json")
+    return workbook_path(output_dir, manifest, info, kind)
 
 
+@bound_operation(project_parameter="output_dir")
 def _load_project(output_dir: Path, *, allow_incomplete: bool = False,
                   allow_unresolved_conflict: bool = False,
                   allow_actual_excel_conflict: bool = False):
@@ -197,9 +200,7 @@ def _load_project(output_dir: Path, *, allow_incomplete: bool = False,
         raise ValueError(f"跨電腦接續未完成，不能當作完整來源或匯入目標：{output_dir}")
     manifest = sp.json_load_strict(output_dir / "校對工作階段.json")
     sp.validate_manifest_integrity(manifest)
-    for info in manifest.get("pdfs", []):
-        _artifact(output_dir, info, "actual")
-        _artifact(output_dir, info, "candidate")
+    bind_workbooks(output_dir, manifest)
     raw_db = sp.json_load_strict(output_dir / "人工判定資料庫.json")
     if not isinstance(raw_db, dict):
         raise ValueError("DATA_INTEGRITY_ERROR：人工判定資料庫根節點必須是物件")
@@ -403,6 +404,234 @@ def _actual_excel_conflict_status(status: Mapping[str, Any], conflicts: list[dic
     return updated
 
 
+EXPECTED_BUSINESS_CONTRACT = "expected-business-conflict/1"
+DEPENDENCY_RECHECK_CONTRACT = "review-dependency-recheck/1"
+_RECHECK_KEYS = ("state", "actual", "actual_evidence", "expected_set",
+                 "expected_evidence", "context_evidence")
+
+
+def _dependency_differences(source, baseline, current, action):
+    comparisons = [("baseline", baseline, _RECHECK_KEYS)]
+    if action == "確認現版差異":
+        comparisons.append(("current", current, _RECHECK_KEYS[1:]))
+    return [{"comparison": label, "key": key, "source": copy.deepcopy(source.get(key)),
+             "target": copy.deepcopy(target.get(key))}
+            for label, target, keys in comparisons for key in keys
+            if source.get(key) != target.get(key)]
+
+
+def _valid_retained_local(entry, event):
+    return (isinstance(event, dict) and event.get("portability_source") is None
+            and event.get("action") in {"補建expected證據", "解決expected證據", "確認現版差異", "確認非校對範圍"}
+            and not entry.get("review_event_replay_status")
+            and entry.get("state") in {"PASS", "TEXTBOOK_ERROR_CONFIRMED", "EXCLUDED_OUT_OF_SCOPE"})
+
+
+def _dependency_recheck_record(source_manifest, manifest, source, baseline, current, event, identity, prior):
+    record = _expected_business_record(source_manifest, manifest, current, event, identity, prior)
+    record["contract"] = DEPENDENCY_RECHECK_CONTRACT
+    record["dependency_recheck"] = {
+        "version": 1, "source_manifest_integrity_sha256": source_manifest["manifest_integrity_sha256"],
+        "source_snapshot": copy.deepcopy(source), "target_baseline_snapshot": copy.deepcopy(baseline),
+        "target_current_snapshot": copy.deepcopy(current),
+        "differences": _dependency_differences(source, baseline, current, event["action"]),
+        "disposition": "PRESERVED_LOCAL_DECISION" if _valid_retained_local(current, prior)
+                       else "RECHECK_LOCAL_REQUIRED"}
+    return record
+
+
+def _validate_dependency_recheck(item, manifest, current_base):
+    import standalone_proofread as sp
+    from occurrence_ledger import validate_occurrence_ledger
+    audit = item["dependency_recheck"]
+    if (not isinstance(audit, dict) or set(audit) != {
+            "version", "source_manifest_integrity_sha256", "source_snapshot", "target_baseline_snapshot",
+            "target_current_snapshot", "differences", "disposition"}
+            or type(audit["version"]) is not int or audit["version"] != 1
+            or audit["disposition"] not in {"RECHECK_LOCAL_REQUIRED", "PRESERVED_LOCAL_DECISION"}
+            or not isinstance(audit["source_manifest_integrity_sha256"], str)
+            or len(audit["source_manifest_integrity_sha256"]) != 64
+            or any(c not in "0123456789abcdef" for c in audit["source_manifest_integrity_sha256"])):
+        raise ValueError("待重核 receipt 契約無效")
+    source, baseline, current = (audit[key] for key in
+                                ("source_snapshot", "target_baseline_snapshot", "target_current_snapshot"))
+    if any(not isinstance(entry, dict) for entry in (source, baseline, current)):
+        raise ValueError("待重核 snapshot 格式無效")
+    for entry in (source, baseline, current):
+        validate_occurrence_ledger([entry])
+    if (any(source.get(key) != item[field] for key, field in (
+            ("review_id", "source_review_id"), ("occurrence_id", "source_occurrence_id"),
+            ("pdf_sha256", "source_pdf_sha256")))
+            or any(sp.manual_expected_target(entry) != sp.manual_expected_target(current_base)
+                   for entry in (baseline, current))):
+        raise ValueError("待重核 snapshot 身份／位置無效")
+    _require_mapped_textbook_context(source, baseline, "待重核 ")
+    _require_mapped_textbook_context(current_base, baseline, "待重核 ")
+    event, basis = item["source_event"], item["target_basis"]
+    if event.get("action") not in {"確認現版差異", "確認非校對範圍"}:
+        raise ValueError("待重核原始 action 無效")
+    if sp._apply_review_event(source, event).get("review_event_replay_status"):
+        raise ValueError("待重核來源判定失效")
+    replayed = (sp._apply_review_event(baseline, basis["event"], expected_manifest=manifest)
+                if basis["event"] is not None else baseline)
+    expected_basis = _expected_target_basis(manifest, current, basis["event"])
+    expected_basis["manifest_integrity_sha256"] = basis["manifest_integrity_sha256"]
+    differences = _dependency_differences(source, baseline, current, event["action"])
+    if (replayed != current or basis != expected_basis or not differences
+            or audit["differences"] != differences
+            or (audit["disposition"] == "PRESERVED_LOCAL_DECISION") !=
+               _valid_retained_local(current, basis["event"])):
+        raise ValueError("待重核原始目標／依賴差異無法驗證")
+
+
+def _expected_target_basis(manifest, entry, event):
+    import standalone_proofread as sp
+    return {"kind": "review_event" if event else "sealed_resolver_record",
+            "manifest_integrity_sha256": manifest["manifest_integrity_sha256"],
+            "session_id": manifest["session_id"],
+            "expected_asset_fingerprint": manifest.get("expected_asset_fingerprint", ""),
+            "target": sp.manual_expected_target(entry),
+            "expected_snapshot": sp.confirmation_expected_snapshot(entry),
+            "event": copy.deepcopy(event) if event else None}
+
+
+def _expected_business_record(source_manifest, target_manifest, target, event, identity, prior):
+    return {"contract": EXPECTED_BUSINESS_CONTRACT,
+            "target_review_id": target["review_id"],
+            "source_review_id": identity["review_id"],
+            "source_session_id": source_manifest["session_id"],
+            "source_pdf_sha256": identity["pdf_sha256"],
+            "source_occurrence_id": identity["occurrence_id"],
+            "target_session_id": target_manifest["session_id"],
+            "target_pdf_sha256": target["pdf_sha256"],
+            "target_occurrence_id": target["occurrence_id"],
+            "source_identity": copy.deepcopy(identity),
+            "source_event": {**copy.deepcopy(event), "portability_source": copy.deepcopy(identity)},
+            "target_basis": _expected_target_basis(target_manifest, target, prior)}
+
+
+def _sealed_expected_receipt(conflicts, supplements):
+    payload = {"version": 2, "contract": EXPECTED_BUSINESS_CONTRACT,
+               "conflicts": conflicts, "supplements": supplements}
+    return {**payload, "integrity_sha256": hashlib.sha256(_canonical(payload)).hexdigest()}
+
+
+def _validated_expected_receipt(receipt, manifest):
+    import standalone_proofread as sp
+    if not isinstance(receipt, dict) or type(receipt.get("version")) is not int:
+        raise ValueError("跨專案判定衝突紀錄格式無法驗證")
+    if receipt["version"] == 1:
+        if not isinstance(receipt.get("conflicts"), list) or not receipt["conflicts"]:
+            raise ValueError("跨專案判定衝突紀錄格式無法驗證")
+        return receipt
+    if (receipt["version"] != 2 or set(receipt) != {
+            "version", "contract", "conflicts", "supplements", "integrity_sha256"}
+            or receipt["contract"] != EXPECTED_BUSINESS_CONTRACT
+            or not isinstance(receipt["conflicts"], list) or not isinstance(receipt["supplements"], list)
+            or not (receipt["conflicts"] or receipt["supplements"])
+            or receipt["integrity_sha256"] != hashlib.sha256(_canonical(
+                {k: v for k, v in receipt.items() if k != "integrity_sha256"})).hexdigest()):
+        raise ValueError("expected business receipt 格式／integrity 無法驗證")
+    sp.validate_manifest_integrity(manifest)
+    by_id = {entry["review_id"]: entry for entry in sp.materialize_ledger(manifest, sp.normalize_db({}))}
+    seen = set()
+    for item in [*receipt["conflicts"], *receipt["supplements"]]:
+        if isinstance(item, dict) and "contract" not in item and item in receipt["conflicts"]:
+            # Exact historical event/event receipt entries retain their v1 checks below.
+            continue
+        keys = {"contract", "target_review_id", "source_review_id", "source_session_id",
+                "source_pdf_sha256", "source_occurrence_id", "target_session_id",
+                "target_pdf_sha256", "target_occurrence_id", "source_identity", "source_event", "target_basis"}
+        recheck = isinstance(item, dict) and item.get("contract") == DEPENDENCY_RECHECK_CONTRACT
+        if recheck:
+            keys.add("dependency_recheck")
+        if (not isinstance(item, dict) or set(item) != keys
+                or item["contract"] not in {EXPECTED_BUSINESS_CONTRACT, DEPENDENCY_RECHECK_CONTRACT}
+                or (recheck and item not in receipt["conflicts"])):
+            raise ValueError("expected business receipt entry 契約無效")
+        entry = by_id.get(item["target_review_id"])
+        identity, source_event, basis = item["source_identity"], item["source_event"], item["target_basis"]
+        if (entry is None or not isinstance(identity, dict) or not isinstance(source_event, dict)
+                or not isinstance(basis, dict) or set(basis) != {
+                    "kind", "manifest_integrity_sha256", "session_id", "expected_asset_fingerprint",
+                    "target", "expected_snapshot", "event"}
+                or basis["kind"] not in {"review_event", "sealed_resolver_record"}
+                or (basis["kind"] == "review_event") != isinstance(basis["event"], dict)
+                or (basis["kind"] == "sealed_resolver_record" and basis["event"] is not None)
+                or not isinstance(basis["manifest_integrity_sha256"], str)
+                or len(basis["manifest_integrity_sha256"]) != 64
+                or any(char not in "0123456789abcdef" for char in basis["manifest_integrity_sha256"])
+                or item["target_session_id"] != manifest["session_id"]
+                or item["target_occurrence_id"] != entry["occurrence_id"]
+                or item["target_pdf_sha256"] != entry["pdf_sha256"]
+                or source_event.get("portability_source") != identity
+                or any(identity.get(key) != item[field] for key, field in (
+                    ("session_id", "source_session_id"), ("pdf_sha256", "source_pdf_sha256"),
+                    ("occurrence_id", "source_occurrence_id"), ("review_id", "source_review_id"),
+                    ("target_session_id", "target_session_id"), ("target_pdf_sha256", "target_pdf_sha256"),
+                    ("target_occurrence_id", "target_occurrence_id"), ("target_review_id", "target_review_id")))
+                or not isinstance(identity.get("source_excel_sha256"), str)
+                or len(identity["source_excel_sha256"]) != 64
+                or any(char not in "0123456789abcdef" for char in identity["source_excel_sha256"])
+                or not isinstance(item["source_pdf_sha256"], str) or len(item["source_pdf_sha256"]) != 64
+                or any(char not in "0123456789abcdef" for char in item["source_pdf_sha256"])
+                or any(not isinstance(item[key], str) or not item[key]
+                       for key in ("source_session_id", "source_occurrence_id", "source_review_id"))
+                or type(identity.get("source_excel_row")) is not int or identity["source_excel_row"] < 2):
+            raise ValueError("expected business receipt source／target 身份無法驗證")
+        key = (identity["source_excel_sha256"], identity["source_excel_row"], item["target_review_id"])
+        if key in seen:
+            raise ValueError("expected business receipt 來源記錄重複")
+        seen.add(key)
+        if recheck:
+            _validate_dependency_recheck(item, manifest, entry)
+            continue
+        sp.expected_resolution_payload(source_event)
+        if (item in receipt["supplements"]
+                and sp.normalize_expected_set(source_event.get("expected_set")) !=
+                    sp.normalize_expected_set(basis["expected_snapshot"].get("expected_set"))):
+            raise ValueError("expected 一致補充的保存讀音不一致")
+        resolved = (sp._apply_review_event(entry, basis["event"], expected_manifest=manifest)
+                    if basis["event"] is not None else entry)
+        current_basis = _expected_target_basis(manifest, resolved, basis["event"])
+        # The historical whole-manifest seal is audit, not an actual->expected
+        # dependency. Current manifest, expected fingerprint/target/snapshot and
+        # original event still independently pass their own contracts.
+        current_basis["manifest_integrity_sha256"] = basis["manifest_integrity_sha256"]
+        if resolved.get("review_event_replay_status") or basis != current_basis:
+            raise ValueError("expected business receipt 原始目標 expected 來源失效")
+    return receipt
+
+
+def expected_conflict_review_view(output_dir, manifest, db, ledger):
+    """Workflow annotation only: never modify either formal evidence lane."""
+    pending = set(validate_conflict_state(output_dir, manifest, db))
+    receipt_path = Path(output_dir) / CONFLICT_FILE
+    conflicts = []
+    if pending:
+        import standalone_proofread as sp
+        conflicts = sp.json_load_strict(receipt_path)["conflicts"]
+    return [{**entry, **({"expected_business_conflict_pending": True,
+                          "expected_business_conflicts": copy.deepcopy([
+                              item for item in conflicts if item["target_review_id"] == entry["review_id"]])}
+                        if entry["review_id"] in pending else {})} for entry in ledger]
+
+
+def hold_expected_conflict_completion(output_dir, manifest, db, gate):
+    pending = validate_conflict_state(output_dir, manifest, db)
+    if not pending:
+        return gate
+    from occurrence_ledger import PROCESSING_FINISHED, PROOFREAD_COMPLETE
+    held = copy.deepcopy(gate)
+    held["hard_gates"]["expected_business_conflicts_zero"] = False
+    held["failed_gates"] = list(dict.fromkeys([*held["failed_gates"], "expected_business_conflicts_zero"]))
+    held["complete"] = False
+    if held["status"] == PROOFREAD_COMPLETE:
+        held["status"] = PROCESSING_FINISHED
+    held["expected_business_conflict_review_ids"] = sorted(set(pending))
+    return held
+
+
 def validate_conflict_state(output_dir: Path, manifest: Mapping[str, Any], db: Mapping[str, Any]):
     """A conflicted row is inactive until a fresh local event cites its receipt."""
     import standalone_proofread as sp
@@ -410,11 +639,13 @@ def validate_conflict_state(output_dir: Path, manifest: Mapping[str, Any], db: M
     path = Path(output_dir) / CONFLICT_FILE
     if not path.exists():
         return []
-    receipt = sp.json_load_strict(path)
-    if (not isinstance(receipt, dict) or receipt.get("version") != 1
-            or not isinstance(receipt.get("conflicts"), list) or not receipt["conflicts"]):
-        raise ValueError("跨專案判定衝突紀錄格式無法驗證")
+    receipt = _validated_expected_receipt(sp.json_load_strict(path), manifest)
     valid_ids = {entry["review_id"] for entry in manifest.get("records", [])}
+    return _pending_expected_conflicts(receipt, valid_ids, db)
+
+
+def _pending_expected_conflicts(receipt, valid_ids, db):
+    """Re-evaluate current adjudications against an integrity-verified receipt."""
     unresolved = []
     def locally_resolves(event, conflict):
         resolution = event.get("portability_conflict_resolution") if isinstance(event, dict) else None
@@ -429,28 +660,75 @@ def validate_conflict_state(output_dir: Path, manifest: Mapping[str, Any], db: M
         if (not isinstance(conflict, dict)
                 or conflict.get("target_review_id") not in valid_ids
                 or not isinstance(conflict.get("source_event"), dict)
-                or not isinstance(conflict.get("target_event"), dict)
+                or not (isinstance(conflict.get("target_event"), dict)
+                        or conflict.get("contract") in {EXPECTED_BUSINESS_CONTRACT, DEPENDENCY_RECHECK_CONTRACT})
                 or not conflict.get("source_pdf_sha256")
                 or not conflict.get("target_pdf_sha256")):
             raise ValueError("跨專案判定衝突來源或位置識別不完整")
         review_id = conflict["target_review_id"]
+        if (conflict.get("contract") == DEPENDENCY_RECHECK_CONTRACT
+                and conflict["dependency_recheck"]["disposition"] == "PRESERVED_LOCAL_DECISION"):
+            # This is an audit of an already completed local decision, not a
+            # new workflow hold. It never reinstates the imported source event.
+            continue
         # A later conflict removes the active local adjudication. Its target
         # snapshot is the durable, exact record of that adjudication and the
         # earlier receipt it resolved; neither source verdict is discarded.
         historical_resolution = any(
             later.get("target_review_id") == review_id
-            and locally_resolves(later.get("target_event"), conflict)
+            and locally_resolves(later.get("target_event", (later.get("target_basis") or {}).get("event")), conflict)
             for later in receipt["conflicts"][index + 1:]
             if isinstance(later, dict))
         if historical_resolution:
             continue
         event = db["events"].get(review_id)
+        if (conflict.get("contract") in {EXPECTED_BUSINESS_CONTRACT, DEPENDENCY_RECHECK_CONTRACT}
+                and event == conflict["target_basis"]["event"]):
+            # Retained formal target truth does not clear the workflow hold.
+            unresolved.append(review_id)
+            continue
         if event is None or event.get("action") == "保留待人工":
             unresolved.append(review_id)
         else:
             if not locally_resolves(event, conflict):
                 raise ValueError(f"衝突位置有未經本地裁決的有效事件：{review_id}")
     return unresolved
+
+
+class _VerifiedExpectedConflicts:
+    """Private service-owned receipt snapshot, never accepted from GUI callers.
+
+    Construction runs the full historical source/basis validation. The service
+    binds this object to captured manifest and receipt bytes, checks them again
+    before writing, and re-evaluates each staged DB. Public views are copies;
+    neither a returned view nor an event can modify cached historical evidence.
+    """
+
+    def __init__(self, receipt, manifest):
+        self._receipt = (_validated_expected_receipt(copy.deepcopy(receipt), manifest)
+                         if receipt is not None else {"conflicts": []})
+        self._valid_ids = {entry["review_id"] for entry in manifest.get("records", [])}
+        self._by_id = {}
+        for item in self._receipt["conflicts"]:
+            if not isinstance(item, dict):
+                raise ValueError("跨專案判定衝突來源或位置識別不完整")
+            self._by_id.setdefault(item.get("target_review_id"), []).append(item)
+
+    def pending(self, db):
+        return _pending_expected_conflicts(self._receipt, self._valid_ids, db)
+
+    def review_view(self, db, ledger, *, pending=None):
+        pending = set(self.pending(db) if pending is None else pending)
+        return [{**entry, **({"expected_business_conflict_pending": True,
+                              "expected_business_conflicts": copy.deepcopy(self._by_id[entry["review_id"]])}
+                            if entry["review_id"] in pending else {})} for entry in ledger]
+
+    def resolution(self, review_id, pending):
+        if review_id not in pending:
+            return None
+        selected = self._by_id[review_id]
+        return {"conflict_sha256": [hashlib.sha256(_canonical(item)).hexdigest() for item in selected],
+                "original_conflicts": copy.deepcopy(selected)}
 
 
 def conflict_resolution_evidence(output_dir: Path, manifest: Mapping[str, Any],
@@ -587,6 +865,34 @@ def _excel_bound_rows(workbook, kind: str):
             for row in rows[1:]]
 
 
+def _check_excel_content_proof_size(raw: bytes) -> None:
+    """One inclusive decompressed-byte limit for Excel proof export and reads."""
+    if len(raw) > EXCEL_CONTENT_PROOF_MAX_BYTES:
+        raise ValueError(
+            "Excel 跨電腦內容證據解壓容量超限："
+            f"上限 {EXCEL_CONTENT_PROOF_MAX_BYTES / (1024 * 1024):g} MiB"
+            f"（{EXCEL_CONTENT_PROOF_MAX_BYTES} bytes）；未匯出或匯入")
+
+
+def _decode_excel_content_proof(chunks, *, label: str):
+    """Decode one bounded zlib stream without hiding capacity failures."""
+    try:
+        packed = base64.b64decode("".join(chunks), validate=True)
+        decoder = zlib.decompressobj()
+        raw = decoder.decompress(packed, EXCEL_CONTENT_PROOF_MAX_BYTES + 1)
+    except (ValueError, TypeError, zlib.error) as exc:
+        raise ValueError(f"{label} 無法解碼：Base64／壓縮資料損壞") from exc
+    _check_excel_content_proof_size(raw)
+    if not decoder.eof or decoder.unconsumed_tail or decoder.unused_data:
+        raise ValueError(f"{label} 壓縮串流不完整或含尾隨資料")
+    try:
+        payload = json.loads(raw)
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"{label} 無法解碼：JSON 格式損壞") from exc
+    return raw, payload
+
+
+@bound_operation(project_parameter="output_dir")
 def write_excel_content_proof(workbook, output_dir: Path, manifest, db, *, kind: str,
                               snapshot_db=None, attestations=None,
                               allow_internal_incomplete: bool = False) -> None:
@@ -633,6 +939,7 @@ def write_excel_content_proof(workbook, output_dir: Path, manifest, db, *, kind:
         ar._load_actual_sample_profile(workbook)
         payload["actual_profile_metadata"] = ar._actual_profile_metadata(workbook)
     raw = _canonical(payload)
+    _check_excel_content_proof_size(raw)
     encoded = base64.b64encode(zlib.compress(raw, level=9)).decode("ascii")
     chunks = [encoded[index:index + 30000] for index in range(0, len(encoded), 30000)]
     sheet = workbook.create_sheet(EXCEL_PROOF_SHEET)
@@ -655,16 +962,8 @@ def validate_actual_profile_content_proof(workbook, *, source_manifest=None):
             or any(row[0] != i or not isinstance(row[1], str) or not row[1]
                    for i, row in enumerate(rows[3:], 1))):
         raise ValueError("actual GPT source content proof chunk contract 不完整")
-    try:
-        packed = base64.b64decode("".join(row[1] for row in rows[3:]), validate=True)
-        decoder = zlib.decompressobj()
-        raw = decoder.decompress(packed, 128 * 1024 * 1024 + 1)
-        if (len(raw) > 128 * 1024 * 1024 or not decoder.eof
-                or decoder.unconsumed_tail or decoder.unused_data):
-            raise ValueError("actual GPT source content proof 超過上限或不完整")
-        payload = json.loads(raw)
-    except (ValueError, TypeError, zlib.error) as exc:
-        raise ValueError("actual GPT source content proof 無法解碼") from exc
+    raw, payload = _decode_excel_content_proof(
+        (row[1] for row in rows[3:]), label="actual GPT source content proof")
     if not isinstance(payload, dict):
         raise ValueError("actual GPT source content proof 根節點無效")
     metadata = ar._actual_profile_metadata(workbook)
@@ -709,17 +1008,9 @@ def load_excel_content_proof(xlsx: Path, target_dir: Path, target_manifest, *,
             or any(row[0] != index or not isinstance(row[1], str)
                    for index, row in enumerate(rows[3:], 1))):
         raise ValueError("Excel 跨電腦內容證據格式損壞")
-    try:
-        packed = base64.b64decode("".join(row[1] for row in rows[3:]), validate=True)
-        decompressor = zlib.decompressobj()
-        raw = decompressor.decompress(packed, 128 * 1024 * 1024 + 1)
-        if (len(raw) > 128 * 1024 * 1024 or not decompressor.eof
-                or decompressor.unconsumed_tail or decompressor.unused_data):
-            raise ValueError("Excel 跨電腦內容證據超過大小上限或壓縮串流不完整")
-        payload = json.loads(raw)
-    except (ValueError, zlib.error, TypeError) as exc:
-        raise ValueError("Excel 跨電腦內容證據無法解碼") from exc
-    if (len(raw) > 128 * 1024 * 1024 or hashlib.sha256(raw).hexdigest() != rows[1][1]
+    raw, payload = _decode_excel_content_proof(
+        (row[1] for row in rows[3:]), label="Excel 跨電腦內容證據")
+    if (hashlib.sha256(raw).hexdigest() != rows[1][1]
             or not isinstance(payload, dict) or payload.get("version") != EXCEL_PROOF_VERSION
             or payload.get("kind") != kind or _canonical(payload) != raw):
         raise ValueError("Excel 跨電腦內容證據完整性或種類不符")
@@ -1043,12 +1334,27 @@ def _pages_equivalent(source_pages, target_pages):
                     for source, target in zip(source_pages, target_pages)))
 
 
+class _ExactBatchGeometry(dict):
+    """Admission retained only after physical SHA and complete page checks."""
+
+    def __init__(self, pages, source_manifest, target_manifest, mapping):
+        super().__init__(pages)
+        self.source_digest = hashlib.sha256(_canonical(source_manifest)).hexdigest()
+        self.target_digest = hashlib.sha256(_canonical(target_manifest)).hexdigest()
+        self.mapping = tuple(sorted(mapping.items()))
+        self.pages_digest = hashlib.sha256(_canonical(pages)).hexdigest()
+
+
 def _match_pdfs(proof: Mapping[str, Any], source_manifest: Mapping[str, Any],
                 target_manifest: Mapping[str, Any], target_dir: Path):
     source_pdfs = list(proof["pdfs"])
     target_pdfs = list(target_manifest.get("pdfs", []))
     if len(source_pdfs) != len(target_pdfs):
         raise ValueError("PDF 數量不同；不支援部分教材成果移轉")
+    source_shas = [item["pdf_sha256"] for item in source_pdfs]
+    target_shas = [item["pdf_sha256"] for item in target_pdfs]
+    if len(set(source_shas)) != len(source_shas) or len(set(target_shas)) != len(target_shas):
+        raise ValueError("來源或目標 PDF SHA 重複；不支援不唯一的教材對應")
     rendered = []
     for target in target_pdfs:
         path = _source_pdf(target_manifest, target, target_dir)
@@ -1056,6 +1362,21 @@ def _match_pdfs(proof: Mapping[str, Any], source_manifest: Mapping[str, Any],
         rendered.append((target, pages))
     mapping = {}
     geometry = {}
+    if (set(source_shas) == set(target_shas)
+            and all(page.get("candidate_text_sha256")
+                    for source in source_pdfs for page in source["pages"])):
+        # Complete, unique identical-byte batches have an exact one-to-one
+        # identity. Still check every carried page against the physical target;
+        # a mismatch cannot fall back to a different visually similar PDF.
+        by_sha = {target["pdf_sha256"]: pages for target, pages in rendered}
+        for source in source_pdfs:
+            sha = source["pdf_sha256"]
+            pages = by_sha[sha]
+            if not _pages_equivalent(source["pages"], pages):
+                raise ValueError(f"同 SHA PDF 頁面內容／文字證據不符：{source['pdf_name']}；未移轉")
+            mapping[sha] = sha
+            geometry[sha] = (source["pages"], pages)
+        return mapping, _ExactBatchGeometry(geometry, source_manifest, target_manifest, mapping)
     for source in source_pdfs:
         missing_text = any("candidate_text_sha256" not in page for page in source["pages"])
         candidates = []
@@ -1118,7 +1439,180 @@ def _anchor(entry: Mapping[str, Any], pages):
     return (page, *(round(value, 2) for value in displayed), str(entry.get("char") or ""))
 
 
+class _CanonicalReviewMap(dict):
+    contract = "same-pdf-canonical-roster/1"
+    fallback_adapter_contract = "sealed-top-true-source-N/1"
+
+
+_ROSTER_IDENTITY_ALIASES = {
+    "physical_page": ("實體頁碼", "physical_page"),
+    "stable_key": ("穩定注音鍵", "stable_key"), "font": ("font",),
+    "font_xref": ("font_xref",), "glyph_id": ("glyph_id_字形索引", "glyph_id", "候選glyph_id"),
+    "zhuyin_component_id": ("注音元件ID", "候選注音元件ID", "zhuyin_component_id"),
+    "char": ("字元", "target_char", "char"),
+    **{key: (key,) for key in ("x0", "y0", "x1", "y1")},
+}
+
+
+def _roster_number(value):
+    if value is None or isinstance(value, bool) or value == "":
+        raise ValueError("canonical roster 缺少合法數值")
+    try:
+        number = Decimal(str(value))
+    except InvalidOperation as exc:
+        raise ValueError("canonical roster 數值損壞") from exc
+    if not number.is_finite() or not math.isfinite(float(number)):
+        raise ValueError("canonical roster 非有限數值")
+    return number
+
+
+def _canonical_roster(manifest, pages_by_sha, side):
+    """Prove original identity and raw positioning, without rewriting evidence."""
+    import occurrence_ledger as ol
+    roster, reviews, adapters = {}, set(), []
+    for entry in manifest.get("records", []):
+        source = entry.get("source_record")
+        if not isinstance(source, dict):
+            raise ValueError("canonical roster 缺少 source_record")
+        sha = entry.get("pdf_sha256")
+        if sha not in pages_by_sha or source.get("pdf_sha256") not in (None, "", sha):
+            raise ValueError("canonical roster PDF partition 矛盾")
+        for obj, required in ((source, {"ledger_schema_version": ol.LEDGER_SCHEMA_VERSION,
+                                       "workbook_schema_version": ol.WORKBOOK_SCHEMA_VERSION}),
+                              (entry, {"ledger_schema_version": ol.LEDGER_SCHEMA_VERSION,
+                                       "review_id_schema_version": ol.REVIEW_ID_SCHEMA_VERSION})):
+            if any(obj.get(key) != value for key, value in required.items()):
+                raise ValueError("canonical roster 未知 record schema")
+        for key, aliases in _ROSTER_IDENTITY_ALIASES.items():
+            if not any(alias in source for alias in aliases):
+                raise ValueError(f"canonical roster 原始身份缺少 {key}")
+            for part, obj in (("source_record", source), ("top", entry)):
+                values = [str(obj[a]).strip() for a in aliases if obj.get(a) not in (None, "")]
+                if len(set(values)) > 1:
+                    raise ValueError(f"canonical roster {part} 身份 alias 矛盾：{key}")
+            if key not in entry:
+                raise ValueError(f"canonical roster 缺少正式 top projection：{key}")
+            original = ol._row_value(source, *aliases)
+            if key in ("physical_page", "x0", "y0", "x1", "y1"):
+                projection_matches = _roster_number(entry[key]) == _roster_number(original)
+            else:
+                projection_matches = ol._row_value(entry, key) == original
+            if not projection_matches:
+                raise ValueError(f"canonical roster 正式 top/source_record projection 矛盾：{key}")
+            if key not in ("physical_page", "x0", "y0", "x1", "y1") and (
+                    ol._row_value(source, *aliases) != ol._row_value(entry, *aliases)):
+                raise ValueError(f"canonical roster top/source_record 原始身份矛盾：{key}")
+        payload = ol._identity_payload(sha, source)
+        if payload != ol._identity_payload(sha, entry):
+            raise ValueError("canonical roster top/source_record identity 矛盾")
+        for key in ("occurrence_id", "review_id", "identity_confidence"):
+            if not source.get(key) or source.get(key) != entry.get(key):
+                raise ValueError(f"canonical roster top/source_record {key} 矛盾")
+        if (source.get("identity_collision_base") or entry.get("identity_collision_base")
+                or source.get("identity_confidence") != "PDF_STABLE"):
+            raise ValueError("canonical roster collision／confidence 不相容")
+        if any(key not in obj or obj[key] in (None, "") for obj in (source, entry)
+               for key in ("identity_row_fallback",)):
+            raise ValueError("canonical roster 缺少 fallback metadata")
+        raw_flag, top_flag = source["identity_row_fallback"], entry["identity_row_fallback"]
+        raw_fallback = ol.parse_identity_row_fallback(raw_flag)
+        top_fallback = ol.parse_identity_row_fallback(top_flag)
+        adapter = type(top_flag) is bool and top_flag is True and type(raw_flag) is str and raw_flag == "N"
+        if raw_fallback or (top_fallback and not adapter) or (raw_fallback != top_fallback and not adapter):
+            raise ValueError("canonical roster fallback／旗標矛盾不在有限 adapter 契約")
+        occurrence_id, confidence, fallback = ol.make_occurrence_id(sha, source)
+        review_id = ol.make_review_id(occurrence_id)
+        if (fallback or confidence != "PDF_STABLE" or occurrence_id != entry["occurrence_id"]
+                or review_id != entry["review_id"]):
+            raise ValueError("canonical roster 保存 ID 與原始 canonical identity 不符")
+        if occurrence_id in roster or review_id in reviews:
+            raise ValueError("canonical roster canonical base／review ID 不唯一")
+        coords = tuple(_roster_number(source.get(k)) for k in ("x0", "y0", "x1", "y1"))
+        if coords != tuple(_roster_number(entry.get(k)) for k in ("x0", "y0", "x1", "y1")):
+            raise ValueError("canonical roster 原始 bbox 矛盾")
+        page = _roster_number(ol._row_value(source, *_ROSTER_IDENTITY_ALIASES["physical_page"]))
+        pages = pages_by_sha[sha]
+        if (page != page.to_integral_value() or not 1 <= page <= len(pages)
+                or coords[2] < coords[0] or coords[3] <= coords[1]):
+            raise ValueError("canonical roster 頁碼或 bbox 無效")
+        geometry = pages[int(page) - 1]
+        matrix = geometry.get("display_matrix")
+        if not isinstance(matrix, list) or len(matrix) != 6:
+            raise ValueError("canonical roster 顯示 matrix 缺失")
+        matrix = tuple(_roster_number(v) for v in matrix)
+        determinant = matrix[0] * matrix[3] - matrix[1] * matrix[2]
+        width, height = (_roster_number(geometry.get(k)) for k in ("width", "height"))
+        if determinant == 0 or width <= 0 or height <= 0 or not all(math.isfinite(float(v)) for v in matrix):
+            raise ValueError("canonical roster 顯示 geometry 無效")
+        raw_identity = tuple((alias, source[alias]) for aliases in _ROSTER_IDENTITY_ALIASES.values()
+                             for alias in aliases if alias in source)
+        signature = (payload, raw_identity, coords, page, matrix, width, height)
+        roster[occurrence_id] = (entry, signature)
+        reviews.add(review_id)
+        if adapter:
+            adapters.append((side, occurrence_id, review_id))
+    return roster, adapters
+
+
+def _canonical_roster_mapping(source_manifest, target_manifest, pdf_map, geometry):
+    import occurrence_ledger as ol
+    import standalone_proofread as sp
+    required = {"session_schema_version": ol.SESSION_SCHEMA_VERSION,
+                "workbook_schema_version": ol.WORKBOOK_SCHEMA_VERSION,
+                "ledger_schema_version": ol.LEDGER_SCHEMA_VERSION,
+                "review_id_schema_version": ol.REVIEW_ID_SCHEMA_VERSION}
+    if not isinstance(geometry, _ExactBatchGeometry):
+        return None  # General content pairing and historical adapters are unchanged.
+    historical = False
+    for manifest in (source_manifest, target_manifest):
+        if not any(k in manifest for k in required):
+            historical = True
+            continue  # Existing schema-less pairing receives no new admission.
+        for key, current in required.items():
+            value = manifest.get(key)
+            if value != current:
+                # Retain only an earlier patch in the existing schema family;
+                # unknown/missing/future schemas cannot claim legacy admission.
+                known_patches = {"workbook_schema_version": ("2.6.0",)}
+                if value in known_patches.get(key, ()):
+                    historical = True
+                else:
+                    raise ValueError("canonical roster 未知 manifest schema")
+    if historical:
+        return None
+    for manifest in (source_manifest, target_manifest):
+        sp.validate_manifest_integrity(manifest)
+    source_shas = [item.get("pdf_sha256") for item in source_manifest.get("pdfs", [])]
+    target_shas = [item.get("pdf_sha256") for item in target_manifest.get("pdfs", [])]
+    if (len(set(source_shas)) != len(source_shas) or len(set(target_shas)) != len(target_shas)
+            or set(source_shas) != set(target_shas) or set(source_shas) != set(geometry)
+            or pdf_map != {sha: sha for sha in source_shas}):
+        raise ValueError("canonical roster sealed PDF partitions／完整 mapping 不符")
+    if (geometry.source_digest != hashlib.sha256(_canonical(source_manifest)).hexdigest()
+            or geometry.target_digest != hashlib.sha256(_canonical(target_manifest)).hexdigest()
+            or geometry.mapping != tuple(sorted(pdf_map.items()))
+            or geometry.pages_digest != hashlib.sha256(_canonical(geometry)).hexdigest()):
+        raise ValueError("canonical roster physical/page admission 已變動")
+    source, sa = _canonical_roster(source_manifest, {sha: pair[0] for sha, pair in geometry.items()}, "source")
+    target, ta = _canonical_roster(target_manifest, {sha: pair[1] for sha, pair in geometry.items()}, "target")
+    if source.keys() != target.keys():
+        raise ValueError("canonical roster 完整 occurrence roster 不同")
+    mapped = _CanonicalReviewMap()
+    for oid, (entry, signature) in source.items():
+        other, other_signature = target[oid]
+        if signature != other_signature:
+            raise ValueError(f"canonical roster 原始定位 signature 不同：{oid}")
+        mapped[entry["review_id"]] = (entry, other)
+    mapped.fallback_adapter_ids = tuple(sa + ta)
+    print(f"{mapped.contract}: records={len(mapped)}; {mapped.fallback_adapter_contract}: "
+          f"observations={len(mapped.fallback_adapter_ids)}", flush=True)
+    return mapped
+
+
 def _map_reviews(source_manifest: Mapping[str, Any], target_manifest: Mapping[str, Any], pdf_map, geometry):
+    canonical = _canonical_roster_mapping(source_manifest, target_manifest, pdf_map, geometry)
+    if canonical is not None:
+        return canonical
     source_by_target = {target_sha: source_sha for source_sha, target_sha in pdf_map.items()}
     target_by_anchor = {}
     for entry in target_manifest.get("records", []):
@@ -1321,6 +1815,7 @@ def _presentation_current_receipts(target_dir: Path):
             for name in PRESENTATION_RECEIPTS}
 
 
+@bound_operation(project_parameter="output_dir")
 def resume_portable_project(output_dir: Path, *, _expected_marker_sha: str | None = None):
     """Redo only a fully bound committed presentation, or undo precommit receipts."""
     import standalone_proofread as sp
@@ -1339,7 +1834,7 @@ def resume_portable_project(output_dir: Path, *, _expected_marker_sha: str | Non
             raise ValueError("未完成專案封印檔已變動；未恢復或清標記")
         manifest = sp.json_load_strict(manifest_path)
         sp.validate_manifest_integrity(manifest)
-        sp.validate_output_artifact_hashes(manifest)
+        sp.validate_output_artifact_hashes(manifest, output_dir=output_dir)
         if manifest["manifest_integrity_sha256"] != marker["manifest_integrity_sha256"]:
             raise ValueError("未完成專案封印與發布計畫不符")
         db_path = output_dir / "人工判定資料庫.json"
@@ -1406,13 +1901,14 @@ def _require_mapped_textbook_context(source, target, label: str) -> None:
 
 
 @_stable_excel_import
+@bound_operation(project_parameter="target_dir")
 def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False,
                           _original_xlsx: Path, _snapshot_sha: str):
     """Import filled expected rows after full-page and occurrence-local mapping."""
     import standalone_proofread as sp
 
     target_dir, xlsx = Path(target_dir).resolve(), Path(xlsx).resolve()
-    target_manifest, target_db = _load_project(target_dir)
+    target_manifest, target_db = _load_project(target_dir, allow_unresolved_conflict=True)
     metadata = sp.workbook_metadata(xlsx, "匯入中繼資料")
     source_manifest, _, source_ledger, reviews, pdf_map, exported_at, _, geometry = load_excel_content_proof(
         xlsx, target_dir, target_manifest, kind="expected",
@@ -1437,10 +1933,12 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
                          sp.materialize_ledger(target_manifest, sp.normalize_db({}))}
     actions = []
     skipped = 0
+    retained_manual = 0
     for number, row in enumerate(rows, 2):
         action = str(row.get("action") or "").strip()
         if not action or action == "保留待人工":
             skipped += 1
+            retained_manual += action == "保留待人工"
             continue
         source = source_by_id.get(str(row.get("review_id") or ""))
         if source is None or str(row.get("occurrence_id") or "") != source["occurrence_id"]:
@@ -1454,27 +1952,19 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
         target = target_by_id[pair[1]["review_id"]]
         prior_event = target_db["events"].get(target["review_id"]) or {}
         target_for_validation = target_base_by_id[target["review_id"]] if prior_event else target
-        prior_sources = [prior_event.get("portability_source"),
-                         *prior_event.get("portability_duplicate_sources", [])]
-        if any(isinstance(item, dict) and item.get("source_excel_sha256") == _snapshot_sha
-               and item.get("review_id") == source["review_id"]
-               and item.get("source_excel_row") == number for item in prior_sources):
-            skipped += 1
-            continue
         _require_mapped_textbook_context(source, target, f"Excel row {number} ")
+        original_context = source.get("source_record") or {}
+        same_conditions = (any(str(original_context.get(key) or "").strip()
+                               for key in ("所在行", "局部詞境"))
+                           or (bool(str(source.get("context_evidence") or "").strip())
+                               and source.get("context_evidence") == target.get("context_evidence")))
         expected_only = action in {"補建expected證據", "解決expected證據"}
         if action not in sp.DECISIONS:
             raise ValueError(f"Excel row {number} action 無效")
+        differences = ([] if expected_only else
+                       _dependency_differences(source, target_for_validation, target, action))
         if not expected_only:
-            semantic = ("state", "actual", "actual_evidence", "expected_set",
-                        "expected_evidence", "context_evidence")
-            if any(source.get(key) != target_for_validation.get(key) for key in semantic):
-                raise ValueError(f"Excel row {number} 目標 actual/expected 證據或狀態不同；須重新核對")
-            if action == "確認現版差異" and any(
-                    source.get(key) != target.get(key) for key in
-                    ("actual", "actual_evidence", "expected_set", "expected_evidence", "context_evidence")):
-                raise ValueError(f"Excel row {number} 目標當前 actual/expected 證據不同；六個確認 gate 不可沿用")
-        _require_transferable_expected_lane(action, target, prior_event, f"Excel row {number} ")
+            _require_transferable_expected_lane(action, target, prior_event, f"Excel row {number} ")
         event = {
             "action": action, "expected_set": str(row.get("proposed_expected_set") or "").strip(),
             "expected_evidence": str(row.get("proposed_expected_evidence") or "").strip(),
@@ -1490,7 +1980,12 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
             if value not in {"", "Y", "N"}:
                 raise ValueError(f"Excel row {number} gate {gate} 必須是 Y/N")
             event[gate] = value == "Y"
-        for entry, label in ((source, "來源"), (target_for_validation, "目標")):
+        # A resolved target is independently validated by project materialization.
+        # Replaying a source fill operation over its formal truth is not validation.
+        checks = [(source, "來源")]
+        if not differences and (not expected_only or sp.infer_expected_status(target_for_validation) != "RESOLVED"):
+            checks.append((target_for_validation, "目標"))
+        for entry, label in checks:
             replay = sp._apply_review_event(entry, event)
             if replay.get("review_event_replay_status"):
                 raise ValueError(f"Excel row {number} {label}判定失效：{replay['review_event_replay_status']}")
@@ -1503,7 +1998,10 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
         identity["source_excel_sha256"] = _snapshot_sha
         identity["source_excel_row"] = number
         identity["source_excel_decision"] = copy.deepcopy(row)
-        actions.append((target, event, identity))
+        recheck = (_dependency_recheck_record(source_manifest, target_manifest, source,
+                                             target_for_validation, target, event, identity, prior_event or None)
+                   if differences else None)
+        actions.append((target, event, identity, same_conditions, recheck))
     if dry_run:
         with sp.project_delivery_lock(sp.project_actual_evidence_root(target_dir)):
             _verify_mapped_target_pdfs(target_dir, target_manifest, pdf_map, geometry)
@@ -1537,18 +2035,44 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
         if receipt_snapshots[CONFLICT_FILE][0] is not None:
             # The receipt and target DB are one logical state. Validate both
             # under the same project lock before extending conflict history.
-            if validate_conflict_state(target_dir, live_manifest, target_db):
-                raise ValueError("Excel 匯入期間目標出現未裁決衝突，不能轉入新判定")
+            validate_conflict_state(target_dir, live_manifest, target_db)
             prior_conflicts = copy.deepcopy(receipt_snapshots[CONFLICT_FILE][1]["conflicts"])
+        prior_supplements = copy.deepcopy((receipt_snapshots[CONFLICT_FILE][1] or {}).get("supplements", []))
+        prior_pending_ids = set(validate_conflict_state(target_dir, live_manifest, target_db))
         candidate = copy.deepcopy(target_db)
-        imported, duplicates, conflicts = 0, 0, []
-        for target, event, identity in actions:
+        imported, duplicates, conflicts, supplements = 0, 0, [], []
+        for target, event, identity, same_conditions, recheck in actions:
             review_id = target["review_id"]
             if _historical_import_replay(prior_conflicts, identity, event, event,
                                          decision_payload=_excel_expected_decision):
                 duplicates += 1
                 continue
+            if any(item.get("source_identity") == identity
+                   and _excel_expected_decision(item.get("source_event", {})) == _excel_expected_decision(event)
+                   for item in [*prior_supplements, *prior_conflicts]):
+                duplicates += 1
+                continue
             current = candidate["events"].get(review_id)
+            known = ([current.get("portability_source"), *current.get("portability_duplicate_sources", [])]
+                     if current is not None else [])
+            if identity in known:
+                duplicates += 1
+                continue
+            pending_here = review_id in prior_pending_ids
+            if recheck is not None:
+                conflicts.append(recheck)
+                continue
+            if event["action"] in sp.EXPECTED_RESOLUTION_ACTIONS and (
+                    sp.infer_expected_status(target) == "RESOLVED" or pending_here):
+                record = _expected_business_record(source_manifest, target_manifest, target, event, identity, current)
+                if (not pending_here and same_conditions
+                        and list(sp.normalize_expected_set(target.get("expected_set"))) ==
+                            list(sp.normalize_expected_set(event.get("expected_set")))
+                        ):
+                    supplements.append(record)
+                else:
+                    conflicts.append(record)
+                continue
             if current is not None:
                 known = [current.get("portability_source"),
                          *current.get("portability_duplicate_sources", [])]
@@ -1578,7 +2102,7 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
         ledger = sp.materialize_ledger(target_manifest, candidate)
         if any(row.get("review_event_replay_status") for row in ledger):
             raise ValueError("Excel 匯入後判定無法在目標安全重播")
-        if imported or duplicates or conflicts:
+        if imported or duplicates or conflicts or supplements:
             receipt_path = target_dir / CONFLICT_FILE
             presentation_paths = [target_dir / name for name in
                                   ("待人工確認.json", "注音校對_最終報告.xlsx", "pipeline_status.json")]
@@ -1587,8 +2111,11 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
             marker_before = marker_path.read_bytes() if marker_path.exists() else None
             receipt_before = receipt_snapshots[CONFLICT_FILE][0]
             original_files[receipt_path] = receipt_before
-            planned_conflicts = ({"version": 1, "conflicts": [*prior_conflicts, *conflicts]}
-                                 if conflicts else None)
+            planned_conflicts = (_sealed_expected_receipt([*prior_conflicts, *conflicts],
+                                                         [*prior_supplements, *supplements])
+                                 if conflicts or supplements else None)
+            if planned_conflicts is not None:
+                _validated_expected_receipt(planned_conflicts, live_manifest)
             owned_marker = _new_presentation_marker(
                 target_dir, live_manifest, before, candidate,
                 {CONFLICT_FILE: planned_conflicts} if planned_conflicts is not None else {},
@@ -1603,7 +2130,7 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
                 marker_sha = sp.json_save(marker_path, owned_marker, expected_sha256="")
                 _assert_actual_marker_owner(marker_path, marker_sha)
                 validate_write()
-                if conflicts:
+                if planned_conflicts is not None:
                     receipt_shas[CONFLICT_FILE] = sp.json_save(
                         receipt_path, planned_conflicts, expected_sha256=receipt_shas[CONFLICT_FILE])
                 if sp.json_load_strict(marker_path) != owned_marker:
@@ -1620,7 +2147,7 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
                     _restore_exact_file(receipt_path, receipt_before)
                     _restore_exact_file(marker_path, marker_before)
                 raise
-    if imported or duplicates or conflicts:
+    if imported or duplicates or conflicts or supplements:
         try:
             resume_portable_project(target_dir, _expected_marker_sha=marker_sha)
         except Exception:
@@ -1638,9 +2165,17 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
                 _restore_exact_file(target_dir / INCOMPLETE_FILE,
                                     original_files[target_dir / INCOMPLETE_FILE])
             raise
-    if conflicts:
-        raise ValueError(f"Excel expected 同位置有 {len(conflicts)} 筆不同判定；兩份來源已保留於 {CONFLICT_FILE}，目標位置已標待人工裁決（不是寫入回滾）")
-    return imported, skipped + duplicates, target_dir / "注音校對_最終報告.xlsx"
+    pending = validate_conflict_state(target_dir, target_manifest, candidate)
+    status = {"imported": imported, "consistent_supplements": len(supplements), "duplicates": duplicates,
+         "skipped_unoperated": skipped - retained_manual, "retained_manual": retained_manual,
+         "new_conflicts": len(conflicts),
+         "pending_conflicts": len(set(pending)), "status": "PENDING_LOCAL_ADJUDICATION" if pending else "SAVED"}
+    rechecks = [item for item in conflicts if item.get("contract") == DEPENDENCY_RECHECK_CONTRACT]
+    if rechecks:
+        status["dependency_rechecks"] = sum(item["dependency_recheck"]["disposition"] == "RECHECK_LOCAL_REQUIRED"
+                                            for item in rechecks)
+        status["preserved_local_decisions"] = len(rechecks) - status["dependency_rechecks"]
+    return sp.ExpectedImportResult(imported, skipped + duplicates, target_dir / "注音校對_最終報告.xlsx", status)
 
 
 def _guard_actual_excel_sources(xlsx, source_ledger, target_dir, target_manifest, pdf_map):
@@ -1687,6 +2222,7 @@ def _guard_actual_excel_sources(xlsx, source_ledger, target_dir, target_manifest
 
 
 @_stable_excel_import
+@bound_operation(project_parameter="target_dir")
 def import_actual_excel(target_dir: Path, xlsx: Path, *,
                         _original_xlsx: Path, _snapshot_sha: str):
     """Carry source visual decisions as local occurrence evidence, never a vote."""
@@ -1966,7 +2502,7 @@ def import_actual_excel(target_dir: Path, xlsx: Path, *,
             raise ValueError("目標 actual Excel 交易待專用恢復；未開始新匯入")
         live_manifest = sp.json_load_strict(target_dir / "校對工作階段.json")
         sp.validate_manifest_integrity(live_manifest)
-        sp.validate_output_artifact_hashes(live_manifest)
+        sp.validate_output_artifact_hashes(live_manifest, output_dir=target_dir)
         if live_manifest["manifest_integrity_sha256"] != target_manifest["manifest_integrity_sha256"]:
             raise ValueError("目標封印於 actual Excel 匯入期間變動；未寫入")
         live_db = sp.normalize_db(sp.json_load_strict(target_dir / "人工判定資料庫.json"))
@@ -2130,8 +2666,9 @@ def _validate_actual_excel_marker(output_dir: Path, marker: Any) -> None:
                 or marker["recovery_plan_sha256"] != hashlib.sha256(_canonical(plan)).hexdigest()):
             raise ValueError("actual Excel 恢復計畫與標記不符")
         snapshot = marker["sealed_workbooks"]
-        if not isinstance(snapshot, dict) or set(snapshot) != {
-                "manifest_integrity_sha256", "manifest_bytes", "entries"}:
+        if not isinstance(snapshot, dict) or set(snapshot) not in (
+                {"manifest_integrity_sha256", "manifest_bytes", "entries"},
+                {"manifest_integrity_sha256", "manifest_bytes", "entries", "location_contract"}):
             raise ValueError("actual Excel 封印工作簿恢復材料不完整")
         old_raw = base64.b64decode(snapshot["manifest_bytes"], validate=True)
         old_manifest = json.loads(old_raw)
@@ -2141,12 +2678,8 @@ def _validate_actual_excel_marker(output_dir: Path, marker: Any) -> None:
                 or snapshot["manifest_integrity_sha256"] != old_manifest.get("manifest_integrity_sha256")):
             raise ValueError("actual Excel 舊封印與恢復標記不符")
         sp.validate_manifest_integrity(old_manifest)
-        expected_entries = []
-        for info in old_manifest.get("pdfs", []):
-            for kind in ("actual", "candidate"):
-                path = Path(str(info.get(f"{kind}_workbook") or "")).resolve()
-                relative = path.relative_to(Path(output_dir).resolve())
-                expected_entries.append((str(relative), str(info.get(f"{kind}_workbook_sha256") or "")))
+        expected_entries = [(relative, wanted) for path, relative, wanted in
+                            snapshot_entries(output_dir, old_manifest, snapshot)]
         entries = snapshot["entries"]
         if not isinstance(entries, list) or len(entries) != len(expected_entries):
             raise ValueError("actual Excel 舊封印備份數量不符")
@@ -2160,29 +2693,28 @@ def _validate_actual_excel_marker(output_dir: Path, marker: Any) -> None:
         raise ValueError(f"actual Excel 恢復材料不完整或不符；保留原標記：{exc}") from exc
 
 
+@bound_operation(project_parameter="output_dir")
 def _sealed_workbook_snapshot(output_dir: Path, manifest: Mapping[str, Any]):
     """Keep exact pre-commit workbook bytes for a dedicated COMMITTED redo."""
     output_dir = Path(output_dir).resolve()
     manifest_bytes = (output_dir / "校對工作階段.json").read_bytes()
+    if json.loads(manifest_bytes) != manifest:
+        raise ValueError("actual Excel 備份 manifest 與 selected project 不符")
     entries = []
-    for info in manifest.get("pdfs", []):
-        for kind in ("actual", "candidate"):
-            path = Path(str(info.get(f"{kind}_workbook") or "")).resolve()
-            try:
-                relative = path.relative_to(output_dir)
-            except ValueError as exc:
-                raise ValueError("actual Excel 封印工作簿不在專案目錄內") from exc
-            expected_sha = str(info.get(f"{kind}_workbook_sha256") or "")
-            raw = path.read_bytes()
-            if hashlib.sha256(raw).hexdigest() != expected_sha:
-                raise ValueError("actual Excel 舊封印工作簿備份 hash 不符")
-            entries.append({"path": str(relative), "sha256": expected_sha,
-                            "bytes": base64.b64encode(raw).decode("ascii")})
-    return {"manifest_integrity_sha256": manifest["manifest_integrity_sha256"],
+    for index, kind, relative, expected_sha in bind_workbooks(output_dir, manifest):
+        path = owned_path(output_dir, relative)
+        raw = path.read_bytes()
+        if hashlib.sha256(raw).hexdigest() != expected_sha:
+            raise ValueError("actual Excel 舊封印工作簿備份 hash 不符")
+        entries.append({"path": str(relative), "sha256": expected_sha,
+                        "bytes": base64.b64encode(raw).decode("ascii")})
+    return {"location_contract": LOCATION_CONTRACT,
+            "manifest_integrity_sha256": manifest["manifest_integrity_sha256"],
             "manifest_bytes": base64.b64encode(manifest_bytes).decode("ascii"),
             "entries": entries}
 
 
+@bound_operation(project_parameter="output_dir")
 def _restore_sealed_workbooks_for_actual_resume(output_dir: Path, marker: Mapping[str, Any], pending):
     """Bind COMMITTED source/journal, then restore only old sealed derived workbooks."""
     import actual_review as ar
@@ -2206,15 +2738,7 @@ def _restore_sealed_workbooks_for_actual_resume(output_dir: Path, marker: Mappin
             or snapshot.get("manifest_integrity_sha256") != old_manifest.get("manifest_integrity_sha256")):
         raise ValueError("actual Excel COMMITTED 舊封印與標記不符")
     sp.validate_manifest_integrity(old_manifest)
-    expected = []
-    for info in old_manifest.get("pdfs", []):
-        for kind in ("actual", "candidate"):
-            path = Path(str(info.get(f"{kind}_workbook") or "")).resolve()
-            try:
-                relative = path.relative_to(output_dir)
-            except ValueError as exc:
-                raise ValueError("actual Excel 封印工作簿不在專案目錄內") from exc
-            expected.append((path, str(relative), str(info.get(f"{kind}_workbook_sha256") or "")))
+    expected = snapshot_entries(output_dir, old_manifest, snapshot)
     if len(snapshot["entries"]) != len(expected):
         raise ValueError("actual Excel 舊封印工作簿備份數量不符")
     validated = []
@@ -2265,14 +2789,16 @@ def _restore_sealed_workbooks_for_actual_resume(output_dir: Path, marker: Mappin
                 or [(row.get("occurrence_id"), row.get("review_id")) for row in manifest.get("records", [])]
                 != [(row.get("occurrence_id"), row.get("review_id")) for row in old_manifest.get("records", [])]):
             raise ValueError("actual Excel COMMITTED 已重封專案的來源識別不符")
-        sp.validate_output_artifact_hashes(manifest)
+        sp.validate_output_artifact_hashes(manifest, output_dir=output_dir)
         return
     for path, raw, wanted in validated:
         if not path.is_file() or _sha(path) != wanted:
             _restore_exact_file(path, raw)
-    sp.validate_output_artifact_hashes(manifest)
+    remember_snapshot(output_dir, old_manifest, expected)
+    sp.validate_output_artifact_hashes(manifest, output_dir=output_dir)
 
 
+@bound_operation(project_parameter="output_dir")
 def resume_actual_excel_project(output_dir: Path):
     """Resolve only the durable actual-Excel marker, never a publication marker."""
     import standalone_proofread as sp
@@ -2465,8 +2991,10 @@ def _mapped_occurrence_overrides(source_dir: Path, source_manifest, target_manif
     # to the sealed workbook, even if an external writer bypasses that lock.
     with sp.project_delivery_lock(source_root):
         sealed_by_pdf = []
-        for info, name in zip(source_manifest.get("pdfs", []), source_names):
-            workbook = _artifact(source_dir, info, "actual")
+        bindings = {(index, kind): relative for index, kind, relative, wanted
+                    in bind_workbooks(source_dir, source_manifest)}
+        for index, (info, name) in enumerate(zip(source_manifest.get("pdfs", []), source_names)):
+            workbook = owned_path(source_dir, bindings[index, "actual"])
             with _workbook_snapshot(workbook, expected_sha256=info["actual_workbook_sha256"]) as (workbook, _):
                 metadata = sp.workbook_metadata(workbook)
                 if metadata.get("pdf_sha256") != info.get("pdf_sha256"):
@@ -2687,13 +3215,13 @@ def import_project_decisions(source_dir: Path, target_dir: Path, *,
                                   if receipt_snapshots[CONFLICT_FILE][0] is not None
                                   else {"version": 1, "conflicts": []})
             if (not isinstance(existing_conflicts, dict)
-                    or existing_conflicts.get("version") != 1
+                    or existing_conflicts.get("version") not in {1, 2}
                     or not isinstance(existing_conflicts.get("conflicts"), list)):
                 raise ValueError("目標既有衝突紀錄格式無法驗證；未覆寫")
-            planned_receipts[CONFLICT_FILE] = {
-                "version": 1,
-                "conflicts": [*existing_conflicts["conflicts"], *conflict_records],
-            }
+            combined = [*existing_conflicts["conflicts"], *conflict_records]
+            planned_receipts[CONFLICT_FILE] = (
+                _sealed_expected_receipt(combined, copy.deepcopy(existing_conflicts["supplements"]))
+                if existing_conflicts["version"] == 2 else {"version": 1, "conflicts": combined})
         if source_actual["status"] == "RECHECK_LOCAL_PDF_REQUIRED":
             # Every original group remains a read-only receipt across hops.
             # No checked ID becomes a fresh local direct visual or Global vote.

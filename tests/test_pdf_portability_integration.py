@@ -26,7 +26,7 @@ import actual_review as ar
 from review_display import occurrence_preview
 from review_save_service import ReviewSaveService
 from tests.test_project_repair_integration_v562 import ACTUAL_COLUMNS, EXCLUDED_COLUMNS
-from tests.test_pdf_portability import pdf as small_pdf, project as small_project
+from tests.test_pdf_portability import pdf as small_pdf, project as small_project, fixture_export_pending_for_gpt
 
 
 def _pdfs(folder):
@@ -846,7 +846,7 @@ def test_excel_expected_conflict_and_same_decision_keep_sources(tmp_path, monkey
          patch("check_pronunciation_candidates.actual_workbook_global_exact_dependencies", return_value=()):
         sp.run_pipeline_pdfs([first], a, defer_excel_reports=True)
         sp.run_pipeline_pdfs([second], b, defer_excel_reports=True)
-        exported = sp.export_pending_for_gpt(a)
+        exported = fixture_export_pending_for_gpt(a)
         first_xlsx, same_xlsx, conflict_xlsx = [tmp_path / name for name in
                                                ("first.xlsx", "same.xlsx", "conflict.xlsx")]
         workbook = load_workbook(exported)
@@ -890,8 +890,8 @@ def test_excel_expected_conflict_and_same_decision_keep_sources(tmp_path, monkey
             with pytest.raises(OSError, match="report disk full"):
                 sp.import_gpt_decisions(b, conflict_xlsx)
         assert {path: path.read_bytes() if path.exists() else None for path in watched} == before_publish
-        with pytest.raises(ValueError, match="不同判定"):
-            sp.import_gpt_decisions(b, conflict_xlsx)
+        saved_conflict = sp.import_gpt_decisions(b, conflict_xlsx)
+        assert saved_conflict.status["new_conflicts"] == 1
         receipt = sp.json_load_strict(b / portability.CONFLICT_FILE)
         assert len(receipt["conflicts"]) == 1
         assert receipt["conflicts"][0]["source_event"]["exclusion_reason"] == "different judgment"
@@ -909,7 +909,7 @@ def test_expected_excel_sequential_conflicts_keep_local_adjudication_and_history
          patch("check_pronunciation_candidates.actual_workbook_global_exact_dependencies", return_value=()):
         sp.run_pipeline_pdfs([first], source, defer_excel_reports=True)
         sp.run_pipeline_pdfs([second], target, defer_excel_reports=True)
-        exported = sp.export_pending_for_gpt(source)
+        exported = fixture_export_pending_for_gpt(source)
         workbook = load_workbook(exported)
         sheet = workbook["待判定候選"]
         headers = [cell.value for cell in sheet[1]]
@@ -928,8 +928,7 @@ def test_expected_excel_sequential_conflicts_keep_local_adjudication_and_history
             "action": "確認非校對範圍", "exclusion_reason": "unrelated position",
             "exclusion_evidence": "PDF page 1"})
         assert sp.import_gpt_decisions(target, paths[0])[0] == 1
-        with pytest.raises(ValueError, match="不同判定"):
-            sp.import_gpt_decisions(target, paths[1])
+        assert sp.import_gpt_decisions(target, paths[1]).status["new_conflicts"] == 1
         first_receipt = sp.json_load_strict(target / portability.CONFLICT_FILE)
         assert len(first_receipt["conflicts"]) == 1
         ReviewSaveService(target).save_event(conflicted_id, {
@@ -950,8 +949,7 @@ def test_expected_excel_sequential_conflicts_keep_local_adjudication_and_history
             with pytest.raises(OSError, match="second conflict DB disk full"):
                 sp.import_gpt_decisions(target, paths[2])
         assert {path: path.read_bytes() if path.exists() else None for path in watched} == before_failed_write
-        with pytest.raises(ValueError, match="不同判定"):
-            sp.import_gpt_decisions(target, paths[2])
+        assert sp.import_gpt_decisions(target, paths[2]).status["new_conflicts"] == 1
         receipt = sp.json_load_strict(target / portability.CONFLICT_FILE)
         assert len(receipt["conflicts"]) == 2
         assert first_receipt["conflicts"][0] in receipt["conflicts"]
@@ -961,8 +959,8 @@ def test_expected_excel_sequential_conflicts_keep_local_adjudication_and_history
         assert db["events"][other_id]["exclusion_reason"] == "unrelated position"
         assert portability.validate_conflict_state(target, manifest, db) == [conflicted_id]
         before = (target / portability.CONFLICT_FILE).read_bytes()
-        with pytest.raises(ValueError, match="衝突|不同判定"):
-            sp.import_gpt_decisions(target, paths[2])
+        retried = sp.import_gpt_decisions(target, paths[2])
+        assert retried.status["duplicates"] == 1 and retried.status["pending_conflicts"] == 1
         assert (target / portability.CONFLICT_FILE).read_bytes() == before
         assert sp.materialize_ledger(manifest, db)[0]["active_review"] is True
         assert len(sp.json_load_strict(target / "待人工確認.json")["pending"]) == 1

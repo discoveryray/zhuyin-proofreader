@@ -19,6 +19,7 @@ from functools import wraps
 from pathlib import Path
 from typing import Any, Mapping
 from uuid import uuid4
+from sealed_workbook_paths import binding_scope, bind_workbooks, workbook_path, owned_path, descriptor, bound_operation, trusted_root
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -172,12 +173,20 @@ class ActualImportResult(tuple):
         return result
 
 
+class ExpectedImportResult(tuple):
+    """Three-value API plus saved business-conflict/supplement counts."""
+    def __new__(cls, count, skipped, report, status):
+        result = super().__new__(cls, (count, skipped, report))
+        result.status = dict(status)
+        return result
+
+
 def _serialized_user_project_entry(operation):
     """Hold the project lock from the first user-facing gate through delivery."""
     @wraps(operation)
     def locked(output_dir, *args, **kwargs):
-        output_dir = resolve_existing_project_dir(Path(output_dir))
-        with project_delivery_lock(project_actual_evidence_root(output_dir)):
+        output_dir = resolve_existing_project_dir(trusted_root(output_dir))
+        with binding_scope(), project_delivery_lock(project_actual_evidence_root(output_dir)):
             if operation.__name__ == "repair_project_state":
                 from pdf_portability import INCOMPLETE_FILE, resume_portable_project
                 if (output_dir / INCOMPLETE_FILE).exists():
@@ -237,6 +246,7 @@ def _publish_local_actual_conflict_resolution(output_dir: Path, report: Path) ->
     return regenerate_report(output_dir)
 
 
+@bound_operation(project_parameter="output_dir")
 def recover_committed_actual_project(output_dir: Path, *, acknowledge: bool = True):
     """Explicit restart recovery; staging is never reapplied here.
 
@@ -286,7 +296,7 @@ def recover_committed_actual_project(output_dir: Path, *, acknowledge: bool = Tr
             phase = "reload_current_ledger"
             manifest = json_load_strict(output_dir / "校對工作階段.json")
             validate_manifest_integrity(manifest)
-            validate_output_artifact_hashes(manifest)
+            validate_output_artifact_hashes(manifest, output_dir=output_dir)
             ledger = materialize_ledger(manifest, load_or_initialize_db(output_dir))
             phase = "refresh_actual_project"
             refresh_status = {}
@@ -296,7 +306,7 @@ def recover_committed_actual_project(output_dir: Path, *, acknowledge: bool = Tr
             phase = "post_refresh_actual_verification"
             manifest = json_load_strict(output_dir / "校對工作階段.json")
             validate_manifest_integrity(manifest)
-            validate_output_artifact_hashes(manifest)
+            validate_output_artifact_hashes(manifest, output_dir=output_dir)
             refreshed = materialize_ledger(manifest, load_or_initialize_db(output_dir))
             _verify_manual_actual_batch_postconditions(refreshed, plan["checked_postconditions"])
             phase = "acknowledge_project_refresh"
@@ -815,6 +825,7 @@ def workbook_metadata(path: Path, sheet: str = "v5.2中繼資料") -> dict[str, 
         wb.close()
 
 
+@bound_operation(project_parameter="output_dir")
 def output_is_reusable(
     output_dir: Path,
     pdf: Path,
@@ -835,7 +846,7 @@ def output_is_reusable(
         try:
             manifest = json_load_strict(output_dir / "校對工作階段.json")
             validate_manifest_integrity(manifest)
-            validate_output_artifact_hashes(manifest, require_candidate=False)
+            validate_output_artifact_hashes(manifest, require_candidate=False, output_dir=output_dir)
         except (FileNotFoundError, ValueError):
             return False
     if not isinstance(manifest, dict):
@@ -869,12 +880,13 @@ def output_is_reusable(
                 return False
     return False
 
+@bound_operation(project_parameter="output_dir")
 def load_reuse_baseline_manifest(output_dir: Path) -> dict[str, Any] | None:
     """Load and seal-check the previous session before any incremental writes."""
     try:
         manifest = json_load_strict(Path(output_dir) / "校對工作階段.json")
         validate_manifest_integrity(manifest)
-        validate_output_artifact_hashes(manifest)
+        validate_output_artifact_hashes(manifest, output_dir=output_dir)
         return manifest
     except (FileNotFoundError, ValueError):
         return None
@@ -1139,11 +1151,12 @@ def needs_expected_review(entry: Mapping[str, Any]) -> bool:
     return state in {"DIFFERENCE_PENDING_CONFIRMATION", "REVIEW_PENDING"}
 
 
+@bound_operation(project_parameter="output_dir")
 def export_pending_for_gpt(output_dir: Path, *, _allow_unpublished_pipeline: bool = False,
                            _allow_internal_portable: bool = False) -> Path:
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
-    validate_output_artifact_hashes(manifest)
+    validate_output_artifact_hashes(manifest, output_dir=output_dir)
     if not schema_compatible(manifest.get("session_schema_version"), SESSION_SCHEMA_VERSION):
         raise ValueError("SESSION_SCHEMA_INCOMPATIBLE：工作階段資料布局不同，需有明確轉接器")
     db = load_or_initialize_db(output_dir)
@@ -1448,6 +1461,7 @@ def _read_actual_source_db(output_dir):
 
 
 @_serialized_user_project_entry
+@bound_operation(project_parameter="output_dir")
 def import_actual_occurrence_decisions(output_dir: Path, csv_path: Path, *, package_meta: Mapping[str, Any]) -> tuple[int, int, Path]:
     """Import occurrence-scoped visual actual decisions from a GPT bundle.
 
@@ -1461,7 +1475,7 @@ def import_actual_occurrence_decisions(output_dir: Path, csv_path: Path, *, pack
     output_dir = Path(output_dir)
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
-    validate_output_artifact_hashes(manifest)
+    validate_output_artifact_hashes(manifest, output_dir=output_dir)
     _validate_gpt_bundle_metadata(package_meta, manifest)
     rows = _read_actual_csv_rows(csv_path)
     _guard_actual_csv_sources(output_dir, materialize_ledger(manifest, _read_actual_source_db(output_dir)), rows)
@@ -1584,6 +1598,7 @@ def import_actual_occurrence_decisions(output_dir: Path, csv_path: Path, *, pack
 
 
 @_serialized_user_project_entry
+@bound_operation(project_parameter="output_dir")
 def import_gpt_decision_bundle(output_dir: Path, bundle: Path) -> tuple[int, int, int, int, Path]:
     """One-file round import with expected preflight and lane-ordered commit.
 
@@ -1596,7 +1611,7 @@ def import_gpt_decision_bundle(output_dir: Path, bundle: Path) -> tuple[int, int
     _reject_incomplete_portable_project(output_dir)
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
-    validate_output_artifact_hashes(manifest)
+    validate_output_artifact_hashes(manifest, output_dir=output_dir)
     with zipfile.ZipFile(bundle, "r") as zf:
         meta = _load_gpt_bundle_metadata(zf)
         _validate_gpt_bundle_metadata(meta, manifest)
@@ -1695,12 +1710,13 @@ def _snapshot_gpt_decisions_entry(operation):
 
 @_serialized_user_project_entry
 @_snapshot_gpt_decisions_entry
+@bound_operation(project_parameter="output_dir")
 def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False,
                          _original_xlsx: Path, _snapshot_sha: str) -> tuple[int, int, Path]:
     _reject_incomplete_portable_project(output_dir)
     manifest, manifest_before_sha = json_load_snapshot(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
-    validate_output_artifact_hashes(manifest)
+    validate_output_artifact_hashes(manifest, output_dir=output_dir)
     if (
         not schema_compatible(manifest.get("session_schema_version"), SESSION_SCHEMA_VERSION)
         or not review_id_schema_compatible(manifest.get("review_id_schema_version"), REVIEW_ID_SCHEMA_VERSION)
@@ -1717,8 +1733,13 @@ def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False,
         mismatched["review_id_schema_version"] = (REVIEW_ID_SCHEMA_VERSION, metadata.get("review_id_schema_version"))
     if mismatched:
         raise ValueError(f"匯入 workbook session/evidence 不相容：{mismatched}")
-    if str(metadata.get("session_id") or "") != str(manifest.get("session_id") or ""):
-        from pdf_portability import import_expected_excel
+    from pdf_portability import import_expected_excel, EXCEL_PROOF_SHEET
+    workbook = load_workbook(xlsx, read_only=True, data_only=True)
+    try:
+        portable_expected = EXCEL_PROOF_SHEET in workbook.sheetnames
+    finally:
+        workbook.close()
+    if portable_expected or str(metadata.get("session_id") or "") != str(manifest.get("session_id") or ""):
         return import_expected_excel.__wrapped__(output_dir, xlsx, dry_run=dry_run,
             _original_xlsx=_original_xlsx, _snapshot_sha=_snapshot_sha)
     # Tool version is intentionally ignored. The exported expected fingerprint
@@ -1991,16 +2012,21 @@ def validate_manifest_integrity(manifest: Mapping[str, Any]) -> None:
         raise ValueError("DATA_INTEGRITY_ERROR：校對工作階段 payload hash 缺失或不符")
 
 
-def validate_output_artifact_hashes(manifest: Mapping[str, Any], *, require_candidate: bool = True) -> None:
-    for info in manifest.get("pdfs", []):
-        checks = [("actual_workbook", "actual_workbook_sha256")]
-        if require_candidate:
-            checks.append(("candidate_workbook", "candidate_workbook_sha256"))
-        for path_key, hash_key in checks:
-            path = Path(str(info.get(path_key) or ""))
-            recorded = str(info.get(hash_key) or "")
-            if not path.exists() or not recorded or sha256_file(path) != recorded:
-                raise ValueError(f"DATA_INTEGRITY_ERROR：輸出資產 hash 不符：{info.get('pdf_name')}/{path_key}")
+def validate_output_artifact_hashes(manifest: Mapping[str, Any], *, require_candidate: bool = True,
+                                    output_dir: Path | None = None) -> None:
+    if output_dir is None:
+        # Finite legacy direct-API adapter. Production user entrypoints always
+        # provide the selected root explicitly; never guess a relocated root.
+        roots = {Path(info[kind + "_workbook"]).absolute().parent.parent
+                 for info in manifest.get("pdfs", [])
+                 for kind in (("actual", "candidate") if require_candidate else ("actual",))}
+        if not roots:
+            validate_manifest_integrity(manifest)
+            return
+        if len(roots) != 1:
+            raise ValueError("workbook binding 缺少 selected project root")
+        output_dir = roots.pop()
+    bind_workbooks(output_dir, manifest, require_candidate=require_candidate)
 
 
 def resolve_pdfs(input_path: Path) -> list[Path]:
@@ -2378,6 +2404,7 @@ def collect_manifest(
     actual_fingerprints: Mapping[str, Mapping[str, Any]],
     source_validation: Mapping[str, Any],
     runtime_root: Path | None = None,
+    sealed_workbook_manifest: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     root = Path(runtime_root or Path(__file__).resolve().parent).resolve()
     manifest = {
@@ -2411,10 +2438,22 @@ def collect_manifest(
     mandatory_reports = []
     pdf_regression_reports = []
     pdf_regression_rows_by_pdf: list[tuple[str, list[dict[str, Any]]]] = []
+    sealed_locations = ({(index, kind): relative for index, kind, relative, sha in
+                         bind_workbooks(actual_dir.parent, sealed_workbook_manifest)}
+                        if sealed_workbook_manifest is not None else {})
     for pdf in pdfs:
         ph = sha256_file(pdf)
-        actual = actual_workbook_path(actual_dir, pdf)
-        cand = candidate_workbook_path(cand_dir, pdf)
+        if sealed_workbook_manifest is not None:
+            if actual_dir.parent != cand_dir.parent:
+                raise ValueError("sealed workbook role roots 不同")
+            infos = [index for index, info in enumerate(sealed_workbook_manifest["pdfs"]) if info["pdf_sha256"] == ph]
+            if len(infos) != 1:
+                raise ValueError("sealed workbook PDF identity 不唯一")
+            actual = owned_path(actual_dir.parent, sealed_locations[infos[0], "actual"])
+            cand = owned_path(cand_dir.parent, sealed_locations[infos[0], "candidate"])
+        else:
+            actual = actual_workbook_path(actual_dir, pdf)
+            cand = candidate_workbook_path(cand_dir, pdf)
         if not actual.exists() or not cand.exists():
             raise FileNotFoundError(f"缺少輸出：{pdf.name}")
         actual_metadata = workbook_metadata(actual)
@@ -2629,6 +2668,46 @@ def load_or_initialize_db(output_dir: Path) -> dict[str, Any]:
         return normalize_db({})
 
 
+def confirm_current_actual_unavailable_reason(entry: Mapping[str, Any]) -> str:
+    """Allow an explicit local choice, including an existing expected conflict.
+
+    Completed items are not reopened; the existing explicit redecision path
+    and receipt-backed pending workflow remain eligible.
+    """
+    state = entry.get("state")
+    if state in HARD_BLOCKING_STATES or entry.get("blocking_state") in HARD_BLOCKING_STATES:
+        return "來源或資料尚未通過驗證（" + str(entry.get("blocking_state") or state) + "），不能確認目前注音"
+    if not (state in NON_TERMINAL_STATES
+            or state in {"PASS", "TEXTBOOK_ERROR_CONFIRMED"}
+            and (valid_manual_expected_decision(entry)
+                 or entry.get("expected_business_conflict_pending") is True)):
+        return "此項目已完成或不屬於可裁決的待辦"
+    target = manual_expected_target(entry)
+    if (not all(target[key] for key in ("occurrence_id", "review_id", "char", "physical_page"))
+            or target["review_id"] != ledger_make_review_id(target["occurrence_id"])
+            or not re.fullmatch(r"[0-9a-f]{64}", target["pdf_sha256"])):
+        return "目前項目的來源或位置識別不完整"
+    import math
+    try:
+        page = float(target["physical_page"])
+        coords = [float(target[key]) for key in ("x0", "y0", "x1", "y1")]
+        if (not math.isfinite(page) or not page.is_integer() or page < 1
+                or not all(math.isfinite(value) for value in coords)
+                or coords[0] > coords[2] or coords[1] >= coords[3]):
+            return "目前項目的頁碼或位置資料無效"
+    except (ValueError, TypeError, OverflowError):
+        return "目前項目的頁碼或位置資料無效"
+    if (infer_actual_status(entry) != "RESOLVED"
+            or not canonical_bopomofo(entry.get("actual"))
+            or not str(entry.get("actual_evidence") or "").strip()):
+        return "目前注音尚未有效確定或缺少 actual 證據"
+    return ""
+
+
+def can_confirm_current_actual_as_expected(entry: Mapping[str, Any]) -> bool:
+    return not confirm_current_actual_unavailable_reason(entry)
+
+
 def build_manual_expected_event(
     entry: Mapping[str, Any], *, operation: str, expected_set: Any = None,
     rationale: str = "", note: str = "",
@@ -2640,16 +2719,16 @@ def build_manual_expected_event(
     """
     redecision = valid_manual_expected_decision(entry)
     if (entry.get("state") not in NON_TERMINAL_STATES
-            and not (redecision and entry.get("state") in {"PASS", "TEXTBOOK_ERROR_CONFIRMED"})) or entry.get("state") in {
+            and not ((redecision or entry.get("expected_business_conflict_pending") is True)
+                     and entry.get("state") in {"PASS", "TEXTBOOK_ERROR_CONFIRMED"})) or entry.get("state") in {
         "SOURCE_INVALID", "DATA_INTEGRITY_ERROR", "REGRESSION_BLOCKED",
     }:
         raise InvalidTransitionError("此項目目前不可保存人工應標判定")
     if operation == "CONFIRM_CURRENT_AS_EXPECTED":
         reading = canonical_bopomofo(entry.get("actual"))
-        if (not redecision and infer_expected_status(entry) not in {"UNRESOLVED", "AMBIGUOUS", "CONFLICT"}
-                or infer_actual_status(entry) != "RESOLVED" or not reading
-                or not str(entry.get("actual_evidence") or "").strip()):
-            raise InvalidTransitionError("目前注音尚未有效確定，不能快捷確認")
+        reason = confirm_current_actual_unavailable_reason(entry)
+        if reason:
+            raise InvalidTransitionError(reason)
         expected_set = [reading]
     elif operation != "ENTER_EXPECTED":
         raise InvalidTransitionError("未知的人工應標操作")
@@ -3115,6 +3194,7 @@ def materialize_ledger(manifest: Mapping[str, Any], db: Mapping[str, Any]) -> li
 
 
 @_serialized_user_project_entry
+@bound_operation(project_parameter="output_dir")
 def bind_legacy_gui_expected_resolutions(output_dir: Path, workbook: Path, *, review_ids: list[str],
                                         expected_manifest_sha256: str, expected_db_sha256: str,
                                         expected_workbook_sha256: str, dry_run: bool = False) -> dict[str, Any]:
@@ -3140,7 +3220,7 @@ def bind_legacy_gui_expected_resolutions(output_dir: Path, workbook: Path, *, re
     if (manifest_sha, db_sha) != (expected_manifest_sha256, expected_db_sha256):
         raise ValueError("legacy adapter 原 manifest／decision DB SHA 不符")
     validate_manifest_integrity(manifest)
-    validate_output_artifact_hashes(manifest)
+    validate_output_artifact_hashes(manifest, output_dir=output_dir)
     db = normalize_db(raw_db)
     baseline = {row["review_id"]:row for row in prepare_review_ledger(manifest, normalize_db({}))[0]}
     staged = copy.deepcopy(raw_db)
@@ -3204,7 +3284,7 @@ def bind_legacy_gui_expected_resolutions(output_dir: Path, workbook: Path, *, re
         if validate_conflict_state(output_dir, manifest, db):
             raise ValueError("legacy adapter 專案存在未裁決衝突；未寫入")
         _verify_available_session_pdfs(output_dir, manifest)
-        validate_output_artifact_hashes(manifest)
+        validate_output_artifact_hashes(manifest, output_dir=output_dir)
         if sha256_file(manifest_path) != manifest_sha or sha256_file(workbook) != observed_sha:
             raise ValueError("legacy adapter 驗證期間原 proof 已變動；未寫入")
         if sha256_file(db_path) != db_sha:
@@ -3218,7 +3298,10 @@ def bind_legacy_gui_expected_resolutions(output_dir: Path, workbook: Path, *, re
 
 def save_pending_json(output_dir: Path, manifest: dict[str, Any], db: dict[str, Any]) -> int:
     ledger = materialize_ledger(manifest, db)
-    pending = [dict(entry) for entry in ledger if entry.get("state") in NON_TERMINAL_STATES]
+    from pdf_portability import expected_conflict_review_view
+    ledger = expected_conflict_review_view(output_dir, manifest, db, ledger)
+    pending = [dict(entry) for entry in ledger if entry.get("state") in NON_TERMINAL_STATES
+               or entry.get("expected_business_conflict_pending") is True]
     gaps = [dict(entry) for entry in ledger if infer_expected_status(entry) == "UNRESOLVED"]
     json_save(output_dir / "待人工確認.json", {
         "version": VERSION,
@@ -3540,6 +3623,7 @@ def _serialized_report_publication(render):
 
 
 @_serialized_report_publication
+@bound_operation(project_parameter="output_dir")
 def generate_report(
     output_dir: Path,
     manifest: dict[str, Any],
@@ -3549,7 +3633,7 @@ def generate_report(
 ) -> Path:
     """Render mutually-exclusive ledger views and the v2.5 completion gate."""
     validate_manifest_integrity(manifest)
-    validate_output_artifact_hashes(manifest)
+    validate_output_artifact_hashes(manifest, output_dir=output_dir)
     if (
         not schema_compatible(manifest.get("session_schema_version"), SESSION_SCHEMA_VERSION)
         or not schema_compatible(manifest.get("workbook_schema_version"), WORKBOOK_SCHEMA_VERSION)
@@ -3592,8 +3676,9 @@ def generate_report(
         manifest.get("regression_gate") or {},
         source_validation_ok=bool(source_validation.get("ok")),
     )
-    from pdf_portability import hold_actual_excel_completion
+    from pdf_portability import hold_actual_excel_completion, hold_expected_conflict_completion
     gate = hold_actual_excel_completion(output_dir, manifest, db, gate)
+    gate = hold_expected_conflict_completion(output_dir, manifest, db, gate)
 
     wb = Workbook()
     ws = wb.active
@@ -3962,12 +4047,13 @@ def _resolve_session_pdfs(output_dir: Path, manifest: Mapping[str, Any]) -> list
     return resolved
 
 
+@bound_operation(project_parameter="output_dir")
 def export_actual_pending_for_gpt(output_dir: Path) -> Path | None:
     output_dir = Path(output_dir)
     _reject_incomplete_portable_project(output_dir)
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
-    validate_output_artifact_hashes(manifest)
+    validate_output_artifact_hashes(manifest, output_dir=output_dir)
     if (
         not schema_compatible(manifest.get("session_schema_version"), SESSION_SCHEMA_VERSION)
         or not review_id_schema_compatible(manifest.get("review_id_schema_version"), REVIEW_ID_SCHEMA_VERSION)
@@ -4090,6 +4176,7 @@ def _manual_actual_summary_from_verified_snapshot(output_dir, staging, manifest,
     return summary
 
 
+@bound_operation(project_parameter="output_dir")
 def manual_actual_staging_summary(output_dir: Path, *, ledger=None) -> dict[str, Any]:
     """Read durable intent; a GUI ledger requests live validation before hiding.
 
@@ -4106,7 +4193,7 @@ def manual_actual_staging_summary(output_dir: Path, *, ledger=None) -> dict[str,
                 return summary
             manifest = json_load_strict(output_dir / "校對工作階段.json")
             validate_manifest_integrity(manifest)
-            validate_output_artifact_hashes(manifest)
+            validate_output_artifact_hashes(manifest, output_dir=output_dir)
             # Strict reading, not load_or_initialize_db: summary never writes.
             db = normalize_db(json_load_strict(output_dir / "人工判定資料庫.json"))
             baseline, current = prepare_review_ledger(manifest, db)
@@ -4120,6 +4207,7 @@ def manual_actual_staging_summary(output_dir: Path, *, ledger=None) -> dict[str,
     return summary
 
 
+@bound_operation(project_parameter="output_dir")
 def stage_manual_actual_correction(
     output_dir: Path,
     review_id: str,
@@ -4131,7 +4219,7 @@ def stage_manual_actual_correction(
     output_dir = Path(output_dir)
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
-    validate_output_artifact_hashes(manifest)
+    validate_output_artifact_hashes(manifest, output_dir=output_dir)
     db = load_or_initialize_db(output_dir)
     ledger = materialize_ledger(manifest, db)
     entry = next(
@@ -4282,12 +4370,14 @@ def _refresh_rebase_manifest(manifest, source, destination):
     """Rebase only the pipeline's known workbook locators, never identity."""
     result = copy.deepcopy(manifest)
     source, destination = Path(source).resolve(), Path(destination).resolve()
-    known = {key: {Path(info[key]).resolve() for info in manifest["pdfs"]}
-             for key in ("actual_workbook", "candidate_workbook")}
-    for info in result["pdfs"]:
+    bindings = bind_workbooks(source, manifest)
+    locations = {(index, kind): relative for index, kind, relative, sha in bindings}
+    known = {kind + "_workbook": {str(info[kind + "_workbook"]): locations[index, kind]
+             for index, info in enumerate(manifest["pdfs"])} for kind in ("actual", "candidate")}
+    for index, info in enumerate(result["pdfs"]):
         for kind in ("actual", "candidate"):
             key = kind + "_workbook"
-            relative = Path(info[key]).resolve().relative_to(source)
+            relative = locations[index, kind]
             directory = "01_實際注音" if kind == "actual" else "02_候選報告"
             if relative.parent != Path(directory) or relative.suffix != ".xlsx":
                 raise ValueError("actual refresh 工作簿路徑不在有限專案目錄")
@@ -4295,9 +4385,9 @@ def _refresh_rebase_manifest(manifest, source, destination):
     for entry in result.get("records", []):
         for key in ("actual_workbook", "candidate_workbook"):
             if entry.get(key):
-                if Path(entry[key]).resolve() not in known[key]:
+                if str(entry[key]) not in known[key]:
                     raise ValueError("actual refresh record workbook locator 不符")
-                entry[key] = str(destination / Path(entry[key]).resolve().relative_to(source))
+                entry[key] = str(destination / known[key][str(entry[key])])
     result["dynamic_actual_evidence_root"] = str(project_actual_evidence_root(destination))
     return seal_manifest(result)
 
@@ -4369,7 +4459,7 @@ def _read_actual_refresh_publication(output_dir, *, acknowledged=None):
     allowed = {"校對工作階段.json", "人工判定資料庫.json", "待人工確認.json", "pipeline_status.json"}
     for info in old_manifest["pdfs"]:
         for kind in ("actual", "candidate"):
-            relative = Path(info[kind + "_workbook"]).resolve().relative_to(output_dir.resolve())
+            relative = descriptor(info, kind)
             directory = "01_實際注音" if kind == "actual" else "02_候選報告"
             if relative.parent != Path(directory) or relative.suffix != ".xlsx":
                 raise ValueError("actual refresh publication workbook allowlist 不符")
@@ -4424,6 +4514,7 @@ def _verify_actual_refresh_pdf_binding(output_dir, manifest, *, sealed_manifest=
     return _resolve_session_pdfs(output_dir, manifest)
 
 
+@bound_operation(project_parameter="output_dir")
 def _resume_actual_refresh_publication(output_dir, *, cleanup=False, acknowledged=None,
                                        acknowledge=True, _post_ack_guard=None):
     if type(acknowledge) is not bool:
@@ -4441,7 +4532,7 @@ def _resume_actual_refresh_publication(output_dir, *, cleanup=False, acknowledge
                 _refresh_atomic_bytes(target, originals[entry["path"]])
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
-    validate_output_artifact_hashes(manifest)
+    validate_output_artifact_hashes(manifest, output_dir=output_dir)
     sealed_manifest = json_parse_strict(originals["校對工作階段.json"], output_dir / ACTUAL_REFRESH_PUBLICATION)
     _verify_actual_refresh_pdf_binding(output_dir, manifest, sealed_manifest=sealed_manifest)
     if journal["phase"] != "PREPARED":
@@ -4514,6 +4605,7 @@ def _acknowledge_actual_refresh_locked(output_dir, token, *, _post_ack_guard=Non
     _resume_actual_refresh_publication(output_dir, cleanup=True, _post_ack_guard=_post_ack_guard)
 
 
+@bound_operation(project_parameter="output_dir")
 def _publish_actual_refresh(output_dir, stage, manifest, *, source, token, before, cleared_count=0, _prewrite_guard=None):
     if _prewrite_guard is not None:
         _prewrite_guard()
@@ -4529,7 +4621,7 @@ def _publish_actual_refresh(output_dir, stage, manifest, *, source, token, befor
     names = []
     for info in manifest["pdfs"]:
         for kind in ("actual", "candidate"):
-            relative = Path(info[kind + "_workbook"]).resolve().relative_to(output_dir.resolve())
+            relative = descriptor(info, kind)
             if sha256_file(stage / relative) != before[str(relative)]:
                 names.append(str(relative))
     names.extend(["人工判定資料庫.json", "待人工確認.json", "pipeline_status.json", "校對工作階段.json"])
@@ -4553,7 +4645,7 @@ def _publish_actual_refresh(output_dir, stage, manifest, *, source, token, befor
         for name in names:
             (stage / name).replace(output_dir / name)
         validate_manifest_integrity(json_load_strict(output_dir / "校對工作階段.json"))
-        validate_output_artifact_hashes(manifest)
+        validate_output_artifact_hashes(manifest, output_dir=output_dir)
         for entry in entries:
             if _refresh_file_sha(output_dir / entry["path"]) != entry["new_sha"]:
                 raise ValueError("actual refresh 發布後 SHA 不符")
@@ -4571,6 +4663,7 @@ def _publish_actual_refresh(output_dir, stage, manifest, *, source, token, befor
         _resume_actual_refresh_publication(output_dir, cleanup=True)
 
 
+@bound_operation(project_parameter="output_dir")
 def refresh_actual_project(output_dir: Path, *, defer_excel_reports: bool = True,
                            _prewrite_guard=None, _refresh_plan=None, _refresh_status=None,
                            _refresh_acknowledge=True) -> Path:
@@ -4585,7 +4678,7 @@ def refresh_actual_project(output_dir: Path, *, defer_excel_reports: bool = True
     validate_manifest_integrity(manifest)
     # Workbooks may now be stale relative to dynamic actual evidence, but must
     # still be intact relative to the last sealed session before we replace them.
-    validate_output_artifact_hashes(manifest)
+    validate_output_artifact_hashes(manifest, output_dir=output_dir)
     pdfs = _resolve_session_pdfs(output_dir, manifest)
     return run_pipeline_pdfs(
         pdfs,
@@ -4596,6 +4689,7 @@ def refresh_actual_project(output_dir: Path, *, defer_excel_reports: bool = True
     )
 
 
+@bound_operation(project_parameter="output_dir")
 def _stage_actual_refresh(output_dir, *, _prewrite_guard=None, plan=None, status=None, acknowledge=True):
     published = _resume_actual_refresh_publication(output_dir, acknowledge=acknowledge)
     if published is not None:
@@ -4610,7 +4704,7 @@ def _stage_actual_refresh(output_dir, *, _prewrite_guard=None, plan=None, status
         _resume_actual_refresh_publication(output_dir, cleanup=True, acknowledge=acknowledge)
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
-    validate_output_artifact_hashes(manifest)
+    validate_output_artifact_hashes(manifest, output_dir=output_dir)
     from actual_review import dynamic_actual_hashes
     dynamic_actual_hashes(project_actual_evidence_root(output_dir), read_only=True)
     pdfs = _verify_actual_refresh_pdf_binding(output_dir, manifest)
@@ -4627,9 +4721,7 @@ def _stage_actual_refresh(output_dir, *, _prewrite_guard=None, plan=None, status
             raise ValueError("actual refresh recovery plan 與 COMMITTED 不符")
     source = _refresh_source_snapshot(output_dir)
     names = ["校對工作階段.json", "人工判定資料庫.json", "待人工確認.json", "pipeline_status.json"]
-    for info in manifest["pdfs"]:
-        for kind in ("actual", "candidate"):
-            names.append(str(Path(info[kind + "_workbook"]).resolve().relative_to(output_dir)))
+    names.extend(str(relative) for index, kind, relative, sha in bind_workbooks(output_dir, manifest))
     before = {name: _refresh_file_sha(output_dir / name) for name in names}
     stage = Path(tempfile.mkdtemp(prefix=".ar-", dir=output_dir.parent))
     try:
@@ -4654,7 +4746,7 @@ def _stage_actual_refresh(output_dir, *, _prewrite_guard=None, plan=None, status
                           **({"_prewrite_guard": _prewrite_guard} if _prewrite_guard is not None else {}))
         updated = json_load_strict(stage / "校對工作階段.json")
         validate_manifest_integrity(updated)
-        validate_output_artifact_hashes(updated)
+        validate_output_artifact_hashes(updated, output_dir=stage)
         identities = lambda value: sorted((entry["occurrence_id"], entry["review_id"]) for entry in value.get("records", []))
         if (updated.get("session_id") != manifest["session_id"]
                 or identities(updated) != identities(manifest)
@@ -4693,12 +4785,14 @@ def _validate_actual_import_target(output_dir: Path, manifest, db):
         _resolve_session_pdfs(output_dir, live_manifest)
 
 
+@bound_operation(project_parameter="output_dir")
 def import_actual_gpt_decisions(output_dir: Path, xlsx: Path) -> tuple[int, int, Path]:
     from pdf_portability import _stable_excel_import
     output_dir = resolve_existing_project_dir(Path(output_dir))
     return _stable_excel_import(_import_actual_gpt_decisions_snapshot)(output_dir, xlsx)
 
 
+@bound_operation(project_parameter="output_dir")
 def _import_actual_gpt_decisions_snapshot(output_dir: Path, xlsx: Path, *,
                                          _original_xlsx: Path, _snapshot_sha: str):
     output_dir = Path(output_dir)
@@ -4707,7 +4801,7 @@ def _import_actual_gpt_decisions_snapshot(output_dir: Path, xlsx: Path, *,
         _reject_incomplete_portable_project(output_dir)
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
-    validate_output_artifact_hashes(manifest)
+    validate_output_artifact_hashes(manifest, output_dir=output_dir)
     metadata = workbook_metadata(Path(xlsx), "匯入中繼資料")
     if str(metadata.get("session_id") or "") != str(manifest.get("session_id") or ""):
         mismatched = _actual_workbook_schema_mismatches(metadata, _session_metadata_for_actual(manifest))
@@ -4721,6 +4815,7 @@ def _import_actual_gpt_decisions_snapshot(output_dir: Path, xlsx: Path, *,
             output_dir, xlsx, _original_xlsx=_original_xlsx, _snapshot_sha=_snapshot_sha)
 
 
+@bound_operation(project_parameter="output_dir")
 def _import_same_session_actual_snapshot(output_dir: Path, xlsx: Path, *,
                                          _original_xlsx: Path, _snapshot_sha: str):
     # The routing read is advisory. Reload the complete same-session target
@@ -4728,7 +4823,7 @@ def _import_same_session_actual_snapshot(output_dir: Path, xlsx: Path, *,
     _reject_incomplete_portable_project(output_dir)
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
-    validate_output_artifact_hashes(manifest)
+    validate_output_artifact_hashes(manifest, output_dir=output_dir)
     readonly_db = _read_actual_source_db(output_dir)
     readonly_groups = build_actual_review_groups(materialize_ledger(manifest, readonly_db))
     validate_actual_sample_profile(xlsx, readonly_groups, output_dir,
@@ -4762,6 +4857,7 @@ def _import_same_session_actual_snapshot(output_dir: Path, xlsx: Path, *,
 
 
 
+@bound_operation(project_parameter="output_dir")
 def apply_manual_actual_correction(
     output_dir: Path,
     review_id: str,
@@ -4773,7 +4869,7 @@ def apply_manual_actual_correction(
     output_dir = Path(output_dir)
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
-    validate_output_artifact_hashes(manifest)
+    validate_output_artifact_hashes(manifest, output_dir=output_dir)
     recover_pending_project_actual_write(project_actual_evidence_root(output_dir))
     db = load_or_initialize_db(output_dir)
     ledger = materialize_ledger(manifest, db)
@@ -4963,12 +5059,13 @@ def _verify_manual_actual_batch_postconditions(
             )
 
 
+@bound_operation(project_parameter="output_dir")
 def apply_staged_manual_actual_corrections(output_dir: Path) -> dict[str, Any]:
     """Apply the durable GUI queue once, clear once, refresh once, then verify."""
     output_dir = Path(output_dir)
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
-    validate_output_artifact_hashes(manifest)
+    validate_output_artifact_hashes(manifest, output_dir=output_dir)
     recover_pending_project_actual_write(project_actual_evidence_root(output_dir))
     if committed_project_recovery(project_actual_evidence_root(output_dir)) is not None:
         return recover_committed_actual_project(output_dir)
@@ -5035,7 +5132,7 @@ def apply_staged_manual_actual_corrections(output_dir: Path) -> dict[str, Any]:
     try:
         refreshed_manifest = json_load_strict(output_dir / "校對工作階段.json")
         validate_manifest_integrity(refreshed_manifest)
-        validate_output_artifact_hashes(refreshed_manifest)
+        validate_output_artifact_hashes(refreshed_manifest, output_dir=output_dir)
         refreshed_db = load_or_initialize_db(output_dir)
         refreshed_ledger = materialize_ledger(refreshed_manifest, refreshed_db)
         _verify_manual_actual_batch_postconditions(refreshed_ledger, postconditions)
@@ -5349,8 +5446,9 @@ def run_pipeline_pdfs(
             ledger = materialize_ledger(manifest, db)
             reconciliation = reconcile_ledger(ledger, manifest.get("actual_source_ids") or [])
             gate = completion_gate(ledger, reconciliation, manifest.get("regression_gate") or {}, source_validation_ok=True)
-            from pdf_portability import hold_actual_excel_completion
+            from pdf_portability import hold_actual_excel_completion, hold_expected_conflict_completion
             gate = hold_actual_excel_completion(_source_project_dir or output_dir, manifest, db, gate)
+            gate = hold_expected_conflict_completion(_source_project_dir or output_dir, manifest, db, gate)
             if _prewrite_guard is not None:
                 _prewrite_guard()
             if defer_excel_reports:
@@ -5446,11 +5544,12 @@ def _refresh_manifest_from_outputs_legacy_disabled(output_dir: Path, old_manifes
 
 
 @_serialized_user_project_entry
+@bound_operation(project_parameter="output_dir")
 def regenerate_report(output_dir: Path) -> Path:
     _reject_incomplete_portable_project(output_dir)
     old_manifest=json_load_strict(output_dir/"校對工作階段.json")
     validate_manifest_integrity(old_manifest)
-    validate_output_artifact_hashes(old_manifest)
+    validate_output_artifact_hashes(old_manifest, output_dir=output_dir)
     if (
         not schema_compatible(old_manifest.get("session_schema_version"), SESSION_SCHEMA_VERSION)
         or not schema_compatible(old_manifest.get("ledger_schema_version"), LEDGER_SCHEMA_VERSION)
@@ -5482,8 +5581,12 @@ def regenerate_report(output_dir: Path) -> Path:
     dynamic_actual_root = initialize_project_actual_evidence(output_dir, root)
     pdfs = _resolve_session_pdfs(output_dir, old_manifest)
     fingerprints = {}
+    sealed_locations = {(index, kind): relative for index, kind, relative, sha in bind_workbooks(output_dir, old_manifest)}
     for pdf in pdfs:
-        actual_path = actual_workbook_path(output_dir / "01_實際注音", pdf)
+        infos = [index for index, info in enumerate(old_manifest["pdfs"]) if info["pdf_sha256"] == sha256_file(pdf)]
+        if len(infos) != 1:
+            raise ValueError("sealed workbook PDF identity 不唯一")
+        actual_path = owned_path(output_dir, sealed_locations[infos[0], "actual"])
         global_dependencies = actual_workbook_global_exact_dependencies(actual_path, pdf)
         fingerprints[pdf.name] = compute_actual_asset_fingerprint(
             root,
@@ -5506,6 +5609,7 @@ def regenerate_report(output_dir: Path) -> Path:
         output_dir / "02_候選報告",
         actual_fingerprints=fingerprints,
         source_validation=source_validation,
+        sealed_workbook_manifest=old_manifest,
     )
     manifest = _carry_forward_cross_version_identity(manifest, old_manifest)
     db = load_or_initialize_db(output_dir)
@@ -5514,6 +5618,7 @@ def regenerate_report(output_dir: Path) -> Path:
     from pdf_portability import validate_conflict_state
     if validate_conflict_state(output_dir, old_manifest, db):
         raise ValueError("專案出現未裁決衝突；未重新發布")
+    validate_output_artifact_hashes(old_manifest, output_dir=output_dir)
     json_save(output_dir/"校對工作階段.json",manifest)
     save_pending_json(output_dir,manifest,db)
     return generate_report(output_dir,manifest,db)
@@ -5533,6 +5638,7 @@ def _reject_incomplete_portable_project(output_dir: Path) -> None:
 
 
 @_serialized_user_project_entry
+@bound_operation(project_parameter="output_dir")
 def repair_project_state(output_dir: Path, *, runtime_root: Path | None = None) -> Path:
     """Rebuild expected candidates and completion state without forcing actual decode.
 
@@ -5546,7 +5652,7 @@ def repair_project_state(output_dir: Path, *, runtime_root: Path | None = None) 
     _reject_incomplete_portable_project(output_dir)
     old_manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(old_manifest)
-    validate_output_artifact_hashes(old_manifest)
+    validate_output_artifact_hashes(old_manifest, output_dir=output_dir)
     if (
         not schema_compatible(old_manifest.get("session_schema_version"), SESSION_SCHEMA_VERSION)
         or not schema_compatible(old_manifest.get("ledger_schema_version"), LEDGER_SCHEMA_VERSION)
@@ -5690,10 +5796,27 @@ def main():
                         flush=True,
                     )
                 else:
-                    n, skipped, report = import_gpt_decisions(outdir, import_path)
+                    expected_result = import_gpt_decisions(outdir, import_path)
+                    n, skipped, report = expected_result
+                    business = getattr(expected_result, "status", {})
+                    business_text = (f"本次已保存：新增 {business['imported']} 筆；"
+                                     f"一致保留／補充 {business['consistent_supplements']} 筆；"
+                                     f"已處理重複 {business['duplicates']} 筆（未新增判定）；"
+                                     f"新增衝突 {business['new_conflicts']} 筆；"
+                                     f"待本地裁決 {business['pending_conflicts']} 筆。\n"
+                                     f"原待辦保留：保留待人工 {business['retained_manual']} 筆；"
+                                     f"未操作列 {business['skipped_unoperated']} 筆。\n"
+                                     + (f"依賴變動待重核 {business['dependency_rechecks']} 筆；"
+                                        f"有效本地完成判定保留 {business['preserved_local_decisions']} 筆（只保存來源稽核）。\n"
+                                        if 'dependency_rechecks' in business else "")
+                                     + ("請按「繼續校對」，查看雙方證據後用「輸入其他應標注音」裁決。\n"
+                                        if business['pending_conflicts'] else "")
+                                     + ("非校對範圍提案請重核原頁後使用既有排除入口；不會自動沿用舊排除。\n"
+                                        if business.get('dependency_rechecks') else "")
+                                     if business else "")
                     print(
                         f"自動辨識：{import_path.name} = expected／差異 GPT 證據檔。"
-                        f"匯入 {n} 筆，略過 {skipped} 筆未操作列。\n{report}\n"
+                        f"{business_text if business else f'匯入 {n} 筆，略過 {skipped} 筆。'}\n{report}\n"
                         "完成狀態請以本次產生的報告／pipeline_status.json 為準；"
                         "若剛升級規則，請按「修復／更新報告」。",
                         flush=True,

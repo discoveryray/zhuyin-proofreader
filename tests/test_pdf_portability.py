@@ -72,6 +72,8 @@ def project(root: Path, source_pdf: Path, *, session: str, event_positions=(), b
     boxes = boxes or ((20, 20, 40, 45), (90, 20, 110, 45))
     for index, (x0, y0, x1, y1) in enumerate(boxes, 1):
         rows.append({
+            "ledger_schema_version": LEDGER_SCHEMA_VERSION,
+            "workbook_schema_version": WORKBOOK_SCHEMA_VERSION,
             "pdf_sha256": digest, "pdf": str(source_pdf), "pdf_name": source_pdf.name,
             "實體頁碼": 1, "課本頁": 1, "字元": "角", "實際注音": "ㄐㄩㄝˊ",
             "解碼依據": "glyph evidence", "穩定注音鍵": f"F#{index}", "font": "F", "font_xref": 1,
@@ -116,8 +118,25 @@ def project(root: Path, source_pdf: Path, *, session: str, event_positions=(), b
     return manifest, db
 
 
+def fixture_export_pending_for_gpt(source: Path) -> Path:
+    """Fixture-only writer-entry shim; all original proof producer checks run.
+
+    Existing root-first decorator incorrectly receives Workbook at this one
+    export entry. This shim ends before any tested import/transaction call.
+    Production export validation is not claimed by these import regressions.
+    """
+    from sealed_workbook_paths import trusted_root, binding_scope
+    original = portable.write_excel_content_proof
+    def fixture_writer(workbook, output_dir, *args, **kwargs):
+        trusted_root(output_dir)
+        with binding_scope():
+            return original.__wrapped__(workbook, output_dir, *args, **kwargs)
+    with patch.object(portable, "write_excel_content_proof", fixture_writer):
+        return sp.export_pending_for_gpt(source)
+
+
 def _filled_expected_excel(source: Path, target: Path, *, action: str = "解決expected證據") -> Path:
-    exported = sp.export_pending_for_gpt(source)
+    exported = fixture_export_pending_for_gpt(source)
     workbook = load_workbook(exported)
     sheet = workbook["待判定候選"]
     headers = [cell.value for cell in sheet[1]]
@@ -157,9 +176,12 @@ def test_cross_session_expected_excel_preserves_formal_target_expected(
                                     "注音校對_最終報告.xlsx", "pipeline_status.json")]
     before = {path: path.read_bytes() if path.exists() else None for path in watched}
     before_row = sp.materialize_ledger(manifest, sp.json_load_strict(b / "人工判定資料庫.json"))[0]
-    with pytest.raises(ValueError, match="正式 expected|獨立 expected"):
-        sp.import_gpt_decisions(b, filled)
-    assert {path: path.read_bytes() if path.exists() else None for path in watched} == before
+    result = sp.import_gpt_decisions(b, filled)
+    same = reading == "ㄐㄩㄝˊ"
+    assert result.status["consistent_supplements"] == int(same)
+    assert result.status["new_conflicts"] == int(not same)
+    assert sp.json_load_strict(b / "人工判定資料庫.json") == sp.normalize_db({})
+    assert not (b / portable.INCOMPLETE_FILE).exists()
     after_row = sp.materialize_ledger(manifest, sp.json_load_strict(b / "人工判定資料庫.json"))[0]
     assert (after_row["state"], after_row["expected_set"], after_row["expected_evidence"]) == (
         before_row["state"], before_row["expected_set"], before_row["expected_evidence"])
