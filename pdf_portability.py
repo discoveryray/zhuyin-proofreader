@@ -641,6 +641,11 @@ def validate_conflict_state(output_dir: Path, manifest: Mapping[str, Any], db: M
         return []
     receipt = _validated_expected_receipt(sp.json_load_strict(path), manifest)
     valid_ids = {entry["review_id"] for entry in manifest.get("records", [])}
+    return _pending_expected_conflicts(receipt, valid_ids, db)
+
+
+def _pending_expected_conflicts(receipt, valid_ids, db):
+    """Re-evaluate current adjudications against an integrity-verified receipt."""
     unresolved = []
     def locally_resolves(event, conflict):
         resolution = event.get("portability_conflict_resolution") if isinstance(event, dict) else None
@@ -688,6 +693,42 @@ def validate_conflict_state(output_dir: Path, manifest: Mapping[str, Any], db: M
             if not locally_resolves(event, conflict):
                 raise ValueError(f"衝突位置有未經本地裁決的有效事件：{review_id}")
     return unresolved
+
+
+class _VerifiedExpectedConflicts:
+    """Private service-owned receipt snapshot, never accepted from GUI callers.
+
+    Construction runs the full historical source/basis validation. The service
+    binds this object to captured manifest and receipt bytes, checks them again
+    before writing, and re-evaluates each staged DB. Public views are copies;
+    neither a returned view nor an event can modify cached historical evidence.
+    """
+
+    def __init__(self, receipt, manifest):
+        self._receipt = (_validated_expected_receipt(copy.deepcopy(receipt), manifest)
+                         if receipt is not None else {"conflicts": []})
+        self._valid_ids = {entry["review_id"] for entry in manifest.get("records", [])}
+        self._by_id = {}
+        for item in self._receipt["conflicts"]:
+            if not isinstance(item, dict):
+                raise ValueError("跨專案判定衝突來源或位置識別不完整")
+            self._by_id.setdefault(item.get("target_review_id"), []).append(item)
+
+    def pending(self, db):
+        return _pending_expected_conflicts(self._receipt, self._valid_ids, db)
+
+    def review_view(self, db, ledger, *, pending=None):
+        pending = set(self.pending(db) if pending is None else pending)
+        return [{**entry, **({"expected_business_conflict_pending": True,
+                              "expected_business_conflicts": copy.deepcopy(self._by_id[entry["review_id"]])}
+                            if entry["review_id"] in pending else {})} for entry in ledger]
+
+    def resolution(self, review_id, pending):
+        if review_id not in pending:
+            return None
+        selected = self._by_id[review_id]
+        return {"conflict_sha256": [hashlib.sha256(_canonical(item)).hexdigest() for item in selected],
+                "original_conflicts": copy.deepcopy(selected)}
 
 
 def conflict_resolution_evidence(output_dir: Path, manifest: Mapping[str, Any],

@@ -54,6 +54,7 @@ class SaveResult:
     timings: dict[str, float]
     version_token: str
     resume_snapshot: ReviewResumeSnapshot | None = None
+    review_view: list[dict[str, Any]] | None = None
 
 
 @dataclass(frozen=True)
@@ -122,6 +123,8 @@ class ReviewSaveService:
         self._runtime_paths = None
         self._source_specs = None
         self._artifact_specs = None
+        self._conflicts = None
+        self._conflicts_key = None
 
     def _runtime(self, timings):
         root = Path(sp.__file__).resolve().parent
@@ -223,10 +226,12 @@ class ReviewSaveService:
             # Use the same project lock as actual apply/recovery. It prevents
             # those transactions racing a save of a now-obsolete expected row.
             notify("等待專案儲存鎖（尚未寫入）")
+            waiting = time.perf_counter()
             with self._lock, sp.project_delivery_lock(sp.project_actual_evidence_root(self.output_dir)):
                 return self._save(review_id, event, expected_manifest, expected_db,
                                   defer_staging_validation=defer_staging_validation, notify=notify,
-                                  confirm_current_actual_snapshot=copy.deepcopy(confirm_current_actual_snapshot))
+                                  confirm_current_actual_snapshot=copy.deepcopy(confirm_current_actual_snapshot),
+                                  lock_wait=time.perf_counter() - waiting)
         finally:
             self._save_lock.release()
 
@@ -290,10 +295,34 @@ class ReviewSaveService:
             index = {row["review_id"]: n for n, row in enumerate(baseline)}
         else:
             baseline, ledger, index = self._baseline, self._ledger, self._index
-        import pdf_portability
-        pdf_portability.validate_conflict_state(self.output_dir, manifest, db)
         timings["ledger_full_rebuild"] = time.perf_counter() - phase if full else 0.0
-        return manifest, db, baseline, ledger, index, content, hashes, candidate_anchor
+        timings["ledger_cache_hit"] = float(not full)
+        timings["ledger_dependency_changed"] = float(self._dependencies is not None and self._dependencies != hashes)
+        timings["ledger_cache_cold"] = float(self._manifest is None or self._db is None)
+        timings["ledger_manifest_changed"] = float(self._manifest_sha is not None and manifest_sha != self._manifest_sha)
+        timings["ledger_db_changed"] = float(self._db_sha is not None and db_sha != self._db_sha)
+        import pdf_portability
+        phase = time.perf_counter()
+        receipt_path = self.output_dir / pdf_portability.CONFLICT_FILE
+        key = (manifest_sha, hashes[str(receipt_path)])
+        if self._conflicts is None or key != self._conflicts_key:
+            reading = time.perf_counter()
+            raw = _read(receipt_path)
+            if _digest(raw) != hashes[str(receipt_path)]:
+                raise StaleReviewProjectError("核對期間衝突來源已變更；未保存，請重新載入")
+            document = _json(raw, receipt_path) if raw is not None else None
+            timings["conflict_receipt_read_parse"] = time.perf_counter() - reading
+            self._conflicts = pdf_portability._VerifiedExpectedConflicts(document, manifest)
+            self._conflicts_key = key
+            timings["conflict_receipt_cache_hit"] = 0.0
+        else:
+            timings["conflict_receipt_cache_hit"] = 1.0
+            timings["conflict_receipt_read_parse"] = 0.0
+        timings["conflict_receipt_validation"] = time.perf_counter() - phase
+        phase = time.perf_counter()
+        pending = self._conflicts.pending(db)
+        timings["conflict_current_db_validation"] = time.perf_counter() - phase
+        return manifest, db, baseline, ledger, index, content, hashes, candidate_anchor, pending
 
     def load_resume_snapshot(self, *, expected_manifest=None, expected_db=None):
         """Verify once, retaining content for queue and staging in this operation.
@@ -305,7 +334,7 @@ class ReviewSaveService:
         timings = {}
         with self._lock, sp.project_delivery_lock(sp.project_actual_evidence_root(self.output_dir)):
             values = self._prepare_snapshot(timings, expected_manifest, expected_db)
-            manifest, db, baseline, ledger, index, content, hashes, anchor = values
+            manifest, db, baseline, ledger, index, content, hashes, anchor, pending = values
             _, final_hashes = self._capture(timings)
             if final_hashes != hashes:
                 raise StaleReviewProjectError("載入期間專案來源或暫存已變更；請重新載入")
@@ -347,16 +376,16 @@ class ReviewSaveService:
         return summary
 
     def _save(self, review_id, event, expected_manifest, expected_db, *, defer_staging_validation=False,
-              notify=lambda phase: None, confirm_current_actual_snapshot=None):
+              notify=lambda phase: None, confirm_current_actual_snapshot=None, lock_wait=0.0):
         started = time.perf_counter()
-        timings = {}
+        timings = {"lock_wait": lock_wait}
         receipt = self.output_dir / "跨專案判定衝突.json"
         if self._dependencies is not None:
             current_receipt_sha = sp.sha256_file(receipt) if receipt.exists() else ""
             if current_receipt_sha != self._dependencies[str(receipt)]:
                 raise StaleReviewProjectError("畫面載入後衝突來源已變更；未裁決，請重新載入雙方證據")
         (manifest, db, baseline, ledger, index, content, hashes,
-         candidate_anchor) = self._prepare_snapshot(timings, expected_manifest, expected_db, notify)
+         candidate_anchor, unresolved_conflicts) = self._prepare_snapshot(timings, expected_manifest, expected_db, notify)
         manifest_sha = hashes[str(self.output_dir / "校對工作階段.json")]
         db_path = self.output_dir / "人工判定資料庫.json"
         db_sha = hashes[str(db_path)]
@@ -367,15 +396,14 @@ class ReviewSaveService:
                             and event["manual_expected_decision"].get("operation") == "CONFIRM_CURRENT_AS_EXPECTED")
         if confirms_current:
             current = ledger[index[review_id]]
-            from pdf_portability import expected_conflict_review_view
-            current = expected_conflict_review_view(self.output_dir, manifest, db, [current])[0]
+            current = self._conflicts.review_view(db, [current], pending=unresolved_conflicts)[0]
             if (not sp.can_confirm_current_actual_as_expected(current)
                     or event.get("expected_set") != [sp.canonical_bopomofo(current.get("actual"))]):
                 raise StaleReviewProjectError("目前 actual 已失效或不同於本次選取讀音；未保存，請重新核對")
             if (confirm_current_actual_snapshot is not None
                     and confirm_current_actual_snapshot != sp.actual_confirmation_snapshot(current)):
                 raise StaleReviewProjectError("目前 actual 證據與畫面 snapshot 不同；未保存，請重新載入")
-        phase = time.perf_counter()
+        incremental_started = time.perf_counter()
         staged_db = {**db, "events": dict(db.get("events", {}))}
         if event is None:
             staged_db["events"].pop(review_id, None)
@@ -383,17 +411,15 @@ class ReviewSaveService:
         else:
             if not isinstance(event, dict):
                 raise ValueError("review event 格式錯誤")
-            import pdf_portability
-            unresolved_conflicts = pdf_portability.validate_conflict_state(
-                self.output_dir, manifest, db)
             if review_id in unresolved_conflicts and event.get("portability_source") is not None:
                 raise ValueError("衝突位置只接受本地重新核對的人工裁決；未保存匯入事件")
             staged_db["events"][review_id] = copy.deepcopy(event)
             staged_db["events"][review_id].pop("portability_conflict_resolution", None)
             resolution = None
             if event.get("action") != "保留待人工" and event.get("portability_source") is None:
-                resolution = pdf_portability.conflict_resolution_evidence(
-                    self.output_dir, manifest, db, review_id)
+                phase = time.perf_counter()
+                resolution = self._conflicts.resolution(review_id, unresolved_conflicts)
+                timings["conflict_evidence_copy"] = time.perf_counter() - phase
                 if resolution is None:
                     resolution = (db.get("events", {}).get(review_id) or {}).get(
                         "portability_conflict_resolution")
@@ -410,10 +436,14 @@ class ReviewSaveService:
                 prior_binding = (db["events"].get(review_id) or {}).get("expected_resolution_binding")
                 if staged_event.get("expected_resolution_binding") != prior_binding:
                     raise ValueError("GUI 確認必須保留既有已驗證 expected binding；不得新增／丟棄來源")
+            phase = time.perf_counter()
             resolved = sp._apply_review_event(baseline[index[review_id]], staged_event, expected_manifest=manifest)
+            timings["single_event_apply"] = time.perf_counter() - phase
             if resolved.get("review_event_replay_status") and review_id in unresolved_conflicts:
                 raise ValueError("衝突裁決事件不能安全重播；原雙方證據仍保留")
-            pdf_portability.validate_conflict_state(self.output_dir, manifest, staged_db)
+            phase = time.perf_counter()
+            staged_pending = self._conflicts.pending(staged_db)
+            timings["conflict_staged_db_validation"] = time.perf_counter() - phase
             if (staged_event.get("action") == "確認現版差異"
                     and (resolved.get("state") != "TEXTBOOK_ERROR_CONFIRMED"
                          or resolved.get("review_event_replay_status"))):
@@ -430,7 +460,7 @@ class ReviewSaveService:
         sp.validate_occurrence_ledger([resolved])
         staged_ledger = list(ledger)
         staged_ledger[index[review_id]] = resolved
-        timings["ledger_incremental"] = time.perf_counter() - phase
+        timings["ledger_incremental"] = time.perf_counter() - incremental_started
         phase = time.perf_counter()
         if defer_staging_validation:
             # Only an independent explicit expected decision may commit while
@@ -457,6 +487,15 @@ class ReviewSaveService:
         if confirms_current and (summary.get("staging_error") or summary.get("staging_validation_pending")
                                  or current["occurrence_id"] in summary.get("staged_checked_occurrence_ids", [])):
             raise ValueError("actual 暫存尚未通過驗證或本筆尚未套用；未保存目前注音判定")
+        # Build the queue's evidence annotation from this operation's verified
+        # receipt and staged DB, before the final content/CAS boundary. GUI
+        # publication cannot introduce a second, unbound receipt read.
+        phase = time.perf_counter()
+        # Undo has its original semantics: validate the remaining adjudications
+        # as part of constructing the same durable DB's review view.
+        review_view = self._conflicts.review_view(
+            staged_db, staged_ledger, pending=staged_pending if event is not None else None)
+        timings["conflict_queue_view"] = time.perf_counter() - phase
         # Recheck every dependency immediately before the atomic replacement;
         # no side effect has happened yet if any input changed during validation.
         notify("寫入前再次完整核對依賴（尚未寫入）")
@@ -483,4 +522,4 @@ class ReviewSaveService:
         timings["backend_total"] = time.perf_counter() - started
         resume = (ReviewResumeSnapshot(manifest, staged_db, baseline, staged_ledger, content, hashes, {})
                   if defer_staging_validation else None)
-        return SaveResult(staged_db, staged_ledger, resolved, summary, timings, token, resume)
+        return SaveResult(staged_db, staged_ledger, resolved, summary, timings, token, resume, review_view)

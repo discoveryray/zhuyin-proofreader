@@ -1593,7 +1593,9 @@ class ReviewApp:
                 progress.put("判定已寫入，正在整理待辦")
                 queue_started = time.perf_counter()
                 from pdf_portability import expected_conflict_review_view
-                review_view = expected_conflict_review_view(request["output_dir"], manifest, result.db, result.ledger)
+                review_view = getattr(result, "review_view", None)
+                if review_view is None:
+                    review_view = expected_conflict_review_view(request["output_dir"], manifest, result.db, result.ledger)
                 prepared = prepare_review_queue(
                     manifest, review_view, previous, index,
                     set(result.staging_summary.get("staged_checked_occurrence_ids") or []),
