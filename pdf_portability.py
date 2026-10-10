@@ -1062,6 +1062,10 @@ def _match_pdfs(proof: Mapping[str, Any], source_manifest: Mapping[str, Any],
     target_pdfs = list(target_manifest.get("pdfs", []))
     if len(source_pdfs) != len(target_pdfs):
         raise ValueError("PDF 數量不同；不支援部分教材成果移轉")
+    source_shas = [item["pdf_sha256"] for item in source_pdfs]
+    target_shas = [item["pdf_sha256"] for item in target_pdfs]
+    if len(set(source_shas)) != len(source_shas) or len(set(target_shas)) != len(target_shas):
+        raise ValueError("來源或目標 PDF SHA 重複；不支援不唯一的教材對應")
     rendered = []
     for target in target_pdfs:
         path = _source_pdf(target_manifest, target, target_dir)
@@ -1069,6 +1073,21 @@ def _match_pdfs(proof: Mapping[str, Any], source_manifest: Mapping[str, Any],
         rendered.append((target, pages))
     mapping = {}
     geometry = {}
+    if (set(source_shas) == set(target_shas)
+            and all(page.get("candidate_text_sha256")
+                    for source in source_pdfs for page in source["pages"])):
+        # Complete, unique identical-byte batches have an exact one-to-one
+        # identity. Still check every carried page against the physical target;
+        # a mismatch cannot fall back to a different visually similar PDF.
+        by_sha = {target["pdf_sha256"]: pages for target, pages in rendered}
+        for source in source_pdfs:
+            sha = source["pdf_sha256"]
+            pages = by_sha[sha]
+            if not _pages_equivalent(source["pages"], pages):
+                raise ValueError(f"同 SHA PDF 頁面內容／文字證據不符：{source['pdf_name']}；未移轉")
+            mapping[sha] = sha
+            geometry[sha] = (source["pages"], pages)
+        return mapping, geometry
     for source in source_pdfs:
         missing_text = any("candidate_text_sha256" not in page for page in source["pages"])
         candidates = []
