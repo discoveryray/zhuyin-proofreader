@@ -405,6 +405,83 @@ def _actual_excel_conflict_status(status: Mapping[str, Any], conflicts: list[dic
 
 
 EXPECTED_BUSINESS_CONTRACT = "expected-business-conflict/1"
+DEPENDENCY_RECHECK_CONTRACT = "review-dependency-recheck/1"
+_RECHECK_KEYS = ("state", "actual", "actual_evidence", "expected_set",
+                 "expected_evidence", "context_evidence")
+
+
+def _dependency_differences(source, baseline, current, action):
+    comparisons = [("baseline", baseline, _RECHECK_KEYS)]
+    if action == "確認現版差異":
+        comparisons.append(("current", current, _RECHECK_KEYS[1:]))
+    return [{"comparison": label, "key": key, "source": copy.deepcopy(source.get(key)),
+             "target": copy.deepcopy(target.get(key))}
+            for label, target, keys in comparisons for key in keys
+            if source.get(key) != target.get(key)]
+
+
+def _valid_retained_local(entry, event):
+    return (isinstance(event, dict) and event.get("portability_source") is None
+            and event.get("action") in {"補建expected證據", "解決expected證據", "確認現版差異", "確認非校對範圍"}
+            and not entry.get("review_event_replay_status")
+            and entry.get("state") in {"PASS", "TEXTBOOK_ERROR_CONFIRMED", "EXCLUDED_OUT_OF_SCOPE"})
+
+
+def _dependency_recheck_record(source_manifest, manifest, source, baseline, current, event, identity, prior):
+    record = _expected_business_record(source_manifest, manifest, current, event, identity, prior)
+    record["contract"] = DEPENDENCY_RECHECK_CONTRACT
+    record["dependency_recheck"] = {
+        "version": 1, "source_manifest_integrity_sha256": source_manifest["manifest_integrity_sha256"],
+        "source_snapshot": copy.deepcopy(source), "target_baseline_snapshot": copy.deepcopy(baseline),
+        "target_current_snapshot": copy.deepcopy(current),
+        "differences": _dependency_differences(source, baseline, current, event["action"]),
+        "disposition": "PRESERVED_LOCAL_DECISION" if _valid_retained_local(current, prior)
+                       else "RECHECK_LOCAL_REQUIRED"}
+    return record
+
+
+def _validate_dependency_recheck(item, manifest, current_base):
+    import standalone_proofread as sp
+    from occurrence_ledger import validate_occurrence_ledger
+    audit = item["dependency_recheck"]
+    if (not isinstance(audit, dict) or set(audit) != {
+            "version", "source_manifest_integrity_sha256", "source_snapshot", "target_baseline_snapshot",
+            "target_current_snapshot", "differences", "disposition"}
+            or type(audit["version"]) is not int or audit["version"] != 1
+            or audit["disposition"] not in {"RECHECK_LOCAL_REQUIRED", "PRESERVED_LOCAL_DECISION"}
+            or not isinstance(audit["source_manifest_integrity_sha256"], str)
+            or len(audit["source_manifest_integrity_sha256"]) != 64
+            or any(c not in "0123456789abcdef" for c in audit["source_manifest_integrity_sha256"])):
+        raise ValueError("待重核 receipt 契約無效")
+    source, baseline, current = (audit[key] for key in
+                                ("source_snapshot", "target_baseline_snapshot", "target_current_snapshot"))
+    if any(not isinstance(entry, dict) for entry in (source, baseline, current)):
+        raise ValueError("待重核 snapshot 格式無效")
+    for entry in (source, baseline, current):
+        validate_occurrence_ledger([entry])
+    if (any(source.get(key) != item[field] for key, field in (
+            ("review_id", "source_review_id"), ("occurrence_id", "source_occurrence_id"),
+            ("pdf_sha256", "source_pdf_sha256")))
+            or any(sp.manual_expected_target(entry) != sp.manual_expected_target(current_base)
+                   for entry in (baseline, current))):
+        raise ValueError("待重核 snapshot 身份／位置無效")
+    _require_mapped_textbook_context(source, baseline, "待重核 ")
+    _require_mapped_textbook_context(current_base, baseline, "待重核 ")
+    event, basis = item["source_event"], item["target_basis"]
+    if event.get("action") not in {"確認現版差異", "確認非校對範圍"}:
+        raise ValueError("待重核原始 action 無效")
+    if sp._apply_review_event(source, event).get("review_event_replay_status"):
+        raise ValueError("待重核來源判定失效")
+    replayed = (sp._apply_review_event(baseline, basis["event"], expected_manifest=manifest)
+                if basis["event"] is not None else baseline)
+    expected_basis = _expected_target_basis(manifest, current, basis["event"])
+    expected_basis["manifest_integrity_sha256"] = basis["manifest_integrity_sha256"]
+    differences = _dependency_differences(source, baseline, current, event["action"])
+    if (replayed != current or basis != expected_basis or not differences
+            or audit["differences"] != differences
+            or (audit["disposition"] == "PRESERVED_LOCAL_DECISION") !=
+               _valid_retained_local(current, basis["event"])):
+        raise ValueError("待重核原始目標／依賴差異無法驗證")
 
 
 def _expected_target_basis(manifest, entry, event):
@@ -465,7 +542,12 @@ def _validated_expected_receipt(receipt, manifest):
         keys = {"contract", "target_review_id", "source_review_id", "source_session_id",
                 "source_pdf_sha256", "source_occurrence_id", "target_session_id",
                 "target_pdf_sha256", "target_occurrence_id", "source_identity", "source_event", "target_basis"}
-        if not isinstance(item, dict) or set(item) != keys or item["contract"] != EXPECTED_BUSINESS_CONTRACT:
+        recheck = isinstance(item, dict) and item.get("contract") == DEPENDENCY_RECHECK_CONTRACT
+        if recheck:
+            keys.add("dependency_recheck")
+        if (not isinstance(item, dict) or set(item) != keys
+                or item["contract"] not in {EXPECTED_BUSINESS_CONTRACT, DEPENDENCY_RECHECK_CONTRACT}
+                or (recheck and item not in receipt["conflicts"])):
             raise ValueError("expected business receipt entry 契約無效")
         entry = by_id.get(item["target_review_id"])
         identity, source_event, basis = item["source_identity"], item["source_event"], item["target_basis"]
@@ -501,6 +583,9 @@ def _validated_expected_receipt(receipt, manifest):
         if key in seen:
             raise ValueError("expected business receipt 來源記錄重複")
         seen.add(key)
+        if recheck:
+            _validate_dependency_recheck(item, manifest, entry)
+            continue
         sp.expected_resolution_payload(source_event)
         if (item in receipt["supplements"]
                 and sp.normalize_expected_set(source_event.get("expected_set")) !=
@@ -571,11 +656,16 @@ def validate_conflict_state(output_dir: Path, manifest: Mapping[str, Any], db: M
                 or conflict.get("target_review_id") not in valid_ids
                 or not isinstance(conflict.get("source_event"), dict)
                 or not (isinstance(conflict.get("target_event"), dict)
-                        or conflict.get("contract") == EXPECTED_BUSINESS_CONTRACT)
+                        or conflict.get("contract") in {EXPECTED_BUSINESS_CONTRACT, DEPENDENCY_RECHECK_CONTRACT})
                 or not conflict.get("source_pdf_sha256")
                 or not conflict.get("target_pdf_sha256")):
             raise ValueError("跨專案判定衝突來源或位置識別不完整")
         review_id = conflict["target_review_id"]
+        if (conflict.get("contract") == DEPENDENCY_RECHECK_CONTRACT
+                and conflict["dependency_recheck"]["disposition"] == "PRESERVED_LOCAL_DECISION"):
+            # This is an audit of an already completed local decision, not a
+            # new workflow hold. It never reinstates the imported source event.
+            continue
         # A later conflict removes the active local adjudication. Its target
         # snapshot is the durable, exact record of that adjudication and the
         # earlier receipt it resolved; neither source verdict is discarded.
@@ -587,7 +677,7 @@ def validate_conflict_state(output_dir: Path, manifest: Mapping[str, Any], db: M
         if historical_resolution:
             continue
         event = db["events"].get(review_id)
-        if (conflict.get("contract") == EXPECTED_BUSINESS_CONTRACT
+        if (conflict.get("contract") in {EXPECTED_BUSINESS_CONTRACT, DEPENDENCY_RECHECK_CONTRACT}
                 and event == conflict["target_basis"]["event"]):
             # Retained formal target truth does not clear the workflow hold.
             unresolved.append(review_id)
@@ -1830,15 +1920,8 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
         expected_only = action in {"補建expected證據", "解決expected證據"}
         if action not in sp.DECISIONS:
             raise ValueError(f"Excel row {number} action 無效")
-        if not expected_only:
-            semantic = ("state", "actual", "actual_evidence", "expected_set",
-                        "expected_evidence", "context_evidence")
-            if any(source.get(key) != target_for_validation.get(key) for key in semantic):
-                raise ValueError(f"Excel row {number} 目標 actual/expected 證據或狀態不同；須重新核對")
-            if action == "確認現版差異" and any(
-                    source.get(key) != target.get(key) for key in
-                    ("actual", "actual_evidence", "expected_set", "expected_evidence", "context_evidence")):
-                raise ValueError(f"Excel row {number} 目標當前 actual/expected 證據不同；六個確認 gate 不可沿用")
+        differences = ([] if expected_only else
+                       _dependency_differences(source, target_for_validation, target, action))
         if not expected_only:
             _require_transferable_expected_lane(action, target, prior_event, f"Excel row {number} ")
         event = {
@@ -1859,7 +1942,7 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
         # A resolved target is independently validated by project materialization.
         # Replaying a source fill operation over its formal truth is not validation.
         checks = [(source, "來源")]
-        if not expected_only or sp.infer_expected_status(target_for_validation) != "RESOLVED":
+        if not differences and (not expected_only or sp.infer_expected_status(target_for_validation) != "RESOLVED"):
             checks.append((target_for_validation, "目標"))
         for entry, label in checks:
             replay = sp._apply_review_event(entry, event)
@@ -1874,7 +1957,10 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
         identity["source_excel_sha256"] = _snapshot_sha
         identity["source_excel_row"] = number
         identity["source_excel_decision"] = copy.deepcopy(row)
-        actions.append((target, event, identity, same_conditions))
+        recheck = (_dependency_recheck_record(source_manifest, target_manifest, source,
+                                             target_for_validation, target, event, identity, prior_event or None)
+                   if differences else None)
+        actions.append((target, event, identity, same_conditions, recheck))
     if dry_run:
         with sp.project_delivery_lock(sp.project_actual_evidence_root(target_dir)):
             _verify_mapped_target_pdfs(target_dir, target_manifest, pdf_map, geometry)
@@ -1914,7 +2000,7 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
         prior_pending_ids = set(validate_conflict_state(target_dir, live_manifest, target_db))
         candidate = copy.deepcopy(target_db)
         imported, duplicates, conflicts, supplements = 0, 0, [], []
-        for target, event, identity, same_conditions in actions:
+        for target, event, identity, same_conditions, recheck in actions:
             review_id = target["review_id"]
             if _historical_import_replay(prior_conflicts, identity, event, event,
                                          decision_payload=_excel_expected_decision):
@@ -1932,6 +2018,9 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
                 duplicates += 1
                 continue
             pending_here = review_id in prior_pending_ids
+            if recheck is not None:
+                conflicts.append(recheck)
+                continue
             if event["action"] in sp.EXPECTED_RESOLUTION_ACTIONS and (
                     sp.infer_expected_status(target) == "RESOLVED" or pending_here):
                 record = _expected_business_record(source_manifest, target_manifest, target, event, identity, current)
@@ -2036,11 +2125,16 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
                                     original_files[target_dir / INCOMPLETE_FILE])
             raise
     pending = validate_conflict_state(target_dir, target_manifest, candidate)
-    return sp.ExpectedImportResult(imported, skipped + duplicates, target_dir / "注音校對_最終報告.xlsx",
-        {"imported": imported, "consistent_supplements": len(supplements), "duplicates": duplicates,
+    status = {"imported": imported, "consistent_supplements": len(supplements), "duplicates": duplicates,
          "skipped_unoperated": skipped - retained_manual, "retained_manual": retained_manual,
          "new_conflicts": len(conflicts),
-         "pending_conflicts": len(set(pending)), "status": "PENDING_LOCAL_ADJUDICATION" if pending else "SAVED"})
+         "pending_conflicts": len(set(pending)), "status": "PENDING_LOCAL_ADJUDICATION" if pending else "SAVED"}
+    rechecks = [item for item in conflicts if item.get("contract") == DEPENDENCY_RECHECK_CONTRACT]
+    if rechecks:
+        status["dependency_rechecks"] = sum(item["dependency_recheck"]["disposition"] == "RECHECK_LOCAL_REQUIRED"
+                                            for item in rechecks)
+        status["preserved_local_decisions"] = len(rechecks) - status["dependency_rechecks"]
+    return sp.ExpectedImportResult(imported, skipped + duplicates, target_dir / "注音校對_最終報告.xlsx", status)
 
 
 def _guard_actual_excel_sources(xlsx, source_ledger, target_dir, target_manifest, pdf_map):

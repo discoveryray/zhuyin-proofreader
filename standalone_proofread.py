@@ -5806,8 +5806,13 @@ def main():
                                      f"待本地裁決 {business['pending_conflicts']} 筆。\n"
                                      f"原待辦保留：保留待人工 {business['retained_manual']} 筆；"
                                      f"未操作列 {business['skipped_unoperated']} 筆。\n"
+                                     + (f"依賴變動待重核 {business['dependency_rechecks']} 筆；"
+                                        f"有效本地完成判定保留 {business['preserved_local_decisions']} 筆（只保存來源稽核）。\n"
+                                        if 'dependency_rechecks' in business else "")
                                      + ("請按「繼續校對」，查看雙方證據後用「輸入其他應標注音」裁決。\n"
                                         if business['pending_conflicts'] else "")
+                                     + ("非校對範圍提案請重核原頁後使用既有排除入口；不會自動沿用舊排除。\n"
+                                        if business.get('dependency_rechecks') else "")
                                      if business else "")
                     print(
                         f"自動辨識：{import_path.name} = expected／差異 GPT 證據檔。"

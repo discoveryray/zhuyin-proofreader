@@ -365,6 +365,13 @@ def expected_conflict_summary(entry):
     lines = []
     for conflict in entry.get("expected_business_conflicts", []):
         source = conflict["source_event"]
+        recheck = conflict.get("dependency_recheck")
+        if recheck is not None:
+            lines.append(f"待重核原來源動作：{source['action']}（未套用過期確認）")
+            for difference in recheck["differences"]:
+                layer = "目標原始基線" if difference["comparison"] == "baseline" else "目標當前判定"
+                lines.append(f"{layer}／{difference['key']}：來源 {difference['source']!r}；目標 {difference['target']!r}")
+            lines.append("核對目前原頁後，可重新排除或輸入本筆應標；原匯入動作與雙方證據仍保留。")
         basis = conflict.get("target_basis")
         target = basis["expected_snapshot"] if basis else conflict["target_event"]
         origin = basis["kind"] if basis else "review_event"
