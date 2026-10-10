@@ -1,7 +1,7 @@
 @echo off
 setlocal
 chcp 65001 >nul
-set "TASK_ROOT=C:\Work\zhuyin-proofreader-phase4\tmp\excel-content-proof-capacity-worktree\"
+set "TASK_ROOT=%~dp0"
 set "PYTHON_EXE=%LOCALAPPDATA%\Programs\Python\Python313\python.exe"
 set "PYTHONUTF8=1"
 set "PYTHONIOENCODING=utf-8"
