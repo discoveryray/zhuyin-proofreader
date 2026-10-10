@@ -33,6 +33,7 @@ ACTUAL_EXCEL_MARKER_VERSION = 1
 CONFLICT_FILE = "跨專案判定衝突.json"
 EXCEL_PROOF_SHEET = "跨電腦內容證據"
 EXCEL_PROOF_VERSION = 1
+EXCEL_CONTENT_PROOF_MAX_BYTES = 256 * 1024 * 1024
 PRESENTATION_PLAN_VERSION = 1
 PRESENTATION_RECEIPTS = (CONFLICT_FILE, PENDING_ACTUAL_FILE)
 
@@ -587,6 +588,33 @@ def _excel_bound_rows(workbook, kind: str):
             for row in rows[1:]]
 
 
+def _check_excel_content_proof_size(raw: bytes) -> None:
+    """One inclusive decompressed-byte limit for Excel proof export and reads."""
+    if len(raw) > EXCEL_CONTENT_PROOF_MAX_BYTES:
+        raise ValueError(
+            "Excel 跨電腦內容證據解壓容量超限："
+            f"上限 {EXCEL_CONTENT_PROOF_MAX_BYTES / (1024 * 1024):g} MiB"
+            f"（{EXCEL_CONTENT_PROOF_MAX_BYTES} bytes）；未匯出或匯入")
+
+
+def _decode_excel_content_proof(chunks, *, label: str):
+    """Decode one bounded zlib stream without hiding capacity failures."""
+    try:
+        packed = base64.b64decode("".join(chunks), validate=True)
+        decoder = zlib.decompressobj()
+        raw = decoder.decompress(packed, EXCEL_CONTENT_PROOF_MAX_BYTES + 1)
+    except (ValueError, TypeError, zlib.error) as exc:
+        raise ValueError(f"{label} 無法解碼：Base64／壓縮資料損壞") from exc
+    _check_excel_content_proof_size(raw)
+    if not decoder.eof or decoder.unconsumed_tail or decoder.unused_data:
+        raise ValueError(f"{label} 壓縮串流不完整或含尾隨資料")
+    try:
+        payload = json.loads(raw)
+    except (ValueError, TypeError) as exc:
+        raise ValueError(f"{label} 無法解碼：JSON 格式損壞") from exc
+    return raw, payload
+
+
 def write_excel_content_proof(workbook, output_dir: Path, manifest, db, *, kind: str,
                               snapshot_db=None, attestations=None,
                               allow_internal_incomplete: bool = False) -> None:
@@ -633,6 +661,7 @@ def write_excel_content_proof(workbook, output_dir: Path, manifest, db, *, kind:
         ar._load_actual_sample_profile(workbook)
         payload["actual_profile_metadata"] = ar._actual_profile_metadata(workbook)
     raw = _canonical(payload)
+    _check_excel_content_proof_size(raw)
     encoded = base64.b64encode(zlib.compress(raw, level=9)).decode("ascii")
     chunks = [encoded[index:index + 30000] for index in range(0, len(encoded), 30000)]
     sheet = workbook.create_sheet(EXCEL_PROOF_SHEET)
@@ -655,16 +684,8 @@ def validate_actual_profile_content_proof(workbook, *, source_manifest=None):
             or any(row[0] != i or not isinstance(row[1], str) or not row[1]
                    for i, row in enumerate(rows[3:], 1))):
         raise ValueError("actual GPT source content proof chunk contract 不完整")
-    try:
-        packed = base64.b64decode("".join(row[1] for row in rows[3:]), validate=True)
-        decoder = zlib.decompressobj()
-        raw = decoder.decompress(packed, 128 * 1024 * 1024 + 1)
-        if (len(raw) > 128 * 1024 * 1024 or not decoder.eof
-                or decoder.unconsumed_tail or decoder.unused_data):
-            raise ValueError("actual GPT source content proof 超過上限或不完整")
-        payload = json.loads(raw)
-    except (ValueError, TypeError, zlib.error) as exc:
-        raise ValueError("actual GPT source content proof 無法解碼") from exc
+    raw, payload = _decode_excel_content_proof(
+        (row[1] for row in rows[3:]), label="actual GPT source content proof")
     if not isinstance(payload, dict):
         raise ValueError("actual GPT source content proof 根節點無效")
     metadata = ar._actual_profile_metadata(workbook)
@@ -709,17 +730,9 @@ def load_excel_content_proof(xlsx: Path, target_dir: Path, target_manifest, *,
             or any(row[0] != index or not isinstance(row[1], str)
                    for index, row in enumerate(rows[3:], 1))):
         raise ValueError("Excel 跨電腦內容證據格式損壞")
-    try:
-        packed = base64.b64decode("".join(row[1] for row in rows[3:]), validate=True)
-        decompressor = zlib.decompressobj()
-        raw = decompressor.decompress(packed, 128 * 1024 * 1024 + 1)
-        if (len(raw) > 128 * 1024 * 1024 or not decompressor.eof
-                or decompressor.unconsumed_tail or decompressor.unused_data):
-            raise ValueError("Excel 跨電腦內容證據超過大小上限或壓縮串流不完整")
-        payload = json.loads(raw)
-    except (ValueError, zlib.error, TypeError) as exc:
-        raise ValueError("Excel 跨電腦內容證據無法解碼") from exc
-    if (len(raw) > 128 * 1024 * 1024 or hashlib.sha256(raw).hexdigest() != rows[1][1]
+    raw, payload = _decode_excel_content_proof(
+        (row[1] for row in rows[3:]), label="Excel 跨電腦內容證據")
+    if (hashlib.sha256(raw).hexdigest() != rows[1][1]
             or not isinstance(payload, dict) or payload.get("version") != EXCEL_PROOF_VERSION
             or payload.get("kind") != kind or _canonical(payload) != raw):
         raise ValueError("Excel 跨電腦內容證據完整性或種類不符")
