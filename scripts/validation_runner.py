@@ -491,6 +491,19 @@ def history(root, *, policy=None, task_id=None):
             raise ValueError("unfinished execution history; retain and resolve before restarting")
     for path in paths:
         values.append((path, read_verified_manifest(path, history_policy=policy, task_id=task_id)))
+    failures = {}
+    for path in root.rglob("pre-core.json"):
+        record = read_pre_core_history(path)
+        if task_id is not None and record["task_id"] != task_id:
+            raise ValueError("foreign pre-core failure history")
+        identity = (record["run_id"], record["attempt"])
+        signature = (record["pr"], record["task_id"], record["sources"]["logs"]["sha256"],
+                     record["sources"]["artifact"]["sha256"], canonical_digest(record["origin"]["jobs"]))
+        if identity in failures and failures[identity] != signature:
+            raise ValueError("conflicting duplicate pre-core history")
+        failures[identity] = signature
+    if any((value["ci"]["run_id"], value["ci"]["attempt"]) in failures for _, value in values):
+        raise ValueError("pre-core history mixed with execution evidence")
     unique = {}
     for path, value in values:
         identity = value["execution_id"]
@@ -1365,15 +1378,22 @@ RELEASE_HISTORY = {
     "original_head": "aab1eb38e3c4dab4d9bb4782368f9665a372f6e1",
     "original_merge": "9c49fd2533b3798fd9acf2e8c7af419a6383d014",
 }
+RELEASE_HISTORY_NEXT = {
+    **RELEASE_HISTORY, "schema": "validation-release-continuation/2",
+    "predecessor_pr": 51,
+    "predecessor_head": "ae5298f5d8fdf4888df76406b66920d7cfacd8fa",
+    "predecessor_merge": "e744a5477aa8a7d812890982b07769eb32e1257f",
+    "main_pr": 52,
+}
 
 
-def release_history_block(corrective_pr="event.pull_request.number"):
+def release_history_block(corrective_pr="event.pull_request.number", *, successor=False):
     """Render only the adopted release chain, never an arbitrary task adapter."""
     if not (corrective_pr == "event.pull_request.number"
             or type(corrective_pr) is int and corrective_pr > RELEASE_HISTORY["original_pr"]):
         raise ValueError("invalid release corrective PR declaration")
     return "<!-- validation-release-continuation\n" + json.dumps(
-        {**RELEASE_HISTORY, "corrective_pr": corrective_pr}, sort_keys=True) + "\n-->"
+        {**(RELEASE_HISTORY_NEXT if successor else RELEASE_HISTORY), "corrective_pr": corrective_pr}, sort_keys=True) + "\n-->"
 
 
 def _release_marker(body):
@@ -1381,8 +1401,9 @@ def _release_marker(body):
     if len(blocks) != 1 or len(blocks[0].encode()) > HANDOFF_LIMIT:
         raise ValueError("exactly one bounded release continuation is required")
     value = parse_json(blocks[0])
-    if (not isinstance(value, dict) or set(value) != set(RELEASE_HISTORY) | {"corrective_pr"}
-            or any(type(value[k]) is not type(v) or value[k] != v for k, v in RELEASE_HISTORY.items())):
+    expected = RELEASE_HISTORY_NEXT if isinstance(value, dict) and value.get("schema") == RELEASE_HISTORY_NEXT["schema"] else RELEASE_HISTORY
+    if (not isinstance(value, dict) or set(value) != set(expected) | {"corrective_pr"}
+            or any(type(value[k]) is not type(v) or value[k] != v for k, v in expected.items())):
         raise ValueError("release continuation source identity differs")
     return value
 
@@ -1463,6 +1484,8 @@ def release_history_scope(event, candidate, handoff, api, repository):
             or _release_handoff(original.get("body")) != handoff):
         raise ValueError("original PR50 sealed source/merge differs")
     original_merge = _git_commit(api, repository, value["original_merge"], [value["baseline"], value["original_head"]])
+    if value["schema"] == RELEASE_HISTORY_NEXT["schema"]:
+        return _release_next_scope(pr, candidate, handoff, api, repository, value, original_merge)
     if pr["head"]["ref"] == value["branch"]:
         if (value["corrective_pr"] != "event.pull_request.number"
                 or pr["number"] <= value["original_pr"] or pr["base"]["ref"] != "develop"
@@ -1493,6 +1516,66 @@ def release_history_scope(event, candidate, handoff, api, repository):
     else:
         raise ValueError("release continuation branch differs")
     return {"reference": value, "admitted_prs": sorted(admitted), "source_branch": value["branch"], "feature_chain": chain}
+
+
+def _release_next_scope(pr, candidate, handoff, api, repository, value, original_merge):
+    """Only the declared PR50 -> merged PR51 -> corrective -> main52 chain."""
+    prior = api(f"repos/{repository}/pulls/{value['predecessor_pr']}")
+    _pr_identity(prior, value["predecessor_pr"], repository, value["branch"])
+    prior_marker = _release_marker(prior.get("body"))
+    if (prior_marker != {**RELEASE_HISTORY, "corrective_pr": "event.pull_request.number"}
+            or _release_handoff(prior.get("body")) != handoff
+            or prior.get("state") != "closed" or prior.get("merged") is not True
+            or prior.get("merge_commit_sha") != value["predecessor_merge"]
+            or prior["head"]["sha"] != value["predecessor_head"]
+            or prior["base"]["sha"] != value["original_merge"] or prior["base"]["ref"] != "develop"):
+        raise ValueError("release PR51 predecessor source/merge differs")
+    prior_chain = _release_feature_chain(api, repository, prior["head"]["sha"], value["original_head"], original_merge["tree"]["sha"])
+    prior_merge = _git_commit(api, repository, value["predecessor_merge"], [value["original_merge"], value["predecessor_head"]])
+    if prior_merge["tree"]["sha"] != prior_chain[0]["tree"]["sha"]:
+        raise ValueError("release PR51 actual merge tree differs")
+    if pr["head"]["ref"] == value["branch"]:
+        if (value["corrective_pr"] != "event.pull_request.number" or pr["number"] <= value["main_pr"]
+                or pr["base"]["ref"] != "develop" or pr["base"]["sha"] != value["predecessor_merge"]):
+            raise ValueError("release next corrective declaration/base differs")
+        corrective = pr
+        # Main52 is an independently identified existing history search scope;
+        # its pending declaration is not proof of a future merge or execution.
+        main = api(f"repos/{repository}/pulls/{value['main_pr']}")
+        _pr_identity(main, value["main_pr"], repository, "develop")
+        if main["base"]["ref"] != "main" or main["base"]["sha"] != value["main_baseline"] or main["head"]["sha"] != value["predecessor_merge"] or _release_handoff(main.get("body")) != handoff:
+            raise ValueError("release pending main52 source/base differs")
+        main_marker = _release_marker(main.get("body"))
+        if main_marker not in ({**value, "corrective_pr": pr["number"]}, {**RELEASE_HISTORY, "corrective_pr": value["predecessor_pr"]}):
+            raise ValueError("release pending main52 declaration differs")
+    elif pr["head"]["ref"] == "develop":
+        number = value["corrective_pr"]
+        if (pr["number"] != value["main_pr"] or type(number) is not int or number <= value["main_pr"]
+                or pr["base"]["ref"] != "main" or pr["base"]["sha"] != value["main_baseline"]):
+            raise ValueError("release next main/corrective declaration differs")
+        corrective = api(f"repos/{repository}/pulls/{number}")
+        _pr_identity(corrective, number, repository, value["branch"])
+        if (corrective.get("state") != "closed" or corrective.get("merged") is not True
+                or corrective.get("merge_commit_sha") != pr["head"]["sha"]):
+            raise ValueError("release next actual corrective merge differs")
+    else:
+        raise ValueError("release next branch differs")
+    if (_release_marker(corrective.get("body")) != {**value, "corrective_pr": "event.pull_request.number"}
+            or _release_handoff(corrective.get("body")) != handoff
+            or corrective["base"]["sha"] != value["predecessor_merge"] or corrective["base"]["ref"] != "develop"):
+        raise ValueError("release next corrective source/base differs")
+    chain = _release_feature_chain(api, repository, corrective["head"]["sha"], value["original_head"], original_merge["tree"]["sha"])
+    anchor = [i for i, node in enumerate(chain) if node["sha"] == value["predecessor_head"]]
+    if len(anchor) != 1 or anchor[0] == 0 or chain[anchor[0]:] != prior_chain:
+        raise ValueError("release next feature chain omits or changes PR51 source")
+    if pr["head"]["ref"] == "develop":
+        merged = _git_commit(api, repository, pr["head"]["sha"], [value["predecessor_merge"], corrective["head"]["sha"]])
+        if merged["tree"]["sha"] != chain[0]["tree"]["sha"] or candidate["tree"] != merged["tree"]["sha"]:
+            raise ValueError("release next actual merge/integration tree differs")
+    elif candidate["tree"] != chain[0]["tree"]["sha"]:
+        raise ValueError("release next corrective integration tree differs")
+    return {"reference": value, "admitted_prs": sorted({value["original_pr"], value["predecessor_pr"], value["main_pr"], corrective["number"]}),
+            "source_branch": value["branch"], "search_branches": [value["branch"], "develop"], "feature_chain": chain}
 
 
 def checkout_history_proof(job_log, system_log, repository):
@@ -1555,11 +1638,182 @@ def _validate_history_scope_artifacts(context, folder):
                    if (parent / entry["path"]).is_file()]
         if not matches or any(digest(path) != entry["sha256"] for path in matches):
             raise ValueError("history attribution raw original missing or corrupt")
+    if "pre_core_failures" in context:
+        records = context["pre_core_failures"]
+        if not isinstance(records, list) or len({row["path"] for row in records}) != len(records):
+            raise ValueError("invalid pre-core history references")
+        identities = set()
+        for entry in records:
+            if entry not in refs or not entry["path"].endswith("/pre-core.json"):
+                raise ValueError("pre-core history is outside the raw closure")
+            path = _history_raw_path(entry, folder)
+            record = read_pre_core_history(path)
+            identity = (record["run_id"], record["attempt"])
+            if identity in identities or record["task_id"] != context.get("task_id"):
+                raise ValueError("duplicate or foreign pre-core history")
+            identities.add(identity)
+            matching = [row for row in context.get("attributions", [])
+                        if (row.get("run_id"), row.get("attempt")) == identity]
+            if (len(matching) != 1 or matching[0].get("disposition") != "applicable"
+                    or matching[0].get("pr") != record["pr"]
+                    or matching[0].get("proof", {}).get("jobs") != record["origin"]["jobs"]):
+                raise ValueError("pre-core history attribution differs")
+
+
+def _history_raw_path(entry, folder):
+    # Reuse the exact relative-reference grammar and SHA closure at every reader.
+    _validate_history_scope_artifacts({"scope_artifacts": [entry]}, folder)
+    return next(parent / entry["path"] for parent in (Path(folder), *Path(folder).parents)
+                if (parent / entry["path"]).is_file())
+
+
+def _pre_core_originals(run, attempt, origin, logs, archive, artifact, task_id):
+    """Prove the sole non-execution exception: failed restore before core began."""
+    metadata = origin.get("attempt_metadata", {})
+    jobs = origin.get("job_metadata", [])
+    if (task_id != RELEASE_HISTORY["task_id"] or origin.get("method") != "original-run-attempt-checkout"
+            or run.get("event") != "pull_request" or run.get("status") != "completed"
+            or metadata.get("id") != run.get("id") or metadata.get("run_attempt") != attempt
+            or metadata.get("status") != "completed" or metadata.get("conclusion") != "failure"
+            or metadata.get("head_sha") != run.get("head_sha") or metadata.get("head_branch") != run.get("head_branch")
+            or metadata.get("head_repository", {}).get("full_name") != REPOSITORY):
+        raise ValueError("pre-core failed original run/attempt identity differs")
+    pr = origin.get("pr_metadata", {})
+    _pr_identity(pr, pr.get("number"), REPOSITORY, run["head_branch"])
+    if (artifact.get("name") != f"validation-evidence-{run['id']}-{attempt}"
+            or artifact.get("expired") is not False or type(artifact.get("id")) is not int
+            or artifact.get("workflow_run", {}).get("id") != run["id"]
+            or artifact["workflow_run"].get("head_sha") != run["head_sha"]
+            or artifact["workflow_run"].get("head_branch") != run["head_branch"]
+            or artifact.get("digest") != "sha256:" + hashlib.sha256(archive).hexdigest()):
+        raise ValueError("pre-core original artifact identity/digest differs")
+    if not jobs or len({row.get("id") for row in jobs}) != len(jobs):
+        raise ValueError("pre-core original jobs missing or duplicate")
+    for job in jobs:
+        if (job.get("run_id") != run["id"] or job.get("run_attempt") != attempt
+                or job.get("head_sha") != run["head_sha"] or job.get("head_branch") != run["head_branch"]):
+            raise ValueError("pre-core original job identity differs")
+    grouped = [row for row in jobs if row.get("name") == "Grouped validation"]
+    if len(grouped) != 1 or grouped[0].get("status") != "completed" or grouped[0].get("conclusion") != "failure":
+        raise ValueError("pre-core grouped failure missing or ambiguous")
+    job = grouped[0]
+    def step(name):
+        rows = [row for row in job.get("steps", []) if row.get("name") == name]
+        if len(rows) != 1 or rows[0].get("status") != "completed" or type(rows[0].get("number")) is not int:
+            raise ValueError("pre-core original step missing or ambiguous")
+        return rows[0]
+    checkout, restore, core = (step(name) for name in ("Check out repository", "Restore validation history", "Run core group"))
+    if (checkout.get("conclusion") != "success" or restore.get("conclusion") != "failure"
+            or core.get("conclusion") != "skipped" or not checkout["number"] < restore["number"] < core["number"]
+            or not restore.get("started_at") or not restore.get("completed_at")
+            or not core.get("started_at") or core["started_at"] != core.get("completed_at")
+            or restore["completed_at"] > core["started_at"]):
+        raise ValueError("core started or pre-core restore failure is unproven")
+    for name in ("Aggregate functional coverage", "Verify functional coverage"):
+        row = step(name)
+        if row.get("conclusion") != "skipped" or row["number"] <= core["number"]:
+            raise ValueError("pre-core functional consumer ran")
+    with zipfile.ZipFile(io.BytesIO(logs)) as zipped:
+        names = zipped.namelist()
+        if len(names) != len(set(names)) or zipped.testzip() is not None:
+            raise ValueError("pre-core original log ZIP corrupt or duplicated")
+        proofs = []
+        for row in jobs:
+            if not any(s.get("name") in {"Check out repository", "Checkout"} for s in row.get("steps", [])):
+                continue
+            matches = [name for name in names if re.fullmatch(r"[0-9]+_" + re.escape(row["name"]) + r"\.txt", name)]
+            system = row["name"] + "/system.txt"
+            if len(matches) != 1 or system not in names:
+                raise ValueError("pre-core original full checkout log missing")
+            proof = checkout_history_proof(zipped.read(matches[0]), zipped.read(system), REPOSITORY)
+            commits = [item for item in origin.get("commits", []) if item.get("sha") == proof["checkout_sha"]]
+            if (not commits or any([p.get("sha") for p in item.get("parents", [])] != proof["ordered_parents"]
+                                   or not re.fullmatch(r"[0-9a-f]{40}", item.get("tree", {}).get("sha", ""))
+                                   or item["tree"]["sha"] == "0" * 40 for item in commits)
+                    or proof["ordered_parents"][1] != run["head_sha"] or proof["pr"] != pr["number"]):
+                raise ValueError("pre-core original Git/PR/checkout contradicts")
+            proof.update(job_id=row["id"], run_id=run["id"], attempt=attempt, log_member=matches[0],
+                         system_member=system, tree=commits[0]["tree"]["sha"])
+            proofs.append(proof)
+        if not proofs or proofs != origin.get("jobs"):
+            raise ValueError("pre-core recorded checkout proof differs")
+        restore_name = job["name"] + "/" + str(restore["number"]) + "_Restore validation history.txt"
+        if restore_name not in names:
+            raise ValueError("pre-core original failing step log missing")
+        text = zipped.read(restore_name).decode("utf-8-sig")
+        if (len(re.findall(r"##\[group\]Run python scripts/validation_runner\.py restore-history --evidence-root tmp/validation-evidence(?:\r?\n|$)", text)) != 1
+                or len(re.findall(r"##\[error\]Process completed with exit code 1\.(?:\r?\n|$)", text)) != 1
+                or any(re.search(r"(?:_Run core group\.txt$|##\[group\]Run .*validation_runner\.py run --group core)", name)
+                       or re.search(rb"##\[group\]Run .*validation_runner\.py run --group core", zipped.read(name))
+                       for name in names if name.endswith(".txt"))):
+            raise ValueError("pre-core log proves execution or not the restore failure")
+    with zipfile.ZipFile(io.BytesIO(archive)) as zipped:
+        names = zipped.namelist()
+        if not names or len(names) != len(set(names)) or zipped.testzip() is not None:
+            raise ValueError("pre-core original validation ZIP missing/corrupt/duplicate")
+        contents = {}
+        execution_names = {"manifest.json", "started.json", "inventory.json", "junit.xml", "events.jsonl", "coverage.json", "raw.log", "collection.log"}
+        for name in names:
+            path = PurePosixPath(name)
+            if (path.is_absolute() or ".." in path.parts or "\\" in name or ":" in name
+                    or name.endswith("/") or path.name in execution_names
+                    or not (path.suffix in {".json", ".jsonl", ".xml", ".log"} or path.name == "pr-artifact.zip")):
+                raise ValueError("pre-core artifact unsafe or contains execution evidence")
+            contents[name] = zipped.read(name)
+        current = [parse_json(payload.decode("utf-8")) for name, payload in contents.items() if PurePosixPath(name).name == "current-checkout-proof.json"]
+        if len(current) != 1 or current[0].get("method") != "current-live-checkout":
+            raise ValueError("pre-core original artifact checkout absent or ambiguous")
+        event_pr, candidate = current[0]["event"]["pull_request"], current[0]["candidate"]
+        _pr_identity(event_pr, pr["number"], REPOSITORY, run["head_branch"])
+        if (event_pr["head"]["sha"] != run["head_sha"]
+                or event_pr["base"]["sha"] != proofs[0]["ordered_parents"][0]
+                or event_pr["base"]["sha"] != RELEASE_HISTORY["main_baseline"]
+                or event_pr["base"]["ref"] != "main" or candidate["head"] != proofs[0]["checkout_sha"]
+                or candidate["parents"] != proofs[0]["ordered_parents"] or candidate["tree"] != proofs[0]["tree"]
+                or current[0].get("jobs") != [job["id"]]
+                or _release_handoff(event_pr.get("body"))["task_id"] != task_id):
+            raise ValueError("pre-core original event/candidate/source differs")
+        handoff = _release_handoff(event_pr.get("body"))
+        if ("local-history/handoff.json" not in contents or "local-history/ledger.json" not in contents
+                or parse_json(contents["local-history/handoff.json"].decode("utf-8")) != handoff
+                or hashlib.sha256(base64.b64decode(handoff["archive_base64"], validate=True)).hexdigest() != handoff["archive_sha256"]):
+            raise ValueError("pre-core original sealed handoff missing or corrupt")
+        ledger = parse_json(contents["local-history/ledger.json"].decode("utf-8"))
+        if any(ledger.get(key) != RELEASE_HISTORY[key] for key in ("task_id", "baseline", "source_ref", "repository")):
+            raise ValueError("pre-core original task ledger differs")
+        with zipfile.ZipFile(io.BytesIO(base64.b64decode(handoff["archive_base64"], validate=True))) as sealed:
+            for name in ("ledger.json", "executions/store.json", "declarations/store.json"):
+                if (sealed.namelist().count(name) != 1 or "local-history/" + name not in contents
+                        or contents["local-history/" + name] != sealed.read(name)):
+                    raise ValueError("pre-core original ledger/store differs from the sealed archive")
+        marker = _release_marker(event_pr.get("body"))
+        if marker["schema"] != RELEASE_HISTORY["schema"] or event_pr["number"] != RELEASE_HISTORY_NEXT["main_pr"] or marker["corrective_pr"] != RELEASE_HISTORY_NEXT["predecessor_pr"] or run["head_sha"] != RELEASE_HISTORY_NEXT["predecessor_merge"]:
+            raise ValueError("pre-core failure is outside the declared original main52 scope")
+    return proofs, {name: hashlib.sha256(payload).hexdigest() for name, payload in sorted(contents.items())}
+
+
+def read_pre_core_history(path):
+    """A failed non-execution record cannot substitute for a manifest/coverage."""
+    path = Path(path)
+    value = read_json(path)
+    required = {"schema", "task_id", "run_id", "attempt", "pr", "run", "origin", "artifact", "sources", "artifact_members", "interpretation"}
+    if (set(value) != required or value["schema"] != "zhuyin-pre-core-history/1"
+            or type(value["run_id"]) is not int or value["run_id"] <= 0
+            or type(value["attempt"]) is not int or value["attempt"] <= 0
+            or value["interpretation"] != "failed before core; retained history only, no execution or PASS"
+            or set(value["sources"]) != {"logs", "artifact"}):
+        raise ValueError("invalid pre-core non-execution history contract")
+    logs, archive = (_history_raw_path(value["sources"][key], path.parent).read_bytes() for key in ("logs", "artifact"))
+    proofs, members = _pre_core_originals(value["run"], value["attempt"], value["origin"], logs, archive, value["artifact"], value["task_id"])
+    if value["run_id"] != value["run"]["id"] or value["pr"] != proofs[0]["pr"] or value["artifact_members"] != members:
+        raise ValueError("pre-core original identity/member checksum differs")
+    return value
 
 
 def _empty_link_origin(run, attempt, api, raw, repository, destination, *, live=None):
     metadata = api(f"repos/{repository}/actions/runs/{run['id']}/attempts/{attempt}")
-    if (metadata.get("id") != run["id"] or metadata.get("run_attempt") != attempt
+    if (type(metadata.get("id")) is not int or type(metadata.get("run_attempt")) is not int
+            or metadata.get("id") != run["id"] or metadata.get("run_attempt") != attempt
             or metadata.get("head_sha") != run["head_sha"] or metadata.get("head_branch") != run["head_branch"]
             or metadata.get("event") != "pull_request"
             or metadata.get("head_repository", {}).get("full_name") != repository):
@@ -1576,7 +1830,8 @@ def _empty_link_origin(run, attempt, api, raw, repository, destination, *, live=
         if not batch:
             raise ValueError("workflow job pagination is incomplete")
         page += 1
-    if not jobs or len({job["id"] for job in jobs}) != len(jobs):
+    if (not jobs or any(type(job.get("id")) is not int or job["id"] <= 0 for job in jobs)
+            or len({job["id"] for job in jobs}) != len(jobs)):
         raise ValueError("workflow job identity missing or duplicate")
     checkout_jobs = []
     for job in jobs:
@@ -1620,7 +1875,7 @@ def _empty_link_origin(run, attempt, api, raw, repository, destination, *, live=
     payload = raw(f"repos/{repository}/actions/runs/{run['id']}/attempts/{attempt}/logs")
     with (destination / "pr-artifact.zip").open("xb") as handle:
         handle.write(payload)
-    proofs = []
+    proofs, commits = [], []
     try:
         with zipfile.ZipFile(io.BytesIO(payload)) as archive:
             names = archive.namelist()
@@ -1641,6 +1896,9 @@ def _empty_link_origin(run, attempt, api, raw, repository, destination, *, live=
                     raise ValueError("original checkout job logs unavailable")
                 proof = checkout_history_proof(archive.read(matches[0]), archive.read(system_name), repository)
                 commit = _git_commit(api, repository, proof["checkout_sha"])
+                if commit["tree"]["sha"] == "0" * 40:
+                    raise ValueError("original checkout tree identity is invalid")
+                commits.append(commit)
                 parents = [item["sha"] for item in commit["parents"]]
                 if len(parents) != 2 or parents[1] != run["head_sha"] or parents != proof["ordered_parents"]:
                     raise ValueError("original checkout ordered parents differ from run head")
@@ -1656,9 +1914,17 @@ def _empty_link_origin(run, attempt, api, raw, repository, destination, *, live=
     _pr_identity(pr, number, repository, run["head_branch"])
     links = metadata.get("pull_requests")
     if (not isinstance(links, list) or links and
-            (len(links) != 1 or links[0].get("number") != number)):
-        raise ValueError("attempt PR links conflict with original checkout")
-    return number, {"method": "original-run-attempt-checkout", "jobs": proofs}
+            (len(links) != 1 or not isinstance(links[0], dict)
+             or type(links[0].get("number")) is not int or links[0]["number"] <= 0)):
+        raise ValueError("attempt PR links are malformed or ambiguous")
+    return number, {"method": "original-run-attempt-checkout", "jobs": proofs,
+        "attempt_metadata": metadata, "job_metadata": jobs, "pr_metadata": pr, "commits": commits,
+        "run_links_observation": run.get("pull_requests"), "attempt_links_observation": links,
+        "association_drift": bool(any(row["number"] != number
+             or row.get("head", {}).get("sha", run["head_sha"]) != run["head_sha"]
+             or row.get("base", {}).get("sha", proofs[0]["ordered_parents"][0]) != proofs[0]["ordered_parents"][0]
+             for row in [*run.get("pull_requests", []), *links])),
+        "interpretation": "original checkout proves ownership; API PR associations are mutable observations"}
 
 
 def restore_history(root):
@@ -1766,7 +2032,7 @@ def restore_history(root):
                         or row.get("head_repository", {}).get("full_name") != repository
                         or not isinstance(links, list)
                         or (links and (len(links) != 1 or not isinstance(links[0], dict)
-                            or type(links[0].get("number")) is not int or links[0]["number"] != source_pr))
+                            or type(links[0].get("number")) is not int or links[0]["number"] <= 0))
                         or row["id"] in history_origins):
                     raise ValueError("PR43 continuation history run scope or duplicate differs")
                 history_origins[row["id"]] = {"branch": source_branch, "pr": source_pr}
@@ -1787,8 +2053,10 @@ def restore_history(root):
         ledger = read_local_ledger(root / "local-history", RELEASE_HISTORY["task_id"])
         if ledger["baseline"] != RELEASE_HISTORY["baseline"] or ledger["repository"] != repository:
             raise ValueError("release original ledger baseline/repository differs")
-        if release_scope["source_branch"] != branch:
-            extra = branch_runs(release_scope["source_branch"])
+        for source_branch in release_scope.get("search_branches", [release_scope["source_branch"]]):
+            if source_branch == branch:
+                continue
+            extra = branch_runs(source_branch)
             if {row["id"] for row in runs} & {row["id"] for row in extra}:
                 raise ValueError("duplicate release cross-PR workflow run")
             runs = [*runs, *extra]
@@ -1796,7 +2064,7 @@ def restore_history(root):
     history_policy = (POLICY if repository == REPOSITORY
                       and branch == "codex/cff-batch-fingerprint" and pr_number == 42
                       and handoff["task_id"] == CFF_HISTORY_TASK else None)
-    retrieved = []
+    retrieved, pre_core_failures = [], []
     attributions = [{"run_id": current_run, "attempt": current_attempt, "pr": current_number,
                      "disposition": "current", "proof": current_proof}]
     for run in runs:
@@ -1813,17 +2081,12 @@ def restore_history(root):
         if run["id"] == current_run and current_attempt == 1:
             continue
         attempts = range(1, current_attempt) if run["id"] == current_run else range(1, run["run_attempt"] + 1)
-        applicable = []
+        applicable, origins = [], {}
         source_numbers = set()
         for attempt in attempts:
             folder = scope_folder()
             if continuation is not None and run["id"] == PR43_ORIGINAL_PUSH_RUN:
                 source_pr, proof = 43, {"method": "existing-pinned-pr43-merge-push"}
-            elif links:
-                source_pr = links[0]["number"]
-                metadata = api(f"repos/{repository}/pulls/{source_pr}")
-                _pr_identity(metadata, source_pr, repository, run.get("head_branch"))
-                proof = {"method": "explicit-unique-run-pr-link", "pr": source_pr}
             else:
                 source_pr, proof = _empty_link_origin(run, attempt, api, raw, repository, folder)
             source_numbers.add(source_pr)
@@ -1836,6 +2099,7 @@ def restore_history(root):
             attributions.append(entry)
             if disposition == "applicable":
                 applicable.append(attempt)
+                origins[attempt] = (folder, proof)
         if len(source_numbers) != 1:
             raise ValueError("workflow attempts have conflicting PR attribution")
         if not applicable:
@@ -1868,8 +2132,42 @@ def restore_history(root):
                 subprocess.run(["gh", "run", "download", str(run["id"]), "--repo", repository,
                                 "--name", name, "--dir", str(destination)], check=True)
             manifests = list(destination.rglob("manifest.json"))
-            if not manifests:
-                raise ValueError("prior attempt bundle has no complete execution evidence")
+            loaded = [(path, read_verified_manifest(path, history_policy=history_policy, task_id=handoff["task_id"])) for path in manifests]
+            own = [value for _, value in loaded if value["ci"]["run_id"] == run["id"] and value["ci"]["attempt"] == attempt]
+            retained_short = (continuation is not None and run["id"] == PR43_ORIGINAL_PUSH_RUN
+                              and attempt == 1 and bool(history_origins[run["id"]].get("retained_short")))
+            # The sole pinned PR43 push adapter already verified an own short
+            # receipt and its complete original PR coverage, not a pytest run.
+            # Ordinary PR attempts must instead bind own execution to checkout.
+            if own and not retained_short:
+                original = origins[attempt][1]["jobs"][0]
+                if any(value["candidate"] != {"head": original["checkout_sha"], "parents": original["ordered_parents"], "tree": original["tree"]} for value in own):
+                    raise ValueError("own attempt execution differs from original checkout")
+            if not own and not retained_short:
+                if release_scope is None or release_scope["reference"]["schema"] != RELEASE_HISTORY_NEXT["schema"]:
+                    raise ValueError("prior attempt bundle has no complete execution evidence")
+                folder, proof = origins[attempt]
+                archive_folder = scope_folder()
+                payload = raw(f"repos/{repository}/actions/artifacts/{matches[0]['id']}/zip")
+                archive_path = archive_folder / "pr-artifact.zip"
+                with archive_path.open("xb") as handle:
+                    handle.write(payload)
+                proofs, members = _pre_core_originals(run, attempt, proof,
+                    (folder / "pr-artifact.zip").read_bytes(), payload, matches[0], handoff["task_id"])
+                actual = {path.relative_to(destination).as_posix(): digest(path)
+                          for path in destination.rglob("*") if path.is_file()}
+                if actual != members:
+                    raise ValueError("pre-core downloaded files differ from original artifact ZIP")
+                record = {"schema": "zhuyin-pre-core-history/1", "task_id": handoff["task_id"],
+                          "run_id": run["id"], "attempt": attempt, "pr": proofs[0]["pr"],
+                          "run": run, "origin": proof, "artifact": matches[0], "artifact_members": members,
+                          "sources": {"logs": artifact_entry(folder / "pr-artifact.zip", root),
+                                      "artifact": artifact_entry(archive_path, root)},
+                          "interpretation": "failed before core; retained history only, no execution or PASS"}
+                write_json(folder / "pre-core.json", record)
+                read_pre_core_history(folder / "pre-core.json")
+                pre_core_failures.append(artifact_entry(folder / "pre-core.json", root))
+                continue
             if continuation is not None and run["id"] == PR43_ORIGINAL_FULL_RUN:
                 original_coverage = destination / "coverage.json"
                 if not original_coverage.is_file() or digest(original_coverage) != PR43_ORIGINAL_COVERAGE_SHA256:
@@ -1877,9 +2175,7 @@ def restore_history(root):
                 history_origins[run["id"]]["coverage"] = artifact_entry(original_coverage, root)
             # Prior bundles already contain earlier history. Keep one original
             # copy per execution, rejecting inconsistent duplicates.
-            for manifest in manifests:
-                value = read_verified_manifest(manifest, history_policy=history_policy,
-                                               task_id=handoff["task_id"])
+            for manifest, value in loaded:
                 known = {row["execution_id"]: row for row in retrieved}
                 if value["execution_id"] in known and known[value["execution_id"]] != value:
                     raise ValueError("conflicting retained execution")
@@ -1891,6 +2187,8 @@ def restore_history(root):
                 "runs": [{"id": run["id"], "attempt": run["run_attempt"]} for run in runs],
                 "executions": sorted(seen), "candidate": candidate, "raw_runs": runs, "task_id": handoff["task_id"], "local_handoff_sha256": handoff["archive_sha256"]}
     context["attributions"] = attributions
+    if pre_core_failures:
+        context["pre_core_failures"] = pre_core_failures
     context["scope_artifacts"] = [artifact_entry(path, root) for folder in scope_folders
                                   for path in sorted(folder.iterdir()) if path.is_file()]
     if release_scope is not None:
