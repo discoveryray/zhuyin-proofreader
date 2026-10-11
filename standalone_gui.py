@@ -681,7 +681,7 @@ class App:
                 import standalone_proofread as sp
                 manifest = sp.json_load_strict(project / "校對工作階段.json")
                 sp.validate_manifest_integrity(manifest)
-                sp.validate_output_artifact_hashes(manifest)
+                sp.validate_output_artifact_hashes(manifest, output_dir=project)
                 db = sp.json_load_strict(project / "人工判定資料庫.json")
                 pending = pdf_portability.actual_excel_conflict_state(project, manifest, db)
                 status = sp.json_load_strict(project / "pipeline_status.json")

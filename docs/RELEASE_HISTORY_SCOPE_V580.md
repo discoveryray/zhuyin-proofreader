@@ -12,7 +12,7 @@ branch 名稱僅用來搜尋可能相關的 run。非空 `pull_requests` 必須�
 
 PR body 保留原 `validation-local-history` marker，另外放唯一 `validation-release-continuation` marker，schema 為 `validation-release-continuation/1`。使用 `scripts.validation_runner.release_history_block()` 產生修正 PR marker；其 `corrective_pr` 為字面值 `event.pull_request.number`，由事件取得真實 PR number。main PR 使用 `release_history_block(corrective_pr=<實際已合併修正 PR number>)`，不可預填未知 number。
 
-marker 欄位固定為 `schema`、`repository`、`task_id`、`baseline`、`main_baseline`、`source_ref`、`archive_sha256`、`original_pr`、`branch`、`original_head`、`original_merge`、`corrective_pr`。前十一個欄位必須完全等於 runner 的有限 `RELEASE_HISTORY` 登記；原 handoff archive SHA 及 source_ref 不變。原 PR50 body／metadata／actual merge ordered parents 必須獨立核對。修正 PR 是原 feature HEAD 的單一後繼 commit，base 為 PR50 actual develop merge；main PR base 為原 main baseline，head 為該修正 PR 的 actual develop merge，並核對修正 PR body、來源與 ordered parents。marker 本身不創造授權或 PASS。
+marker 欄位固定為 `schema`、`repository`、`task_id`、`baseline`、`main_baseline`、`source_ref`、`archive_sha256`、`original_pr`、`branch`、`original_head`、`original_merge`、`corrective_pr`。前十一個欄位必須完全等於 runner 的有限 `RELEASE_HISTORY` 登記；原 handoff archive SHA 及 source_ref 不變。原 PR50 body／metadata／actual merge ordered parents 必須獨立核對。修正 PR 經連續單 parent 提交鏈回到原 feature HEAD，base 為 PR50 actual develop merge；main PR base 為原 main baseline，head 為該修正 PR 的 actual develop merge，並核對修正 PR body、來源與 ordered parents。兩入口共用逐 node SHA／parent／tree 查核，最多十六個後繼加原起點；原起點 tree 必須等於 PR50 actual merge tree，鏈原件保存在 context。缺件、循環、非單 parent、斷鏈、矛盾、超界或 API 失敗拒絕，不只使用 ancestor 布林判斷；實際 merge 的雙 ordered parents 不變。這個查詢上限不是修正額度，不重設 task／baseline／original_head／sealed handoff／失敗歷史，也不授權任何追加修正。marker 本身不創造授權或 PASS。
 
 ## 原件閉包與搬移
 

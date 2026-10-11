@@ -1417,6 +1417,29 @@ def _git_commit(api, repository, identity, parents=None):
     return value
 
 
+def _release_feature_chain(api, repository, head, anchor, anchor_tree):
+    """Prove at most sixteen successive single-parent release commits."""
+    nodes, seen = [], set()
+    identity = head
+    for _ in range(17):  # Sixteen descendants plus the immutable original head.
+        if identity in seen:
+            raise ValueError("release commit chain contains a cycle")
+        seen.add(identity)
+        node = _git_commit(api, repository, identity)
+        if node["tree"]["sha"] == "0" * 40:
+            raise ValueError("release commit chain has invalid tree identity")
+        if identity == anchor:
+            if not nodes or node["tree"]["sha"] != anchor_tree:
+                raise ValueError("release commit chain original source differs")
+            return [*nodes, node]
+        parents = [item["sha"] for item in node["parents"]]
+        if len(parents) != 1 or parents[0] == "0" * 40:
+            raise ValueError("release commit chain must have a single parent")
+        nodes.append(node)
+        identity = parents[0]
+    raise ValueError("release commit chain exceeds its finite bound")
+
+
 def release_history_scope(event, candidate, handoff, api, repository):
     """The sole adopted PR50 -> corrective PR -> main release chain."""
     pr = event["pull_request"]
@@ -1439,13 +1462,14 @@ def release_history_scope(event, candidate, handoff, api, repository):
             or original["base"]["sha"] != value["baseline"] or original["base"]["ref"] != "develop"
             or _release_handoff(original.get("body")) != handoff):
         raise ValueError("original PR50 sealed source/merge differs")
-    _git_commit(api, repository, value["original_merge"], [value["baseline"], value["original_head"]])
+    original_merge = _git_commit(api, repository, value["original_merge"], [value["baseline"], value["original_head"]])
     if pr["head"]["ref"] == value["branch"]:
         if (value["corrective_pr"] != "event.pull_request.number"
                 or pr["number"] <= value["original_pr"] or pr["base"]["ref"] != "develop"
                 or pr["base"]["sha"] != value["original_merge"]):
             raise ValueError("release corrective PR declaration/base differs")
-        feature = _git_commit(api, repository, pr["head"]["sha"], [value["original_head"]])
+        chain = _release_feature_chain(api, repository, pr["head"]["sha"], value["original_head"], original_merge["tree"]["sha"])
+        feature = chain[0]
         if feature["tree"]["sha"] != candidate["tree"]:
             raise ValueError("release corrective integration tree differs")
         admitted = {pr["number"], value["original_pr"]}
@@ -1463,12 +1487,12 @@ def release_history_scope(event, candidate, handoff, api, repository):
                 or corrective.get("merge_commit_sha") != pr["head"]["sha"]
                 or corrective["base"]["sha"] != value["original_merge"] or corrective["base"]["ref"] != "develop"):
             raise ValueError("release corrective predecessor source/merge differs")
-        _git_commit(api, repository, corrective["head"]["sha"], [value["original_head"]])
+        chain = _release_feature_chain(api, repository, corrective["head"]["sha"], value["original_head"], original_merge["tree"]["sha"])
         _git_commit(api, repository, pr["head"]["sha"], [value["original_merge"], corrective["head"]["sha"]])
         admitted = {pr["number"], number, value["original_pr"]}
     else:
         raise ValueError("release continuation branch differs")
-    return {"reference": value, "admitted_prs": sorted(admitted), "source_branch": value["branch"]}
+    return {"reference": value, "admitted_prs": sorted(admitted), "source_branch": value["branch"], "feature_chain": chain}
 
 
 def checkout_history_proof(job_log, system_log, repository):

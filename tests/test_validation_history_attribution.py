@@ -431,6 +431,7 @@ class ReleaseContinuationTests(HistoryFixture):
         self.commits[self.merge] = self.commit(self.merge, self.candidate["parents"], self.tree)
         self.commits[self.head] = self.commit(self.head, [self.spec["original_head"]], self.tree)
         self.commits[self.base] = self.commit(self.base, [self.spec["baseline"], self.spec["original_head"]], "9" * 40)
+        self.commits[self.spec["original_head"]] = self.commit(self.spec["original_head"], ["6" * 40], "9" * 40)
         self.prs[61] = self.pr(61, self.head, self.base, self.branch, self.body)
         original = self.pr(50, self.spec["original_head"], self.spec["baseline"], self.branch, local)
         original.update(state="closed", merged=True, merge_commit_sha=self.base)
@@ -478,6 +479,7 @@ class ReleaseContinuationTests(HistoryFixture):
         original_body = self.event_data["pull_request"]["body"]
         for key, wrong in (("task_id", "other-task"), ("source_ref", "other-source"),
                            ("archive_sha256", "0" * 64), ("main_baseline", "0" * 40),
+                           ("original_head", "f" * 40),
                            ("corrective_pr", 61)):
             value = {**self.spec, "corrective_pr": "event.pull_request.number", key: wrong}
             body = original_body.split("<!-- validation-release-continuation", 1)[0] + "<!-- validation-release-continuation\n" + json.dumps(value) + "\n-->"
@@ -495,3 +497,55 @@ class ReleaseContinuationTests(HistoryFixture):
         self.prs[61]["merge_commit_sha"] = "f" * 40
         with self.assertRaises(ValueError):
             self.restore("main-unproven-corrective-pr")
+
+    def set_feature_chain(self, count):
+        parent = self.spec["original_head"]
+        for index in reversed(range(count)):
+            identity = self.head if index == 0 else format(10000 + index, "040x")
+            self.commits[identity] = self.commit(identity, [parent], self.tree if index == 0 else "4" * 40)
+            parent = identity
+
+    def scope_only(self):
+        return runner.release_history_scope(self.event_data, self.candidate, self.handoff, self.api, self.repo)
+
+    def test_corrective_and_main_single_and_multiple_successors_keep_complete_chain(self):
+        names = ("commits", "prs", "event_data", "candidate", "runs", "current_pr", "current_run", "body")
+        original = {name: copy.deepcopy(getattr(self, name)) for name in names}
+        for phase in ("corrective", "main"):
+            for count in (1, 3):
+                for name, value in original.items():setattr(self, name, copy.deepcopy(value))
+                self.set_feature_chain(count)
+                if phase == "main":self.main_stage()
+                with self.subTest(phase=phase, successors=count):
+                    root, context = self.restore(phase + str(count))
+                    chain = context["release_continuation"]["feature_chain"]
+                    self.assertEqual(len(chain), count + 1)
+                    self.assertEqual(chain[0]["sha"], self.head)
+                    self.assertEqual(chain[-1]["sha"], self.spec["original_head"])
+                    self.assertEqual(chain[-1]["tree"]["sha"], "9" * 40)
+                    self.assertTrue(all(node["parents"] == [{"sha": following["sha"]}]
+                                        for node, following in zip(chain, chain[1:])))
+                    self.assertTrue((root / context["scope_artifacts"][0]["path"]).is_file())
+
+    def test_both_entrypoints_refuse_missing_cycle_disconnected_nonsingle_and_contradictory_chain(self):
+        names = ("commits", "prs", "event_data", "candidate", "runs", "current_pr", "current_run", "body")
+        original = {name: copy.deepcopy(getattr(self, name)) for name in names}
+        for phase in ("corrective", "main"):
+            for defect in ("missing", "cycle", "disconnected", "nonsingle", "wrong-sha", "invalid-tree", "wrong-anchor-tree", "api-failure", "bound"):
+                for name, value in original.items():setattr(self, name, copy.deepcopy(value))
+                self.set_feature_chain(17 if defect == "bound" else 3)
+                intermediate = format(10001, "040x")
+                if phase == "main":self.main_stage()
+                if defect == "missing":del self.commits[intermediate]
+                elif defect == "cycle":self.commits[intermediate]["parents"] = [{"sha": self.head}]
+                elif defect == "disconnected":self.commits[intermediate]["parents"] = []
+                elif defect == "nonsingle":self.commits[intermediate]["parents"].append({"sha": "f" * 40})
+                elif defect == "wrong-sha":self.commits[intermediate]["sha"] = "f" * 40
+                elif defect == "invalid-tree":self.commits[intermediate]["tree"]["sha"] = "not-a-tree"
+                elif defect == "wrong-anchor-tree":self.commits[self.spec["original_head"]]["tree"]["sha"] = "f" * 40
+                def api(endpoint):
+                    if defect == "api-failure" and endpoint.endswith("/" + intermediate):
+                        raise subprocess.CalledProcessError(1, ["gh", "api", endpoint], stderr="unavailable")
+                    return self.api(endpoint)
+                with self.subTest(phase=phase, defect=defect), self.assertRaises((ValueError, KeyError, subprocess.CalledProcessError)):
+                    runner.release_history_scope(self.event_data, self.candidate, self.handoff, api, self.repo)
