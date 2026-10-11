@@ -326,7 +326,8 @@ class AsyncReviewSaveTests(unittest.TestCase):
                 self.assertTrue(app._save_recovery_required)
                 self.assertEqual(headless_app(output).db["events"][row["review_id"]], event)
 
-    def test_missing_or_wrong_preview_never_starts_shortcut(self):
+    @patch.object(gui.messagebox, "showwarning")
+    def test_missing_or_wrong_preview_never_starts_shortcut(self, warning):
         for rendered in (None, "different-review-id"):
             self.app._rendered_review_id = rendered
             with patch.object(self.app, "save_event") as save:
@@ -338,6 +339,8 @@ class AsyncReviewSaveTests(unittest.TestCase):
         with patch.object(self.app, "save_event") as save:
             self.app.confirm_current_expected(self.row["review_id"])
         save.assert_not_called()
+        self.assertEqual(warning.call_count, 3)
+        self.assertFalse(getattr(self.app, "_save_in_progress", False))
 
     def test_async_undo_uses_saved_state_and_reopens_without_the_event(self):
         event = sp.build_manual_expected_event(self.row, operation="ENTER_EXPECTED", expected_set="ㄎㄢ")

@@ -1068,7 +1068,7 @@ def test_missing_source_pdf_requires_prior_proof_and_moved_artifact_is_checked(t
     # though the sealed manifest retains the first computer's absolute path.
     assert portable.import_project_decisions(source, target)["imported"] == 1
     (source / "01_實際注音" / "actual.xlsx").write_bytes(b"tampered")
-    with pytest.raises(ValueError, match="來源工作簿"):
+    with pytest.raises(ValueError, match="DATA_INTEGRITY_ERROR：workbook binding 遺失、SHA 不符或定位不唯一"):
         portable.import_project_decisions(source, target)
 
 

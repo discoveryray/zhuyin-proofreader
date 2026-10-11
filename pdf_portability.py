@@ -1038,7 +1038,16 @@ def load_excel_content_proof(xlsx: Path, target_dir: Path, target_manifest, *,
             or [(item.get("pdf_sha256"), item.get("pdf_name")) for item in proof.get("pdfs", [])]
             != [(item.get("pdf_sha256"), item.get("pdf_name")) for item in source_manifest.get("pdfs", [])]):
         raise ValueError("Excel 來源全頁內容證據與封印不符")
-    pdf_map, geometry = _match_pdfs(proof, source_manifest, target_manifest, Path(target_dir))
+    if kind == "expected" and source_manifest["session_id"] == target_manifest["session_id"]:
+        _verify_available_session_pdfs(Path(target_dir), target_manifest)
+        pdf_map = {item["pdf_sha256"]: item["pdf_sha256"] for item in proof["pdfs"]}
+        geometry = _SealedSessionGeometry(
+            {item["pdf_sha256"]: (item["pages"], item["pages"]) for item in proof["pdfs"]},
+            source_manifest, target_manifest, pdf_map)
+        if _canonical_roster_mapping(source_manifest, target_manifest, pdf_map, geometry) is None:
+            raise ValueError("同 session expected 離線匯入缺少完整 sealed canonical roster")
+    else:
+        pdf_map, geometry = _match_pdfs(proof, source_manifest, target_manifest, Path(target_dir))
     reviews = _map_reviews(source_manifest, target_manifest, pdf_map, geometry)
     if kind == "actual":
         _guard_actual_excel_sources(xlsx, source_ledger, target_dir, target_manifest, pdf_map)
@@ -1345,6 +1354,14 @@ class _ExactBatchGeometry(dict):
         self.pages_digest = hashlib.sha256(_canonical(pages)).hexdigest()
 
 
+class _SealedSessionGeometry(_ExactBatchGeometry):
+    """Expected-only exact roster admission from validated same-session seals.
+
+    This carries archived pages, never claims a new physical PDF observation.
+    Available PDF bytes are still checked at admission and every write gate.
+    """
+
+
 def _match_pdfs(proof: Mapping[str, Any], source_manifest: Mapping[str, Any],
                 target_manifest: Mapping[str, Any], target_dir: Path):
     source_pdfs = list(proof["pdfs"])
@@ -1406,6 +1423,14 @@ def _verify_mapped_target_pdfs(target_dir: Path, target_manifest, pdf_map, geome
     by_sha = {str(info["pdf_sha256"]): info for info in target_manifest.get("pdfs", [])}
     if len(by_sha) != len(target_manifest.get("pdfs", [])) or len(pdf_map) != len(by_sha):
         raise ValueError("目標 PDF 內容對應清單已變動；未匯入判定")
+    if isinstance(geometry, _SealedSessionGeometry):
+        if (geometry.target_digest != hashlib.sha256(_canonical(target_manifest)).hexdigest()
+                or geometry.mapping != tuple(sorted(pdf_map.items()))
+                or geometry.pages_digest != hashlib.sha256(_canonical(geometry)).hexdigest()
+                or pdf_map != {sha: sha for sha in by_sha}):
+            raise ValueError("同 session sealed PDF admission 已變動；未匯入判定")
+        _verify_available_session_pdfs(target_dir, target_manifest)
+        return
     for source_sha, target_sha in pdf_map.items():
         info = by_sha.get(target_sha)
         expected = geometry.get(source_sha) if geometry is not None else None
@@ -1669,6 +1694,12 @@ def _historical_import_replay(conflicts, identity, source_event, target_event, *
             continue
         for side, incoming in (("source", source_event), ("target", target_event)):
             saved = conflict.get(f"{side}_event")
+            if side == "target" and saved is None and conflict.get("contract") in {
+                    EXPECTED_BUSINESS_CONTRACT, DEPENDENCY_RECHECK_CONTRACT}:
+                # Validated v2 receipts retain the earlier imported target in
+                # target_basis rather than v1 target_event. Exact identity AND
+                # decision comparison below still bind the original inputs.
+                saved = conflict["target_basis"]["event"]
             if not isinstance(saved, dict):
                 continue
             known = [conflict.get(f"{side}_identity"), saved.get("portability_source"),
@@ -1903,12 +1934,21 @@ def _require_mapped_textbook_context(source, target, label: str) -> None:
 @_stable_excel_import
 @bound_operation(project_parameter="target_dir")
 def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False,
-                          _original_xlsx: Path, _snapshot_sha: str):
+                          _original_xlsx: Path, _snapshot_sha: str,
+                          _target_manifest_sha: str | None = None):
     """Import filled expected rows after full-page and occurrence-local mapping."""
     import standalone_proofread as sp
 
     target_dir, xlsx = Path(target_dir).resolve(), Path(xlsx).resolve()
+    manifest_path = target_dir / "校對工作階段.json"
+    if _target_manifest_sha is None:
+        _, _target_manifest_sha = sp.json_load_snapshot(manifest_path)
+    def verify_manifest_snapshot():
+        if _sha(manifest_path) != _target_manifest_sha:
+            raise ValueError("Excel 匯入期間首次目標 manifest 已變動；未寫入判定")
+    verify_manifest_snapshot()
     target_manifest, target_db = _load_project(target_dir, allow_unresolved_conflict=True)
+    verify_manifest_snapshot()
     metadata = sp.workbook_metadata(xlsx, "匯入中繼資料")
     source_manifest, _, source_ledger, reviews, pdf_map, exported_at, _, geometry = load_excel_content_proof(
         xlsx, target_dir, target_manifest, kind="expected",
@@ -2004,11 +2044,17 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
         actions.append((target, event, identity, same_conditions, recheck))
     if dry_run:
         with sp.project_delivery_lock(sp.project_actual_evidence_root(target_dir)):
+            verify_manifest_snapshot()
+            _verify_excel_import_snapshot(xlsx, _original_xlsx, _snapshot_sha)
+            if _load_project(target_dir, allow_unresolved_conflict=True)[1] != target_db:
+                raise ValueError("Excel 匯入期間目標判定資料庫已變動")
+            verify_manifest_snapshot()
             _verify_mapped_target_pdfs(target_dir, target_manifest, pdf_map, geometry)
         return len(actions), skipped, target_dir / "注音校對_最終報告.xlsx"
 
     written_candidate_sha = None
     with sp.project_delivery_lock(sp.project_actual_evidence_root(target_dir)):
+        verify_manifest_snapshot()
         _verify_excel_import_snapshot(xlsx, _original_xlsx, _snapshot_sha)
         marker_path = target_dir / INCOMPLETE_FILE
         if marker_path.exists():
@@ -2121,6 +2167,7 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
                 {CONFLICT_FILE: planned_conflicts} if planned_conflicts is not None else {},
                 phase="CROSS_SESSION_EXPECTED", _receipt_snapshots=receipt_snapshots)
             def validate_write():
+                verify_manifest_snapshot()
                 _actual_transfer_state(target_dir, live_manifest)
                 _check_receipt_shas(target_dir, receipt_shas)
                 _verify_mapped_target_pdfs(target_dir, live_manifest, pdf_map, geometry)

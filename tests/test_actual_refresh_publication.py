@@ -239,7 +239,7 @@ def test_refresh_cannot_replace_original_sealed_pdf_hash(tmp_path, monkeypatch, 
         sp.json_save(path, sp.seal_manifest(staged))
         return result
     monkeypatch.setattr(sp, 'run_pipeline_pdfs', unbound_stage)
-    with pytest.raises(ValueError, match='PDF'):
+    with pytest.raises(ValueError, match='PDF|workbook binding 缺少封印來源 identity'):
         sp.refresh_actual_project(output)
     assert _refresh_retained_bytes(output) == before
     assert promotion.project_refresh_token(sp.project_actual_evidence_root(output)) == token

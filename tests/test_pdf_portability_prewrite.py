@@ -53,6 +53,15 @@ def test_expected_rejects_known_changed_pdf_after_excel_read(pair, tmp_path, mon
 
 @pytest.mark.parametrize('kind', ['manifest', 'db_other', 'db_same'])
 def test_expected_snapshot_does_not_adopt_later_preimage(pair, tmp_path, monkeypatch, kind):
+    _expected_snapshot_drift(pair, tmp_path, monkeypatch, kind, dry_run=False)
+
+
+@pytest.mark.parametrize('kind', ['manifest', 'db_other', 'db_same'])
+def test_expected_dry_run_retains_first_snapshot_and_external_bytes(pair, tmp_path, monkeypatch, kind):
+    _expected_snapshot_drift(pair, tmp_path, monkeypatch, kind, dry_run=True)
+
+
+def _expected_snapshot_drift(pair, tmp_path, monkeypatch, kind, *, dry_run):
     a, b, bp, bm = pair
     x = _filled_expected_excel(b, tmp_path / 'filled.xlsx')
     path = b / ('校對工作階段.json' if kind == 'manifest' else '人工判定資料庫.json')
@@ -76,8 +85,37 @@ def test_expected_snapshot_does_not_adopt_later_preimage(pair, tmp_path, monkeyp
     monkeypatch.setattr(Path, 'read_text', lambda self, *args, **kw: inject(self, original_text, *args, **kw))
     monkeypatch.setattr(Path, 'read_bytes', lambda self, *args, **kw: inject(self, original_bytes, *args, **kw))
     with pytest.raises(ValueError):
-        sp.import_gpt_decisions(b, x)
+        sp.import_gpt_decisions(b, x, dry_run=dry_run)
     assert injected
+    assert state(b) == before
+    assert not (b / p.INCOMPLETE_FILE).exists()
+
+
+@pytest.mark.parametrize('mutation', ['identity', 'schema', 'pdf_partition'])
+def test_same_session_string_cannot_admit_unbound_offline_proof(pair, tmp_path, mutation):
+    from openpyxl import load_workbook
+    from tests.test_excel_content_proof_capacity import proof_bytes, replace_proof
+    _, b, bp, _ = pair
+    x = _filled_expected_excel(b, tmp_path / 'filled.xlsx')
+    book = load_workbook(x)
+    payload = json.loads(proof_bytes(book))
+    source = payload['manifest']
+    if mutation == 'identity':
+        source['records'][0]['glyph_id'] = 999
+        source['records'][0]['source_record']['glyph_id_字形索引'] = 999
+    elif mutation == 'schema':
+        source['workbook_schema_version'] = '9.9.9'
+    else:
+        source['pdfs'][0]['pdf_sha256'] = 'f' * 64
+        payload['proof']['pdfs'][0]['pdf_sha256'] = 'f' * 64
+    sp.seal_manifest(source)
+    payload['proof']['manifest_integrity_sha256'] = source['manifest_integrity_sha256']
+    replace_proof(book, p._canonical(payload))
+    book.save(x); book.close()
+    bp.unlink()
+    before = state(b)
+    with pytest.raises(ValueError, match='canonical roster'):
+        sp.import_gpt_decisions(b, x)
     assert state(b) == before
     assert not (b / p.INCOMPLETE_FILE).exists()
 

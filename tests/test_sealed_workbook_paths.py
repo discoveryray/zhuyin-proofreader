@@ -167,7 +167,8 @@ class SealedWorkbookPathsTests(unittest.TestCase):
         self.assertEqual(self.manifest, original)
         self.assertEqual(rebased["session_id"], original["session_id"])
         self.assertEqual(rebased["records"][0]["occurrence_id"], "occ-exact")
-        self.assertEqual(rebased["records"][0]["actual_workbook"], str(destination / locations.descriptor(self.info, "actual")))
+        self.assertEqual(Path(rebased["records"][0]["actual_workbook"]).resolve(),
+                         (destination / locations.descriptor(self.info, "actual")).resolve())
 
     def test_snapshot_old_adapter_and_new_contract_keep_same_locations(self):
         snapshot = p._sealed_workbook_snapshot(self.selected, self.manifest)

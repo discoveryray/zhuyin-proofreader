@@ -1741,7 +1741,8 @@ def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False,
         workbook.close()
     if portable_expected or str(metadata.get("session_id") or "") != str(manifest.get("session_id") or ""):
         return import_expected_excel.__wrapped__(output_dir, xlsx, dry_run=dry_run,
-            _original_xlsx=_original_xlsx, _snapshot_sha=_snapshot_sha)
+            _original_xlsx=_original_xlsx, _snapshot_sha=_snapshot_sha,
+            _target_manifest_sha=manifest_before_sha)
     # Tool version is intentionally ignored. The exported expected fingerprint
     # is compared to the session snapshot, so an old workbook from the same
     # project remains importable after an application upgrade.

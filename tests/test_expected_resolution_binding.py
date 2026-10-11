@@ -42,6 +42,14 @@ class _ResolutionFixture:
         self.base = next(row for row in self.manifest["records"] if row["state"] == "DIFFERENCE_PENDING_CONFIRMATION")
 
     def import_resolution(self):
+        # Exercise creation of an imported resolution on an unresolved sealed
+        # baseline. A resolved independent baseline now retains equal-reading
+        # imports as supplements rather than overwriting its evidence.
+        self.base = copy.deepcopy(self.base)
+        baseline = next(row for row in self.manifest["records"] if row["review_id"] == self.base["review_id"])
+        baseline.update(expected_set=[], expected_status="UNRESOLVED", expected_evidence="")
+        baseline.update(ol.refresh_derived_state(baseline))
+        sp.json_save(self.output / "校對工作階段.json", sp.seal_manifest(self.manifest))
         workbook = sp.export_pending_for_gpt(self.output)
         wb = load_workbook(workbook)
         sheet = wb["待判定候選"]
@@ -230,10 +238,24 @@ class ExpectedResolutionReplayTests(_ResolutionFixture, unittest.TestCase):
         self.assertEqual((self.output / "人工判定資料庫.json").read_bytes(), before)
 
     def test_legacy_adapter_requires_exact_workbook_and_preserves_original_event(self):
-        workbook,db = self.import_resolution()
-        reviewed = next(r for r in sp.materialize_ledger(self.manifest, db) if r["review_id"] == self.base["review_id"])
+        # Construct the adapter's exact historical contract, independently of
+        # the modern portable importer's source name and provenance fields.
+        workbook = sp.export_pending_for_gpt(self.output)
+        db, source, reviewed = self.legacy_resolution(with_fingerprint=True)
+        wb = load_workbook(workbook)
+        sheet = wb["待判定候選"]
+        columns = {c.value: c.column for c in sheet[1]}
+        number = next(n for n in range(2, sheet.max_row + 1)
+                      if sheet.cell(n, columns["review_id"]).value == self.base["review_id"])
+        for key, value in {"action": source["action"],
+                           "proposed_expected_set": "|".join(source["expected_set"]),
+                           "proposed_expected_evidence": source["expected_evidence"],
+                           "proposed_context_evidence": source["context_evidence"],
+                           "note": source["note"]}.items():
+            sheet.cell(number, columns[key], value)
+        wb.save(workbook); wb.close()
         event = captured_confirmation(reviewed, db)
-        event.pop("expected_resolution_binding")
+        self.assertNotIn("expected_resolution_binding", event)
         db["events"][self.base["review_id"]] = event
         sp.json_save(self.output / "人工判定資料庫.json", db)
         arguments = dict(review_ids=[self.base["review_id"]],

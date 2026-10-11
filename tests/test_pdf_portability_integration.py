@@ -1430,7 +1430,7 @@ def test_actual_excel_midrefresh_workbook_rewrite_can_resume_twice(tmp_path, mon
         sealed_backup = base64.b64decode(damaged_item["bytes"], validate=True)
         assert hashlib.sha256(sealed_backup).hexdigest() == damaged_item["sha256"]
         damaged_path.write_bytes(b"deliberate legacy workbook damage")
-        with pytest.raises(ValueError, match="hash 不符"):
+        with pytest.raises(ValueError, match="DATA_INTEGRITY_ERROR：workbook binding 遺失、SHA 不符或定位不唯一"):
             sp.validate_output_artifact_hashes(old_manifest)
         # Exercise the real bounded COMMITTED recovery reader/restorer; it must
         # validate the sealed backup and actual source plan before restoring.
@@ -1545,14 +1545,27 @@ def test_existing_target_event_cannot_bypass_six_gate_actual_evidence_match(tmp_
     sheet = workbook["待判定候選"]
     headers = [cell.value for cell in sheet[1]]
     sheet.cell(2, headers.index("action") + 1, "確認現版差異")
+    for key, value in (("proposed_expected_set", "ㄐㄧㄠˇ"),
+                       ("proposed_expected_evidence", "independent rule"),
+                       ("proposed_context_evidence", "角@1")):
+        sheet.cell(2, headers.index(key) + 1, value)
     for gate in sp.CONFIRMATION_GATES:
         sheet.cell(2, headers.index(gate) + 1, "Y")
     filled = tmp_path / "confirm.xlsx"
     workbook.save(filled)
     workbook.close()
     before = (b / "人工判定資料庫.json").read_bytes()
-    with pytest.raises(ValueError, match="actual/expected 證據|當前 actual"):
-        sp.import_gpt_decisions(b, filled)
+    with patch.object(portability, "_publish_portable_outputs", return_value=b / "report.xlsx"):
+        result = sp.import_gpt_decisions(b, filled)
+    assert result.status["imported"] == 0
+    assert result.status["preserved_local_decisions"] == 1
+    receipt = sp.json_load_strict(b / portability.CONFLICT_FILE)
+    recheck = receipt["conflicts"][0]
+    assert recheck["contract"] == portability.DEPENDENCY_RECHECK_CONTRACT
+    assert any(item["key"] == "actual_evidence" and item["source"] == "glyph evidence"
+               and item["target"] == "different B glyph evidence"
+               for item in recheck["dependency_recheck"]["differences"])
+    assert recheck["dependency_recheck"]["disposition"] == "PRESERVED_LOCAL_DECISION"
     assert (b / "人工判定資料庫.json").read_bytes() == before
     assert not (b / portability.INCOMPLETE_FILE).exists()
 

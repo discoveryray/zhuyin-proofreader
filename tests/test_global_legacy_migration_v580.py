@@ -813,6 +813,24 @@ class MigrationArchitectureTests(unittest.TestCase):
         guards. For larger application functions, compare only contract calls
         and their arguments, allowing other human-review/report statements.
         """
+        tree = copy.deepcopy(tree)
+        # The adopted location binding changes only the actual cache guard's
+        # project-root decorator and artifact-locator argument. Validate their
+        # exact shapes before comparing every original fingerprint boundary.
+        for node in tree.body:
+            if isinstance(node, ast.FunctionDef) and node.name == "output_is_reusable":
+                if node.decorator_list:
+                    expected = ast.parse('@bound_operation(project_parameter="output_dir")\ndef guard():\n    pass').body[0].decorator_list
+                    if [ast.dump(d) for d in node.decorator_list] != [ast.dump(d) for d in expected]:
+                        raise AssertionError("Unexpected actual cache location decorator")
+                    node.decorator_list = []
+                for call in ast.walk(node):
+                    if isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "validate_output_artifact_hashes":
+                        locator = [kw for kw in call.keywords if kw.arg == "output_dir"]
+                        if locator:
+                            if len(locator) != 1 or ast.dump(locator[0].value) != ast.dump(ast.Name(id="output_dir", ctx=ast.Load())):
+                                raise AssertionError("Unexpected actual cache artifact locator")
+                            call.keywords.remove(locator[0])
         declarations = {"ACTUAL_DECODER_SOURCE_FILES", "COMPATIBLE_SESSION_VERSIONS"}
         guards = {"output_is_reusable", "candidate_is_baseline_reusable"}
         calls = cls._FINGERPRINT_CONTRACT_CALLS
@@ -878,6 +896,19 @@ class MigrationArchitectureTests(unittest.TestCase):
         self._assert_legacy_expected_adapter_contract(current)
         self.assertEqual(self._standalone_fingerprint_contract(current),
                          self._standalone_fingerprint_contract(self._historical_standalone()))
+        for mutation in ("wrong_locator", "duplicate_locator", "different_decorator"):
+            changed = copy.deepcopy(current)
+            guard = next(node for node in changed.body if isinstance(node, ast.FunctionDef) and node.name == "output_is_reusable")
+            call = next(node for node in ast.walk(guard) if isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Name) and node.func.id == "validate_output_artifact_hashes")
+            if mutation == "different_decorator":
+                guard.decorator_list[0].keywords[0].value = ast.Constant(value="other_root")
+            elif mutation == "duplicate_locator":
+                call.keywords.append(copy.deepcopy(next(kw for kw in call.keywords if kw.arg == "output_dir")))
+            else:
+                next(kw for kw in call.keywords if kw.arg == "output_dir").value = ast.Name(id="unverified_root", ctx=ast.Load())
+            with self.subTest(location_mutation=mutation), self.assertRaises(AssertionError):
+                self._standalone_fingerprint_contract(changed)
 
     def test_unrelated_manual_and_report_changes_do_not_change_contract(self):
         historical = self._historical_standalone()
