@@ -13,7 +13,7 @@ from tkinter import filedialog, messagebox, ttk
 from occurrence_ledger import ALL_STATES, NON_TERMINAL_STATES, EXCLUDED_STATES
 from review_display import ActionRows, WrappedLabel, scrollable_entry
 
-VERSION = "5.7.0"
+VERSION = "5.8.0"
 
 
 STATUS_TEXT = {

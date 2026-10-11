@@ -176,17 +176,38 @@ jobs:
       - name: Upgrade pip
         id: pip
         if: ${{ (((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) }}
-        run: python -m pip install --upgrade pip
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF -eq 'refs/heads/main') {
+            python scripts/release_ci_evidence.py run --output tmp/main-full/pip.log -- python -m pip install --disable-pip-version-check pip==24.2
+          } else {
+            python -m pip install --upgrade pip
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Install development dependencies
         id: dependencies
         if: ${{ (((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) }}
-        run: python -m pip install -r requirements-ci.txt
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF -eq 'refs/heads/main') {
+            python scripts/release_ci_evidence.py run --output tmp/main-full/dependencies.log -- python -m pip install --disable-pip-version-check -r requirements-ci-lock.txt
+          } else {
+            python -m pip install -r requirements-ci.txt
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Validate runtime asset integrity
         id: runtime
         if: ${{ (((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) }}
-        run: python -m pytest tests/test_runtime_asset_manifest_integrity_v562.py -q
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF -eq 'refs/heads/main') {
+            python scripts/release_ci_evidence.py run --output tmp/main-full/runtime.log -- python -m pytest tests/test_runtime_asset_manifest_integrity_v562.py -q
+          } else {
+            python -m pytest tests/test_runtime_asset_manifest_integrity_v562.py -q
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Audit test entrypoint coverage
         id: inventory
@@ -201,7 +222,14 @@ jobs:
       - name: Run full pytest suite
         id: pytest
         if: ${{ (((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && (!cancelled()) }}
-        run: python -m pytest tests/ -q -rs --junitxml=tmp/ci-pytest.xml
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF -eq 'refs/heads/main') {
+            python scripts/release_ci_evidence.py run --output tmp/main-full/pytest.log -- python -m pytest tests/ -q -rs --junitxml=tmp/ci-pytest.xml
+          } else {
+            python -m pytest tests/ -q -rs --junitxml=tmp/ci-pytest.xml
+          }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Verify active test execution
         id: active
@@ -291,6 +319,27 @@ jobs:
             Write-Error "Repository working tree is not clean."
             exit 1
           }
+      - name: Capture main full environment
+        id: main_environment
+        if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        run: python scripts/release_ci_evidence.py environment --output tmp/main-full/environment.json
+      - name: Upload main full evidence
+        id: main_evidence
+        if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: main-full-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.python-version }}
+          path: |
+            tmp/ci-test-inventory.json
+            tmp/ci-pytest.xml
+            tmp/main-full/environment.json
+            tmp/main-full/pip.log
+            tmp/main-full/dependencies.log
+            tmp/main-full/runtime.log
+            tmp/main-full/pytest.log
+          if-no-files-found: error
+          overwrite: false
+          include-hidden-files: false
       - name: Verify required validation results
         if: always()
         shell: pwsh
@@ -314,11 +363,14 @@ jobs:
           DIFF_PR_RESULT: ${{ steps.diff_pr.outcome }}
           DIFF_PUSH_RESULT: ${{ steps.diff_push.outcome }}
           CLEAN_RESULT: ${{ steps.clean.outcome }}
+          MAIN_ENVIRONMENT_RESULT: ${{ steps.main_environment.outcome }}
+          MAIN_EVIDENCE_RESULT: ${{ steps.main_evidence.outcome }}
         run: |
           if ($env:LEGACY_VALIDATION -eq 'true' -or ($env:EVENT_NAME -eq 'push' -and $env:EVENT_REF -eq 'refs/heads/main')) {
             if ($env:GROUPED_RESULT -ne 'skipped' -or $env:SHORT_RESULT -ne 'skipped') { throw 'Full validation must not schedule grouped or develop short jobs' }
             $required = @('CHECKOUT_RESULT', 'PYTHON_RESULT', 'VERSION_RESULT', 'PIP_RESULT', 'DEPENDENCIES_RESULT', 'RUNTIME_RESULT', 'INVENTORY_RESULT', 'PYTEST_RESULT', 'ACTIVE_RESULT', 'COMPILE_RESULT', 'CLEAN_RESULT')
             if ($env:LEGACY_VALIDATION -eq 'true') { $required += 'UNITTEST_RESULT' }
+            if ($env:EVENT_NAME -eq 'push' -and $env:EVENT_REF -eq 'refs/heads/main') { $required += @('MAIN_ENVIRONMENT_RESULT', 'MAIN_EVIDENCE_RESULT') }
             if ($env:EVENT_NAME -eq 'push') { $required += 'DIFF_PUSH_RESULT' } else { $required += 'DIFF_PR_RESULT' }
             foreach ($name in $required) {
               if ([Environment]::GetEnvironmentVariable($name) -ne 'success') { throw "Required full-validation step did not succeed: $name" }

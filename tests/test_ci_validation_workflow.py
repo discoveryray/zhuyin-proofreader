@@ -149,7 +149,7 @@ class ValidationWorkflowTests(unittest.TestCase):
         main = event_context('push', 'refs/heads/main')
         legacy = event_context(event__pull_request__number=29, head_ref='codex/review-confirm-responsive',
                                event__pull_request__base__sha='502414b3b38e004a6d8d9cb693cf21b65148765a')
-        ids = ['checkout', 'python', 'version', 'pip', 'dependencies', 'runtime', 'inventory', 'pytest', 'active', 'compile', 'clean', 'diff_push']
+        ids = ['checkout', 'python', 'version', 'pip', 'dependencies', 'runtime', 'inventory', 'pytest', 'active', 'compile', 'clean', 'diff_push', 'main_environment', 'main_evidence']
         success = {key: 'success' for key in ids}; success.update(unittest='skipped', diff_pr='skipped')
         cases = [(pr, {}, True), (develop, {}, True), (main, success, True),
                  (event_context('workflow_dispatch', 'refs/heads/main'), success, False),
@@ -162,7 +162,7 @@ class ValidationWorkflowTests(unittest.TestCase):
         legacy_success = {**success, 'diff_push': 'skipped', 'diff_pr': 'success', 'unittest': 'success'}
         cases.append((legacy, legacy_success, True))
         for result in ('failure', 'cancelled', 'skipped', ''):
-            for key in [name for name in ids if name != 'diff_push'] + ['unittest', 'diff_pr']:
+            for key in [name for name in ids if name not in ('diff_push', 'main_environment', 'main_evidence')] + ['unittest', 'diff_pr']:
                 cases.append((legacy, {**legacy_success, key: result}, False))
         for context in (pr, develop, main, legacy):
             changed = {**context, 'needs': dict(grouped=dict(result='success'), short=dict(result='success'))}
@@ -211,11 +211,12 @@ foreach ($case in $cases) {
         selected = dict(planned(main)['test'])
         required = {'Check out repository', 'Set up Python', 'Show Python version', 'Upgrade pip', 'Install development dependencies',
                     'Validate runtime asset integrity', 'Audit test entrypoint coverage', 'Run full pytest suite', 'Verify active test execution',
-                    'Compile Python sources', 'Check committed whitespace (push)', 'Check repository working tree', 'Verify required validation results'}
+                    'Compile Python sources', 'Check committed whitespace (push)', 'Check repository working tree', 'Verify required validation results',
+                    'Capture main full environment', 'Upload main full evidence'}
         self.assertEqual(set(selected), required)
-        self.assertEqual(selected['Run full pytest suite'], ('run', 'python -m pytest tests/ -q -rs --junitxml=tmp/ci-pytest.xml'))
+        self.assertIn('python -m pytest tests/ -q -rs --junitxml=tmp/ci-pytest.xml', selected['Run full pytest suite'][1])
         self.assertEqual(selected['Verify active test execution'], ('run', 'python scripts/test_entrypoint_audit.py verify-active tmp/ci-test-inventory.json --junit tmp/ci-pytest.xml'))
-        self.assertEqual(selected['Validate runtime asset integrity'], ('run', 'python -m pytest tests/test_runtime_asset_manifest_integrity_v562.py -q'))
+        self.assertIn('python -m pytest tests/test_runtime_asset_manifest_integrity_v562.py -q', selected['Validate runtime asset integrity'][1])
         self.assertEqual(selected['Check out repository'], ('uses', 'actions/checkout@v7'))
         self.assertEqual(selected['Set up Python'], ('uses', 'actions/setup-python@v7'))
         matrix = re.search(r'^        python-version: (.*)$', job('test'), re.M).group(1)

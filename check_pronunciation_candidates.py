@@ -60,7 +60,7 @@ from global_exact_glyph_library import (
 )
 
 PROGRAM = "注音校對候選比較器"
-VERSION = "5.7.0"
+VERSION = "5.8.0"
 EXPECTED_RESOLVER_SOURCE_FILES = [
     "check_pronunciation_candidates.py",
     "pronunciation_rule_engine.py",

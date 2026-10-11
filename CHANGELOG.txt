@@ -1,4 +1,16 @@
-﻿v5.7.0（2026-09-01）－人工 actual 批次確認與證據相容性強化版
+﻿v5.8.0（發布候選；尚待正式驗證及發布）－現有功能穩定版
+- 發布範圍為目前已整合功能，不宣稱全部 v5.8 規劃完成。保留 PDF actual／expected 獨立證據、人工／GPT 判定、報告及相容專案續作；全冊教材校對完成不是軟體發布門檻。
+- 人工 actual 可持久暫存、批次套用、增量更新及繼續已提交更新；人工 expected 可保存、撤銷、重存及查看已確認項目。保存失敗保留原筆，actual 尚未套用不冒稱完成，也不抹除獨立 expected。
+- Global exact glyph 提供狀態／證據查閱、安全重用及單項明確核准；交付與恢復提供 journal／outbox／receipt 狀態查閱；舊資料匯入預檢只驗證明確選定 project，不代表 APPLY、核准或可重用。
+- PR #49 已整合 Excel 證據容量、sealed workbook 的有限專案搬移定位、匯入衝突保存與本地裁決、保存效能及啟動器修正。保留該任務全部歷史及 functional 10／launcher 2／aggregate 12；不重開或轉移其修正額度。本版後續證據另行保存。
+- 完整 aggregate metrics 延期：Global reuse／rescue／cross-project match、人工減量、promotion funnel、correlation rejection、quorum／promotion 時間、conflict／false promotion、cache precision／stability、store reliability、migration conversion。現有 snapshot 筆數不冒充這些比率或因果統計。
+- Phase 6 查閱介面的 APPLY、批次 migration、adjudication、自動解除 quarantine、recovery／delivery／ack／refresh 操作、新 staging、自動預填核准及缺失的原頁／字形預覽延期；此限制不取消產品其他既有更新／恢復路徑。
+- Windows Python 3.13.0 與既有 .bat 入口；固定發布 runtime 依賴及 pip，發布包從乾淨 Git commit 依逐檔 allowlist 建立，附來源 commit／tree、逐檔 SHA256 與 ZIP 外 checksum。不帶入本機教材、session、個人 DB 或後續新增資料。
+- 升級使用獨立程式目錄及一致備份，保留完整 project、程式旁使用者資料及 Global；回復需配套備份，不保證新版已寫資料能直接由舊程式讀取。
+- 自動驗證依現行 validation-flow/no-real-tk/1，不初始化真 Tk，不包含 hidden root、虛擬顯示器或 Tk preflight／retry；產品 GUI 保留。發布六項人工操作須另保存真實結果，舊證據不宣稱為本候選的人工驗收。
+- 此發布準備不變更 schema、semantics epoch、occurrence／review identity 或資料相容性契約；runtime manifest 只同步 tool_version，20 個資產內容、SHA、bytes 與其他欄位維持原值。正式兩輪審查、PR CI、main merge／push 完整非視窗 CI、人工驗收、tag／Release 均尚待後續階段。
+
+v5.7.0（2026-09-01）－人工 actual 批次確認與證據相容性強化版
 - 統一 actual／expected fingerprint producer 與 comparator 的 required contract registry；schema、reuse policy、semantics epoch 與各證據鏈必要欄位均須完整一致。缺少必要 contract 欄位、required nonempty text 為空、必要 contract value 不一致，或遇到未知／未支援且無 explicit adapter 的 schema／contract transition 時一律 fail closed；額外的 tool version、implementation source hash 等 audit metadata 可以存在，但不構成 cache compatibility boundary。
 - 新增 actual／expected 各自獨立的 semantics epoch contract，兩者目前都維持初始 epoch `1`。只有相同 evidence 可能因演算法語意改變而得到不同讀音時才應 bump；本次 v5.7.0 release counter 不改 epoch。released v5.6.2、Phase 0B1 transitional 與 v5.5.1 schema adapters 只在 exact known digest／contract 成立時相容，未知 legacy fingerprint 不再獲得寬鬆 fallback。
 - 建立 GitHub hosted Windows CI baseline：Python 3.12／3.13 都執行 runtime asset integrity、完整 unittest、完整 pytest、compileall、committed whitespace 與 clean-working-tree checks；GUI layout tests 使用 deterministic event synchronization，不以 sleep 或排除 Windows 規避失敗。

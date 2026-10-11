@@ -10,10 +10,10 @@ import review_gui
 import runtime_source_validation
 import standalone_gui
 import standalone_proofread
+from tests.release_version_expected import RELEASE_VERSION
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RELEASE_VERSION = "5.7.0"
 
 
 class ReleaseVersionConsistencyTests(unittest.TestCase):

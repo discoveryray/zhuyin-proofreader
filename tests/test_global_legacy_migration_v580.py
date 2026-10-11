@@ -9,6 +9,7 @@ import json
 import multiprocessing
 import os
 from pathlib import Path
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -32,6 +33,7 @@ import migrate_legacy_global_candidates as cli
 from occurrence_ledger import LEDGER_SCHEMA_VERSION, SESSION_SCHEMA_VERSION, WORKBOOK_SCHEMA_VERSION, REVIEW_ID_SCHEMA_VERSION
 from test_exact_glyph_identity_v580 import synthetic_sfnt, simple_glyph, composite_glyph
 from test_global_promotion_v580 import intent, approve, sql_rows, FakeDocument
+from tests.release_version_expected import RELEASE_VERSION
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -746,6 +748,10 @@ class MigrationTests(unittest.TestCase):
 
 class MigrationArchitectureTests(unittest.TestCase):
     PHASE5_BASELINE = "d2d558808bd2902857fad30f824d8bdc352beb73"
+    _PROTECTED_RELEASE_FILES = (
+        "runtime_asset_manifest.json", "runtime_source_validation.py",
+        "cross_version_compat.py", "VERSION.txt",
+    )
     _FINGERPRINT_CONTRACT_CALLS = {
         "compute_actual_asset_fingerprint", "compute_expected_asset_fingerprint",
         "rewrite_actual_workbook_fingerprint", "fingerprint_compatible",
@@ -870,6 +876,160 @@ class MigrationArchitectureTests(unittest.TestCase):
         self.assertEqual(compatibility.ACTUAL_DECODER_SEMANTICS_EPOCH, "1")
         self.assertEqual(compatibility.EXPECTED_RESOLVER_SEMANTICS_EPOCH, "1")
 
+    @classmethod
+    def _phase5_release_files(cls):
+        return {name: subprocess.check_output(
+            ["git", "show", cls.PHASE5_BASELINE + ":" + name], cwd=ROOT,
+        ) for name in cls._PROTECTED_RELEASE_FILES}
+
+    @classmethod
+    def _phase5_asset_bytes(cls, manifest):
+        return {asset["path"]: subprocess.check_output(
+            ["git", "show", cls.PHASE5_BASELINE + ":" + asset["path"]], cwd=ROOT,
+        ) for asset in manifest["assets"]}
+
+    def _manifest_version_token(self, raw):
+        def unique_object(pairs):
+            result = {}
+            for key, value in pairs:
+                self.assertNotIn(key, result, "Duplicate manifest field")
+                result[key] = value
+            return result
+
+        parsed = json.loads(raw, object_pairs_hook=unique_object)
+        self.assertIsInstance(parsed, dict)
+        self.assertIn("tool_version", parsed)
+        self.assertIsInstance(parsed["tool_version"], str)
+        # The frozen manifest uses this exact top-level field placement. Only
+        # its value token is projected; spacing, ordering and all other bytes
+        # remain part of the comparison, even if they contain a version string.
+        matches = list(re.finditer(
+            rb'^  "tool_version": (?P<value>"(?:[^"\\]|\\.)*"),?$', raw, re.M))
+        self.assertEqual(len(matches), 1, "Exactly one top-level version token is required")
+        match = matches[0]
+        projected = raw[:match.start("value")] + b"<release-value>" + raw[match.end("value"):]
+        return parsed, projected
+
+    def _runtime_version_token(self, raw):
+        tree = ast.parse(raw)
+        declarations = [node for node in tree.body if isinstance(node, ast.Assign)
+                        and any(isinstance(target, ast.Name) and target.id == "TOOL_VERSION"
+                                for target in node.targets)]
+        stores = [node for node in ast.walk(tree) if isinstance(node, ast.Name)
+                  and isinstance(node.ctx, ast.Store) and node.id == "TOOL_VERSION"]
+        self.assertEqual(len(declarations), 1, "Exactly one module TOOL_VERSION declaration is required")
+        self.assertEqual(len(stores), 1, "Duplicate or nested TOOL_VERSION binding")
+        declaration = declarations[0]
+        self.assertEqual(len(declaration.targets), 1)
+        self.assertIsInstance(declaration.value, ast.Constant)
+        self.assertIsInstance(declaration.value.value, str)
+        value = declaration.value
+        self.assertEqual(value.lineno, value.end_lineno, "Version must be one literal token")
+        # AST columns are UTF-8 byte offsets. Preserve the entire source apart
+        # from this one validated literal value; no other AST/source exclusion.
+        lines = raw.splitlines(keepends=True)
+        start = sum(map(len, lines[:value.lineno - 1])) + value.col_offset
+        end = sum(map(len, lines[:value.end_lineno - 1])) + value.end_col_offset
+        return value.value, raw[:start] + b"<release-value>" + raw[end:]
+
+    def _assert_phase5_release_boundaries(self, current, historical, assets, historical_assets):
+        self.assertEqual(set(current), set(self._PROTECTED_RELEASE_FILES))
+        self.assertEqual(set(historical), set(self._PROTECTED_RELEASE_FILES))
+        # Retain the original source comparison's sole CRLF/LF allowance.
+        current = {name: raw.replace(b"\r\n", b"\n") for name, raw in current.items()}
+        historical = {name: raw.replace(b"\r\n", b"\n") for name, raw in historical.items()}
+        actual_manifest, actual_manifest_projection = self._manifest_version_token(current["runtime_asset_manifest.json"])
+        old_manifest, old_manifest_projection = self._manifest_version_token(historical["runtime_asset_manifest.json"])
+        self.assertEqual(actual_manifest["tool_version"], RELEASE_VERSION)
+        self.assertEqual(actual_manifest_projection, old_manifest_projection)
+        actual_version, actual_source_projection = self._runtime_version_token(current["runtime_source_validation.py"])
+        _, old_source_projection = self._runtime_version_token(historical["runtime_source_validation.py"])
+        self.assertEqual(actual_version, RELEASE_VERSION)
+        self.assertEqual(actual_source_projection, old_source_projection)
+        self.assertEqual(current["cross_version_compat.py"], historical["cross_version_compat.py"])
+        self.assertEqual(historical["VERSION.txt"], old_manifest["tool_version"].encode("utf-8") + b"\n")
+        self.assertEqual(current["VERSION.txt"], RELEASE_VERSION.encode("utf-8") + b"\n")
+        expected_paths = {asset["path"] for asset in old_manifest["assets"]}
+        self.assertEqual(set(assets), expected_paths)
+        self.assertEqual(set(historical_assets), expected_paths)
+        for spec in old_manifest["assets"]:
+            path = spec["path"]
+            # Keep failures visible to callers' assertRaises negative probes.
+            self.assertEqual(sha(assets[path]), spec["sha256"], path)
+            self.assertEqual(len(assets[path]), len(historical_assets[path]), path)
+            self.assertEqual(assets[path], historical_assets[path], path)
+
+    def _legal_release_fixture(self):
+        historical = self._phase5_release_files()
+        current = dict(historical)
+        # Independently spelled exact Phase 5 -> adopted release edits. This
+        # fixture neither reads the product version nor uses the token projector.
+        for name, old, new in (
+            ("runtime_asset_manifest.json", b'  "tool_version": "5.7.0"',
+             b'  "tool_version": "' + RELEASE_VERSION.encode("utf-8") + b'"'),
+            ("runtime_source_validation.py", b'TOOL_VERSION = "5.7.0"',
+             b'TOOL_VERSION = "' + RELEASE_VERSION.encode("utf-8") + b'"'),
+        ):
+            self.assertEqual(current[name].count(old), 1)
+            current[name] = current[name].replace(old, new, 1)
+        current["VERSION.txt"] = RELEASE_VERSION.encode("utf-8") + b"\n"
+        assets = self._phase5_asset_bytes(json.loads(historical["runtime_asset_manifest.json"]))
+        return current, historical, assets
+
+    def test_authorized_release_metadata_preserves_complete_phase5_boundaries(self):
+        current, historical, assets = self._legal_release_fixture()
+        self._assert_phase5_release_boundaries(current, historical, assets, assets)
+
+    def test_release_version_mismatch_in_each_metadata_location_is_rejected(self):
+        current, historical, assets = self._legal_release_fixture()
+        for wrong in (b"5.7.0", b"5.8.1", b""):
+            for name, old in (
+                ("runtime_asset_manifest.json", b'  "tool_version": "5.8.0"'),
+                ("runtime_source_validation.py", b'TOOL_VERSION = "5.8.0"'),
+                ("VERSION.txt", b"5.8.0"),
+            ):
+                changed = dict(current)
+                replacement = old.replace(b"5.8.0", wrong)
+                changed[name] = changed[name].replace(old, replacement, 1)
+                with self.subTest(location=name, wrong=wrong), self.assertRaises(AssertionError):
+                    self._assert_phase5_release_boundaries(changed, historical, assets, assets)
+
+    def test_release_metadata_projection_rejects_nonversion_drift_and_ambiguous_tokens(self):
+        current, historical, assets = self._legal_release_fixture()
+        changes = (
+            ("manifest_schema", "runtime_asset_manifest.json", b'"schema_version": "2.6.2"', b'"schema_version": "future"'),
+            ("manifest_other_version_string", "runtime_asset_manifest.json", b'"policy": "', b'"policy": "5.8.0 '),
+            ("manifest_format", "runtime_asset_manifest.json", b'  "schema_version":', b'    "schema_version":'),
+            ("manifest_asset_sha", "runtime_asset_manifest.json", json.loads(current["runtime_asset_manifest.json"])["assets"][0]["sha256"].encode(), b"0" * 64),
+            ("manifest_missing_version", "runtime_asset_manifest.json", b'  "tool_version": "5.8.0",\n', b""),
+            ("manifest_duplicate_version", "runtime_asset_manifest.json", b'  "tool_version": "5.8.0",', b'  "tool_version": "5.8.0",\n  "tool_version": "5.8.0",'),
+            ("runtime_schema", "runtime_source_validation.py", b'ACTUAL_FINGERPRINT_SCHEMA_VERSION = "3.0.0"', b'ACTUAL_FINGERPRINT_SCHEMA_VERSION = "future"'),
+            ("runtime_other_version_string", "runtime_source_validation.py", b"# compatible release", b"# 5.8.0 compatible release"),
+            ("runtime_missing_version", "runtime_source_validation.py", b'TOOL_VERSION = "5.8.0"\n', b""),
+            ("runtime_duplicate_version", "runtime_source_validation.py", b'TOOL_VERSION = "5.8.0"', b'TOOL_VERSION = "5.8.0"\nTOOL_VERSION = "5.8.0"'),
+            ("runtime_nonliteral_version", "runtime_source_validation.py", b'TOOL_VERSION = "5.8.0"', b'TOOL_VERSION = str("5.8.0")'),
+        )
+        for label, name, old, new in changes:
+            changed = dict(current)
+            self.assertEqual(changed[name].count(old), 1, label)
+            changed[name] = changed[name].replace(old, new, 1)
+            with self.subTest(mutation=label), self.assertRaises(AssertionError):
+                self._assert_phase5_release_boundaries(changed, historical, assets, assets)
+        changed = dict(current)
+        changed["cross_version_compat.py"] += b"\n# release 5.8.0 must not exempt other bytes\n"
+        with self.subTest(mutation="compatibility_bytes"), self.assertRaises(AssertionError):
+            self._assert_phase5_release_boundaries(changed, historical, assets, assets)
+        path = next(iter(assets))
+        changed_assets = dict(assets)
+        raw = changed_assets[path]
+        changed_assets[path] = raw[:-1] + bytes([raw[-1] ^ 1])
+        with self.subTest(mutation="same_length_asset_bytes"), self.assertRaises(AssertionError):
+            self._assert_phase5_release_boundaries(current, historical, changed_assets, assets)
+        changed_assets = dict(assets)
+        changed_assets.pop(path)
+        with self.subTest(mutation="missing_asset"), self.assertRaises(AssertionError):
+            self._assert_phase5_release_boundaries(current, historical, changed_assets, assets)
+
     def test_import_chain_has_no_expected_resolver(self):
         code = "import legacy_global_migration, sys; assert 'standalone_proofread' not in sys.modules; assert 'check_pronunciation_candidates' not in sys.modules"
         result = subprocess.run([sys.executable, "-B", "-c", code], cwd=ROOT, capture_output=True, text=True)
@@ -888,10 +1048,11 @@ class MigrationArchitectureTests(unittest.TestCase):
         import runtime_source_validation as runtime
         self._assert_contract_versions()
         self.assertTrue(runtime.validate_asset_manifest(ROOT)["ok"])
-        for name in ("runtime_asset_manifest.json", "runtime_source_validation.py", "cross_version_compat.py",
-                     "VERSION.txt"):
-            committed = subprocess.check_output(["git", "show", self.PHASE5_BASELINE + ":" + name], cwd=ROOT)
-            self.assertEqual((ROOT / name).read_bytes().replace(b"\r\n", b"\n"), committed.replace(b"\r\n", b"\n"))
+        historical = self._phase5_release_files()
+        historical_assets = self._phase5_asset_bytes(json.loads(historical["runtime_asset_manifest.json"]))
+        current = {name: (ROOT / name).read_bytes() for name in self._PROTECTED_RELEASE_FILES}
+        assets = {path: (ROOT / path).read_bytes() for path in historical_assets}
+        self._assert_phase5_release_boundaries(current, historical, assets, historical_assets)
         current = ast.parse((ROOT / "standalone_proofread.py").read_text(encoding="utf-8"))
         self._assert_legacy_expected_adapter_contract(current)
         self.assertEqual(self._standalone_fingerprint_contract(current),

@@ -1,10 +1,12 @@
 # 使用指南
 
-臺灣國小教材 PDF 注音校對工具（內部使用）。
+臺灣國小教材 PDF 注音校對工具。v5.8.0 為現有功能穩定版的發布候選，尚待正式驗證及發布。
 
-第一次使用：執行「安裝依賴.bat」。
+環境：Windows、Python 3.13.0。第一次使用：執行「安裝依賴.bat」，使用隨包 `requirements-release-lock.txt` 的固定 runtime 依賴及 pip；不需要安裝 pytest 等測試工具。
 
 平常使用：執行「啟動_單機注音校對.bat」。
+
+既有使用者先依 [升級與回復說明](UPGRADE_V580.md) 備份，使用獨立程式目錄，繼續原專案。套件安裝與日常啟動使用相同 Python 選擇；有多個 Python 時，請先確認 `py -3`（無 py 時為 `python`）指向 3.13.0。
 
 ## 一、一般校對流程
 
@@ -67,4 +69,24 @@ Excel／GPT 外部匯入仍須遵守原有六閘門確認契約；填入新 GUI 
 人工確認的保存／取消與主判定按鈕保留在固定底部。
 長路徑和單行輸入有橫向捲軸，可用 Ctrl+A、Ctrl+C 複製完整值；詳細資訊也可一鍵複製。
 
-原始單機說明保留於[封存版本](archive/manuals/README_單機版.txt)，供查考當時版本與操作文字；其中歷史版本敘述不作為目前功能保證。
+原始單機說明保留於 [repository 封存版本](https://github.com/discoveryray/zhuyin-proofreader/blob/151b90f6f5f2a352e828fa6f73402dfb8c4f5617/docs/archive/manuals/README_單機版.txt)，供查考當時版本與操作文字；其中歷史版本敘述不作為目前功能保證。封存／開發文件不隨 runtime 包全部附送。
+
+## 三、匯入判定與專案搬移
+
+使用產品實際匯出的判定檔，依其中欄位及來源要求填寫，再從「匯入 GPT 判定檔（自動辨識）」匯入。匯入來源與目前本地 expected 不同時，程式保存兩份證據並保留原目標判定，列為待裁決。請在該位置查看來源／目標依據，按語境作新的本地判定；不要以 actual 反推 expected。再次匯入同一已裁決來源不應復活已否決來源；來源或依賴改變仍須重新驗證。匯入成功不表示全部待辦已完成。
+
+專案可整個移動或改名，再明確選擇新的專案目錄及可驗證的原 PDF。內部 `01_實際注音`、`02_候選報告` 的角色目錄與 workbook 檔名須保持，內容須符合 sealed SHA。缺檔、SHA 不符、來源不唯一、連結／junction 等情況會拒絕；不要改 seal、複製別人的 workbook 或改 runtime manifest 來繞過。搬移不是任意重新命名內部工作簿的授權。
+
+## 四、Global 與查閱介面的範圍
+
+「全域字形庫」區分儲存狀態、有效重用狀態、來源與核准紀錄；只有符合既有安全 gate 的 exact glyph truth 可重用。單一項目的「檢視並核准」先固定證據清單，須明確確認；它不製造新的人工 actual，也不批次核准。
+
+「交付與恢復狀態」分開本地 journal／outbox 與目前 Global receipt；COMMITTED 不代表後續 refresh 已完成，缺 journal 不代表歷史已完成。「舊資料匯入預檢」只檢查明確選定 project 與可選 PDF roots，通過不等於匯入、核准或重用。來源改變後須明確重新開始。
+
+本版延期完整 aggregate metrics，以及 Phase 6 查閱介面的 APPLY、批次 migration、adjudication、自動解除 quarantine、recovery／delivery／ack／refresh 操作、新 staging、自動預填核准與缺失的原頁／字形預覽。現有筆數不是 quorum、命中率或因果改善量。這些查閱限制不取消第二節已提供的 actual 更新／恢復功能。
+
+## 五、軟體發布與教材完成
+
+v5.8.0 穩定版目標不代表全部 v5.8 規劃完成。軟體發布另需審查、CI、[六項人工驗收](RELEASE_ACCEPTANCE_V580.md)、main merge、tag／Release 及包 checksum 等門檻；本發布準備尚未滿足這些門檻。自動入口不建立真 Tk 視窗；原生介面人工操作另行記錄，不能把 import／CLI help 的短檢查當作人工介面驗收。
+
+教材全冊完成仍須各自 actual／expected 證據、回歸、對帳與 completion gate 通過。軟體發布不要求重跑整份教材或清空所有教材待辦，也不替教材取得完成狀態。
