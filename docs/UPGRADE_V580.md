@@ -29,7 +29,7 @@ Global 預設 root 是 `%LOCALAPPDATA%\DiscoveryRay\ZhuyinProofreader\GlobalExac
 
 | 程式根目錄檔案 | 隨包內容與升級處理 |
 | --- | --- |
-| `校對判定記憶.json` | 既有內建 exact-context 判定 seed。舊程式可能已有後續人工記憶；備份原檔，不能用新包 seed 覆寫該原件。 |
+| `校對判定記憶.json` | 未啟用的 legacy regression／audit 歷史 seed；現行 `load_decision_memory` 回傳空值、`apply_decision_memory` 回傳 0，不提供 active decision、terminal 或 expected truth。保留歷史 bytes／pin；舊程式的後續內容只作原件備份，不因複製到新版而啟用，也不能用新包 seed 覆寫該原件。 |
 | `可重用expected規則.json` | 既有已批准 expected seed。保留使用者另建規則及其證據；不能因升版重建成空檔。 |
 | `manual_actual_occurrence_overrides.csv` | 既有有限定位的內建覆核 seed；不當成全域 truth。舊程式旁的後續 occurrence override 與專案 `_專案證據/actual` 分別保留。 |
 | `user_verified_glyf_fingerprints.csv`、`user_verified_cff_glyph_fingerprints.csv` | 隨包是既有 header-only seed；舊程式的有內容檔可能是使用者已驗證資料，須連同來源及衝突／provenance 一起保留。 |

@@ -261,7 +261,7 @@
     {
       "path": "校對判定記憶.json",
       "role": "builtin_seed",
-      "classification": "Existing built-in approved exact-context decision memory; retain unchanged matching contract.",
+      "classification": "Inactive legacy regression/audit historical seed. Current load_decision_memory returns an empty mapping and apply_decision_memory returns 0; this file provides no active decision, terminal or expected truth. Preserve historical bytes and pin without enabling it.",
       "baseline_commit": "151b90f6f5f2a352e828fa6f73402dfb8c4f5617",
       "baseline_sha256": "474115d44d4c6fd09331d48add01d28de4993969d1e8a260a088f99b31097492"
     },
