@@ -13,7 +13,7 @@ import standalone_proofread
 
 
 ROOT = Path(__file__).resolve().parents[1]
-RELEASE_VERSION = "5.7.0"
+RELEASE_VERSION = "5.8.0"
 
 
 class ReleaseVersionConsistencyTests(unittest.TestCase):

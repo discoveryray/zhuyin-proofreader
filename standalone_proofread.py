@@ -128,7 +128,7 @@ from global_exact_glyph_library import (
 )
 
 PROGRAM = "注音校對工具－單機端到端控制器"
-VERSION = "5.7.0"
+VERSION = "5.8.0"
 # Tool release number is not a cache/session boundary. Compatibility is decided
 # by schema family, durable review IDs, PDF bytes and evidence assets.
 COMPATIBLE_SESSION_VERSIONS = None

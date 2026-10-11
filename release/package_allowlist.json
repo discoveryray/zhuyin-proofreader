@@ -1,0 +1,339 @@
+{
+  "schema": "zhuyin-release-allowlist/1",
+  "version": "5.8.0",
+  "classification_baseline": "151b90f6f5f2a352e828fa6f73402dfb8c4f5617",
+  "files": [
+    {
+      "path": "actual_render_geometry.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "actual_review.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "cff_unseen_family_bootstrap.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "cff_zero_map_batch.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "cff_zhuyin_decoder.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "check_pronunciation_candidates.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "concise_expected_resolver.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "cross_version_compat.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "delivery_recovery_inspector.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "delivery_recovery_service.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "exact_glyph_identity.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "export_pdf_text_diagnostics.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "export_zhuyin_readings.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "global_exact_glyph_library.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "global_glyph_promotion.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "global_library_approval.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "global_library_inspector.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "legacy_global_migration.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "legacy_migration_inspection.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "legacy_migration_inspector.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "migrate_legacy_global_candidates.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "occurrence_ledger.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "pdf_portability.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "pronunciation_rule_engine.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "review_display.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "review_gui.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "review_save_service.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "revision_diff.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "runtime_regression_gate.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "runtime_source_validation.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "sealed_workbook_paths.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "standalone_gui.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "standalone_proofread.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "ttf_symbol_recombination.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "ttf_zhuyin_shape_decoder.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "《國語辭典簡編本》資料 dict_concised_2014_20260626.xlsx",
+      "role": "runtime_asset"
+    },
+    {
+      "path": "一字多音-字典檔.xlsx",
+      "role": "runtime_asset"
+    },
+    {
+      "path": "pronunciation_lexical_rules.csv",
+      "role": "runtime_asset"
+    },
+    {
+      "path": "統一用字手冊_注音規則.csv",
+      "role": "runtime_asset"
+    },
+    {
+      "path": "統一用字手冊_字音限制.csv",
+      "role": "runtime_asset"
+    },
+    {
+      "path": "pronunciation_regressions.csv",
+      "role": "runtime_asset"
+    },
+    {
+      "path": "mandatory_regression_cases.csv",
+      "role": "runtime_asset"
+    },
+    {
+      "path": "character_overrides.csv",
+      "role": "runtime_asset"
+    },
+    {
+      "path": "source_context_overrides.csv",
+      "role": "runtime_asset"
+    },
+    {
+      "path": "zhuyin_component_map.csv",
+      "role": "runtime_asset"
+    },
+    {
+      "path": "font_compatibility_groups.csv",
+      "role": "runtime_asset"
+    },
+    {
+      "path": "cff_bopomofo_symbol_map.csv",
+      "role": "runtime_asset"
+    },
+    {
+      "path": "cff_crossfamily_cid_consensus.csv",
+      "role": "runtime_asset"
+    },
+    {
+      "path": "ttf_xref_component_overrides.csv",
+      "role": "runtime_asset"
+    },
+    {
+      "path": "ttf_verified_component_transforms.csv",
+      "role": "runtime_asset"
+    },
+    {
+      "path": "ttf_verified_glyf_fingerprints.csv",
+      "role": "runtime_asset"
+    },
+    {
+      "path": "ttf_verified_outline_signatures.csv",
+      "role": "runtime_asset"
+    },
+    {
+      "path": "ttf_verified_mapping_corrections.csv",
+      "role": "runtime_asset"
+    },
+    {
+      "path": "ttf_verified_symbol_templates.csv",
+      "role": "runtime_asset"
+    },
+    {
+      "path": "structural_detection_exclusions.csv",
+      "role": "runtime_asset"
+    },
+    {
+      "path": "user_verified_glyf_fingerprints.csv",
+      "role": "builtin_seed",
+      "classification": "Empty header-only project-local actual seed; no truth rows.",
+      "baseline_commit": "151b90f6f5f2a352e828fa6f73402dfb8c4f5617",
+      "baseline_sha256": "1ce79de8ff935d4ab33672821eedce70aa6ac2ff39698111947a4db4e658ed6a"
+    },
+    {
+      "path": "user_verified_cff_glyph_fingerprints.csv",
+      "role": "builtin_seed",
+      "classification": "Empty header-only CFF actual seed; no truth rows.",
+      "baseline_commit": "151b90f6f5f2a352e828fa6f73402dfb8c4f5617",
+      "baseline_sha256": "dbb169381ab883f63654740596c1c0ced4123abd0f236622d18e0247d290505c"
+    },
+    {
+      "path": "glyph_truth_conflicts.csv",
+      "role": "builtin_seed",
+      "classification": "Empty header-only conflict seed; never promotes unknown truth.",
+      "baseline_commit": "151b90f6f5f2a352e828fa6f73402dfb8c4f5617",
+      "baseline_sha256": "f53e25ea9ea61de45f531008656d1ee0653504c740b67cff42647e347580bff0"
+    },
+    {
+      "path": "glyph_truth_provenance.csv",
+      "role": "builtin_seed",
+      "classification": "Empty header-only provenance seed; no fabricated events.",
+      "baseline_commit": "151b90f6f5f2a352e828fa6f73402dfb8c4f5617",
+      "baseline_sha256": "73d0274241aeb737cd2e73b50adab84f03d54f0109f6c8a21b8d3b4e83e3c325"
+    },
+    {
+      "path": "manual_actual_occurrence_overrides.csv",
+      "role": "builtin_seed",
+      "classification": "Existing curated occurrence-local actual overrides; finite PDF/context/position match, not global truth.",
+      "baseline_commit": "151b90f6f5f2a352e828fa6f73402dfb8c4f5617",
+      "baseline_sha256": "9f8ab426ae202dc5a8aac8436b2179f4c790d1c42d658688e25a52fd1af58eca"
+    },
+    {
+      "path": "校對判定記憶.json",
+      "role": "builtin_seed",
+      "classification": "Existing built-in approved exact-context decision memory; retain unchanged matching contract.",
+      "baseline_commit": "151b90f6f5f2a352e828fa6f73402dfb8c4f5617",
+      "baseline_sha256": "474115d44d4c6fd09331d48add01d28de4993969d1e8a260a088f99b31097492"
+    },
+    {
+      "path": "可重用expected規則.json",
+      "role": "builtin_seed",
+      "classification": "Existing human-approved expected rules; independent of actual evidence.",
+      "baseline_commit": "151b90f6f5f2a352e828fa6f73402dfb8c4f5617",
+      "baseline_sha256": "b99c99d4681ffbd045ab544cd6a74a4597ddf3f79e85f2edba3cc3da7fb1c96d"
+    },
+    {
+      "path": "啟動_單機注音校對.bat",
+      "role": "entrypoint"
+    },
+    {
+      "path": "安裝依賴.bat",
+      "role": "entrypoint"
+    },
+    {
+      "path": "CHANGELOG.txt",
+      "role": "document"
+    },
+    {
+      "path": "README.md",
+      "role": "document"
+    },
+    {
+      "path": "docs/USER_GUIDE.md",
+      "role": "document"
+    },
+    {
+      "path": "docs/UPGRADE_V580.md",
+      "role": "document"
+    },
+    {
+      "path": "docs/RELEASE_ACCEPTANCE_V580.md",
+      "role": "document"
+    },
+    {
+      "path": "統一用字手冊_規則來源.txt",
+      "role": "document"
+    },
+    {
+      "path": "requirements-release-lock.txt",
+      "role": "dependency_lock"
+    },
+    {
+      "path": "VERSION.txt",
+      "role": "metadata"
+    },
+    {
+      "path": "runtime_asset_manifest.json",
+      "role": "metadata"
+    },
+    {
+      "path": "release/package_allowlist.json",
+      "role": "metadata"
+    }
+  ],
+  "excluded": [
+    {
+      "path": "build_handbook_rules.py",
+      "reason": "Asset authoring tool, not runtime."
+    },
+    {
+      "path": "requirements.txt",
+      "reason": "Unfrozen developer input; installer uses release lock."
+    },
+    {
+      "path": "啟動_注音校對_修正版.bat",
+      "reason": "Historical alternate launcher, not formal release entrypoint."
+    }
+  ],
+  "source_policy": "Only exact committed blobs. Local PDFs, sessions, decisions, DBs, later user rows, caches, tests, evidence, secrets and environments are excluded by finite allowlist; user in a name is not a rule."
+}
