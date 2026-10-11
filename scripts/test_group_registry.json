@@ -86,7 +86,7 @@
       "tests/test_manual_actual_gui_batch_v570.py": "a708fd1c4caf266e5eda8fb44831ec5bb8f50b321f416afeecaf7d2584dc5a93",
       "tests/test_manual_actual_staging_v570.py": "14f3ccc744c4e1b5dfd327b07ec6165781414a5e1fac921a5b95b0542e2b4155",
       "tests/test_manual_review_usability_v580.py": "c8af4c372f6b19ea0c4baf90a2dcc5b8cbd73173219e118b2dea1c697bba103b",
-      "tests/test_pdf_portability.py": "17fb703339ad913783b96e16179659799fa4e4b1fa16bf8f968495f4c8819349",
+      "tests/test_pdf_portability.py": "d9df975e717c0bfdd65666d5e60c2651d3e0a99286dfed4b0c3830051515fffd",
       "tests/test_pdf_portability_actual_receipt.py": "d1ea6b1de211005a604e433d27b55aabc50761e72cfc9f7dcfd62308322499db",
       "tests/test_pdf_portability_actual_schema.py": "dd135a31b581d4de770f6c6ec846894fb6d287b59efde51528660d091efadaca",
       "tests/test_pdf_portability_binding.py": "8f100cbabc646666815c894d06e3cda47ee0dadf634ffaac4e9b98cacca23c05",

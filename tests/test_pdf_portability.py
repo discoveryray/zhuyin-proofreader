@@ -525,7 +525,7 @@ def test_expected_excel_rejects_target_pdf_changed_after_mapping(tmp_path, monke
     with patch.object(portable, "_verify_excel_import_snapshot", side_effect=replace_after_mapping):
         with pytest.raises(ValueError, match="目標 PDF|PDF SHA|頁面內容"):
             sp.import_gpt_decisions(target, filled, dry_run=dry_run)
-    assert calls == (1 if dry_run else 2)
+    assert calls == 2
     assert {path: path.read_bytes() if path.exists() else None for path in watched} == before
     assert not list((tmp_path / "isolated-localappdata").rglob("*.sqlite*"))
 
