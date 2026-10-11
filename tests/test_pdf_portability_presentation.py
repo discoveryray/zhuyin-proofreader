@@ -243,7 +243,7 @@ def test_foreign_marker_inserted_at_creation_is_not_overwritten(tmp_path, monkey
         return original_save(path, *args, **kwargs)
 
     with patch.object(sp, "json_save", side_effect=insert_at_marker):
-        with pytest.raises(ValueError, match="其他操作變更"):
+        with pytest.raises(ValueError, match="其他操作變更|未完成標記已由其他交易變動"):
             operation()
     assert inserted and sp.json_load_strict(marker) == foreign
     assert {path: read(path) for path in watched} == before
@@ -254,17 +254,14 @@ def test_same_session_expected_postcommit_report_failure_uses_repair(tmp_path, m
     output = real_project(tmp_path / "same-session")
     filled = expected_workbook(tmp_path, output)
     marker = output / portable.INCOMPLETE_FILE
-    before = read(output / "人工判定資料庫.json")
+    before = {name: read(output / name) for name in ("人工判定資料庫.json",
+              portable.CONFLICT_FILE, "待人工確認.json", "注音校對_最終報告.xlsx", "pipeline_status.json")}
     with patch.object(portable, "_publish_portable_outputs", side_effect=OSError("report disk fault")):
         with pytest.raises(OSError, match="report disk fault"):
             sp.import_gpt_decisions(output, filled)
-    assert marker.exists()
-    assert read(output / "人工判定資料庫.json") != before
-    with pytest.raises(ValueError, match="未完成"):
-        sp.regenerate_report(output)
-    assert sp.repair_project_state(output) == output / "注音校對_最終報告.xlsx"
     assert not marker.exists()
-    assert len(sp.json_load_strict(output / "人工判定資料庫.json")["events"]) == 1
+    assert {name: read(output / name) for name in before} == before
+    assert sp.json_load_strict(output / "人工判定資料庫.json")["events"] == {}
 
 
 def test_same_render_different_candidate_text_is_not_equivalent(tmp_path):

@@ -12,12 +12,15 @@ from tests.test_pdf_portability import pdf, project, _filled_expected_excel
 from tests.test_pdf_portability_prewrite import pair, state
 
 
-def edited_excel(first, output, *, evidence=None, title=None):
+def edited_excel(first, output, *, evidence=None, title=None, reading=None):
     book = load_workbook(first)
     if evidence is not None:
         sheet = book['待判定候選']; headers = [cell.value for cell in sheet[1]]
         sheet.cell(2, headers.index('proposed_expected_evidence') + 1, evidence)
     if title is not None: book.properties.title = title
+    if reading is not None:
+        sheet = book['待判定候選']; headers = [cell.value for cell in sheet[1]]
+        sheet.cell(2, headers.index('proposed_expected_set') + 1, reading)
     book.save(output); book.close()
     return output
 
@@ -30,9 +33,11 @@ def adjudicate(b, rid, evidence='LOCAL ADJUDICATION'):
 def excel_pair(a, b, tmp_path):
     sp.json_save(a / '人工判定資料庫.json', sp.normalize_db({}))
     first = _filled_expected_excel(a, tmp_path / 'first.xlsx')
-    second = edited_excel(first, tmp_path / 'second.xlsx', evidence='OTHER ORIGINAL RULE')
+    second = edited_excel(first, tmp_path / 'second.xlsx', evidence='OTHER ORIGINAL RULE', reading='ㄐㄧㄠˇ')
     sp.import_gpt_decisions(b, first)
-    with pytest.raises(ValueError, match='不同判定'): sp.import_gpt_decisions(b, second)
+    result = sp.import_gpt_decisions(b, second)
+    assert result.status['new_conflicts'] == 1
+    assert result.status['status'] == 'PENDING_LOCAL_ADJUDICATION'
     return first, second
 
 
@@ -78,12 +83,18 @@ def test_real_source_change_after_adjudication_is_still_conflict(pair, tmp_path,
         sp.json_save(source / '人工判定資料庫.json', source_db)
         assert p.import_project_decisions(source, b)['conflicts']
     else:
-        new = (edited_excel(first, tmp_path / 'third.xlsx', evidence='NEW SOURCE RULE')
+        new = (edited_excel(first, tmp_path / 'third.xlsx', evidence='NEW SOURCE RULE', reading='ㄐㄧㄠˇ')
                if changed_source == 'same' else _filled_expected_excel(source, tmp_path / 'third.xlsx'))
-        with pytest.raises(ValueError, match='不同判定'): sp.import_gpt_decisions(b, new)
+        if changed_source == 'new':
+            new = edited_excel(new, tmp_path / 'new-conflicting.xlsx', reading='ㄐㄧㄠˇ')
+        result = sp.import_gpt_decisions(b, new)
+        assert result.status['new_conflicts'] == 1
     current = sp.json_load_strict(b / p.CONFLICT_FILE)['conflicts']
     assert len(current) == 2 and current[0] == original_receipt[0]
-    assert rid not in sp.json_load_strict(b / '人工判定資料庫.json')['events']
+    if lane == 'project':
+        assert rid not in sp.json_load_strict(b / '人工判定資料庫.json')['events']
+    else:
+        assert sp.json_load_strict(b / '人工判定資料庫.json')['events'][rid]['expected_evidence'] == 'LOCAL ADJUDICATION'
 
 
 @pytest.mark.parametrize('lane', ['project', 'expected'])
@@ -103,13 +114,18 @@ def test_retained_duplicate_source_replay_preserves_adjudication(pair, tmp_path,
         sp.json_save(a / '人工判定資料庫.json', sp.normalize_db({}))
         first = _filled_expected_excel(a, tmp_path / 'first.xlsx')
         duplicate = edited_excel(first, tmp_path / 'duplicate.xlsx', title='independent file copy')
-        different = edited_excel(first, tmp_path / 'different.xlsx', evidence='DIFFERENT RULE')
+        different = edited_excel(first, tmp_path / 'different.xlsx', evidence='DIFFERENT RULE', reading='ㄐㄧㄠˇ')
         sp.import_gpt_decisions(b, first)
         sp.import_gpt_decisions(b, duplicate)
         replay = lambda: sp.import_gpt_decisions(b, duplicate)
-        with pytest.raises(ValueError, match='不同判定'): sp.import_gpt_decisions(b, different)
+        result = sp.import_gpt_decisions(b, different)
+        assert result.status['new_conflicts'] == 1
     receipt = sp.json_load_strict(b / p.CONFLICT_FILE)
-    assert len(receipt['conflicts'][0]['target_event']['portability_duplicate_sources']) == 1
+    if lane == 'project':
+        assert len(receipt['conflicts'][0]['target_event']['portability_duplicate_sources']) == 1
+    else:
+        assert len(receipt['supplements']) == 1
+        assert receipt['supplements'][0]['source_identity']['source_excel_sha256'] == p._sha(duplicate)
     adjudicate(b, rid)
     before = state(b)
     replay()

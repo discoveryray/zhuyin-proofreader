@@ -257,7 +257,8 @@ class ManualActualGuiStagingServiceTests(unittest.TestCase):
             self.assertEqual(staged["note"], "checked on original page")
             self.assertEqual(snapshot_paths(artifact_paths), before_artifacts)
             self.assertEqual(snapshot_paths(authoritative_paths), before_authoritative)
-            manifest_check.assert_called_once()
+            self.assertEqual(manifest_check.call_count, 2)
+            self.assertEqual(manifest_check.call_args_list[0], manifest_check.call_args_list[1])
             artifact_check.assert_called_once()
             for forbidden in (
                 single_apply, batch_apply, clear_events, refresh, pipeline,
@@ -404,13 +405,18 @@ class ManualActualGuiBatchOrchestrationTests(unittest.TestCase):
             for name in ("unaffected.pdf", "cross-file-evidence.pdf"):
                 info = copy.deepcopy(original)
                 pdf = Path(directory) / name
-                pdf.write_bytes(Path(original["pdf"]).read_bytes())
+                import fitz
+                with fitz.open(original["pdf"]) as document:
+                    document.set_metadata({"title": name})
+                    document.save(pdf)
                 info["pdf_name"] = name
                 info["pdf"] = str(pdf)
+                info["pdf_sha256"] = sp.sha256_file(pdf)
                 for key in ("actual_workbook", "candidate_workbook"):
                     target = Path(info[key]).with_name(name + ".xlsx")
-                    target.write_bytes(Path(original[key]).read_bytes())
+                    target.write_bytes(Path(original[key]).read_bytes() + name.encode())
                     info[key] = str(target)
+                    info[key + "_sha256"] = sp.sha256_file(target)
                 manifest["pdfs"].append(info)
             manifest = sp.seal_manifest(manifest)
             sp.json_save(output_dir / "校對工作階段.json", manifest)
@@ -424,7 +430,15 @@ class ManualActualGuiBatchOrchestrationTests(unittest.TestCase):
             source_alias = alias / output_dir.name
             def checked_stage(pdfs, destination, **kwargs):
                 self.assertNotEqual(Path(destination).resolve(strict=True), source_alias.resolve(strict=True))
-                return successful_stage(pdfs, destination, **kwargs)
+                result = successful_stage(pdfs, destination, **kwargs)
+                stage_path = Path(destination) / "校對工作階段.json"
+                staged = sp.json_load_strict(stage_path)
+                for info in staged["pdfs"]:
+                    artifact = Path(info["actual_workbook"])
+                    artifact.write_bytes(artifact.read_bytes() + info["pdf_name"].encode())
+                    info["actual_workbook_sha256"] = sp.sha256_file(artifact)
+                sp.json_save(stage_path, sp.seal_manifest(staged))
+                return result
             with patch.object(sp, "run_pipeline_pdfs", side_effect=checked_stage) as pipeline:
                 sp.refresh_actual_project(source_alias)
             pipeline.assert_called_once()

@@ -537,6 +537,19 @@ def refresh_derived_state(entry: Mapping[str, Any], *, preserve_confirmed: bool 
     return out
 
 
+def parse_identity_row_fallback(value: Any) -> bool:
+    """Read the producer's boolean and finite Excel representations."""
+    if value is None or value == "":
+        return False  # Existing absent-field projection; roster proof requires presence.
+    if type(value) is bool:
+        return value
+    if type(value) is int and value in (0, 1):
+        return bool(value)
+    if type(value) is str and value in ("N", "FALSE", "0", "Y", "TRUE", "1"):
+        return value in ("Y", "TRUE", "1")
+    raise LedgerError("未知 identity_row_fallback 表示；未建立 occurrence ledger")
+
+
 def build_occurrence_ledger(
     source_rows: Sequence[Mapping[str, Any]],
     classifications: Mapping[str, Mapping[str, Any]],
@@ -558,7 +571,7 @@ def build_occurrence_ledger(
             "state": state,
             "source_row_number": source.get("source_row_number") or source.get("來源列號") or "",
             "identity_confidence": source.get("identity_confidence") or "",
-            "identity_row_fallback": bool(source.get("identity_row_fallback")),
+            "identity_row_fallback": parse_identity_row_fallback(source.get("identity_row_fallback")),
             "identity_collision_base": source.get("identity_collision_base") or "",
             "pdf_sha256": source.get("pdf_sha256") or classified.get("pdf_sha256") or "",
             "pdf": source.get("pdf") or classified.get("pdf") or "",

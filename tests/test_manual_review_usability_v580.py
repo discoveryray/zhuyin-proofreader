@@ -28,9 +28,10 @@ REGRESSION = {"ok": True, "required": 1, "executed": 1, "passed": 1, "failed": 0
 
 def make_entry(n=1, *, actual="ㄎㄢˋ", expected=(), blocked="", excluded=False, pdf="fixture.pdf", pdf_sha="f" * 64,
                printed_page="1"):
-    source = {"pdf_sha256": pdf_sha, "pdf": str(pdf), "pdf_name": Path(pdf).name,
+    source = {"ledger_schema_version": ol.LEDGER_SCHEMA_VERSION,
+              "workbook_schema_version": ol.WORKBOOK_SCHEMA_VERSION, "pdf_sha256": pdf_sha, "pdf": str(pdf), "pdf_name": Path(pdf).name,
               "實體頁碼": 1, "課本頁": printed_page, "字元": "看", "穩定注音鍵": f"fixture-{n}",
-              "font": "fixture", "font_xref": 1, "glyph_id_字形索引": n,
+              "font": "fixture", "font_xref": 1, "glyph_id_字形索引": n, "注音元件ID": "",
               "x0": 72.0, "y0": float(72 + n * 45), "x1": 96.0, "y1": float(96 + n * 45),
               "source_row_number": n, "所在行": f"看一看窗外的風景（隔離操作樣本 {n}）", "局部詞境": "看一看"}
     ol.prepare_occurrence_rows(pdf_sha, [source])

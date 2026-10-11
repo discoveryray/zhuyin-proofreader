@@ -471,7 +471,11 @@ class StagedNavigationTests(unittest.TestCase):
         before = copy.deepcopy(self.app.db)
         self.app._review_action_cooldown_until = 0
         self.app._rendered_review_id = row["review_id"]
-        self.app.confirm_current_expected(row["review_id"])
+        with patch.object(gui.messagebox, "showwarning") as warning, patch.object(self.app, "save_event") as save:
+            self.app.confirm_current_expected(row["review_id"])
+        warning.assert_called_once()
+        save.assert_not_called()
+        self.assertEqual(self.app.current()["review_id"], row["review_id"])
         self.assertEqual(self.app.db, before)
 
 

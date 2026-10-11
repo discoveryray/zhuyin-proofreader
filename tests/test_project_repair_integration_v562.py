@@ -811,7 +811,7 @@ class ProjectRepairIntegrationV562Tests(unittest.TestCase):
         workbook.save(actual_path)
         workbook.close()
         with patch.object(proof, "decode", side_effect=AssertionError("integrity must reject before decode")) as decoder:
-            with self.assertRaisesRegex(ValueError, "輸出資產 hash 不符"):
+            with self.assertRaisesRegex(ValueError, "DATA_INTEGRITY_ERROR：workbook binding 遺失、SHA 不符或定位不唯一"):
                 proof.repair_project_state(output, runtime_root=self.runtime_root)
         self.assertEqual(decoder.call_count, 0)
 

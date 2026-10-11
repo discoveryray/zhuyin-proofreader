@@ -220,6 +220,9 @@ def test_actual_recovery_preserves_foreign_marker(actual_projects, tmp_path):
 @pytest.mark.parametrize("action", ["補建expected證據", "解決expected證據"])
 def test_resolved_adjudication_cannot_be_overwritten_by_old_expected(tmp_path, monkeypatch, action):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
+    # The synthetic project has no runtime expected fingerprint; retain real
+    # importer, receipt, identity and transaction checks, substitute publication.
+    monkeypatch.setattr(p, "_publish_portable_outputs", lambda *args: args[0] / "report.xlsx")
     a_pdf, b_pdf = tmp_path / "a.pdf", tmp_path / "b.pdf"
     pdf(a_pdf, title="a")
     pdf(b_pdf, title="b")
@@ -235,9 +238,17 @@ def test_resolved_adjudication_cannot_be_overwritten_by_old_expected(tmp_path, m
     ReviewSaveService(b).save_event(rid, {"action": "解決expected證據", "expected_set": ["ㄐㄩㄝˊ"],
                     "expected_evidence": "LOCAL_ADJUDICATION", "context_evidence": "角色/角@1"})
     before = {path: read(path) for path in watched(b)}
-    with pytest.raises(ValueError):
-        sp.import_gpt_decisions(b, old)
-    assert {path: read(path) for path in before} == before
+    local_event = sp.json_load_strict(b / "人工判定資料庫.json")["events"][rid]
+    prior_receipt = sp.json_load_strict(b / p.CONFLICT_FILE)
+    result = sp.import_gpt_decisions(b, old)
+    assert result.status["consistent_supplements"] == 1
+    assert sp.json_load_strict(b / "人工判定資料庫.json")["events"][rid] == local_event
+    current_receipt = sp.json_load_strict(b / p.CONFLICT_FILE)
+    assert current_receipt["conflicts"] == prior_receipt["conflicts"]
+    assert len(current_receipt["supplements"]) == 1
+    assert current_receipt["supplements"][0]["source_identity"]["source_excel_sha256"] == p._sha(old)
+    assert {path: read(path) for path in before if path.name != p.CONFLICT_FILE} == {
+        path: data for path, data in before.items() if path.name != p.CONFLICT_FILE}
 
     # An unrelated pending row remains importable without replacing the verdict.
     local_event = sp.json_load_strict(b / "人工判定資料庫.json")["events"][rid]

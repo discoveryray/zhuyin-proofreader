@@ -21,3 +21,6 @@
 
 # PR29 adoption evidence is bound to its original UTF-8 LF bytes.
 /docs/evidence/pr29_round5_user_adopted_contract.md text eol=lf
+
+# cmd.exe requires this local corrected launcher to retain CRLF on checkout.
+"/啟動_注音校對_修正版.bat" text eol=crlf

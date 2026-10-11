@@ -484,7 +484,8 @@ class SourceAndFingerprintTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             pdf = root / "book.pdf"; pdf.write_bytes(b"current pdf")
-            actual = root / "actual.xlsx"
+            actual = root / "01_實際注音" / "actual.xlsx"
+            actual.parent.mkdir()
             wb = Workbook(); ws = wb.active; ws.title = "v5.2中繼資料"; ws.append(["項目", "內容"])
             import hashlib
             pdf_hash = hashlib.sha256(b"current pdf").hexdigest()

@@ -26,6 +26,8 @@ from standalone_proofread import (
     build_gui_confirmation,
     build_reusable_rule,
     build_manual_expected_event,
+    can_confirm_current_actual_as_expected,
+    confirm_current_actual_unavailable_reason,
     committed_project_recovery,
     friendly_state,
     json_load,
@@ -224,6 +226,8 @@ LANE_ORDER = {lane: index for index, lane in enumerate(LANE_LABELS)}
 def review_lane(entry):
     if entry.get("state") in HARD_BLOCKING_STATES or entry.get("state") in EXCLUDED_STATES:
         return "other"
+    if entry.get("expected_business_conflict_pending") is True:
+        return "expected"
     if infer_expected_status(entry) in {"UNRESOLVED", "AMBIGUOUS", "CONFLICT"}:
         return "expected"
     if infer_actual_status(entry) in {"UNRESOLVED", "DECODE_ERROR"}:
@@ -232,17 +236,12 @@ def review_lane(entry):
 
 
 def can_confirm_current_expected(entry):
-    redecision = valid_manual_expected_decision(entry)
-    return (
-        (review_lane(entry) == "expected" and entry.get("state") in NON_TERMINAL_STATES
-         or redecision and entry.get("state") not in HARD_BLOCKING_STATES)
-        and infer_actual_status(entry) == "RESOLVED"
-        and bool(canonical_bopomofo(entry.get("actual")))
-        and bool(str(entry.get("actual_evidence") or "").strip())
-    )
+    return can_confirm_current_actual_as_expected(entry)
 
 
 def _waits_for_actual(item, checked):
+    if item.get("expected_business_conflict_pending") is True:
+        return False
     # A pending-comparison view only; it never changes a ledger state.
     return (str(item.get("occurrence_id") or "") in checked
             and infer_expected_status(item) == "RESOLVED"
@@ -270,7 +269,8 @@ def prepare_review_queue(manifest, ledger, previous, index, checked, deferred,
     }
     conflict_ids = set(actual_conflict_review_ids)
     pending = [item for item in ledger if (item.get("state") in NON_TERMINAL_STATES
-                                           or item.get("review_id") in conflict_ids)
+                                           or item.get("review_id") in conflict_ids
+                                           or item.get("expected_business_conflict_pending") is True)
                and not _waits_for_actual(item, checked)]
     live_keys = {(review_lane(item), str(item.get("occurrence_id") or "")) for item in pending}
     deferred = deferred & live_keys
@@ -323,10 +323,13 @@ def guarded_review_action(method):
     def run(self, *args, **kwargs):
         if (getattr(self, "_review_action_in_progress", False)
                 or self._save_busy()
-                or (getattr(self, "staging_summary", {}).get("staging_validation_pending")
-                    and method.__name__ != "resolve_expected")
                 or getattr(self, "_apply_in_progress", False)
                 or time.monotonic() < getattr(self, "_review_action_cooldown_until", 0)):
+            return
+        if (getattr(self, "staging_summary", {}).get("staging_validation_pending")
+                and method.__name__ != "resolve_expected"):
+            if method.__name__ == "confirm_current_expected":
+                messagebox.showwarning("目前注音尚不可確認", "actual 暫存仍在核對，請先等待核對完成", parent=self.root)
             return
         self._review_action_in_progress = True
         self._last_event_saved = self._last_actual_staged = False
@@ -356,6 +359,32 @@ class _ReviewDialog(tk.Toplevel):
                 value = self.__dict__.pop(name, None)
                 if isinstance(value, list):
                     value.clear()
+
+
+def expected_conflict_summary(entry):
+    lines = []
+    for conflict in entry.get("expected_business_conflicts", []):
+        source = conflict["source_event"]
+        recheck = conflict.get("dependency_recheck")
+        if recheck is not None:
+            lines.append(f"待重核原來源動作：{source['action']}（未套用過期確認）")
+            for difference in recheck["differences"]:
+                layer = "目標原始基線" if difference["comparison"] == "baseline" else "目標當前判定"
+                lines.append(f"{layer}／{difference['key']}：來源 {difference['source']!r}；目標 {difference['target']!r}")
+            lines.append("核對目前原頁後，可重新排除或輸入本筆應標；原匯入動作與雙方證據仍保留。")
+        basis = conflict.get("target_basis")
+        target = basis["expected_snapshot"] if basis else conflict["target_event"]
+        origin = basis["kind"] if basis else "review_event"
+        def readings(value):
+            return value if isinstance(value, str) else " | ".join(value or [])
+        lines.extend([
+            f"匯入來源應標：{readings(source.get('expected_set'))}；依據：{source.get('expected_evidence', '')}",
+            f"來源語境：{source.get('context_evidence', '')}",
+            f"原目標應標（{'程式規則' if origin == 'sealed_resolver_record' else '人工判定'}）："
+            f"{readings(target.get('expected_set'))}；依據：{target.get('expected_evidence', '')}",
+            f"目標語境：{target.get('context_evidence', '')}",
+        ])
+    return "\n".join(lines)
 
 
 class ExpectedDialog(_ReviewDialog):
@@ -402,6 +431,10 @@ class ExpectedDialog(_ReviewDialog):
             f"課本目前注音：{entry.get('actual', '')}"
         )
         WrappedLabel(summary, text=text, justify="left", anchor="w", wraplength=660).pack(fill="x", padx=10, pady=8)
+        if entry.get("expected_business_conflict_pending") is True:
+            WrappedLabel(summary, text="兩份證據均已保存，原目標判定仍保留。請依本位置獨立裁決：\n"
+                         + expected_conflict_summary(entry), justify="left", anchor="w",
+                         wraplength=660).pack(fill="x", padx=10, pady=8)
 
         form = tk.Frame(body)
         form.pack(fill="x", padx=16, pady=4)
@@ -870,12 +903,13 @@ def load_review_project(output_dir, progress):
     snapshot = service.load_resume_snapshot()
     manifest, db = copy.deepcopy(snapshot.manifest), copy.deepcopy(snapshot.db)
     progress("核對跨專案判定衝突")
-    from pdf_portability import validate_conflict_state, actual_excel_conflict_state
+    from pdf_portability import validate_conflict_state, actual_excel_conflict_state, expected_conflict_review_view
     conflicts = validate_conflict_state(output_dir, manifest, db)
     actual_conflicts = set(actual_excel_conflict_state(output_dir, manifest, db))
     progress("整理已核對的校對項目")
     summary = {"staging_validation_pending": True}
-    prepared = prepare_review_queue(manifest, copy.deepcopy(snapshot.ledger), [], 0, set(), set(),
+    review_view = expected_conflict_review_view(output_dir, manifest, db, snapshot.ledger)
+    prepared = prepare_review_queue(manifest, review_view, [], 0, set(), set(),
                                     actual_conflict_review_ids=actual_conflicts)
     progress("校對清單已備妥；actual 暫存將在背景核對")
     return dict(manifest=manifest, db=db, summary=summary, prepared=prepared,
@@ -991,6 +1025,7 @@ class ReviewApp:
         self.more_button.config(menu=self.more_menu)
         self.more_menu.add_command(label="此處不需校對…", command=self.exclude)
         self.more_menu.add_command(label="實際注音辨識有誤…", command=self.correct_actual)
+        self.more_menu.add_command(label="輸入其他應標注音…", command=self.resolve_expected)
         self.more_menu.add_command(label="撤銷本筆人工判定", command=self.clear)
         self.more_menu.add_command(label="返回待辦", command=self.return_to_pending)
         self.more_menu.add_command(label="另行建立上筆應標可重用規則…", command=self.create_reusable_expected_rule)
@@ -1223,9 +1258,10 @@ class ReviewApp:
 
     def _set_actionable_records_from_ledger(self, ledger, *, advance_from=None):
         if hasattr(self, "output_dir") and hasattr(self, "db"):
-            from pdf_portability import actual_excel_conflict_state
+            from pdf_portability import actual_excel_conflict_state, expected_conflict_review_view
             self.actual_excel_conflict_review_ids = set(actual_excel_conflict_state(
                 self.output_dir, self.manifest, self.db))
+            ledger = expected_conflict_review_view(self.output_dir, self.manifest, self.db, ledger)
         else:
             # Pure queue/navigation fixtures have no persisted project to read.
             self.actual_excel_conflict_review_ids = set()
@@ -1499,7 +1535,7 @@ class ReviewApp:
                 and getattr(self, "_rendered_review_id", None) != entry.get("review_id")):
             # A resize/render may fail while the save worker is running. Do not
             # restore the shortcut's old enabled state after a failed write.
-            self.primary.config(state="disabled")
+            getattr(self, "_confirm_current_expected_button", self.primary).config(state="disabled")
         if hasattr(self, "status") and hasattr(self, "_saved_status_text"):
             self.status.config(text=self._saved_status_text)
 
@@ -1531,6 +1567,9 @@ class ReviewApp:
                        and not getattr(self, "_focused_from_undo", False)),
                    "return_after_undo": focus_after_save,
                    "pending_staging": pending_staging,
+                   "confirm_current_actual_snapshot": copy.deepcopy(actual_confirmation_snapshot(entry))
+                   if isinstance(event, dict) and (event.get("manual_expected_decision") or {}).get("operation")
+                   == "CONFIRM_CURRENT_AS_EXPECTED" else None,
                    "started": started}
         self._save_request = request
         completed = queue.Queue(maxsize=1)
@@ -1547,11 +1586,18 @@ class ReviewApp:
                 result = service.save_event(request["review_id"], event,
                                             expected_manifest=manifest, expected_db=request["db"],
                                             progress=progress.put,
+                                            **({"confirm_current_actual_snapshot": request["confirm_current_actual_snapshot"]}
+                                               if isinstance(event, dict) and (event.get("manual_expected_decision") or {}).get("operation")
+                                               == "CONFIRM_CURRENT_AS_EXPECTED" else {}),
                                             **({"defer_staging_validation": True} if pending_staging else {}))
                 progress.put("判定已寫入，正在整理待辦")
                 queue_started = time.perf_counter()
+                from pdf_portability import expected_conflict_review_view
+                review_view = getattr(result, "review_view", None)
+                if review_view is None:
+                    review_view = expected_conflict_review_view(request["output_dir"], manifest, result.db, result.ledger)
                 prepared = prepare_review_queue(
-                    manifest, result.ledger, previous, index,
+                    manifest, review_view, previous, index,
                     set(result.staging_summary.get("staged_checked_occurrence_ids") or []),
                     deferred, character_order, advance_from=request["review_id"],
                     actual_conflict_review_ids=actual_conflict_review_ids)
@@ -1703,6 +1749,7 @@ class ReviewApp:
     @guarded_review_action
     def confirm_current_expected(self, review_id=None):
         if getattr(self, "staging_summary", {}).get("staging_validation_pending"):
+            messagebox.showwarning("目前注音尚不可確認", "actual 暫存仍在核對，請先等待核對完成", parent=self.root)
             return
         if time.monotonic() < getattr(self, "_shortcut_cooldown_until", 0):
             return
@@ -1710,10 +1757,16 @@ class ReviewApp:
         if not entry or (review_id is not None and entry.get("review_id") != review_id):
             return
         if not can_confirm_current_expected(entry):
+            messagebox.showwarning("目前注音尚不可確認", confirm_current_actual_unavailable_reason(entry), parent=self.root)
             return
         if str(entry.get("occurrence_id") or "") in self.staged_checked_occurrence_ids:
+            messagebox.showwarning("目前注音尚不可確認", "本筆 actual 已暫存但尚未套用，不能採用套用前的讀音", parent=self.root)
             return
         if getattr(self, "_rendered_review_id", None) != entry.get("review_id"):
+            messagebox.showwarning("目前注音尚不可確認", "目前項目的原頁尚未成功顯示，請重新核對來源", parent=self.root)
+            return
+        if getattr(self, "_resume_source_error", None):
+            messagebox.showwarning("目前注音尚不可確認", "來源尚未通過驗證：" + str(self._resume_source_error), parent=self.root)
             return
         try:
             event = build_manual_expected_event(entry, operation="CONFIRM_CURRENT_AS_EXPECTED")
@@ -2032,7 +2085,7 @@ class ReviewApp:
                 try:
                     self.manifest = json_load_strict(self.output_dir / "校對工作階段.json")
                     validate_manifest_integrity(self.manifest)
-                    validate_output_artifact_hashes(self.manifest)
+                    validate_output_artifact_hashes(self.manifest, output_dir=self.output_dir)
                     self.db = load_or_initialize_db(self.output_dir)
                     self.reload_records()
                     self.show()
@@ -2049,7 +2102,7 @@ class ReviewApp:
             try:
                 self.manifest = json_load_strict(self.output_dir / "校對工作階段.json")
                 validate_manifest_integrity(self.manifest)
-                validate_output_artifact_hashes(self.manifest)
+                validate_output_artifact_hashes(self.manifest, output_dir=self.output_dir)
                 self.db = load_or_initialize_db(self.output_dir)
                 self.index = old_index
                 self.reload_records()
@@ -2177,6 +2230,10 @@ class ReviewApp:
         elif state == "DIFFERENCE_PENDING_CONFIRMATION":
             primary_command = self.confirm_difference
             secondary_command = self.resolve_expected
+            if (can_confirm_current_expected(entry)
+                    and str(entry.get("occurrence_id") or "") not in self.staged_checked_occurrence_ids):
+                secondary_text = "確認目前注音就是應標注音"
+                secondary_command = lambda rid=entry["review_id"]: self.confirm_current_expected(rid)
         elif state == "REVIEW_PENDING":
             primary_command = self.resolve_expected
         if getattr(self, "_resume_source_error", None):
@@ -2187,6 +2244,8 @@ class ReviewApp:
             primary_command = self.resolve_expected if lane == "expected" else None
             secondary_text = secondary_command = None
         self.primary.config(text=primary_text, width=0, state="normal" if primary_command else "disabled", command=primary_command or (lambda: None))
+        self._confirm_current_expected_button = (
+            self.primary if primary_text == "確認目前注音就是應標注音" else self.secondary)
         buttons = [self.primary]
         if secondary_text and secondary_command:
             self.secondary.config(text=secondary_text, state="normal", command=secondary_command)
@@ -2269,7 +2328,7 @@ class ReviewApp:
             if self.image.load(entry):
                 self._rendered_review_id = entry.get("review_id")
             elif can_confirm_current_expected(entry):
-                self.primary.config(state="disabled")
+                getattr(self, "_confirm_current_expected_button", self.primary).config(state="disabled")
         finally:
             if getattr(self, "_save_in_progress", False):
                 self.last_save_timings["preview_render"] = time.perf_counter() - started
@@ -2278,7 +2337,7 @@ class ReviewApp:
         self._rendered_review_id = None
         entry = self.current()
         if entry and can_confirm_current_expected(entry):
-            self.primary.config(state="disabled")
+            getattr(self, "_confirm_current_expected_button", self.primary).config(state="disabled")
 
 
 def main():
