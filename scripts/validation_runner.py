@@ -290,6 +290,7 @@ def read_verified_manifest(path, *, history_policy=None, task_id=None):
     if not {"inventory", "raw_log", "started", "history_context"} <= artifacts.keys():
         raise ValueError("execution raw evidence absent")
     context = read_json(path.parent / artifacts["history_context"]["path"])
+    _validate_history_scope_artifacts(context, path.parent)
     if not context.get("task_id"):
         raise ValueError("original task history scope missing")
     if data["ci"]["event"] == "local":
@@ -958,6 +959,7 @@ def validate_history_context(root, candidate):
                 and value.get("current_attempt") == int(os.environ["GITHUB_RUN_ATTEMPT"])]
     if len(matching) != 1 or matching[0].get("candidate") != candidate:
         raise ValueError("missing or stale authoritative history scope index")
+    _validate_history_scope_artifacts(matching[0], root)
     current_ids = {value["execution_id"] for _, value in history(
         root, policy=POLICY, task_id=matching[0]["task_id"])}
     if not set(matching[0]["executions"]) <= current_ids:
@@ -1350,8 +1352,317 @@ def restore_pr43_original_push(destination, artifact, root):
             "short_raw_bytes": byte_refs, "materialized_members": sorted(selected)}
 
 
+RELEASE_HISTORY = {
+    "schema": "validation-release-continuation/1",
+    "repository": "discoveryray/zhuyin-proofreader",
+    "task_id": "release-v5-8-0-prep",
+    "baseline": "151b90f6f5f2a352e828fa6f73402dfb8c4f5617",
+    "main_baseline": "98a5dad4ac0212176a0220a8a9c9be87e6bd03e4",
+    "source_ref": "tmp/pr-review-automation/release-v5.8.0-prep/original-request.md",
+    "archive_sha256": "157b8ea5cfc0fdd22ef3bfcadd8296ecc49cfc089096d37520f73e0059da9de8",
+    "original_pr": 50,
+    "branch": "codex/release-v5.8.0-prep",
+    "original_head": "aab1eb38e3c4dab4d9bb4782368f9665a372f6e1",
+    "original_merge": "9c49fd2533b3798fd9acf2e8c7af419a6383d014",
+}
+
+
+def release_history_block(corrective_pr="event.pull_request.number"):
+    """Render only the adopted release chain, never an arbitrary task adapter."""
+    if not (corrective_pr == "event.pull_request.number"
+            or type(corrective_pr) is int and corrective_pr > RELEASE_HISTORY["original_pr"]):
+        raise ValueError("invalid release corrective PR declaration")
+    return "<!-- validation-release-continuation\n" + json.dumps(
+        {**RELEASE_HISTORY, "corrective_pr": corrective_pr}, sort_keys=True) + "\n-->"
+
+
+def _release_marker(body):
+    blocks = re.findall(r"<!-- validation-release-continuation\s+(.*?)\s*-->", body or "", re.DOTALL)
+    if len(blocks) != 1 or len(blocks[0].encode()) > HANDOFF_LIMIT:
+        raise ValueError("exactly one bounded release continuation is required")
+    value = parse_json(blocks[0])
+    if (not isinstance(value, dict) or set(value) != set(RELEASE_HISTORY) | {"corrective_pr"}
+            or any(type(value[k]) is not type(v) or value[k] != v for k, v in RELEASE_HISTORY.items())):
+        raise ValueError("release continuation source identity differs")
+    return value
+
+
+def _release_handoff(body):
+    blocks = re.findall(r"<!-- validation-local-history\s+(.*?)\s*-->", body or "", re.DOTALL)
+    if len(blocks) != 1 or len(blocks[0].encode()) > HANDOFF_LIMIT:
+        raise ValueError("release original handoff missing or ambiguous")
+    value = parse_json(blocks[0])
+    if (not isinstance(value, dict) or value.get("schema") != HANDOFF_SCHEMA
+            or any(value.get(k) != RELEASE_HISTORY[k] for k in ("task_id", "source_ref", "archive_sha256"))):
+        raise ValueError("release sealed handoff binding differs")
+    return value
+
+
+def _pr_identity(pr, number, repository, branch=None):
+    if (not isinstance(pr, dict) or pr.get("number") != number or type(number) is not int or number <= 0
+            or any(pr.get(side, {}).get("repo", {}).get("full_name") != repository for side in ("head", "base"))
+            or any(not re.fullmatch(r"[0-9a-f]{40}", pr.get(side, {}).get("sha", ""))
+                   or pr[side]["sha"] == "0" * 40 or not pr[side].get("ref") for side in ("head", "base"))
+            or branch is not None and pr["head"]["ref"] != branch):
+        raise ValueError("PR metadata identity/repository/branch differs")
+
+
+def _git_commit(api, repository, identity, parents=None):
+    value = api(f"repos/{repository}/git/commits/{identity}")
+    ordered = [item.get("sha") for item in value.get("parents", [])]
+    if (value.get("sha") != identity or not re.fullmatch(r"[0-9a-f]{40}", value.get("tree", {}).get("sha", ""))
+            or any(not re.fullmatch(r"[0-9a-f]{40}", item or "") for item in ordered)
+            or parents is not None and ordered != parents):
+        raise ValueError("Git commit identity/ordered parents differ")
+    return value
+
+
+def _release_feature_chain(api, repository, head, anchor, anchor_tree):
+    """Prove at most sixteen successive single-parent release commits."""
+    nodes, seen = [], set()
+    identity = head
+    for _ in range(17):  # Sixteen descendants plus the immutable original head.
+        if identity in seen:
+            raise ValueError("release commit chain contains a cycle")
+        seen.add(identity)
+        node = _git_commit(api, repository, identity)
+        if node["tree"]["sha"] == "0" * 40:
+            raise ValueError("release commit chain has invalid tree identity")
+        if identity == anchor:
+            if not nodes or node["tree"]["sha"] != anchor_tree:
+                raise ValueError("release commit chain original source differs")
+            return [*nodes, node]
+        parents = [item["sha"] for item in node["parents"]]
+        if len(parents) != 1 or parents[0] == "0" * 40:
+            raise ValueError("release commit chain must have a single parent")
+        nodes.append(node)
+        identity = parents[0]
+    raise ValueError("release commit chain exceeds its finite bound")
+
+
+def release_history_scope(event, candidate, handoff, api, repository):
+    """The sole adopted PR50 -> corrective PR -> main release chain."""
+    pr = event["pull_request"]
+    selected = ("<!-- validation-release-continuation" in (pr.get("body") or "")
+                or handoff.get("task_id") == RELEASE_HISTORY["task_id"])
+    if not selected:
+        return None
+    value = _release_marker(pr.get("body"))
+    if repository != RELEASE_HISTORY["repository"]:
+        raise ValueError("release continuation repository differs")
+    _pr_identity(pr, pr["number"], repository)
+    current_handoff = _release_handoff(pr.get("body"))
+    if current_handoff != handoff:
+        raise ValueError("release imported/original handoff differs")
+    original = api(f"repos/{repository}/pulls/{value['original_pr']}")
+    _pr_identity(original, value["original_pr"], repository, value["branch"])
+    if (original.get("merged") is not True or original.get("state") != "closed"
+            or original.get("merge_commit_sha") != value["original_merge"]
+            or original["head"]["sha"] != value["original_head"]
+            or original["base"]["sha"] != value["baseline"] or original["base"]["ref"] != "develop"
+            or _release_handoff(original.get("body")) != handoff):
+        raise ValueError("original PR50 sealed source/merge differs")
+    original_merge = _git_commit(api, repository, value["original_merge"], [value["baseline"], value["original_head"]])
+    if pr["head"]["ref"] == value["branch"]:
+        if (value["corrective_pr"] != "event.pull_request.number"
+                or pr["number"] <= value["original_pr"] or pr["base"]["ref"] != "develop"
+                or pr["base"]["sha"] != value["original_merge"]):
+            raise ValueError("release corrective PR declaration/base differs")
+        chain = _release_feature_chain(api, repository, pr["head"]["sha"], value["original_head"], original_merge["tree"]["sha"])
+        feature = chain[0]
+        if feature["tree"]["sha"] != candidate["tree"]:
+            raise ValueError("release corrective integration tree differs")
+        admitted = {pr["number"], value["original_pr"]}
+    elif pr["head"]["ref"] == "develop":
+        number = value["corrective_pr"]
+        if (type(number) is not int or number <= value["original_pr"] or number == pr["number"]
+                or pr["base"]["ref"] != "main" or pr["base"]["sha"] != value["main_baseline"]):
+            raise ValueError("release main/corrective PR scope differs")
+        corrective = api(f"repos/{repository}/pulls/{number}")
+        _pr_identity(corrective, number, repository, value["branch"])
+        original_marker = _release_marker(corrective.get("body"))
+        if (original_marker["corrective_pr"] != "event.pull_request.number"
+                or _release_handoff(corrective.get("body")) != handoff
+                or corrective.get("merged") is not True or corrective.get("state") != "closed"
+                or corrective.get("merge_commit_sha") != pr["head"]["sha"]
+                or corrective["base"]["sha"] != value["original_merge"] or corrective["base"]["ref"] != "develop"):
+            raise ValueError("release corrective predecessor source/merge differs")
+        chain = _release_feature_chain(api, repository, corrective["head"]["sha"], value["original_head"], original_merge["tree"]["sha"])
+        _git_commit(api, repository, pr["head"]["sha"], [value["original_merge"], corrective["head"]["sha"]])
+        admitted = {pr["number"], number, value["original_pr"]}
+    else:
+        raise ValueError("release continuation branch differs")
+    return {"reference": value, "admitted_prs": sorted(admitted), "source_branch": value["branch"], "feature_chain": chain}
+
+
+def checkout_history_proof(job_log, system_log, repository):
+    """Bind original checkout inputs/ref, fetch, checkout and final Git SHA."""
+    text = job_log.decode("utf-8-sig")
+    system = system_log.decode("utf-8-sig")
+    refs = re.findall(r"Job defined at: " + re.escape(repository)
+                      + r"/\.github/workflows/ci\.yml@refs/pull/([1-9][0-9]*)/merge(?:\r?\n|$)", system)
+    if len(refs) != 1:
+        raise ValueError("workflow job original PR ref missing or ambiguous")
+    starts = list(re.finditer(r"(?m)^\S+ ##\[group\]Run actions/checkout@[^\r\n]+\r?$", text))
+    if len(starts) != 1:
+        raise ValueError("original checkout action missing or ambiguous")
+    # Retain the full action step; nested log groups are not action boundaries.
+    tail = text[starts[0].start():]
+    end = re.search(r"(?m)^\S+ ##\[group\]Run (?!actions/checkout@)", tail)
+    checkout = tail[:end.start()] if end else tail
+    lines = [re.sub(r"^\S+ ", "", line) for line in checkout.splitlines()]
+    if sum(line.strip() == "repository: " + repository for line in lines) != 1:
+        raise ValueError("checkout input repository differs")
+    fetches = [line for line in lines if line.startswith("[command]") and " fetch " in line]
+    targets = [pair for line in fetches for pair in re.findall(
+        r"\+([0-9a-f]{40}):refs/remotes/pull/([1-9][0-9]*)/merge(?:\s|$)", line)]
+    if len(targets) != 1 or targets[0][1] != refs[0]:
+        raise ValueError("checkout fetched PR merge identity differs")
+    identity, number = targets[0]
+    checkouts = [line for line in lines if line.startswith("[command]") and " checkout " in line]
+    if len(checkouts) != 1 or not checkouts[0].endswith("refs/remotes/pull/" + number + "/merge"):
+        raise ValueError("checkout command PR ref differs")
+    logs = [i for i, line in enumerate(lines) if line.startswith("[command]") and line.endswith(" log -1 --format=%H")]
+    if len(logs) != 1 or logs[0] + 1 >= len(lines) or lines[logs[0] + 1] != identity:
+        raise ValueError("checkout final Git SHA differs")
+    heads = [match.groups() for line in lines if (match := re.fullmatch(
+        r"HEAD is now at ([0-9a-f]{7,40}) Merge ([0-9a-f]{40}) into ([0-9a-f]{40})", line))]
+    if len(heads) != 1 or not identity.startswith(heads[0][0]):
+        raise ValueError("checkout actual HEAD merge record differs")
+    return {"pr": int(number), "checkout_sha": identity,
+            "ordered_parents": [heads[0][2], heads[0][1]],
+            "checkout_step_sha256": hashlib.sha256(checkout.encode()).hexdigest()}
+
+
+def _validate_history_scope_artifacts(context, folder):
+    """Resolve original relative proof refs after nested bundle relocation."""
+    if "scope_artifacts" not in context:
+        return  # Immutable older contexts retain their original contract.
+    refs = context["scope_artifacts"]
+    if not isinstance(refs, list) or not refs:
+        raise ValueError("history scope raw originals missing")
+    for entry in refs:
+        if not isinstance(entry, dict) or set(entry) != {"path", "sha256"}:
+            raise ValueError("invalid history scope raw reference")
+        parts = PurePosixPath(entry["path"]).parts
+        if (len(parts) != 2 or not re.fullmatch(r"history-scope-[0-9a-f]{32}", parts[0])
+                or not re.fullmatch(r"[a-z0-9-]+\.(?:json|log)|pr-artifact\.zip", parts[1])
+                or not re.fullmatch(r"[0-9a-f]{64}", entry["sha256"])):
+            raise ValueError("unsafe history scope raw reference")
+        # Every scope directory has a unique producer-generated UUID. Original
+        # nested bundles can move together without storing an absolute CI path.
+        matches = [parent / entry["path"] for parent in (Path(folder), *Path(folder).parents)
+                   if (parent / entry["path"]).is_file()]
+        if not matches or any(digest(path) != entry["sha256"] for path in matches):
+            raise ValueError("history attribution raw original missing or corrupt")
+
+
+def _empty_link_origin(run, attempt, api, raw, repository, destination, *, live=None):
+    metadata = api(f"repos/{repository}/actions/runs/{run['id']}/attempts/{attempt}")
+    if (metadata.get("id") != run["id"] or metadata.get("run_attempt") != attempt
+            or metadata.get("head_sha") != run["head_sha"] or metadata.get("head_branch") != run["head_branch"]
+            or metadata.get("event") != "pull_request"
+            or metadata.get("head_repository", {}).get("full_name") != repository):
+        raise ValueError("run/attempt original metadata differs")
+    jobs, page = [], 1
+    while True:
+        value = api(f"repos/{repository}/actions/runs/{run['id']}/attempts/{attempt}/jobs?per_page=100&page={page}")
+        batch = value["jobs"]
+        jobs.extend(batch)
+        if len(jobs) >= value["total_count"]:
+            if len(jobs) != value["total_count"]:
+                raise ValueError("workflow job pagination count differs")
+            break
+        if not batch:
+            raise ValueError("workflow job pagination is incomplete")
+        page += 1
+    if not jobs or len({job["id"] for job in jobs}) != len(jobs):
+        raise ValueError("workflow job identity missing or duplicate")
+    checkout_jobs = []
+    for job in jobs:
+        if (job.get("run_id") != run["id"] or job.get("run_attempt") != attempt
+                or job.get("head_sha") != run["head_sha"] or job.get("head_branch") != run["head_branch"]):
+            raise ValueError("job run/attempt/source identity differs")
+        steps = [step for step in job.get("steps", []) if step.get("name") in {"Check out repository", "Checkout"}]
+        if steps:
+            if len(steps) != 1 or steps[0].get("conclusion") != "success":
+                raise ValueError("job checkout step unfinished or ambiguous")
+            checkout_jobs.append(job)
+    if not checkout_jobs:
+        raise ValueError("original checkout job absent")
+    if live is not None:
+        # The current job's complete log is not downloadable while it runs.
+        # Preserve the actual current checkout and immutable event instead;
+        # cross-check attempt/jobs, PR metadata and canonical Git parents.
+        event, candidate = live
+        pr = event["pull_request"]
+        actual = api(f"repos/{repository}/pulls/{pr['number']}")
+        _pr_identity(actual, pr["number"], repository, run["head_branch"])
+        if (any(actual[side]["sha"] != pr[side]["sha"] or actual[side]["ref"] != pr[side]["ref"]
+                for side in ("head", "base"))
+                or run["head_sha"] != pr["head"]["sha"]
+                or candidate["parents"] != [pr["base"]["sha"], pr["head"]["sha"]]):
+            raise ValueError("current PR metadata/actual checkout differs")
+        for marker in ("validation-local-history", "validation-release-continuation"):
+            def blocks(body):
+                return [parse_json(item) for item in re.findall(
+                    r"<!-- " + marker + r"\s+(.*?)\s*-->", body or "", re.DOTALL)]
+            if blocks(actual.get("body")) != blocks(pr.get("body")):
+                raise ValueError("current PR immutable history source binding differs")
+        commit = _git_commit(api, repository, candidate["head"], candidate["parents"])
+        if commit["tree"]["sha"] != candidate["tree"]:
+            raise ValueError("current checkout Git tree differs")
+        links = metadata.get("pull_requests")
+        if (not isinstance(links, list) or links and (len(links) != 1 or links[0].get("number") != pr["number"])):
+            raise ValueError("current attempt PR links conflict")
+        return pr["number"], {"method": "current-live-checkout", "event": event, "candidate": candidate,
+                               "jobs": [job["id"] for job in checkout_jobs]}
+    payload = raw(f"repos/{repository}/actions/runs/{run['id']}/attempts/{attempt}/logs")
+    with (destination / "pr-artifact.zip").open("xb") as handle:
+        handle.write(payload)
+    proofs = []
+    try:
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            names = archive.namelist()
+            if len(names) != len(set(names)) or archive.testzip() is not None:
+                raise ValueError("duplicate or corrupt workflow log archive")
+            for job in jobs:
+                if (job.get("run_id") != run["id"] or job.get("run_attempt") != attempt
+                        or job.get("head_sha") != run["head_sha"] or job.get("head_branch") != run["head_branch"]):
+                    raise ValueError("job run/attempt/source identity differs")
+                steps = [step for step in job.get("steps", []) if step.get("name") in {"Check out repository", "Checkout"}]
+                if not steps:
+                    continue  # A summary job has no checkout and cannot supply proof.
+                if len(steps) != 1 or steps[0].get("conclusion") != "success":
+                    raise ValueError("job checkout step unfinished or ambiguous")
+                matches = [name for name in names if re.fullmatch(r"[0-9]+_" + re.escape(job["name"]) + r"\.txt", name)]
+                system_name = job["name"] + "/system.txt"
+                if len(matches) != 1 or system_name not in names:
+                    raise ValueError("original checkout job logs unavailable")
+                proof = checkout_history_proof(archive.read(matches[0]), archive.read(system_name), repository)
+                commit = _git_commit(api, repository, proof["checkout_sha"])
+                parents = [item["sha"] for item in commit["parents"]]
+                if len(parents) != 2 or parents[1] != run["head_sha"] or parents != proof["ordered_parents"]:
+                    raise ValueError("original checkout ordered parents differ from run head")
+                proof.update(job_id=job["id"], run_id=run["id"], attempt=attempt, log_member=matches[0],
+                             system_member=system_name, ordered_parents=parents, tree=commit["tree"]["sha"])
+                proofs.append(proof)
+    except zipfile.BadZipFile as error:
+        raise ValueError("corrupt workflow log archive") from error
+    if not proofs or len({proof["pr"] for proof in proofs}) != 1 or len({proof["checkout_sha"] for proof in proofs}) != 1:
+        raise ValueError("workflow checkout PR attribution unknown or conflicting")
+    number = proofs[0]["pr"]
+    pr = api(f"repos/{repository}/pulls/{number}")
+    _pr_identity(pr, number, repository, run["head_branch"])
+    links = metadata.get("pull_requests")
+    if (not isinstance(links, list) or links and
+            (len(links) != 1 or links[0].get("number") != number)):
+        raise ValueError("attempt PR links conflict with original checkout")
+    return number, {"method": "original-run-attempt-checkout", "jobs": proofs}
+
+
 def restore_history(root):
-    """Retrieve every prior exact-head PR execution; missing history fails closed."""
+    """Retrieve every applicable PR attempt; branch alone never assigns a task."""
     root = Path(root).resolve()
     root.mkdir(parents=True, exist_ok=True)
     event = read_json(os.environ["GITHUB_EVENT_PATH"])
@@ -1361,9 +1672,38 @@ def restore_history(root):
     repository = os.environ["GITHUB_REPOSITORY"]
     current_run = int(os.environ["GITHUB_RUN_ID"])
     current_attempt = int(os.environ["GITHUB_RUN_ATTEMPT"])
+    scope_folders = []
+
+    def scope_folder():
+        folder = root / ("history-scope-" + uuid.uuid4().hex)
+        folder.mkdir()
+        scope_folders.append(folder)
+        return folder
+
+    api_folder = scope_folder()
+    api_sequence = 0
 
     def api(endpoint):
-        return json.loads(subprocess.check_output(["gh", "api", endpoint], text=True, encoding="utf-8"))
+        nonlocal api_sequence
+        api_sequence += 1
+        stem = "api-" + str(api_sequence).zfill(6)
+        write_json(api_folder / (stem + "-request.json"), {"endpoint": endpoint})
+        try:
+            response = subprocess.check_output(["gh", "api", endpoint], text=True, encoding="utf-8", stderr=subprocess.PIPE)
+        except subprocess.CalledProcessError as error:
+            (api_folder / (stem + "-error.log")).write_text(str(error.stderr or error.output or error), encoding="utf-8")
+            raise
+        (api_folder / (stem + ".json")).write_text(response, encoding="utf-8")
+        return parse_json(response)
+
+    def raw(endpoint):
+        stem = "raw-request-" + uuid.uuid4().hex
+        write_json(api_folder / (stem + ".json"), {"endpoint": endpoint})
+        try:
+            return subprocess.check_output(["gh", "api", endpoint], stderr=subprocess.PIPE)
+        except subprocess.CalledProcessError as error:
+            (api_folder / (stem + "-error.log")).write_text(str(error.stderr or error.output or error), encoding="utf-8")
+            raise
 
     def branch_runs(source_branch):
         values = []
@@ -1373,6 +1713,8 @@ def restore_history(root):
             batch = result["workflow_runs"]
             values.extend(batch)
             if len(values) >= result["total_count"]:
+                if len(values) != result["total_count"]:
+                    raise ValueError("workflow run pagination count differs")
                 break
             if not batch:
                 raise ValueError("workflow run pagination is incomplete")
@@ -1393,6 +1735,13 @@ def restore_history(root):
     candidate = snapshot()
     if candidate["parents"] != [event["pull_request"]["base"]["sha"], head]:
         raise ValueError("checkout is not the current PR integration commit")
+    links = current[0].get("pull_requests")
+    if (not isinstance(links, list) or links and
+            (len(links) != 1 or type(links[0].get("number")) is not int or links[0]["number"] != pr_number)):
+        raise ValueError("current run PR links conflict")
+    current_number, current_proof = _empty_link_origin(
+        current[0], current_attempt, api, raw, repository, api_folder, live=(event, candidate))
+    write_json(api_folder / "current-checkout-proof.json", current_proof)
     continuation = pr43_postmerge_handoff(event, candidate, api, repository)
     history_origins = {}
     if continuation is not None:
@@ -1431,31 +1780,81 @@ def restore_history(root):
             raise ValueError("original PR43 ledger baseline/repository differs")
     else:
         handoff = import_local_handoff(event["pull_request"].get("body"), root)
+    release_scope = release_history_scope(event, candidate, handoff, api, repository)
+    admitted_prs = {pr_number, 43} if continuation is not None else {pr_number}
+    if release_scope is not None:
+        admitted_prs.update(release_scope["admitted_prs"])
+        ledger = read_local_ledger(root / "local-history", RELEASE_HISTORY["task_id"])
+        if ledger["baseline"] != RELEASE_HISTORY["baseline"] or ledger["repository"] != repository:
+            raise ValueError("release original ledger baseline/repository differs")
+        if release_scope["source_branch"] != branch:
+            extra = branch_runs(release_scope["source_branch"])
+            if {row["id"] for row in runs} & {row["id"] for row in extra}:
+                raise ValueError("duplicate release cross-PR workflow run")
+            runs = [*runs, *extra]
     # Only this exact PR/task caller may opt into the retained False record.
     history_policy = (POLICY if repository == REPOSITORY
                       and branch == "codex/cff-batch-fingerprint" and pr_number == 42
                       and handoff["task_id"] == CFF_HISTORY_TASK else None)
     retrieved = []
+    attributions = [{"run_id": current_run, "attempt": current_attempt, "pr": current_number,
+                     "disposition": "current", "proof": current_proof}]
     for run in runs:
         if run.get("head_repository", {}).get("full_name") != repository:
-            continue
-        source_pr = history_origins[run["id"]]["pr"] if continuation is not None else pr_number
-        if run.get("pull_requests") and not any(pr["number"] == source_pr for pr in run["pull_requests"]):
-            continue
+            raise ValueError("searched workflow run repository differs")
+        if (run.get("event") != "pull_request" and not (continuation is not None and run["id"] == PR43_ORIGINAL_PUSH_RUN)
+                or type(run.get("run_attempt")) is not int or run["run_attempt"] < 1):
+            raise ValueError("searched workflow run event/attempt differs")
+        links = run.get("pull_requests")
+        if (not isinstance(links, list) or links and
+                (len(links) != 1 or not isinstance(links[0], dict)
+                 or type(links[0].get("number")) is not int or links[0]["number"] <= 0)):
+            raise ValueError("workflow run PR links missing, multiple or invalid")
         if run["id"] == current_run and current_attempt == 1:
+            continue
+        attempts = range(1, current_attempt) if run["id"] == current_run else range(1, run["run_attempt"] + 1)
+        applicable = []
+        source_numbers = set()
+        for attempt in attempts:
+            folder = scope_folder()
+            if continuation is not None and run["id"] == PR43_ORIGINAL_PUSH_RUN:
+                source_pr, proof = 43, {"method": "existing-pinned-pr43-merge-push"}
+            elif links:
+                source_pr = links[0]["number"]
+                metadata = api(f"repos/{repository}/pulls/{source_pr}")
+                _pr_identity(metadata, source_pr, repository, run.get("head_branch"))
+                proof = {"method": "explicit-unique-run-pr-link", "pr": source_pr}
+            else:
+                source_pr, proof = _empty_link_origin(run, attempt, api, raw, repository, folder)
+            source_numbers.add(source_pr)
+            disposition = "applicable" if source_pr in admitted_prs else "excluded-other-task"
+            entry = {"run_id": run["id"], "attempt": attempt, "pr": source_pr,
+                     "disposition": disposition, "proof": proof}
+            if disposition == "excluded-other-task":
+                entry["reason"] = "uniquely proven different PR, outside this task's adopted continuation chain"
+            write_json(folder / "attribution.json", entry)
+            attributions.append(entry)
+            if disposition == "applicable":
+                applicable.append(attempt)
+        if len(source_numbers) != 1:
+            raise ValueError("workflow attempts have conflicting PR attribution")
+        if not applicable:
             continue
         if run["id"] != current_run and run["status"] != "completed":
             raise ValueError("another candidate run is unfinished; history not final")
-        attempts = range(1, current_attempt) if run["id"] == current_run else range(1, run["run_attempt"] + 1)
         artifacts = []
         artifact_page = 1
         while True:
             page_data = api(f"repos/{repository}/actions/runs/{run['id']}/artifacts?per_page=100&page={artifact_page}")
             artifacts.extend(page_data["artifacts"])
             if len(artifacts) >= page_data["total_count"]:
+                if len(artifacts) != page_data["total_count"]:
+                    raise ValueError("artifact pagination count differs")
                 break
+            if not page_data["artifacts"]:
+                raise ValueError("artifact pagination is incomplete")
             artifact_page += 1
-        for attempt in attempts:
+        for attempt in applicable:
             name = f"validation-evidence-{run['id']}-{attempt}"
             matches = [artifact for artifact in artifacts if artifact["name"] == name and not artifact["expired"]]
             if len(matches) != 1:
@@ -1468,6 +1867,9 @@ def restore_history(root):
             else:
                 subprocess.run(["gh", "run", "download", str(run["id"]), "--repo", repository,
                                 "--name", name, "--dir", str(destination)], check=True)
+            manifests = list(destination.rglob("manifest.json"))
+            if not manifests:
+                raise ValueError("prior attempt bundle has no complete execution evidence")
             if continuation is not None and run["id"] == PR43_ORIGINAL_FULL_RUN:
                 original_coverage = destination / "coverage.json"
                 if not original_coverage.is_file() or digest(original_coverage) != PR43_ORIGINAL_COVERAGE_SHA256:
@@ -1475,7 +1877,7 @@ def restore_history(root):
                 history_origins[run["id"]]["coverage"] = artifact_entry(original_coverage, root)
             # Prior bundles already contain earlier history. Keep one original
             # copy per execution, rejecting inconsistent duplicates.
-            for manifest in destination.rglob("manifest.json"):
+            for manifest in manifests:
                 value = read_verified_manifest(manifest, history_policy=history_policy,
                                                task_id=handoff["task_id"])
                 known = {row["execution_id"]: row for row in retrieved}
@@ -1488,6 +1890,11 @@ def restore_history(root):
     context = {"head": head, "current_run": current_run, "current_attempt": current_attempt,
                 "runs": [{"id": run["id"], "attempt": run["run_attempt"]} for run in runs],
                 "executions": sorted(seen), "candidate": candidate, "raw_runs": runs, "task_id": handoff["task_id"], "local_handoff_sha256": handoff["archive_sha256"]}
+    context["attributions"] = attributions
+    context["scope_artifacts"] = [artifact_entry(path, root) for folder in scope_folders
+                                  for path in sorted(folder.iterdir()) if path.is_file()]
+    if release_scope is not None:
+        context["release_continuation"] = release_scope
     if continuation is not None:
         context["postmerge_continuation"] = {"reference": reference,
             "original_history_block_sha256": reference["original_history_block_sha256"],
