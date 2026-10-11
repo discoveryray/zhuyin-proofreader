@@ -196,6 +196,10 @@ class HistoryFixture(unittest.TestCase):
                 scope = context
                 value["candidate"] = self.candidate
                 value.update(started_at="2026-10-11T00:00:00+00:00", finished_at="2026-10-11T00:00:01+00:00")
+            else:
+                sha = self.origins[identity, attempt][1]
+                original = self.commits[sha]
+                value["candidate"] = {"head": sha, "parents": [item["sha"] for item in original["parents"]], "tree": original["tree"]["sha"]}
             write(manifest.parent / "history-context.json", scope)
             value["execution_id"] = folder.name
             value["command"][3] = str(folder)
@@ -230,12 +234,14 @@ class HistoryFixture(unittest.TestCase):
         return root, runner.read_json(next(root.glob("history-index-*.json")))
 
 
-def historical_api_fixture(endpoint, rows, pr, repository):
+def historical_api_fixture(endpoint, rows, pr, repository, candidates=None):
     """Full synthetic original-checkout API boundary for retained adapters."""
     number = pr["number"]
     for row in rows:
         for attempt in range(1, row["run_attempt"] + 1):
-            sha = format(row["id"] * 100 + attempt, "040x")
+            candidate = (candidates or {}).get((row["id"], attempt), {
+                "head": format(row["id"] * 100 + attempt, "040x"), "parents": [pr["base"]["sha"], row["head_sha"]], "tree": "8" * 40})
+            sha = candidate["head"]
             base = f"repos/{repository}/actions/runs/{row['id']}/attempts/{attempt}"
             if endpoint == base:
                 return {**row, "run_attempt": attempt}
@@ -244,7 +250,7 @@ def historical_api_fixture(endpoint, rows, pr, repository):
                     "name": "Proof " + str(index), "run_id": row["id"], "run_attempt": attempt,
                     "head_sha": row["head_sha"], "head_branch": row["head_branch"],
                     "steps": [{"name": "Check out repository", "conclusion": "success"}]} for index in (0, 1)]}
-            commit = HistoryFixture.commit(sha, [pr["base"]["sha"], row["head_sha"]], "8" * 40)
+            commit = HistoryFixture.commit(sha, candidate["parents"], candidate["tree"])
             if endpoint == f"repos/{repository}/git/commits/{sha}":
                 return commit
             if endpoint == base + "/logs":
@@ -256,7 +262,48 @@ def historical_api_fixture(endpoint, rows, pr, repository):
     return None
 
 
+def own_core_fixture(destination, identity, attempt, candidate, task):
+    """Add a mutable complete own fixture; never change pinned nested bytes."""
+    container = destination / ("model-" + str(identity) + "-" + str(attempt));container.mkdir()
+    fixtures.NoWindowEvidenceTests().new_bundle(container)
+    folder = destination / ("own-" + str(identity) + "-" + str(attempt))
+    (container / "core").rename(folder)
+    assert container.resolve().is_relative_to(destination.resolve())
+    shutil.rmtree(container)  # only the isolated raw GUI fixture, no Tk execution
+    value = runner.read_json(folder / "manifest.json")
+    context = runner.read_json(folder / "history-context.json");context["task_id"] = task
+    write(folder / "history-context.json", context)
+    value.update(execution_id=folder.name, candidate=candidate, ci={"run_id": identity, "attempt": attempt, "job": "grouped", "event": "pull_request"})
+    value["command"][3] = str(folder)
+    value["retry_key"] = runner.canonical_digest({"task": task, "tree": candidate["tree"]})
+    (folder / "junit.xml").write_text((folder / "junit.xml").read_text().replace('value="core"', 'value="' + folder.name + '"'))
+    write(folder / "started.json", value)
+    value["artifacts"] = {key: ref(folder / entry["path"]) for key, entry in value["artifacts"].items()}
+    write(folder / "manifest.json", value)
+    runner.read_verified_manifest(folder / "manifest.json")
+
+
 class HistoryAttributionTests(HistoryFixture):
+    def test_nonempty_mutable_links_are_observations_not_original_ownership(self):
+        row = self.add_run(number=7, links=[{"number": self.current_pr, "head": self.prs[self.current_pr]["head"]}])
+        root, context = self.restore("drift-other")
+        original = context["attributions"][1]
+        self.assertEqual((original["pr"], original["disposition"]), (7, "excluded-other-task"))
+        self.assertTrue(original["proof"]["association_drift"])
+        self.assertEqual(original["proof"]["run_links_observation"], row["pull_requests"])
+        self.assertEqual(self.downloads, [])
+        self.assertFalse(any("7001/artifacts" in path for path in self.calls))
+        runner._validate_history_scope_artifacts(context, root)
+        row["pull_requests"] = [{"number": 7}]
+        self.origins[7001, 1] = self.current_pr, self.origins[7001, 1][1]
+        root, context = self.restore("drift-same")
+        self.assertEqual(context["attributions"][1]["pr"], self.current_pr)
+        self.assertEqual(self.downloads, [(7001, 1)])
+        # A later PR head differs from the original run head. Original checkout
+        # and parents remain authoritative; equality to latest metadata is not.
+        self.assertNotEqual(self.prs[self.current_pr]["head"]["sha"], row["head_sha"])
+        self.assertEqual(len(runner.history(root)), 2)
+
     def test_empty_links_different_pr_is_excluded_with_originals_and_no_artifact_request(self):
         self.add_run()
         root, scope = self.restore()
@@ -449,6 +496,7 @@ class ReleaseContinuationTests(HistoryFixture):
         self.assertTrue(all(value["outcome"] == "failed" for _, value in runner.history(root)))
 
     def main_stage(self):
+        self.origins[7000, 1] = 61, self.merge
         corrective = self.prs[61]
         corrective.update(state="closed", merged=True, merge_commit_sha="7" * 40)
         self.commits["7" * 40] = self.commit("7" * 40, [self.base, self.head], self.tree)
@@ -549,3 +597,316 @@ class ReleaseContinuationTests(HistoryFixture):
                     return self.api(endpoint)
                 with self.subTest(phase=phase, defect=defect), self.assertRaises((ValueError, KeyError, subprocess.CalledProcessError)):
                     runner.release_history_scope(self.event_data, self.candidate, self.handoff, api, self.repo)
+
+
+class ReleaseNextHistoryTests(HistoryFixture):
+    """Finite /2 release fixtures; no network, Tk or synthetic formal PASS."""
+    def setUp(self):
+        super().setUp()
+        self.spec = dict(runner.RELEASE_HISTORY)
+        self.task = self.spec["task_id"]
+        self.handoff = self.make_handoff(self.task, self.spec["baseline"], self.spec["source_ref"])
+        self.spec["archive_sha256"] = self.handoff["archive_sha256"]
+        self.next_spec = {**runner.RELEASE_HISTORY_NEXT, "archive_sha256": self.handoff["archive_sha256"]}
+        for target, value in ((runner.RELEASE_HISTORY, self.spec), (runner.RELEASE_HISTORY_NEXT, self.next_spec)):
+            item = patch.dict(target, value);item.start();self.addCleanup(item.stop)
+        self.branch = self.spec["branch"]
+        self.local = "<!-- validation-local-history\n" + json.dumps(self.handoff) + "\n-->\n"
+        self.body = self.local + runner.release_history_block(successor=True)
+        self.current_pr = 53
+        self.base = self.next_spec["predecessor_merge"]
+        self.candidate["parents"] = [self.base, self.head]
+        self.commits[self.merge] = self.commit(self.merge, self.candidate["parents"], self.tree)
+        self.commits[self.head] = self.commit(self.head, [self.next_spec["predecessor_head"]], self.tree)
+        for identity, parents, tree in (
+            (self.spec["original_head"], ["6" * 40], "9" * 40),
+            (self.spec["original_merge"], [self.spec["baseline"], self.spec["original_head"]], "9" * 40),
+            (self.next_spec["predecessor_head"], [self.spec["original_head"]], "4" * 40),
+            (self.base, [self.spec["original_merge"], self.next_spec["predecessor_head"]], "4" * 40)):
+            self.commits[identity] = self.commit(identity, parents, tree)
+        self.prs = {53: self.pr(53, self.head, self.base, self.branch, self.body)}
+        self.prs[50] = self.pr(50, self.spec["original_head"], self.spec["baseline"], self.branch, self.local)
+        self.prs[50].update(state="closed", merged=True, merge_commit_sha=self.spec["original_merge"])
+        self.prs[51] = self.pr(51, self.next_spec["predecessor_head"], self.spec["original_merge"], self.branch,
+                               self.local + runner.release_history_block())
+        self.prs[51].update(state="closed", merged=True, merge_commit_sha=self.base)
+        self.prs[52] = self.pr(52, self.base, self.spec["main_baseline"], "develop",
+                               self.local + runner.release_history_block(53, successor=True))
+        self.prs[52]["base"]["ref"] = "main"
+        self.event_data = {"pull_request": copy.deepcopy(self.prs[53])}
+        self.runs[0] = self.run_row(7000, self.head, 1, "in_progress", [{"number": 53}])
+        self.precore_rows = {}
+
+    def main_stage(self):
+        self.origins[7000, 1] = 53, self.merge
+        self.prs[53].update(state="closed", merged=True, merge_commit_sha="7" * 40)
+        self.commits["7" * 40] = self.commit("7" * 40, [self.base, self.head], self.tree)
+        self.commits["2" * 40] = self.commit("2" * 40, [self.spec["main_baseline"], "7" * 40], self.tree)
+        self.prs[52]["head"]["sha"] = "7" * 40
+        self.event_data = {"pull_request": copy.deepcopy(self.prs[52])}
+        self.current_pr, self.current_run = 52, 8000
+        self.candidate = {"head": "2" * 40, "tree": self.tree, "parents": [self.spec["main_baseline"], "7" * 40]}
+        self.runs[0].update(status="completed", conclusion="success")
+        current = self.run_row(8000, "7" * 40, 1, "in_progress", [{"number": 52}]);current["head_branch"] = "develop"
+        self.runs.insert(0, current)
+
+    def add_precore(self, identity=8100):
+        row = self.run_row(identity, self.base, 1, "completed", [{"number": 52}]);row["head_branch"] = "develop"
+        self.runs.append(row)
+        sha = "5" * 40
+        self.commits[sha] = self.commit(sha, [self.spec["main_baseline"], self.base], "4" * 40)
+        self.origins[identity, 1] = 52, sha
+        job_id = identity * 100 + 10
+        names = [("Check out repository", "success"), ("Restore validation history", "failure"),
+                 ("Run core group", "skipped"), ("Aggregate functional coverage", "skipped"),
+                 ("Verify functional coverage", "skipped")]
+        steps = [{"name": name, "number": i, "status": "completed", "conclusion": result,
+                  "started_at": "2026-10-11T00:00:00Z", "completed_at": "2026-10-11T00:00:00Z"}
+                 for i, (name, result) in enumerate(names, 1)]
+        job = {"id": job_id, "run_id": identity, "run_attempt": 1, "head_sha": self.base,
+               "head_branch": "develop", "name": "Grouped validation", "status": "completed", "conclusion": "failure", "steps": steps}
+        with zipfile.ZipFile(io.BytesIO(super().logs(identity, 1))) as old:
+            checkout = old.read("0_Proof 0.txt");system = old.read("Proof 0/system.txt")
+        failure = ("2026-10-11T00:00:00Z ##[group]Run python scripts/validation_runner.py restore-history --evidence-root tmp/validation-evidence\n"
+                   "2026-10-11T00:00:00Z prior run/attempt history unavailable: validation-evidence-other-1\n"
+                   "2026-10-11T00:00:00Z ##[error]Process completed with exit code 1.\n").encode()
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, "w") as zipped:
+            zipped.writestr("0_Grouped validation.txt", checkout + failure)
+            zipped.writestr("Grouped validation/system.txt", system)
+            zipped.writestr("Grouped validation/2_Restore validation history.txt", failure)
+        original_pr = copy.deepcopy(self.prs[52]);original_pr["body"] = self.local + runner.release_history_block(51)
+        original_pr["head"]["sha"] = self.base
+        archived = {"method": "current-live-checkout", "event": {"pull_request": original_pr},
+                    "candidate": {"head": sha, "parents": [self.spec["main_baseline"], self.base], "tree": "4" * 40}, "jobs": [job_id]}
+        with zipfile.ZipFile(io.BytesIO(base64.b64decode(self.handoff["archive_base64"]))) as sealed:
+            ledger = sealed.read("ledger.json")
+            stores = {"local-history/" + name: sealed.read(name) for name in ("executions/store.json", "declarations/store.json")}
+        contents = {"history-scope-" + "1" * 32 + "/current-checkout-proof.json": json.dumps(archived).encode(),
+                    "history-scope-" + "2" * 32 + "/attribution.json": b'{"pr":52,"disposition":"applicable","interpretation":"original wrong attribution preserved"}',
+                    "local-history/handoff.json": json.dumps(self.handoff).encode(), "local-history/ledger.json": ledger, **stores}
+        self.precore_rows[identity] = {"job": job, "logs": stream.getvalue(), "contents": contents}
+
+    def artifact_zip(self, identity):
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, "w") as zipped:
+            for name, payload in self.precore_rows[identity]["contents"].items():zipped.writestr(name, payload)
+        return stream.getvalue()
+
+    def contradict_precore_identity(self, contents, label):
+        """Alter only a new negative copy, retaining a valid rebuilt ZIP/hash."""
+        if label in {"base-sha", "base-ref"}:
+            name = next(name for name in contents if name.endswith("current-checkout-proof.json"))
+            value = json.loads(contents[name])
+            value["event"]["pull_request"]["base"]["sha" if label == "base-sha" else "ref"] = (
+                "f" * 40 if label == "base-sha" else "develop")
+            contents[name] = json.dumps(value).encode()
+        elif label == "store-rebinding":
+            for name in ("ledger.json", "executions/store.json", "declarations/store.json"):
+                name = "local-history/" + name;value = json.loads(contents[name]);value["store_id"] = "f" * 32
+                contents[name] = json.dumps(value).encode()
+        elif label in {"ledger-store", "ledger-schema", "ledger-created"}:
+            name = "local-history/ledger.json";value = json.loads(contents[name])
+            key, new_value = {"ledger-store": ("store_id", "f" * 32),
+                              "ledger-schema": ("schema", "zhuyin-local-history/future"),
+                              "ledger-created": ("created_at", "2026-10-12T00:00:00+00:00")}[label]
+            value[key] = new_value
+            contents[name] = json.dumps(value).encode()
+        else:
+            kind, action = label.split("-")
+            name = "local-history/" + kind + "/store.json"
+            if action == "missing":del contents[name]
+            else:
+                value = json.loads(contents[name]);value["store_id"] = "f" * 32
+                contents[name] = json.dumps(value).encode()
+
+    precore_identity_negatives = ("base-sha", "base-ref", "ledger-store", "ledger-schema", "ledger-created", "store-rebinding",
+                                  "executions-missing", "executions-mismatch", "declarations-missing", "declarations-mismatch")
+
+    def api(self, endpoint):
+        match = re.fullmatch(r"repos/" + re.escape(self.repo) + r"/actions/runs/([0-9]+)/attempts/1/jobs\?per_page=100&page=1", endpoint)
+        if match and int(match[1]) in self.precore_rows:
+            self.calls.append(endpoint)
+            return {"total_count": 1, "jobs": [copy.deepcopy(self.precore_rows[int(match[1])]["job"])]}
+        match = re.fullmatch(r"repos/" + re.escape(self.repo) + r"/actions/artifacts/([0-9]+)/zip", endpoint)
+        if match and int(match[1]) in self.precore_rows:
+            self.calls.append(endpoint);return self.artifact_zip(int(match[1]))
+        result = super().api(endpoint)
+        match = re.fullmatch(r"repos/" + re.escape(self.repo) + r"/actions/runs/([0-9]+)/artifacts\?per_page=100&page=1", endpoint)
+        if match and int(match[1]) in self.precore_rows and result["artifacts"]:
+            identity = int(match[1]);row = next(row for row in self.runs if row["id"] == identity)
+            result["artifacts"][0].update(id=identity, digest="sha256:" + hashlib.sha256(self.artifact_zip(identity)).hexdigest(),
+                workflow_run={"id": identity, "head_sha": row["head_sha"], "head_branch": row["head_branch"]})
+        return result
+
+    def logs(self, identity, attempt):
+        return self.precore_rows[identity]["logs"] if identity in self.precore_rows else super().logs(identity, attempt)
+
+    def download(self, command, **kwargs):
+        identity = int(command[3])
+        if identity not in self.precore_rows:return super().download(command, **kwargs)
+        destination = Path(command[-1]);destination.mkdir(parents=True)
+        for name, payload in self.precore_rows[identity]["contents"].items():
+            target = destination / name;target.parent.mkdir(parents=True, exist_ok=True);target.write_bytes(payload)
+        self.downloads.append((identity, 1))
+        return subprocess.CompletedProcess(command, 0)
+
+    def test_new_corrective_and_main_keep_pr50_pr51_old_heads_every_attempt_and_precore(self):
+        self.add_run(number=50, identity=7001, attempts=2)
+        self.add_run(number=51, identity=7002, attempts=2, links=[{"number": 53}])
+        self.add_precore()
+        root, context = self.restore("next-corrective")
+        self.assertEqual(context["release_continuation"]["admitted_prs"], [50, 51, 52, 53])
+        self.assertEqual(self.downloads, [(7001, 1), (7001, 2), (7002, 1), (7002, 2), (8100, 1)])
+        self.assertEqual(len(context["pre_core_failures"]), 1)
+        self.assertEqual(len(context["executions"]), 8)
+        self.assertEqual(len(runner.history(root)), 8)
+        record = runner.read_pre_core_history(root / context["pre_core_failures"][0]["path"])
+        self.assertEqual((record["run_id"], record["attempt"], record["pr"]), (8100, 1, 52))
+        self.assertNotIn("execution_id", record)
+        self.assertFalse(self.prs[53]["merged"])
+        with self.assertRaisesRegex(ValueError, "latest core|earlier same|missing core"):
+            runner.aggregate(root)
+        # A genuinely new multiple-successor head keeps both single-parent
+        # edges back through the independently pinned PR51 head.
+        previous = self.head;self.head = "1" * 40
+        self.commits[self.head] = self.commit(self.head, [previous], self.tree)
+        self.commits[self.merge] = self.commit(self.merge, [self.base, self.head], self.tree)
+        self.prs[53]["head"]["sha"] = self.head
+        self.runs[0]["head_sha"] = self.head
+        self.event_data = {"pull_request": copy.deepcopy(self.prs[53])}
+        self.candidate["parents"] = [self.base, self.head]
+        multiple, multiple_context = self.restore("next-multiple-successor")
+        self.assertEqual([node["sha"] for node in multiple_context["release_continuation"]["feature_chain"]],
+                         [self.head, previous, self.next_spec["predecessor_head"], self.spec["original_head"]])
+        runner._validate_history_scope_artifacts(multiple_context, multiple)
+        self.main_stage()
+        root, context = self.restore("next-main")
+        self.assertEqual(context["release_continuation"]["admitted_prs"], [50, 51, 52, 53])
+        self.assertEqual(len(context["executions"]), 10)
+        runner._validate_history_scope_artifacts(context, root)
+
+    def test_next_chain_source_decl_actual_merge_and_missing_anchor_refuse(self):
+        originals = {name: copy.deepcopy(getattr(self, name)) for name in ("prs", "commits", "event_data", "candidate", "runs", "current_pr", "current_run")}
+        for phase in ("corrective", "main"):
+            for label in ("base", "prior-head", "prior-parents", "prior-tree", "prior-marker", "handoff", "anchor", "unknown-schema", "multiple-marker", "main-number", "actual-parents", "actual-tree"):
+                for name, value in originals.items():setattr(self, name, copy.deepcopy(value))
+                if phase == "main":self.main_stage()
+                if label == "base":self.prs[53]["base"]["sha"] = self.spec["original_merge"]
+                elif label == "prior-head":self.prs[51]["head"]["sha"] = "f" * 40
+                elif label == "prior-parents":self.commits[self.base]["parents"].reverse()
+                elif label == "prior-tree":self.commits[self.base]["tree"]["sha"] = "f" * 40
+                elif label == "prior-marker":self.prs[51]["body"] = self.local + runner.release_history_block(successor=True)
+                elif label == "handoff":self.prs[51]["body"] = self.prs[51]["body"].replace(self.spec["source_ref"], "wrong-source")
+                elif label == "anchor":self.commits[self.head]["parents"] = [{"sha": self.spec["original_head"]}]
+                elif label == "unknown-schema":self.event_data["pull_request"]["body"] = self.body.replace("continuation/2", "continuation/3")
+                elif label == "multiple-marker":self.event_data["pull_request"]["body"] += runner.release_history_block(successor=True)
+                elif label == "main-number":
+                    self.prs[52]["number"] = 54
+                    if phase == "main":self.event_data["pull_request"]["number"] = 54
+                elif label == "actual-parents" and phase == "main":self.commits["7" * 40]["parents"].reverse()
+                elif label == "actual-tree" and phase == "main":self.commits["7" * 40]["tree"]["sha"] = "f" * 40
+                else:continue
+                if phase == "corrective" and label == "base":self.event_data["pull_request"] = copy.deepcopy(self.prs[53])
+                with self.subTest(phase=phase, label=label), self.assertRaises((ValueError, KeyError)):
+                    runner.release_history_scope(self.event_data, self.candidate, self.handoff, self.api, self.repo)
+
+    def test_precore_started_missing_or_contaminated_originals_refuse(self):
+        self.add_precore()
+        original = copy.deepcopy(self.precore_rows[8100])
+        for label in ("started-step", "skipped-but-duration", "missing-failure-log", "core-command", "started", "manifest", "raw", "wrong-event", "wrong-seal", "unsafe-path", *self.precore_identity_negatives):
+            self.precore_rows[8100] = copy.deepcopy(original)
+            row = self.precore_rows[8100]
+            if label == "started-step":row["job"]["steps"][2]["conclusion"] = "failure"
+            elif label == "skipped-but-duration":row["job"]["steps"][2]["completed_at"] = "2026-10-11T00:00:01Z"
+            elif label in {"missing-failure-log", "core-command"}:
+                stream = io.BytesIO()
+                with zipfile.ZipFile(io.BytesIO(row["logs"])) as old, zipfile.ZipFile(stream, "w") as new:
+                    for name in old.namelist():
+                        if label == "missing-failure-log" and name.endswith("_Restore validation history.txt"):continue
+                        new.writestr(name, old.read(name))
+                    if label == "core-command":new.writestr("Grouped validation/3_Run core group.txt", "core started")
+                row["logs"] = stream.getvalue()
+            elif label in {"started", "manifest", "raw"}:row["contents"]["core/" + {"started": "started.json", "manifest": "manifest.json", "raw": "raw.log"}[label]] = b"{}"
+            elif label in {"wrong-event", "wrong-seal"}:
+                name = next(name for name in row["contents"] if name.endswith("current-checkout-proof.json"))
+                value = json.loads(row["contents"][name]);key = value["event"]["pull_request"]
+                if label == "wrong-event":key["head"]["sha"] = "f" * 40
+                else:key["body"] = key["body"].replace(self.spec["archive_sha256"], "f" * 64)
+                row["contents"][name] = json.dumps(value).encode()
+            elif label == "unsafe-path":row["contents"]["../outside.json"] = b"{}"
+            else:self.contradict_precore_identity(row["contents"], label)
+            with self.subTest(label=label), self.assertRaises((ValueError, KeyError)):
+                self.restore("bad-precore-" + label)
+
+    def test_precore_download_reader_context_aggregate_verify_relocation_and_hash_failures(self):
+        self.add_precore()
+        producer, scope = self.restore()
+        self.bundle(producer / "current", self.current_run, 1, context=scope)
+        coverage = runner.aggregate(producer)
+        write(producer / "coverage.json", coverage)
+        self.assertEqual(evidence.verify_coverage(producer / "coverage.json"), coverage)
+        self.assertEqual(len(coverage["history_manifests"]), 2)
+        uploaded = self.folder / "consumer/tmp/validation-evidence";uploaded.mkdir(parents=True)
+        for path in producer.rglob("*"):
+            if path.is_file() and (path.suffix in {".json", ".jsonl", ".xml", ".log"} or path.name == "pr-artifact.zip"):
+                target = uploaded / path.relative_to(producer);target.parent.mkdir(parents=True, exist_ok=True);shutil.copyfile(path, target)
+        shutil.rmtree(producer)
+        with patch.object(runner, "ROOT", self.folder / "consumer"), patch.dict("os.environ", {
+                "GITHUB_ACTIONS": "true", "GITHUB_EVENT_NAME": "pull_request", "GITHUB_RUN_ID": str(self.current_run), "GITHUB_RUN_ATTEMPT": "1"}):
+            self.assertEqual(runner.validate_history_context(uploaded, self.candidate), scope)
+        self.assertEqual(evidence.verify_coverage(uploaded / "coverage.json"), coverage)
+        record_path = uploaded / scope["pre_core_failures"][0]["path"]
+        record = runner.read_pre_core_history(record_path)
+        # Rehash every negative's ZIP, record, context and manifest. Coverage
+        # keeps its existing relative manifest paths, without invented hashes.
+        snapshot = {path: path.read_bytes() for path in uploaded.rglob("*") if path.is_file()}
+        archive_path = uploaded / record["sources"]["artifact"]["path"]
+        for label in self.precore_identity_negatives:
+            contents = copy.deepcopy(self.precore_rows[8100]["contents"])
+            self.contradict_precore_identity(contents, label)
+            stream = io.BytesIO()
+            with zipfile.ZipFile(stream, "w") as zipped:
+                for name, payload in contents.items():zipped.writestr(name, payload)
+            archive_path.write_bytes(stream.getvalue())
+            wrong = copy.deepcopy(record);archive_sha = runner.digest(archive_path)
+            wrong["sources"]["artifact"]["sha256"] = archive_sha
+            wrong["artifact"]["digest"] = "sha256:" + archive_sha
+            wrong["artifact_members"] = {name: hashlib.sha256(payload).hexdigest() for name, payload in sorted(contents.items())}
+            write(record_path, wrong)
+            altered_scope = copy.deepcopy(scope)
+            for entry in altered_scope["scope_artifacts"] + altered_scope["pre_core_failures"]:
+                if entry["path"] == record["sources"]["artifact"]["path"]:entry["sha256"] = archive_sha
+                elif entry["path"] == scope["pre_core_failures"][0]["path"]:entry["sha256"] = runner.digest(record_path)
+            for path in uploaded.glob("history-index-*.json"):write(path, altered_scope)
+            for path in uploaded.rglob("history-context.json"):
+                write(path, altered_scope)
+                manifest_path = path.parent / "manifest.json"
+                manifest = runner.read_json(manifest_path)
+                manifest["artifacts"]["history_context"]["sha256"] = runner.digest(path)
+                write(manifest_path, manifest)
+            error = "pre-core original event/candidate/source differs" if label.startswith("base-") else "pre-core original ledger/store differs"
+            with self.subTest(label=label, consumer="reader"), self.assertRaisesRegex(ValueError, error):
+                runner.read_pre_core_history(record_path)
+            with patch.object(runner, "ROOT", self.folder / "consumer"), patch.dict("os.environ", {
+                    "GITHUB_ACTIONS": "true", "GITHUB_EVENT_NAME": "pull_request", "GITHUB_RUN_ID": str(self.current_run), "GITHUB_RUN_ATTEMPT": "1"}):
+                with self.subTest(label=label, consumer="context"), self.assertRaisesRegex(ValueError, error):
+                    runner.validate_history_context(uploaded, self.candidate)
+            with self.subTest(label=label, consumer="aggregate"), self.assertRaisesRegex(ValueError, error):runner.aggregate(uploaded)
+            with self.subTest(label=label, consumer="verify"), self.assertRaisesRegex(ValueError, error):
+                evidence.verify_coverage(uploaded / "coverage.json")
+            for path, payload in snapshot.items():path.write_bytes(payload)
+        self.assertEqual(evidence.verify_coverage(uploaded / "coverage.json"), coverage)
+        for entry in (scope["pre_core_failures"][0], *record["sources"].values()):
+            path = uploaded / entry["path"];original = path.read_bytes();path.unlink()
+            with self.subTest(missing=entry["path"]), self.assertRaises(ValueError):evidence.verify_coverage(uploaded / "coverage.json")
+            path.write_bytes(original + b"corrupt")
+            with self.subTest(corrupt=entry["path"]), self.assertRaises(ValueError):evidence.verify_coverage(uploaded / "coverage.json")
+            path.write_bytes(original)
+        # Hash-updated records still must pass the semantic originals reader.
+        wrong = copy.deepcopy(record);wrong["attempt"] = 2;write(record_path, wrong)
+        with self.assertRaises(ValueError):runner.read_pre_core_history(record_path)
+        write(record_path, record)
+        duplicate = uploaded / ("history-scope-" + "e" * 32) / "pre-core.json";duplicate.parent.mkdir()
+        wrong = copy.deepcopy(record);wrong["sources"]["logs"]["sha256"] = "f" * 64;write(duplicate, wrong)
+        with self.assertRaises(ValueError):runner.aggregate(uploaded)

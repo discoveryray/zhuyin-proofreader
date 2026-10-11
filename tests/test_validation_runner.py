@@ -12,7 +12,7 @@ import xml.etree.ElementTree as ET
 
 from scripts import test_entrypoint_audit as audit
 from scripts import validation_runner as runner
-from test_validation_history_attribution import live_api_fixture, historical_api_fixture
+from test_validation_history_attribution import live_api_fixture, historical_api_fixture, own_core_fixture
 
 
 # Exact adopted bytes, not a self-authored fixture authorization. Original
@@ -175,7 +175,11 @@ class Pr43GuiSupplementTests(unittest.TestCase):
             {"id": self.spec["run_id"], "head_sha": self.spec["starting_head"], "run_attempt": 1, "status": "completed",
              "head_branch": event["pull_request"]["head"]["ref"], "event": "pull_request",
              "head_repository": {"full_name": runner.REPOSITORY}, "pull_requests": [{"number": 43}]}]
-        reply = live_api_fixture(endpoint, event, self.candidate, rows, runner.REPOSITORY)
+        reply = historical_api_fixture(endpoint, rows[1:], event["pull_request"], runner.REPOSITORY,
+            {(self.spec["run_id"], 1): runner.read_json(self.old / "manifest.json")["candidate"]})
+        if reply is not None:
+            return reply
+        reply = live_api_fixture(endpoint, event, self.candidate, rows[:1], runner.REPOSITORY)
         if reply is not None:
             return reply
         if "/artifacts/" in endpoint:
@@ -188,7 +192,8 @@ class Pr43GuiSupplementTests(unittest.TestCase):
     def restore(self):
         import shutil
         def output(command, **kwargs):
-            return self.zipbytes if command[-1].endswith("/zip") else json.dumps(self.api(command[-1]))
+            value = self.zipbytes if command[-1].endswith("/zip") else self.api(command[-1])
+            return value if isinstance(value, bytes) else json.dumps(value)
         def download(command, **kwargs):
             shutil.copytree(self.original, Path(command[-1]))
             return subprocess.CompletedProcess(command, 0)
@@ -1185,8 +1190,10 @@ class HistoryRetrievalTests(unittest.TestCase):
             rows = responses[0]["workflow_runs"]
             candidate = {"head": "c" * 40, "tree": "d" * 40, "parents": ["b" * 40, "a" * 40]}
             def query(command, **kwargs):
-                reply = live_api_fixture(command[-1], runner.read_json(event), candidate, rows, "owner/repo")
-                return json.dumps(reply if reply is not None else responses.pop(0))
+                reply = historical_api_fixture(command[-1], rows, runner.read_json(event)["pull_request"], "owner/repo")
+                if reply is None:reply = live_api_fixture(command[-1], runner.read_json(event), candidate, rows, "owner/repo")
+                if reply is None:reply = responses.pop(0)
+                return reply if isinstance(reply, bytes) else json.dumps(reply)
             with patch.object(runner, "import_local_handoff", return_value={"task_id": "fixture-task", "archive_sha256": "f" * 64}), patch.object(runner, "snapshot", return_value={"head": "c" * 40, "tree": "d" * 40, "parents": ["b" * 40, "a" * 40]}), patch.dict("os.environ", {"GITHUB_EVENT_PATH": str(event), "GITHUB_REPOSITORY": "owner/repo",
                                             "GITHUB_RUN_ID": "9", "GITHUB_RUN_ATTEMPT": "2"}), patch.object(runner.subprocess, "check_output", side_effect=query) as queried:
                 self.assertEqual(runner.main(["restore-history", "--evidence-root", str(folder / "history")]), 2)
@@ -1344,15 +1351,23 @@ class CFFLegacyFailureReadTests(unittest.TestCase):
         def download(command, **kwargs):
             destination = Path(command[-1])
             shutil.copytree(self.folder, destination / self.folder.name)
+            attempt = int(command[-3].rsplit("-", 1)[1])
+            if attempt == 2:
+                own_core_fixture(destination, 37293413665, attempt, {
+                    "head": format(37293413665 * 100 + attempt, "040x"), "tree": "8" * 40,
+                    "parents": [current["parents"][0], runs[1]["head_sha"]]}, runner.CFF_HISTORY_TASK)
         env = {"GITHUB_EVENT_PATH": str(event), "GITHUB_REPOSITORY": runner.REPOSITORY,
                "GITHUB_RUN_ID": "999", "GITHUB_RUN_ATTEMPT": "1",
                "GITHUB_JOB": "grouped", "GITHUB_EVENT_NAME": "pull_request"}
         active_runs = runs
         def query(command, **kwargs):
-            reply = live_api_fixture(command[-1], runner.read_json(event), current, active_runs, env["GITHUB_REPOSITORY"])
+            reply = historical_api_fixture(command[-1], active_runs[1:], runner.read_json(event)["pull_request"], env["GITHUB_REPOSITORY"],
+                {(37293413665, 1): runner.read_json(self.manifest)["candidate"]})
+            if reply is None:
+                reply = live_api_fixture(command[-1], runner.read_json(event), current, active_runs[:1], env["GITHUB_REPOSITORY"])
             if reply is None:
                 reply = {"artifacts": artifacts, "total_count": 2} if "/artifacts?" in command[-1] else {"workflow_runs": active_runs, "total_count": 2}
-            return json.dumps(reply)
+            return reply if isinstance(reply, bytes) else json.dumps(reply)
         with patch.object(runner, "CFF_LEGACY_FAILURE_SHA256", self.fixture_hash), patch.dict("os.environ", env), \
                 patch.object(runner, "snapshot", return_value=current), \
                 patch.object(runner, "import_local_handoff", return_value={"task_id": runner.CFF_HISTORY_TASK, "archive_sha256": "f" * 64}), \
@@ -1361,16 +1376,18 @@ class CFFLegacyFailureReadTests(unittest.TestCase):
             output = self.root / "restored"
             runner.restore_history(output)
             index = runner.read_json(next(output.glob("history-index-*.json")))
-            self.assertEqual(index["executions"], [self.folder.name])
-            self.assertEqual(len(list(output.rglob("manifest.json"))), 2)
+            self.assertEqual(index["executions"], [self.folder.name, "own-37293413665-2"])
+            self.assertEqual(len(list(output.rglob("manifest.json"))), 3)
             with self.assertRaisesRegex(ValueError, "missing core"):
-                runner.aggregate(output)
+                runner.aggregate(output, head=current["head"])
             from scripts import validation_evidence
             shutil.copytree(self.root / "core", output / "core")
-            bundle = runner.aggregate(output)
+            value = runner.read_json(output / "core/manifest.json");value["candidate"] = current
+            self.rebind(output / "core/manifest.json", value, runner.CFF_HISTORY_TASK)
+            bundle = runner.aggregate(output, head=current["head"])
             self.write(output / "coverage.json", bundle)
             self.assertEqual(validation_evidence.verify_coverage(output / "coverage.json"), bundle)
-            self.assertEqual(len(bundle["history_manifests"]), 2)
+            self.assertEqual(len(bundle["history_manifests"]), 3)
         # Wrong PR/branch/task must not opt in, even with the same retained files.
         for field, value in (("number", 43), ("branch", "codex/other"), ("task", "other-task"),
                              ("repository", "other/repo")):
@@ -1532,7 +1549,10 @@ class Pr43PostmergeHistoryTests(unittest.TestCase):
 
     def api(self, endpoint):
         self.api_calls.append(endpoint)
-        reply = live_api_fixture(endpoint, self.event_data, self.candidate, self.new_runs, runner.REPOSITORY)
+        reply = historical_api_fixture(endpoint, self.new_runs[1:], self.event_data["pull_request"], runner.REPOSITORY)
+        if reply is not None:
+            return reply
+        reply = live_api_fixture(endpoint, self.event_data, self.candidate, self.new_runs[:1], runner.REPOSITORY)
         if reply is not None:
             return reply
         reply = historical_api_fixture(endpoint, self.old_runs, self.old_pr, runner.REPOSITORY)
@@ -1561,6 +1581,11 @@ class Pr43PostmergeHistoryTests(unittest.TestCase):
         import shutil
         destination = Path(command[-1])
         shutil.copytree(self.source, destination)
+        identity = int(command[3]);attempt = int(command[-3].rsplit("-", 1)[1])
+        row = next(row for row in [*self.new_runs, *self.old_runs] if row["id"] == identity)
+        original_pr = self.event_data["pull_request"] if row["head_branch"] == self.spec["branch"] else self.old_pr
+        own_core_fixture(destination, identity, attempt, {"head": format(identity * 100 + attempt, "040x"),
+            "parents": [original_pr["base"]["sha"], row["head_sha"]], "tree": "8" * 40}, self.spec["task_id"])
         if self.corrupt_download:
             target = destination / self.corrupt_download
             if target.is_file():
@@ -1589,9 +1614,10 @@ class Pr43PostmergeHistoryTests(unittest.TestCase):
         self.save_event()
         opened_snapshot = self.event.read_bytes()
         root, index = self.restore()
-        self.assertEqual(index["executions"], ["core", "gui"])
+        self.assertEqual(index["executions"], sorted(["core", "gui", "own-901-1", "own-901-2",
+                         "own-" + str(runner.PR43_ORIGINAL_FULL_RUN) + "-1", "own-37789520018-1"]))
         self.assertEqual(len(list((root / "history").iterdir())), 5)
-        self.assertEqual(len(runner.history(root)), 2)
+        self.assertEqual(len(runner.history(root)), 6)
         self.assertEqual(sum(value["outcome"] == "failed" for _, value in runner.history(root)), 1)
         self.assertEqual({row["run_id"] for row in index["postmerge_continuation"]["origins"]}, {900, 901, runner.PR43_ORIGINAL_FULL_RUN, 37789520018, runner.PR43_ORIGINAL_PUSH_RUN})
         for retained in (root / "history").iterdir():
@@ -1783,15 +1809,21 @@ class Pr43PostmergeHistoryTests(unittest.TestCase):
         self.new_runs[0].pop("pull_requests")
         with self.assertRaises(ValueError):
             self.restore("missing-current-pr-links")
-        for links in ([{"number": 57}, {"number": 58}], [{"number": 58}], [{"number": True}]):
+        for links in ([{"number": 57}, {"number": 58}], [{"number": True}]):
             self.new_runs = copy.deepcopy(original_runs)
             self.new_runs[1]["pull_requests"] = links
             with self.subTest(prior_pr_links=links), self.assertRaises(ValueError):
                 self.restore("prior-links-" + str(len(list(self.folder.glob("prior-links-*")))))
         self.new_runs = original_runs
+        self.new_runs[1]["pull_requests"] = [{"number": 58}]
+        _, context = self.restore("mutable-prior-link")
+        prior = [row for row in context["attributions"] if row["run_id"] == self.new_runs[1]["id"]]
+        self.assertEqual([(row["pr"], row["attempt"]) for row in prior], [(57, 1), (57, 2)])
+        self.assertTrue(all(row["proof"]["association_drift"] for row in prior))
+        self.new_runs = copy.deepcopy(original_runs)
         changes = [dict(self.new_runs[1], status="in_progress"), dict(self.new_runs[1], head_branch="foreign"),
                    dict(self.new_runs[1], head_repository={"full_name": "other/repo"}),
-                   dict(self.new_runs[1], pull_requests=[{"number": 58}]), dict(self.new_runs[0])]
+                   dict(self.new_runs[0])]
         for index, row in enumerate(changes):
             with patch.object(self, "new_runs", [self.new_runs[0], row]), self.subTest(index=index), self.assertRaises(ValueError):
                 self.restore("run-" + str(index))
@@ -1802,6 +1834,19 @@ class Pr43PostmergeHistoryTests(unittest.TestCase):
             with self.subTest(path=path), self.assertRaises(ValueError):
                 self.restore("bytes-" + str(index))
         self.corrupt_download = None
+        original_download = self.download
+        def wrong_own(command, **kwargs):
+            result = original_download(command, **kwargs)
+            identity = int(command[3]);attempt = int(command[-3].rsplit("-", 1)[1])
+            path = Path(command[-1]) / ("own-" + str(identity) + "-" + str(attempt)) / "manifest.json"
+            value = runner.read_json(path);value["candidate"]["head"] = "f" * 40
+            self.write(path.parent / "started.json", value)
+            value["artifacts"]["started"] = self.ref(path.parent / "started.json")
+            self.write(path, value)
+            runner.read_verified_manifest(path)  # internally valid, wrong checkout
+            return result
+        with patch.object(runner.subprocess, "run", side_effect=wrong_own), self.assertRaisesRegex(ValueError, "own attempt execution differs"):
+            self.restore("wrong-own-checkout")
         import io, zipfile, hashlib
         original_zip = self.push_zip
         for mode in ("short", "proof", "unknown_started", "missing_closure", "duplicate_member", "unsafe_member", "zip"):
