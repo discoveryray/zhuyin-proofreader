@@ -12,6 +12,7 @@ import xml.etree.ElementTree as ET
 
 from scripts import test_entrypoint_audit as audit
 from scripts import validation_runner as runner
+from test_validation_history_attribution import live_api_fixture, historical_api_fixture
 
 
 # Exact adopted bytes, not a self-authored fixture authorization. Original
@@ -142,7 +143,7 @@ class Pr43GuiSupplementTests(unittest.TestCase):
         self.event = self.folder / "event.json"
         runner.write_json(self.event, {"pull_request": {"number": 43, "body": self.block,
                           "head": {"sha": self.feature, "ref": "codex/actual-gpt-bbox-export", "repo": {"full_name": runner.REPOSITORY}},
-                          "base": {"sha": self.spec["baseline"], "repo": {"full_name": runner.REPOSITORY}}}})
+                          "base": {"sha": self.spec["baseline"], "ref": "develop", "repo": {"full_name": runner.REPOSITORY}}}})
         self.vars = {"GITHUB_ACTIONS": "true", "GITHUB_EVENT_NAME": "pull_request", "GITHUB_REPOSITORY": runner.REPOSITORY,
                      "GITHUB_EVENT_PATH": str(self.event), "GITHUB_RUN_ID": "777", "GITHUB_RUN_ATTEMPT": "1", "GITHUB_JOB": "grouped"}
         self.patches = [patch.dict("os.environ", self.vars), patch.object(runner, "snapshot", return_value=self.candidate),
@@ -166,16 +167,23 @@ class Pr43GuiSupplementTests(unittest.TestCase):
         self.restore()
 
     def api(self, endpoint):
+        event = runner.read_json(self.event)
+        rows = [
+            {"id": 777, "head_sha": self.feature, "run_attempt": 1, "status": "in_progress",
+             "head_branch": event["pull_request"]["head"]["ref"], "event": "pull_request",
+             "head_repository": {"full_name": runner.REPOSITORY}, "pull_requests": [{"number": 43}]},
+            {"id": self.spec["run_id"], "head_sha": self.spec["starting_head"], "run_attempt": 1, "status": "completed",
+             "head_branch": event["pull_request"]["head"]["ref"], "event": "pull_request",
+             "head_repository": {"full_name": runner.REPOSITORY}, "pull_requests": [{"number": 43}]}]
+        reply = live_api_fixture(endpoint, event, self.candidate, rows, runner.REPOSITORY)
+        if reply is not None:
+            return reply
         if "/artifacts/" in endpoint:
             return {"id": self.spec["artifact_id"], "digest": "sha256:" + self.spec["archive_sha256"],
                     "workflow_run": {"id": self.spec["run_id"]}, "expired": False}
         if endpoint.endswith("/artifacts?per_page=100&page=1"):
             return {"total_count": 1, "artifacts": [{"name": "validation-evidence-37453889278-1", "expired": False}]}
-        return {"total_count": 2, "workflow_runs": [
-            {"id": 777, "head_sha": self.feature, "run_attempt": 1, "status": "in_progress",
-             "head_repository": {"full_name": runner.REPOSITORY}, "pull_requests": [{"number": 43}]},
-            {"id": self.spec["run_id"], "head_sha": self.spec["starting_head"], "run_attempt": 1, "status": "completed",
-             "head_repository": {"full_name": runner.REPOSITORY}, "pull_requests": [{"number": 43}]}]}
+        return {"total_count": 2, "workflow_runs": rows}
 
     def restore(self):
         import shutil
@@ -1167,15 +1175,23 @@ class HistoryRetrievalTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             folder = Path(temporary)
             event = folder / "event.json"
-            runner.write_json(event, {"pull_request": {"number": 99, "base": {"sha": "b" * 40}, "head": {"sha": "a" * 40, "ref": "task-branch"}}})
+            runner.write_json(event, {"pull_request": {"number": 99,
+                "base": {"sha": "b" * 40, "ref": "develop", "repo": {"full_name": "owner/repo"}},
+                "head": {"sha": "a" * 40, "ref": "task-branch", "repo": {"full_name": "owner/repo"}}}})
             responses = [{"workflow_runs": [{"id": 9, "status": "in_progress", "run_attempt": 2, "head_sha": "a" * 40,
+                                             "head_branch": "task-branch", "event": "pull_request",
                                              "head_repository": {"full_name": "owner/repo"}, "pull_requests": [{"number": 99}]}], "total_count": 1},
                          {"artifacts": [], "total_count": 0}]
+            rows = responses[0]["workflow_runs"]
+            candidate = {"head": "c" * 40, "tree": "d" * 40, "parents": ["b" * 40, "a" * 40]}
+            def query(command, **kwargs):
+                reply = live_api_fixture(command[-1], runner.read_json(event), candidate, rows, "owner/repo")
+                return json.dumps(reply if reply is not None else responses.pop(0))
             with patch.object(runner, "import_local_handoff", return_value={"task_id": "fixture-task", "archive_sha256": "f" * 64}), patch.object(runner, "snapshot", return_value={"head": "c" * 40, "tree": "d" * 40, "parents": ["b" * 40, "a" * 40]}), patch.dict("os.environ", {"GITHUB_EVENT_PATH": str(event), "GITHUB_REPOSITORY": "owner/repo",
-                                            "GITHUB_RUN_ID": "9", "GITHUB_RUN_ATTEMPT": "2"}), patch.object(runner.subprocess, "check_output", side_effect=[json.dumps(value) for value in responses]) as query:
+                                            "GITHUB_RUN_ID": "9", "GITHUB_RUN_ATTEMPT": "2"}), patch.object(runner.subprocess, "check_output", side_effect=query) as queried:
                 self.assertEqual(runner.main(["restore-history", "--evidence-root", str(folder / "history")]), 2)
-                self.assertIn("branch=task-branch", query.call_args_list[0].args[0][-1])
-                self.assertNotIn("head_sha=", query.call_args_list[0].args[0][-1])
+                self.assertIn("branch=task-branch", queried.call_args_list[0].args[0][-1])
+                self.assertNotIn("head_sha=", queried.call_args_list[0].args[0][-1])
 
     def test_retry_suite_requires_initializer_trace_not_arbitrary_tclerror(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -1314,10 +1330,14 @@ class CFFLegacyFailureReadTests(unittest.TestCase):
         import shutil
         event = self.root / "event.json"
         current = {"head": "a" * 40, "tree": "b" * 40, "parents": ["c" * 40, "d" * 40]}
-        self.write(event, {"pull_request": {"number": 42, "base": {"sha": "c" * 40},
-                   "head": {"sha": "d" * 40, "ref": "codex/cff-batch-fingerprint"}}})
-        runs = [{"id": 999, "head_sha": "d" * 40, "run_attempt": 1},
+        self.write(event, {"pull_request": {"number": 42,
+                   "base": {"sha": "c" * 40, "ref": "develop", "repo": {"full_name": runner.REPOSITORY}},
+                   "head": {"sha": "d" * 40, "ref": "codex/cff-batch-fingerprint", "repo": {"full_name": runner.REPOSITORY}}}})
+        runs = [{"id": 999, "head_sha": "d" * 40, "run_attempt": 1,
+                 "head_branch": "codex/cff-batch-fingerprint", "event": "pull_request",
+                 "head_repository": {"full_name": runner.REPOSITORY}, "pull_requests": [{"number": 42}]},
                 {"id": 37293413665, "head_sha": "431b43be38d655b51e58a81ceaa2caff141672e7",
+                 "head_branch": "codex/cff-batch-fingerprint", "event": "pull_request",
                  "run_attempt": 2, "status": "completed", "head_repository": {"full_name": runner.REPOSITORY},
                  "pull_requests": [{"number": 42}]}]
         artifacts = [{"name": f"validation-evidence-37293413665-{n}", "expired": False} for n in (1, 2)]
@@ -1327,10 +1347,16 @@ class CFFLegacyFailureReadTests(unittest.TestCase):
         env = {"GITHUB_EVENT_PATH": str(event), "GITHUB_REPOSITORY": runner.REPOSITORY,
                "GITHUB_RUN_ID": "999", "GITHUB_RUN_ATTEMPT": "1",
                "GITHUB_JOB": "grouped", "GITHUB_EVENT_NAME": "pull_request"}
+        active_runs = runs
+        def query(command, **kwargs):
+            reply = live_api_fixture(command[-1], runner.read_json(event), current, active_runs, env["GITHUB_REPOSITORY"])
+            if reply is None:
+                reply = {"artifacts": artifacts, "total_count": 2} if "/artifacts?" in command[-1] else {"workflow_runs": active_runs, "total_count": 2}
+            return json.dumps(reply)
         with patch.object(runner, "CFF_LEGACY_FAILURE_SHA256", self.fixture_hash), patch.dict("os.environ", env), \
                 patch.object(runner, "snapshot", return_value=current), \
                 patch.object(runner, "import_local_handoff", return_value={"task_id": runner.CFF_HISTORY_TASK, "archive_sha256": "f" * 64}), \
-                patch.object(runner.subprocess, "check_output", side_effect=[json.dumps({"workflow_runs": runs, "total_count": 2}), json.dumps({"artifacts": artifacts, "total_count": 2})]), \
+                patch.object(runner.subprocess, "check_output", side_effect=query), \
                 patch.object(runner.subprocess, "run", side_effect=download):
             output = self.root / "restored"
             runner.restore_history(output)
@@ -1362,15 +1388,17 @@ class CFFLegacyFailureReadTests(unittest.TestCase):
             self.write(event, changed_event)
             prior = dict(runs[1], head_repository={"full_name": changed_env["GITHUB_REPOSITORY"]},
                          pull_requests=[{"number": changed_event["pull_request"]["number"]}])
+            active_runs = [runs[0], prior]
             with self.subTest(field=field), patch.object(runner, "CFF_LEGACY_FAILURE_SHA256", self.fixture_hash), \
                     patch.dict("os.environ", changed_env), patch.object(runner, "snapshot", return_value=current), \
                     patch.object(runner, "import_local_handoff", return_value={"task_id": task, "archive_sha256": "f" * 64}), \
-                    patch.object(runner.subprocess, "check_output", side_effect=[json.dumps({"workflow_runs": [runs[0], prior], "total_count": 2}), json.dumps({"artifacts": artifacts, "total_count": 2})]), \
+                    patch.object(runner.subprocess, "check_output", side_effect=query), \
                     patch.object(runner.subprocess, "run", side_effect=download):
                 with self.assertRaises(ValueError):
                     runner.restore_history(self.root / ("rejected-" + field))
-            self.write(event, {"pull_request": {"number": 42, "base": {"sha": "c" * 40},
-                       "head": {"sha": "d" * 40, "ref": "codex/cff-batch-fingerprint"}}})
+            self.write(event, {"pull_request": {"number": 42,
+                       "base": {"sha": "c" * 40, "ref": "develop", "repo": {"full_name": runner.REPOSITORY}},
+                       "head": {"sha": "d" * 40, "ref": "codex/cff-batch-fingerprint", "repo": {"full_name": runner.REPOSITORY}}}})
 
 
 class Pr43PostmergeHistoryTests(unittest.TestCase):
@@ -1504,6 +1532,12 @@ class Pr43PostmergeHistoryTests(unittest.TestCase):
 
     def api(self, endpoint):
         self.api_calls.append(endpoint)
+        reply = live_api_fixture(endpoint, self.event_data, self.candidate, self.new_runs, runner.REPOSITORY)
+        if reply is not None:
+            return reply
+        reply = historical_api_fixture(endpoint, self.old_runs, self.old_pr, runner.REPOSITORY)
+        if reply is not None:
+            return reply
         if endpoint == "repos/discoveryray/zhuyin-proofreader/actions/artifacts/11595410764/zip":
             return self.push_zip
         if endpoint == "repos/discoveryray/zhuyin-proofreader/pulls/43":
@@ -1575,7 +1609,10 @@ class Pr43PostmergeHistoryTests(unittest.TestCase):
                     self.assertEqual((retained / relative).read_bytes(), payload)
         self.assertEqual(runner.read_local_ledger(root / "local-history", self.spec["task_id"])["baseline"], self.spec["baseline"])
         self.assertNotIn("archive_base64", self.event_data["pull_request"]["body"])
-        self.assertEqual(self.api_calls.count("repos/discoveryray/zhuyin-proofreader/pulls/43"), 1)
+        # One original handoff proof plus one independent metadata check for
+        # each of the two original PR43 runs; neither old attempt is inferred
+        # from its branch or from the other run's attribution.
+        self.assertEqual(self.api_calls.count("repos/discoveryray/zhuyin-proofreader/pulls/43"), 3)
         self.assertTrue(any("branch=codex%2Factual-gpt-bbox-export&" in endpoint for endpoint in self.api_calls))
         self.assertEqual(index["postmerge_continuation"]["reference"]["current_pr"], 57)
         self.assertIs(type(index["postmerge_continuation"]["reference"]["current_pr"]), int)
