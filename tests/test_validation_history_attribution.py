@@ -387,7 +387,11 @@ class HistoryAttributionTests(HistoryFixture):
         # Current successful raw fixture has a different candidate tree than
         # retained failures; it cannot erase them or relabel their candidates.
         self.bundle(producer / "current", self.current_run, 1, context=scope)
-        coverage = runner.aggregate(producer)
+        fixture_ci = {"run_id": self.current_run, "attempt": self.current_attempt,
+                      "job": "grouped", "event": "pull_request"}
+        coverage = runner.aggregate(producer, ci=fixture_ci)
+        self.assertEqual(coverage["ci"], {"run_id": 7000, "attempt": 1,
+                                          "job": "grouped", "event": "pull_request"})
         write(producer / "coverage.json", coverage)
         self.assertEqual(evidence.verify_coverage(producer / "coverage.json"), coverage)
         uploaded = self.folder / "consumer/tmp/validation-evidence";uploaded.mkdir(parents=True)

@@ -1299,7 +1299,9 @@ class CFFLegacyFailureReadTests(unittest.TestCase):
             values = runner.history(self.root, policy=runner.POLICY)
             self.assertEqual(len(values), 2)
             self.assertEqual(sum(v["outcome"] == "failed" for _, v in values), 1)
-            bundle = runner.aggregate(self.root)
+            fixture_ci = {"run_id": 100, "attempt": 1, "job": "grouped", "event": "pull_request"}
+            bundle = runner.aggregate(self.root, ci=fixture_ci)
+            self.assertEqual(bundle["ci"], fixture_ci)
             self.write(self.root / "coverage.json", bundle)
             self.assertEqual(validation_evidence.verify_coverage(self.root / "coverage.json"), bundle)
             self.assertEqual(bundle["schema"], runner.COVERAGE_SCHEMA)
