@@ -286,6 +286,13 @@ class CurrentEvidenceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             root=Path(folder);workspace=root/'producer';scope=workspace/'tmp/validation-evidence/short-synthetic';scope.mkdir(parents=True)
             coverage,short=current_short(scope)
+            # Installation precheck attachments are retained alongside, never
+            # substituted for the existing exact current-PR/merge-short closure.
+            precheck = workspace/'tmp/validation-evidence/locked-environment.json'
+            precheck_log = precheck.with_suffix('.log')
+            write(precheck, {'schema': 'zhuyin-locked-environment-check/1', 'status': 'success', 'environment': evidence.load_json(short)['environment']})
+            precheck_log.write_text(json.dumps({'argv': ['fixture-python', 'scripts/release_ci_evidence.py', 'verify-environment', '--output', str(precheck)]})+'\nexit_code=0\n')
+            precheck_bytes, precheck_log_bytes = precheck.read_bytes(), precheck_log.read_bytes()
             (scope/'personal.txt').write_text('synthetic excluded canary; not user data',encoding='utf-8')
             upload=step(current_job('short'),'Upload validation evidence')
             block=re.search(r'^          path: \|\n((?:            .*\n)+)',upload,re.M).group(1)
@@ -297,6 +304,7 @@ class CurrentEvidenceTests(unittest.TestCase):
                 if pattern.startswith('!'):included.difference_update(workspace.glob(pattern[1:]))
             lock=scope/'pr-evidence/main-full/lock.txt'
             self.assertIn(lock,included);self.assertNotIn(scope/'personal.txt',included)
+            self.assertIn(precheck, included);self.assertIn(precheck_log, included)
             archive=root/'uploaded.zip'
             with zipfile.ZipFile(archive,'w') as output:
                 for path in sorted(included):output.write(path,path.relative_to(workspace/'tmp/validation-evidence').as_posix())
@@ -307,6 +315,8 @@ class CurrentEvidenceTests(unittest.TestCase):
             extracted=root/'relocated';evidence.extract_evidence(archive.read_bytes(),extracted)
             shutil.rmtree(workspace)
             relocated=extracted/'short-synthetic'
+            self.assertEqual((extracted/'locked-environment.json').read_bytes(), precheck_bytes)
+            self.assertEqual((extracted/'locked-environment.log').read_bytes(), precheck_log_bytes)
             self.assertEqual(evidence.verify_reuse(relocated/'pr-evidence/current-coverage.json',relocated/'short.json')['outcome'],'success')
             missing_root=root/'missing';evidence.extract_evidence(missing.getvalue(),missing_root)
             with self.assertRaises((OSError,ValueError)):

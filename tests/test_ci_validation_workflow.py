@@ -115,6 +115,17 @@ def action(section):
     return ('run', run.group(1))
 
 
+def current_python_transport_driver(body):
+    """Only command transport; interpreter identity is tested with a real venv separately."""
+    return '''
+$env:CI_PYTHON = Join-Path (Get-Location) 'tmp/ci-venv/Scripts/python.exe'
+New-Item -ItemType Directory -Force -Path (Split-Path $env:CI_PYTHON) | Out-Null
+New-Item -ItemType File -Force -Path $env:CI_PYTHON | Out-Null
+function python { $global:LASTEXITCODE=0 }
+Set-Item -LiteralPath "Function:$env:CI_PYTHON" -Value { $args -join ' '; $global:LASTEXITCODE=[int]$env:FIXTURE_EXIT }
+''' + body
+
+
 def event_context(event='pull_request', ref='refs/pull/41/merge', **changes):
     github = dict(event_name=event, ref=ref, head_ref='chore/validation-flow-reduction',
                   repository='discoveryray/zhuyin-proofreader',
@@ -423,6 +434,8 @@ class CurrentValidationWorkflowTests(unittest.TestCase):
                 for label in ('Capture main full environment','Upload main full evidence','Check repository working tree','Verify required validation results'):
                     declared={'env':{'FULL_CURRENT_VALIDATION':'true'}}
                     self.assertTrue(condition(step(current_job('test'),label),{**context,**declared,'_success':False}))
+                for label in ('Run full pytest suite', 'Verify active test execution', 'Compile Python sources'):
+                    self.assertFalse(condition(step(current_job('test'), label), {**context, 'env': {'FULL_CURRENT_VALIDATION': 'true'}, '_success': False}), 'failed environment precheck must stop expensive validation')
         for context in (event_context('push','refs/heads/develop'),event_context('push','refs/heads/develop',event__before='502414b3b38e004a6d8d9cb693cf21b65148765a')):
             self.assertEqual(set(current_plan(context)),{'short','test'})
             self.assertEqual(set(dict(current_plan(context)['test'])),{'Check out repository','Set up Python','Show Python version','Verify required validation results'})
@@ -453,7 +466,7 @@ class CurrentValidationWorkflowTests(unittest.TestCase):
 
     def test_current_commands_lock_capture_scope_and_finite_artifacts_are_explicit(self):
         full=current_job('test');short=current_job('short')
-        self.assertEqual(action(step(short,'Verify merge and run short validation')),('run','python scripts/validation_evidence.py post-merge --current-only --evidence-root tmp/validation-evidence'))
+        self.assertEqual(action(step(short,'Verify merge and run short validation')),('run','& $env:CI_PYTHON scripts/validation_evidence.py post-merge --current-only --evidence-root tmp/validation-evidence'))
         self.assertIn('pip==24.2',step(short,'Install locked validation dependencies'))
         self.assertIn('-r requirements-ci-lock.txt',step(short,'Install locked validation dependencies'))
         self.assertEqual(re.search(r'^      PYTEST_ADDOPTS: (.*)$',short,re.M).group(1),'""')
@@ -465,6 +478,17 @@ class CurrentValidationWorkflowTests(unittest.TestCase):
         for name in ('Capture main full environment','Produce current validation coverage','Verify current validation coverage'):
             self.assertNotIn('validation_runner.py',step(full,name))
         self.assertIn('environment --current-only',step(full,'Capture main full environment'))
+        for section, installer in ((full, 'Upgrade pip'), (short, 'Install locked validation dependencies')):
+            body = step(section, installer)
+            self.assertIn('$env:CI_PYTHON = (Resolve-Path tmp/ci-venv/Scripts/python.exe).Path', body)
+            self.assertIn('"CI_PYTHON=$env:CI_PYTHON"', body)
+            self.assertIn('$env:GITHUB_ENV', body)
+        self.assertLess(full.index('Capture main full environment'), full.index('Run full pytest suite'))
+        self.assertLess(full.index('Install development dependencies'), full.index('Capture main full environment'))
+        self.assertIn('verify-environment', step(short, 'Install locked validation dependencies'))
+        for name, body in steps(full):
+            if name not in ('Show Python version', 'Upgrade pip') and action(body)[0] == 'run' and name != 'Verify required validation results':
+                self.assertIn('& $env:CI_PYTHON', body)
         for section,name in ((full,'Upload main full evidence'),(short,'Upload validation evidence')):
             upload=step(section,name)
             for required in ('always()','if-no-files-found: error','overwrite: false','include-hidden-files: false','actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a'):
@@ -488,8 +512,8 @@ class CurrentValidationWorkflowTests(unittest.TestCase):
             for code in (0,17):
                 with tempfile.TemporaryDirectory() as folder:
                     # Command transport only; no package install or functional pytest is started.
-                    driver="function python { if ($args[0] -eq '-m' -and $args[1] -eq 'venv') { New-Item -ItemType Directory -Force -Path (Join-Path $args[2] 'Scripts') | Out-Null; $global:LASTEXITCODE=0 } else { $args -join ' '; $global:LASTEXITCODE=[int]$env:FIXTURE_EXIT } }\n"+body
-                    result=subprocess.run([shell,'-NoProfile','-NonInteractive','-Command',driver],cwd=folder,capture_output=True,env={**os.environ,'FIXTURE_EXIT':str(code),'GITHUB_PATH':str(Path(folder)/'github-path.log')},timeout=30)
+                    driver=current_python_transport_driver(body)
+                    result=subprocess.run([shell,'-NoProfile','-NonInteractive','-Command',driver],cwd=folder,capture_output=True,env={**os.environ,'FIXTURE_EXIT':str(code),'GITHUB_PATH':str(Path(folder)/'github-path.log'),'GITHUB_ENV':str(Path(folder)/'github-env.log')},timeout=30)
                 with self.subTest(name=name,code=code):
                     self.assertEqual(result.returncode,code,result.stderr)
                     self.assertIn(expected,result.stdout.decode())

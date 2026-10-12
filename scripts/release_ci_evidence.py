@@ -36,6 +36,9 @@ def environment(output, *, current_only=False):
         output.parent.mkdir(parents=True, exist_ok=True)
         with output.open("x", encoding="utf-8") as stream:
             json.dump(result, stream, indent=2, ensure_ascii=False)
+        # Keep the original capture even on failure; this is metadata, not PASS.
+        # The same strict guard is also used by the final coverage consumer.
+        evidence._locked_environment(result["environment"], evidence.ROOT / "requirements-ci-lock.txt")
         return
     # Deliberately no environment dump, credentials, user paths or DB inspection.
     result = {"schema": "zhuyin-main-full-environment/1",
@@ -53,9 +56,36 @@ def environment(output, *, current_only=False):
     output.write_text(json.dumps(result, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
+def verify_environment(output):
+    """Fail before full pytest using the existing exact frozen environment guard."""
+    try:
+        from scripts import validation_evidence as evidence
+    except ModuleNotFoundError:
+        import validation_evidence as evidence
+    value = evidence.runner_module().environment()
+    record = {"schema": "zhuyin-locked-environment-check/1", "environment": value,
+              "executable": sys.executable, "prefix": sys.prefix, "base_prefix": sys.base_prefix}
+    try:
+        evidence._locked_environment(value, evidence.ROOT / "requirements-ci-lock.txt")
+    except ValueError as error:
+        record.update(status="failed", error=str(error))
+        raise
+    else:
+        record["status"] = "success"
+    finally:
+        output.parent.mkdir(parents=True, exist_ok=True)
+        with output.open("x", encoding="utf-8") as stream:
+            json.dump(record, stream, indent=2, ensure_ascii=False)
+
+
 def run(output, command):
     if not command:
         raise ValueError("child command required")
+    # Resolve only the finite unqualified Python spellings. Explicit executables
+    # and non-Python commands retain their original identity and arguments.
+    command = list(command)
+    if command[0].lower() in {"python", "python.exe"}:
+        command[0] = sys.executable
     output.parent.mkdir(parents=True, exist_ok=True)
     with output.open("wb") as log:
         log.write((json.dumps({"argv": command}, ensure_ascii=False) + "\n").encode("utf-8"))
@@ -73,14 +103,17 @@ def run(output, command):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("environment", "run"))
+    parser.add_argument("command", choices=("environment", "verify-environment", "run"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--current-only", action="store_true")
     args, child = parser.parse_known_args(argv)
-    if args.command == "environment":
+    if args.command in {"environment", "verify-environment"}:
         if child:
             parser.error("unexpected environment arguments")
-        environment(args.output, current_only=args.current_only)
+        if args.command == "verify-environment":
+            verify_environment(args.output)
+        else:
+            environment(args.output, current_only=args.current_only)
         return 0
     return run(args.output, child[1:] if child and child[0] == "--" else child)
 

@@ -42,13 +42,17 @@ jobs:
         run: |
           python -m venv tmp/ci-venv
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & tmp/ci-venv/Scripts/python.exe -m pip install --disable-pip-version-check pip==24.2
+          $env:CI_PYTHON = (Resolve-Path tmp/ci-venv/Scripts/python.exe).Path
+          & $env:CI_PYTHON -m pip install --disable-pip-version-check pip==24.2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & tmp/ci-venv/Scripts/python.exe -m pip install --disable-pip-version-check -r requirements-ci-lock.txt
+          & $env:CI_PYTHON -m pip install --disable-pip-version-check -r requirements-ci-lock.txt
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          (Resolve-Path tmp/ci-venv/Scripts).Path | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "CI_PYTHON=$env:CI_PYTHON" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          & $env:CI_PYTHON scripts/release_ci_evidence.py run --output tmp/validation-evidence/locked-environment.log -- python scripts/release_ci_evidence.py verify-environment --output tmp/validation-evidence/locked-environment.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify merge and run short validation
-        run: python scripts/validation_evidence.py post-merge --current-only --evidence-root tmp/validation-evidence
+        run: |
+          & $env:CI_PYTHON scripts/validation_evidence.py post-merge --current-only --evidence-root tmp/validation-evidence
       - name: Upload validation evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -101,52 +105,56 @@ jobs:
         run: |
           python -m venv tmp/ci-venv
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $scripts = (Resolve-Path tmp/ci-venv/Scripts).Path
-          $env:PATH = "$scripts;$env:PATH"
-          python scripts/release_ci_evidence.py run --output tmp/main-full/pip.log -- python -m pip install --disable-pip-version-check pip==24.2
+          $env:CI_PYTHON = (Resolve-Path tmp/ci-venv/Scripts/python.exe).Path
+          & $env:CI_PYTHON scripts/release_ci_evidence.py run --output tmp/main-full/pip.log -- python -m pip install --disable-pip-version-check pip==24.2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $scripts | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "CI_PYTHON=$env:CI_PYTHON" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Install development dependencies
         id: dependencies
         if: ${{ env.FULL_CURRENT_VALIDATION == 'true' }}
         shell: pwsh
         run: |
-          python scripts/release_ci_evidence.py run --output tmp/main-full/dependencies.log -- python -m pip install --disable-pip-version-check -r requirements-ci-lock.txt
+          & $env:CI_PYTHON scripts/release_ci_evidence.py run --output tmp/main-full/dependencies.log -- python -m pip install --disable-pip-version-check -r requirements-ci-lock.txt
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Capture main full environment
+        id: main_environment
+        if: ${{ always() && env.FULL_CURRENT_VALIDATION == 'true' }}
+        run: |
+          & $env:CI_PYTHON scripts/release_ci_evidence.py environment --current-only --output tmp/main-full/environment.json
       - name: Validate runtime asset integrity
         id: runtime
         if: ${{ env.FULL_CURRENT_VALIDATION == 'true' }}
         shell: pwsh
         run: |
-          python scripts/release_ci_evidence.py run --output tmp/main-full/runtime.log -- python -m pytest tests/test_runtime_asset_manifest_integrity_v562.py -q
+          & $env:CI_PYTHON scripts/release_ci_evidence.py run --output tmp/main-full/runtime.log -- python -m pytest tests/test_runtime_asset_manifest_integrity_v562.py -q
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Audit test entrypoint coverage
         id: inventory
         if: ${{ env.FULL_CURRENT_VALIDATION == 'true' }}
         shell: pwsh
         run: |
-          python scripts/release_ci_evidence.py run --output tmp/main-full/inventory.log -- python scripts/test_entrypoint_audit.py collect tmp/ci-test-inventory.json
+          & $env:CI_PYTHON scripts/release_ci_evidence.py run --output tmp/main-full/inventory.log -- python scripts/test_entrypoint_audit.py collect tmp/ci-test-inventory.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Run full pytest suite
         id: pytest
-        if: ${{ env.FULL_CURRENT_VALIDATION == 'true' && !cancelled() }}
+        if: ${{ success() && env.FULL_CURRENT_VALIDATION == 'true' && !cancelled() }}
         shell: pwsh
         run: |
-          python scripts/release_ci_evidence.py run --output tmp/main-full/pytest.log -- python -m pytest tests/ -q -rs --junitxml=tmp/ci-pytest.xml
+          & $env:CI_PYTHON scripts/release_ci_evidence.py run --output tmp/main-full/pytest.log -- python -m pytest tests/ -q -rs --junitxml=tmp/ci-pytest.xml
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify active test execution
         id: active
-        if: ${{ env.FULL_CURRENT_VALIDATION == 'true' && !cancelled() }}
+        if: ${{ success() && env.FULL_CURRENT_VALIDATION == 'true' && !cancelled() }}
         shell: pwsh
         run: |
-          python scripts/release_ci_evidence.py run --output tmp/main-full/active.log -- python scripts/test_entrypoint_audit.py verify-active tmp/ci-test-inventory.json --junit tmp/ci-pytest.xml
+          & $env:CI_PYTHON scripts/release_ci_evidence.py run --output tmp/main-full/active.log -- python scripts/test_entrypoint_audit.py verify-active tmp/ci-test-inventory.json --junit tmp/ci-pytest.xml
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Compile Python sources
         id: compile
-        if: ${{ env.FULL_CURRENT_VALIDATION == 'true' && !cancelled() }}
+        if: ${{ success() && env.FULL_CURRENT_VALIDATION == 'true' && !cancelled() }}
         shell: pwsh
         run: |
-          python scripts/release_ci_evidence.py run --output tmp/main-full/compile.log -- python -m compileall -q -x "(^|[\\/])(\.venv|tmp)([\\/]|$)" .
+          & $env:CI_PYTHON scripts/release_ci_evidence.py run --output tmp/main-full/compile.log -- python -m compileall -q -x "(^|[\\/])(\.venv|tmp)([\\/]|$)" .
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Check committed whitespace (pull request)
         id: diff_pr
@@ -157,7 +165,7 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           if ($env:BASE_SHA -notmatch '^[0-9a-f]{40}$' -or $env:HEAD_SHA -notmatch '^[0-9a-f]{40}$') { throw 'Missing current PR identity' }
-          python scripts/release_ci_evidence.py run --output tmp/main-full/diff.log -- git diff --check "$($env:BASE_SHA)...$($env:HEAD_SHA)"
+          & $env:CI_PYTHON scripts/release_ci_evidence.py run --output tmp/main-full/diff.log -- git diff --check "$($env:BASE_SHA)...$($env:HEAD_SHA)"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Check committed whitespace (push)
         id: diff_push
@@ -168,29 +176,27 @@ jobs:
           AFTER_SHA: ${{ github.sha }}
         run: |
           if ($env:BEFORE_SHA -notmatch '^[0-9a-f]{40}$' -or $env:AFTER_SHA -notmatch '^[0-9a-f]{40}$') { throw 'Missing current push identity' }
-          python scripts/release_ci_evidence.py run --output tmp/main-full/diff.log -- git diff --check "$($env:BEFORE_SHA)..$($env:AFTER_SHA)"
+          & $env:CI_PYTHON scripts/release_ci_evidence.py run --output tmp/main-full/diff.log -- git diff --check "$($env:BEFORE_SHA)..$($env:AFTER_SHA)"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Check repository working tree
         id: clean
         if: ${{ always() && env.FULL_CURRENT_VALIDATION == 'true' }}
         shell: pwsh
         run: |
-          python scripts/release_ci_evidence.py run --output tmp/main-full/clean.log -- git status --porcelain
+          & $env:CI_PYTHON scripts/release_ci_evidence.py run --output tmp/main-full/clean.log -- git status --porcelain
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $lines = @(Get-Content tmp/main-full/clean.log)
           if (($lines[1..($lines.Count - 2)] -join '').Trim()) { throw 'Repository working tree is not clean' }
-      - name: Capture main full environment
-        id: main_environment
-        if: ${{ always() && env.FULL_CURRENT_VALIDATION == 'true' }}
-        run: python scripts/release_ci_evidence.py environment --current-only --output tmp/main-full/environment.json
       - name: Produce current validation coverage
         id: coverage
         if: ${{ success() && env.FULL_CURRENT_VALIDATION == 'true' }}
-        run: python scripts/validation_evidence.py current-coverage --evidence-root tmp --output tmp/current-coverage.json
+        run: |
+          & $env:CI_PYTHON scripts/validation_evidence.py current-coverage --evidence-root tmp --output tmp/current-coverage.json
       - name: Verify current validation coverage
         id: coverage_verify
         if: ${{ success() && env.FULL_CURRENT_VALIDATION == 'true' }}
-        run: python scripts/validation_evidence.py verify-coverage tmp/current-coverage.json
+        run: |
+          & $env:CI_PYTHON scripts/validation_evidence.py verify-coverage tmp/current-coverage.json
       - name: Upload main full evidence
         id: main_evidence
         if: ${{ always() && env.FULL_CURRENT_VALIDATION == 'true' }}
