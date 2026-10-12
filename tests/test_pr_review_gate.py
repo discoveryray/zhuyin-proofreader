@@ -810,7 +810,9 @@ class ReviewGateTests(unittest.TestCase):
                 self.assertEqual(json.loads(result.stdout)["action"], "STOP")
 
     def test_gate_required_step_names_still_match_repository_workflow(self):
-        workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        # Retain every old reader assertion against its exact source snapshot.
+        from tests.ci_workflow_history_fixture import E744_WORKFLOW
+        workflow = E744_WORKFLOW
         # Keep the immutable legacy snapshot reader while checking the
         # current workflow selected by the explicit no-window policy.
         self.assertIn("Verify GUI test execution", gate.COMMON_STEPS)
@@ -834,6 +836,23 @@ class ReviewGateTests(unittest.TestCase):
         self.assertIn("- name: Verify required validation results", workflow)
         self.assertIn("needs.grouped.result", workflow)
         self.assertIn("needs.short.result", workflow)
+        # The new gate policy independently requires every current live step.
+        import ast
+        import inspect
+        live = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        body = ast.parse(inspect.getsource(gate._current_ci_problem))
+        declaration = next(n for n in ast.walk(body) if isinstance(n, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "required" for t in n.targets))
+        required = ast.literal_eval(declaration.value)
+        self.assertEqual(len(required), len(set(required)))
+        self.assertIn("Verify current validation coverage", required)
+        self.assertIn("Produce current validation coverage", required)
+        self.assertIn("Upload main full evidence", required)
+        self.assertNotIn("Run full unittest suite", required)
+        for name in required:
+            self.assertIn(f"- name: {name}\n", live)
+        self.assertNotIn("restore-history", live)
+        self.assertNotIn("validation_runner.py", live)
+        self.assertEqual(gate.CURRENT_POLICY, "validation-flow/current-evidence/1")
 
 
 

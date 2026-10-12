@@ -1,5 +1,9 @@
 # 兩輪審查流程的證據 gate
 
+新政策下，既有 review-history adapter 仍核對原任務、審查與修正紀錄的身分、順序、授權及已確認 blocker；不再讀取其歷史 CI archive、execution manifest、JUnit、events 或執行輸出作為前置條件。這項分流只適用明示的 current-evidence 政策，舊 snapshot 的原 reader、schema 及判定保持。
+
+2026-10-12 永久採納 `validation-flow/current-evidence/1`。新 v4 snapshot 明示此 validation_policy，以 coverage `/3`、對應 actual merge-short `/3` 核當前候選，不以歷史 aggregate、旧artifact/封存新版閉包重播作前置。舊無旗標或 no-real-tk/1 snapshot 仍按原 schema/政策讀取；下列原 `/1`、`/2` 歷史描述不追溯改義。當次完整 pytest/verify-active、raw hashes、CI身分/SHA/parents/tree、兩輪完整 PASS、產品安全 blocker、授權、corrective 上限及 GitHub 保護不放寬。Gate 不證明輸入真實性或創造授權；原 native STOP 不改標 PASS。詳見[現行政策](VALIDATION_POLICY.md)。
+
 2026-10-07 使用者明確採納 `validation-flow/no-real-tk/1`，完全取消所有自動化入口的真視窗驗證（含 hidden root、虛擬顯示器、fixture／import／子程序）、Tcl/Tk configure／preflight／初始化能力門檻及 GUI retry／補驗。新政策適用本身與後續驗證；尚未結案任務只遷移 window 義務，其餘凍結契約、baseline、修正計數、原 Tk 失敗及 retry 額度保留，其他 blocker 不自動解除。產品 GUI／Tk／launcher 保留；有效非視窗資料／交易／恢復與功能測試、Python 3.13.0、runtime／compile／diff、兩輪審查與 actual merge 短驗證仍必要。詳見 [驗證政策](VALIDATION_POLICY.md)。
 
 舊 v3／PR29／PR41 schema、原授權及判定保留；下列原 GUI／preflight 歷史 contract 不授權未來再執行真視窗，也不追認舊 PASS。新政策證據與舊原件必須明確區分。

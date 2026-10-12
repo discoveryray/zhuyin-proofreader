@@ -193,6 +193,26 @@ class Pr43SixthGateTests(unittest.TestCase):
     commit = Pr43CorrectionGateTests.commit
     candidate = Pr43CorrectionGateTests.candidate
 
+    def test_current_policy_keeps_review_prefix_and_sixth_limit_without_old_ci(self):
+        for name in ("ci_manifest", "ci_raw", "ci_junit", "ci_events"):
+            Path(self.sixth_refs[name]).unlink()
+        current=deepcopy(self.old_state);current["validation_policy"]=gate.CURRENT_POLICY
+        before=deepcopy(current);gate.validate_state(current)
+        self.assertEqual(gate.next_action(current)["action"],"STOP")
+        self.assertEqual(current,before)
+        with self.assertRaisesRegex(gate.EvidenceError,"unavailable"):gate.validate_state(self.old_state)
+        self.sixth(before=True,after=True);self.state["validation_policy"]=gate.CURRENT_POLICY
+        gate.validate_state(self.state)
+        self.assertEqual(gate._correction_limit(self.state),6)
+        self.assertEqual(gate.next_action(self.state)["action"],"REQUEST_REVIEW_1")
+        self.assertEqual(gate._correct(self.state,"confirmed synthetic new defect")["action"],"STOP")
+        for mutation in (lambda s:s["reviews"][4].update(findings=["changed"]),lambda s:s["pr43_review_history_adapter"].update(contract="future"),
+                         lambda s:s["corrections"].pop(0),lambda s:s["reviews"].append(deepcopy(s["reviews"][2]))):
+            changed=deepcopy(self.state);mutation(changed)
+            with self.subTest(mutation=mutation),self.assertRaises(gate.EvidenceError):gate.validate_state(changed)
+        Path(self.sixth_refs["adoption"]).unlink()
+        with self.assertRaisesRegex(gate.EvidenceError,"unavailable"):gate.validate_state(self.state)
+
     def setUp(self):
         from test_pr_review_gate import review_evidence
         Pr43CorrectionGateTests.setUp(self)
@@ -383,6 +403,27 @@ class Pr43PostmergeGateTests(unittest.TestCase):
     commit = Pr43CorrectionGateTests.commit
     candidate = Pr43CorrectionGateTests.candidate
     sixth = Pr43SixthGateTests.sixth
+
+    def test_current_postmerge_propagates_policy_without_relabeling_old_snapshot(self):
+        original_snapshot=Path(self.post_refs["snapshot"]).read_bytes()
+        for name in ("ci_manifest","ci_raw","ci_junit","ci_events"):
+            Path(self.sixth_refs[name]).unlink()
+        for name in ("short","handoff"):
+            Path(self.post_refs[name]).unlink()
+        current=deepcopy(self.state);current["validation_policy"]=gate.CURRENT_POLICY
+        gate.validate_state(current)
+        self.assertEqual(gate._correction_limit(current),7)
+        self.assertEqual(gate.next_action(current)["action"],"REQUEST_REVIEW_1")
+        self.assertEqual(Path(self.post_refs["snapshot"]).read_bytes(),original_snapshot)
+        self.assertEqual(current["reviews"][:10],self.old_merged["reviews"])
+        self.assertEqual(current["corrections"][:6],self.old_merged["corrections"])
+        with self.assertRaisesRegex(gate.EvidenceError,"unavailable"):gate.validate_state(self.state)
+        old=deepcopy(self.old_merged);old["validation_policy"]=gate.CURRENT_POLICY
+        self.assertEqual(gate.next_action(old)["action"],"STOP")
+        changed=deepcopy(current);changed["corrections"].append(dict(changed["corrections"][-1],number=8))
+        with self.assertRaises(gate.EvidenceError):gate.validate_state(changed)
+        Path(self.post_refs["finding_report"]).unlink()
+        with self.assertRaisesRegex(gate.EvidenceError,"unavailable"):gate.validate_state(current)
 
     def setUp(self):
         from test_pr_review_gate import review_evidence

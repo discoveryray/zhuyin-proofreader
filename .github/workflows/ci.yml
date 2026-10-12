@@ -2,13 +2,9 @@ name: CI
 
 on:
   pull_request:
-    branches:
-      - develop
-      - main
+    branches: [develop, main]
   push:
-    branches:
-      - develop
-      - main
+    branches: [develop, main]
   workflow_dispatch:
 
 permissions:
@@ -16,88 +12,16 @@ permissions:
   actions: read
   pull-requests: read
 
-# Same candidate runs are serialized; previous attempts remain downloadable.
+# Serialize the current candidate without erasing original attempts.
 concurrency:
   group: validation-${{ github.repository }}-${{ github.event.pull_request.head.ref || github.ref }}
   cancel-in-progress: false
 
 jobs:
-  grouped:
-    name: Grouped validation
-    timeout-minutes: 125
-    if: ${{ github.event_name == 'pull_request' && !((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) }}
-    runs-on: windows-latest
-    env:
-      PYTHONUTF8: "1"
-      PYTHONIOENCODING: "utf-8"
-      PYTEST_ADDOPTS: ""
-      GH_TOKEN: ${{ github.token }}
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - name: Set up Python
-        uses: actions/setup-python@v7
-        with:
-          python-version: '3.13.0'
-      - name: Install locked validation dependencies
-        shell: pwsh
-        run: |
-          python -m venv tmp/ci-venv
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & tmp/ci-venv/Scripts/python.exe -m pip install -r requirements-ci-lock.txt
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          (Resolve-Path tmp/ci-venv/Scripts).Path | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-      - name: Restore validation history
-        run: python scripts/validation_runner.py restore-history --evidence-root tmp/validation-evidence
-      - name: Run core group
-        run: python scripts/validation_runner.py run --group core --mode validation --evidence-root tmp/validation-evidence
-      - name: Aggregate functional coverage
-        run: python scripts/validation_runner.py aggregate --evidence-root tmp/validation-evidence --output tmp/validation-evidence/coverage.json
-      - name: Verify functional coverage
-        run: python scripts/validation_evidence.py verify-coverage tmp/validation-evidence/coverage.json
-      - name: Validate runtime asset integrity
-        run: >-
-          python -c "from pathlib import Path; from runtime_source_validation import validate_asset_manifest; r=validate_asset_manifest(Path.cwd()); assert r['ok'] and not r['errors'] and not r['warnings'] and r['required_asset_roster_ok'] and r['required_asset_chain_roster_ok']=={'actual':True,'expected':True}, r"
-      - name: Compile Python sources
-        run: python -m compileall -q -x "(^|[\\/])(\.venv|tmp)([\\/]|$)" .
-      - name: Check committed whitespace
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        shell: pwsh
-        run: |
-          if ($env:BASE_SHA -notmatch '^[0-9a-f]{40}$' -or $env:HEAD_SHA -notmatch '^[0-9a-f]{40}$') { throw "Missing PR base/head identity" }
-          git diff --check "$($env:BASE_SHA)...$($env:HEAD_SHA)"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Check repository working tree
-        if: always()
-        shell: pwsh
-        run: |
-          $status = @(git status --porcelain)
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          if ($status.Count) { $status; throw "Working tree is not clean" }
-      - name: Upload validation evidence
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: validation-evidence-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            tmp/validation-evidence/**/*.json
-            tmp/validation-evidence/**/*.jsonl
-            tmp/validation-evidence/**/*.xml
-            tmp/validation-evidence/**/*.log
-            tmp/validation-evidence/**/pr-artifact.zip
-            !tmp/validation-evidence/**/temp/**
-          if-no-files-found: error
-          overwrite: false
-          include-hidden-files: false
-
   short:
     name: Merge short validation
     timeout-minutes: 20
-    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' && !((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) }}
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' }}
     runs-on: windows-latest
     env:
       PYTHONUTF8: "1"
@@ -118,11 +42,13 @@ jobs:
         run: |
           python -m venv tmp/ci-venv
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          & tmp/ci-venv/Scripts/python.exe -m pip install -r requirements-ci-lock.txt
+          & tmp/ci-venv/Scripts/python.exe -m pip install --disable-pip-version-check pip==24.2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & tmp/ci-venv/Scripts/python.exe -m pip install --disable-pip-version-check -r requirements-ci-lock.txt
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           (Resolve-Path tmp/ci-venv/Scripts).Path | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Verify merge and run short validation
-        run: python scripts/validation_evidence.py post-merge --evidence-root tmp/validation-evidence
+        run: python scripts/validation_evidence.py post-merge --current-only --evidence-root tmp/validation-evidence
       - name: Upload validation evidence
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -134,6 +60,7 @@ jobs:
             tmp/validation-evidence/**/*.xml
             tmp/validation-evidence/**/*.log
             tmp/validation-evidence/**/pr-artifact.zip
+            tmp/validation-evidence/**/pr-evidence/main-full/lock.txt
             !tmp/validation-evidence/**/temp/**
           if-no-files-found: error
           overwrite: false
@@ -142,193 +69,134 @@ jobs:
   test:
     name: Python ${{ matrix.python-version }}
     if: always()
-    needs: [grouped, short]
+    needs: [short]
     runs-on: windows-latest
     env:
       PYTHONUTF8: "1"
       PYTHONIOENCODING: "utf-8"
-      # Keep the exact frozen PR29 capture exception; no Tk validation runs.
-      PYTEST_ADDOPTS: ${{ ((github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) && '--capture=sys' || '' }}
+      PYTEST_ADDOPTS: ""
+      FULL_CURRENT_VALIDATION: ${{ (github.event_name == 'pull_request' && (github.event.pull_request.base.ref == 'develop' || github.event.pull_request.base.ref == 'main')) || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
     strategy:
       fail-fast: false
       matrix:
-        # PR29's develop push window only schedules tests; the actual PR merge is
-        # established separately from GitHub's record, ordered parents and tree.
-        python-version: ${{ fromJSON(((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) && '["3.12", "3.13"]' || '["3.13"]') }}
-
+        python-version: ['3.13']
     steps:
       - name: Check out repository
         id: checkout
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-
       - name: Set up Python
         id: python
         uses: actions/setup-python@v7
         with:
-          python-version: ${{ matrix.python-version == '3.13' && '3.13.0' || matrix.python-version }}
-
+          python-version: '3.13.0'
       - name: Show Python version
         id: version
         run: python --version
-
       - name: Upgrade pip
         id: pip
-        if: ${{ (((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) }}
+        if: ${{ env.FULL_CURRENT_VALIDATION == 'true' }}
         shell: pwsh
         run: |
-          if ($env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF -eq 'refs/heads/main') {
-            python scripts/release_ci_evidence.py run --output tmp/main-full/pip.log -- python -m pip install --disable-pip-version-check pip==24.2
-          } else {
-            python -m pip install --upgrade pip
-          }
+          python -m venv tmp/ci-venv
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
+          $scripts = (Resolve-Path tmp/ci-venv/Scripts).Path
+          $env:PATH = "$scripts;$env:PATH"
+          python scripts/release_ci_evidence.py run --output tmp/main-full/pip.log -- python -m pip install --disable-pip-version-check pip==24.2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $scripts | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
       - name: Install development dependencies
         id: dependencies
-        if: ${{ (((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) }}
+        if: ${{ env.FULL_CURRENT_VALIDATION == 'true' }}
         shell: pwsh
         run: |
-          if ($env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF -eq 'refs/heads/main') {
-            python scripts/release_ci_evidence.py run --output tmp/main-full/dependencies.log -- python -m pip install --disable-pip-version-check -r requirements-ci-lock.txt
-          } else {
-            python -m pip install -r requirements-ci.txt
-          }
+          python scripts/release_ci_evidence.py run --output tmp/main-full/dependencies.log -- python -m pip install --disable-pip-version-check -r requirements-ci-lock.txt
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
       - name: Validate runtime asset integrity
         id: runtime
-        if: ${{ (((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) }}
+        if: ${{ env.FULL_CURRENT_VALIDATION == 'true' }}
         shell: pwsh
         run: |
-          if ($env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF -eq 'refs/heads/main') {
-            python scripts/release_ci_evidence.py run --output tmp/main-full/runtime.log -- python -m pytest tests/test_runtime_asset_manifest_integrity_v562.py -q
-          } else {
-            python -m pytest tests/test_runtime_asset_manifest_integrity_v562.py -q
-          }
+          python scripts/release_ci_evidence.py run --output tmp/main-full/runtime.log -- python -m pytest tests/test_runtime_asset_manifest_integrity_v562.py -q
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
       - name: Audit test entrypoint coverage
         id: inventory
-        if: ${{ (((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) }}
-        run: python scripts/test_entrypoint_audit.py collect tmp/ci-test-inventory.json
-
-      - name: Run full unittest suite
-        if: ${{ ((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) }}
-        id: unittest
-        run: python -m unittest discover -s tests -p "test_*.py"
-
-      - name: Run full pytest suite
-        id: pytest
-        if: ${{ (((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && (!cancelled()) }}
+        if: ${{ env.FULL_CURRENT_VALIDATION == 'true' }}
         shell: pwsh
         run: |
-          if ($env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF -eq 'refs/heads/main') {
-            python scripts/release_ci_evidence.py run --output tmp/main-full/pytest.log -- python -m pytest tests/ -q -rs --junitxml=tmp/ci-pytest.xml
-          } else {
-            python -m pytest tests/ -q -rs --junitxml=tmp/ci-pytest.xml
-          }
+          python scripts/release_ci_evidence.py run --output tmp/main-full/inventory.log -- python scripts/test_entrypoint_audit.py collect tmp/ci-test-inventory.json
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-
+      - name: Run full pytest suite
+        id: pytest
+        if: ${{ env.FULL_CURRENT_VALIDATION == 'true' && !cancelled() }}
+        shell: pwsh
+        run: |
+          python scripts/release_ci_evidence.py run --output tmp/main-full/pytest.log -- python -m pytest tests/ -q -rs --junitxml=tmp/ci-pytest.xml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Verify active test execution
         id: active
-        if: ${{ (((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && (!cancelled()) }}
-        run: python scripts/test_entrypoint_audit.py verify-active tmp/ci-test-inventory.json --junit tmp/ci-pytest.xml
-
+        if: ${{ env.FULL_CURRENT_VALIDATION == 'true' && !cancelled() }}
+        shell: pwsh
+        run: |
+          python scripts/release_ci_evidence.py run --output tmp/main-full/active.log -- python scripts/test_entrypoint_audit.py verify-active tmp/ci-test-inventory.json --junit tmp/ci-pytest.xml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Compile Python sources
         id: compile
-        if: ${{ (((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && (!cancelled()) }}
-        run: python -m compileall -q -x "(^|[\\/])(\.venv|tmp)([\\/]|$)" .
-
+        if: ${{ env.FULL_CURRENT_VALIDATION == 'true' && !cancelled() }}
+        shell: pwsh
+        run: |
+          python scripts/release_ci_evidence.py run --output tmp/main-full/compile.log -- python -m compileall -q -x "(^|[\\/])(\.venv|tmp)([\\/]|$)" .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Check committed whitespace (pull request)
         id: diff_pr
-        if: ${{ (((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && (!cancelled() && github.event_name == 'pull_request') }}
+        if: ${{ env.FULL_CURRENT_VALIDATION == 'true' && github.event_name == 'pull_request' && !cancelled() }}
         shell: pwsh
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          if (
-            [string]::IsNullOrWhiteSpace($env:BASE_SHA) -or
-            [string]::IsNullOrWhiteSpace($env:HEAD_SHA)
-          ) {
-            Write-Error "Pull request base/head SHA is unavailable."
-            exit 1
-          }
-          git diff --check "$($env:BASE_SHA)...$($env:HEAD_SHA)"
-          if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
-          }
-
+          if ($env:BASE_SHA -notmatch '^[0-9a-f]{40}$' -or $env:HEAD_SHA -notmatch '^[0-9a-f]{40}$') { throw 'Missing current PR identity' }
+          python scripts/release_ci_evidence.py run --output tmp/main-full/diff.log -- git diff --check "$($env:BASE_SHA)...$($env:HEAD_SHA)"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Check committed whitespace (push)
         id: diff_push
-        if: ${{ (((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && (!cancelled() && github.event_name == 'push') }}
+        if: ${{ env.FULL_CURRENT_VALIDATION == 'true' && github.event_name == 'push' && !cancelled() }}
         shell: pwsh
         env:
           BEFORE_SHA: ${{ github.event.before }}
           AFTER_SHA: ${{ github.sha }}
         run: |
-          if (
-            [string]::IsNullOrWhiteSpace($env:BEFORE_SHA) -or
-            [string]::IsNullOrWhiteSpace($env:AFTER_SHA)
-          ) {
-            Write-Error "Push before/after SHA is unavailable."
-            exit 1
-          }
-          if ($env:BEFORE_SHA -match '^0+$') {
-            $emptyTree = (git hash-object -t tree --stdin).Trim()
-            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($emptyTree)) {
-              Write-Error "Unable to derive the empty Git tree for an all-zero before SHA."
-              exit 1
-            }
-            git diff --check "$emptyTree..$($env:AFTER_SHA)"
-          } else {
-            git diff --check "$($env:BEFORE_SHA)..$($env:AFTER_SHA)"
-          }
-          if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
-          }
-
-      - name: Check committed whitespace (workflow dispatch)
-        if: ${{ ((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) && (!cancelled() && github.event_name == 'workflow_dispatch') }}
-        shell: pwsh
-        env:
-          HEAD_SHA: ${{ github.sha }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:HEAD_SHA)) {
-            Write-Error "Workflow dispatch HEAD SHA is unavailable."
-            exit 1
-          }
-          git diff --check "$($env:HEAD_SHA)^..$($env:HEAD_SHA)"
-          if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
-          }
-
+          if ($env:BEFORE_SHA -notmatch '^[0-9a-f]{40}$' -or $env:AFTER_SHA -notmatch '^[0-9a-f]{40}$') { throw 'Missing current push identity' }
+          python scripts/release_ci_evidence.py run --output tmp/main-full/diff.log -- git diff --check "$($env:BEFORE_SHA)..$($env:AFTER_SHA)"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Check repository working tree
         id: clean
-        if: ${{ (((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) || (github.event_name == 'push' && github.ref == 'refs/heads/main')) && (always()) }}
+        if: ${{ always() && env.FULL_CURRENT_VALIDATION == 'true' }}
         shell: pwsh
         run: |
-          $status = @(git status --short)
-          if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
-          }
-          $status | ForEach-Object { Write-Output $_ }
-          if ($status.Count -ne 0) {
-            Write-Error "Repository working tree is not clean."
-            exit 1
-          }
+          python scripts/release_ci_evidence.py run --output tmp/main-full/clean.log -- git status --porcelain
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $lines = @(Get-Content tmp/main-full/clean.log)
+          if (($lines[1..($lines.Count - 2)] -join '').Trim()) { throw 'Repository working tree is not clean' }
       - name: Capture main full environment
         id: main_environment
-        if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
-        run: python scripts/release_ci_evidence.py environment --output tmp/main-full/environment.json
+        if: ${{ always() && env.FULL_CURRENT_VALIDATION == 'true' }}
+        run: python scripts/release_ci_evidence.py environment --current-only --output tmp/main-full/environment.json
+      - name: Produce current validation coverage
+        id: coverage
+        if: ${{ success() && env.FULL_CURRENT_VALIDATION == 'true' }}
+        run: python scripts/validation_evidence.py current-coverage --evidence-root tmp --output tmp/current-coverage.json
+      - name: Verify current validation coverage
+        id: coverage_verify
+        if: ${{ success() && env.FULL_CURRENT_VALIDATION == 'true' }}
+        run: python scripts/validation_evidence.py verify-coverage tmp/current-coverage.json
       - name: Upload main full evidence
         id: main_evidence
-        if: ${{ always() && github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+        if: ${{ always() && env.FULL_CURRENT_VALIDATION == 'true' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: main-full-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.python-version }}
+          name: current-validation-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
             tmp/ci-test-inventory.json
             tmp/ci-pytest.xml
@@ -337,6 +205,16 @@ jobs:
             tmp/main-full/dependencies.log
             tmp/main-full/runtime.log
             tmp/main-full/pytest.log
+            tmp/main-full/inventory.log
+            tmp/main-full/active.log
+            tmp/main-full/compile.log
+            tmp/main-full/diff.log
+            tmp/main-full/clean.log
+            tmp/main-full/event.json
+            tmp/main-full/lock.txt
+            tmp/main-full/registry.json
+            tmp/main-full/assets.json
+            tmp/current-coverage.json
           if-no-files-found: error
           overwrite: false
           include-hidden-files: false
@@ -344,11 +222,10 @@ jobs:
         if: always()
         shell: pwsh
         env:
-          GROUPED_RESULT: ${{ needs.grouped.result }}
+          CURRENT_FULL_VALIDATION: ${{ (github.event_name == 'pull_request' && (github.event.pull_request.base.ref == 'develop' || github.event.pull_request.base.ref == 'main')) || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
           SHORT_RESULT: ${{ needs.short.result }}
           EVENT_NAME: ${{ github.event_name }}
           EVENT_REF: ${{ github.ref }}
-          LEGACY_VALIDATION: ${{ ((github.event_name == 'pull_request' && github.head_ref == 'codex/simplify-validation' && github.event.pull_request.base.sha == '1593e7af65596d320b4427f1b15bb2bc0bdc949c') || (github.event_name == 'pull_request' && github.repository == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.head.repo.full_name == 'discoveryray/zhuyin-proofreader' && github.event.pull_request.number == 29 && github.head_ref == 'codex/review-confirm-responsive' && github.event.pull_request.base.ref == 'develop' && github.event.pull_request.base.sha == '502414b3b38e004a6d8d9cb693cf21b65148765a') || (github.event_name == 'push' && github.repository == 'discoveryray/zhuyin-proofreader' && github.ref == 'refs/heads/develop' && github.event.before == '502414b3b38e004a6d8d9cb693cf21b65148765a')) }}
           CHECKOUT_RESULT: ${{ steps.checkout.outcome }}
           PYTHON_RESULT: ${{ steps.python.outcome }}
           VERSION_RESULT: ${{ steps.version.outcome }}
@@ -356,7 +233,6 @@ jobs:
           DEPENDENCIES_RESULT: ${{ steps.dependencies.outcome }}
           RUNTIME_RESULT: ${{ steps.runtime.outcome }}
           INVENTORY_RESULT: ${{ steps.inventory.outcome }}
-          UNITTEST_RESULT: ${{ steps.unittest.outcome }}
           PYTEST_RESULT: ${{ steps.pytest.outcome }}
           ACTIVE_RESULT: ${{ steps.active.outcome }}
           COMPILE_RESULT: ${{ steps.compile.outcome }}
@@ -365,20 +241,19 @@ jobs:
           CLEAN_RESULT: ${{ steps.clean.outcome }}
           MAIN_ENVIRONMENT_RESULT: ${{ steps.main_environment.outcome }}
           MAIN_EVIDENCE_RESULT: ${{ steps.main_evidence.outcome }}
+          COVERAGE_RESULT: ${{ steps.coverage.outcome }}
+          COVERAGE_VERIFY_RESULT: ${{ steps.coverage_verify.outcome }}
         run: |
-          if ($env:LEGACY_VALIDATION -eq 'true' -or ($env:EVENT_NAME -eq 'push' -and $env:EVENT_REF -eq 'refs/heads/main')) {
-            if ($env:GROUPED_RESULT -ne 'skipped' -or $env:SHORT_RESULT -ne 'skipped') { throw 'Full validation must not schedule grouped or develop short jobs' }
-            $required = @('CHECKOUT_RESULT', 'PYTHON_RESULT', 'VERSION_RESULT', 'PIP_RESULT', 'DEPENDENCIES_RESULT', 'RUNTIME_RESULT', 'INVENTORY_RESULT', 'PYTEST_RESULT', 'ACTIVE_RESULT', 'COMPILE_RESULT', 'CLEAN_RESULT')
-            if ($env:LEGACY_VALIDATION -eq 'true') { $required += 'UNITTEST_RESULT' }
-            if ($env:EVENT_NAME -eq 'push' -and $env:EVENT_REF -eq 'refs/heads/main') { $required += @('MAIN_ENVIRONMENT_RESULT', 'MAIN_EVIDENCE_RESULT') }
+          if ($env:CURRENT_FULL_VALIDATION -eq 'true') {
+            if ($env:SHORT_RESULT -ne 'skipped') { throw 'Current full validation must not schedule develop short' }
+            $required = @('CHECKOUT_RESULT', 'PYTHON_RESULT', 'VERSION_RESULT', 'PIP_RESULT', 'DEPENDENCIES_RESULT', 'RUNTIME_RESULT', 'INVENTORY_RESULT', 'PYTEST_RESULT', 'ACTIVE_RESULT', 'COMPILE_RESULT', 'CLEAN_RESULT', 'MAIN_ENVIRONMENT_RESULT', 'MAIN_EVIDENCE_RESULT', 'COVERAGE_RESULT', 'COVERAGE_VERIFY_RESULT')
             if ($env:EVENT_NAME -eq 'push') { $required += 'DIFF_PUSH_RESULT' } else { $required += 'DIFF_PR_RESULT' }
-            foreach ($name in $required) {
-              if ([Environment]::GetEnvironmentVariable($name) -ne 'success') { throw "Required full-validation step did not succeed: $name" }
-            }
-          } elseif ($env:EVENT_NAME -eq 'pull_request') {
-            if ($env:GROUPED_RESULT -ne 'success' -or $env:SHORT_RESULT -ne 'skipped') { throw 'Required functional evidence did not succeed' }
           } elseif ($env:EVENT_NAME -eq 'push' -and $env:EVENT_REF -eq 'refs/heads/develop') {
-            if ($env:SHORT_RESULT -ne 'success' -or $env:GROUPED_RESULT -ne 'skipped') { throw 'Required actual merge short verification did not succeed' }
+            if ($env:SHORT_RESULT -ne 'success') { throw 'Required current actual merge short validation did not succeed' }
+            $required = @('CHECKOUT_RESULT', 'PYTHON_RESULT', 'VERSION_RESULT')
           } else {
-            throw 'Grouped validation requires a PR; short verification requires develop push; full push validation requires main'
+            throw 'Current validation requires PR to develop/main, develop push or main push'
+          }
+          foreach ($name in $required) {
+            if ([Environment]::GetEnvironmentVariable($name) -ne 'success') { throw "Required current-validation step did not succeed: $name" }
           }

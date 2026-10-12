@@ -1,5 +1,21 @@
 # Windows 無視窗分階段驗證政策
 
+## 現行永久政策：當前候選證據
+
+2026-10-12 使用者採納 `validation-flow/current-evidence/1`，立即適用未結案任務及後續一般工作，取代發布分支特例。正常入口不呼叫 restore-history，不要求全部舊 run/attempt、舊 artifact 或 handoff/ledger/continuation 通過新版閉包解讀；coverage、沿用與 gate 亦不得間接要求。歷史工具、封存、失敗與原判定只供查阅，不修 parser、不新增 PR/run 例外、不改寫舊 schema。
+
+一般 PR→develop、PR→main 均執行 Windows Python3.13.0、requirements-ci-lock.txt 的全部有效非視窗 pytest，inventory/JUnit `verify-active` 對帳；runtime、compile、PR diff、clean、當次環境/命令/退出碼/原始附件及 required Python3.13 summary 全部必要。當次失敗、漏跑、skip、錯 SHA、缺附件或 verifier 錯誤仍阻擋，不造空 coverage、不把 collection/upload 當測試，不例行增加 full unittest。
+
+Develop actual merge push 只沿用對應 PR 的必要當次原件，核 repository/base/head、run/attempt/event/tested SHA、ordered parents/tree、依賴/capture/命令及 raw hashes，再做 runtime、非視窗 import/CLI、compile、push diff、clean；不遞迴讀全部歷史。Main push 另執行完整非視窗 pytest/verify-active，PR CI 或 develop short 不能代替。
+
+新 coverage 為 `zhuyin-validation-coverage/3`、short 為 `zhuyin-merge-short/3`；gate v4 明確選取新 validation_policy 才核當次原件。舊無旗標、no-real-tk/1、`/1`、`/2` snapshot/reader 均保持原義，不追認舊成功。兩輪新候選完整適用獨立 PASS、當前產品/資料安全 blocker、有效授權、原 baseline/source_ref/計數及 GitHub 保護仍保持。
+
+本機先做受影響短測；正式時段須明確授權，本任務已授權自動接續 finalize→develop、actual develop push、既有 PR52 develop→main、actual main full push及待發布包。不授權 tag、公開Release、日常替換或正式資料寫入。所有自動入口繼續取消真 Tk，六項人工驗收只保持原候選 USER_REPORTED_PASS。
+
+操作見 [TESTING](../TESTING.md)；下列原政策與歷史 task 契約保留原義，其與歷史重播前置要求衝突部分不適用新執行。
+
+## 原 no-real-tk/1 政策與採納歷史
+
 本政策是現行驗證策略的主要來源，現行版本為 `validation-flow/no-real-tk/1`，搭配明確採用的 gate v4。2026-10-07 使用者明確採納完全取消真視窗驗證；本次 `no-real-tk-validation` 本身及後續驗證均適用。尚未結案的既有任務只遷移真視窗義務，其餘 task／baseline／授權／修正計數／凍結契約與全部失敗歷史保留。政策修改完成不會解除其他 code／evidence blocker，也不會自動使舊功能任務 COMPLETE。
 
 取消範圍涵蓋本機短測、完整 pytest／unittest、fixture／import／子程序、PR、main／develop push、legacy branch、preflight、post-merge；立即隱藏的 Tk root 或虛擬顯示器中的視窗同樣取消。Tcl/Tk configure、初始化能力門檻、真視窗 retry／supplement 均退場，不執行 fd／sys 對照或修補 Tcl/Tk。產品 GUI、啟動器與正常使用所需 Tk 依賴保持原功能。

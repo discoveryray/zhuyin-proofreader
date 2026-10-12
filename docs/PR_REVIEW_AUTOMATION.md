@@ -1,5 +1,7 @@
 # 兩輪獨立審查與自動接續
 
+2026-10-12 永久採納 `validation-flow/current-evidence/1`。正常 PR 核當前完整非視窗 pytest/inventory/JUnit verify-active及原件，develop actual merge短驗證只讀對應 PR 當次證據，main push完整測試。不要求歷史 restore/舊 artifact/handoff/ledger/continuation 閉包。下文原政策操作與 task 原件保留原義；與此取消決策衝突的歷史重播前置條件停止適用新執行。新 coverage/short `/3` 明確版本化，兩輪完整scope、當前必需證據、原計數、授權/保護仍必要，見[現行政策](VALIDATION_POLICY.md)。
+
 此手冊供 Codex 執行期間的協調者使用。任務來源、授權及安全邊界以使用者指示、AGENTS.md 和 [完整規範](V58_MASTER_DEVELOPMENT_REVIEW_PLAN_v1.1.md) 為準。它不啟動背景 AI、不呼叫額外 AI API，也不變更 GitHub 保護規則。
 
 ## 角色與實際可用能力

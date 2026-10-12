@@ -229,6 +229,8 @@ fetch 只更新遠端 refs，不代表可以自行 merge、rebase 或 pull unrel
 
 ## 11. 測試原則
 
+2026-10-12 使用者永久採納 `validation-flow/current-evidence/1`，立即適用未結案任務及後續一般工作。正常 PR、develop/main push、本機必要驗證與發布不再要求 CI 歷史自動重播、舊 artifact 可下載、或舊 handoff/ledger/continuation 被新版工具重新解讀；coverage、沿用與 gate 亦不得間接要求歷史閉包。舊原件/schema/判定、baseline/source_ref、審查與修正計數保持，不重建或追認成功。當前完整有效非視窗 pytest、inventory/JUnit 對帳、Windows Python3.13.0/凍結依賴、runtime/compile/diff/clean、精確 SHA/parents/tree、原件及兩輪獨立 PASS 仍必要；當前失敗、漏跑、錯 SHA 或缺附件仍拒絕。Develop merge push 只核對對應 PR 當次原件、actual merge 及短驗證，main push 保留完整非視窗測試。這取代下文與歷史重播前置門檻衝突的要求；產品安全、授權、保護、真視窗取消與修正上限不變，詳見[現行政策](docs/VALIDATION_POLICY.md)。
+
 2026-10-07 使用者明確採納 `validation-flow/no-real-tk/1`，完全取消所有自動化入口的真視窗驗證（含 hidden root、虛擬顯示器、fixture／import／子程序）、Tcl/Tk configure／preflight／初始化能力門檻及 GUI retry／補驗。新政策適用本身與後續驗證；尚未結案任務只遷移 window 義務，其餘凍結契約、baseline、修正計數、原 Tk 失敗及 retry 額度保留，其他 blocker 不自動解除。產品 GUI／Tk／launcher 保留；有效非視窗資料／交易／恢復與功能測試、Python 3.13.0、runtime／compile／diff、兩輪審查與 actual merge 短驗證仍必要。詳見 [驗證政策](docs/VALIDATION_POLICY.md)。
 
 支援 Windows Python 3.13.0；現行驗證策略以 [驗證政策](docs/VALIDATION_POLICY.md) 為主要來源。新任務預設開發模式，每輪只做預估五分鐘內的必要定向 regression、compile／diff，保存本機 commit；延後 PR 與昂貴測試。只有使用者明確說「開始驗證」才固定候選並進入驗證模式，執行一次 PR 有效非視窗測試全集，合併後執行實際 merge SHA 的短檢查。不例行另跑本機 full、完整 unittest、混合 full pytest 或 post-merge full。重跑必須有修改影響、失敗線索或明確門檻，不因等待 CI、重開 session 或整理報告而無理由重跑。
@@ -409,6 +411,8 @@ Codex 不得僅依自己的 implementation、tests 或自我 code review
 ---
 
 ## 17. 兩輪獨立審查與 Codex 執行期間自動接續
+
+新執行使用 `validation-flow/current-evidence/1` 當次 coverage `/3` 與 merge-short `/3`；不遞迴重驗全部舊 CI。下文舊 `/2` 的格式描述只適用原政策快照，其 schema/判定保留原義。兩輪完整scope、當前必需證據、已知未解產品/資料安全blocker、授權、原task/計數與GitHub保護保持。
 
 除已明確採納的無視窗義務遷移外，新制度只適用採用後的新任務；未收尾任務維持其餘凍結契約。開發／驗證模式及使用者事前明確採納的制度變更過渡驗收見 [驗證政策](docs/VALIDATION_POLICY.md)，不得用受審新 gate 自行創造授權或追認舊 PASS。
 

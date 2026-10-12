@@ -11,7 +11,32 @@ import subprocess
 import sys
 
 
-def environment(output):
+def environment(output, *, current_only=False):
+    if current_only:
+        try:
+            from scripts import validation_evidence as evidence
+        except ModuleNotFoundError:
+            import validation_evidence as evidence
+        runner = evidence.runner_module()
+        ci = {"run_id": int(os.environ["GITHUB_RUN_ID"]), "attempt": int(os.environ["GITHUB_RUN_ATTEMPT"]),
+              "job": os.environ["GITHUB_JOB"], "event": os.environ["GITHUB_EVENT_NAME"]}
+        candidate = runner.snapshot()
+        evidence.require(candidate["head"] == os.environ["GITHUB_SHA"], "environment checkout SHA differs")
+        event = evidence.load_json(Path(os.environ["GITHUB_EVENT_PATH"]))
+        if ci["event"] == "pull_request":
+            pr = event["pull_request"]
+            checkout = {"number": pr["number"], "repository": os.environ["GITHUB_REPOSITORY"],
+                "base_repository": pr["base"]["repo"]["full_name"], "head_repository": pr["head"]["repo"]["full_name"],
+                "base_ref": pr["base"]["ref"], "head_ref": pr["head"]["ref"], "base_sha": pr["base"]["sha"], "head_sha": pr["head"]["sha"]}
+        else:
+            checkout = {"repository": os.environ["GITHUB_REPOSITORY"], "ref": os.environ["GITHUB_REF"], "before": event["before"]}
+        result = {"schema": "zhuyin-current-validation-environment/1", "policy": evidence.CURRENT_POLICY,
+            "window_validation": evidence.WINDOW_NOTICE, "environment": runner.environment(), "candidate": candidate,
+            "ci": ci, "checkout": checkout}
+        output.parent.mkdir(parents=True, exist_ok=True)
+        with output.open("x", encoding="utf-8") as stream:
+            json.dump(result, stream, indent=2, ensure_ascii=False)
+        return
     # Deliberately no environment dump, credentials, user paths or DB inspection.
     result = {"schema": "zhuyin-main-full-environment/1",
               "python": platform.python_version(), "executable": sys.executable,
@@ -50,11 +75,12 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("command", choices=("environment", "run"))
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--current-only", action="store_true")
     args, child = parser.parse_known_args(argv)
     if args.command == "environment":
         if child:
             parser.error("unexpected environment arguments")
-        environment(args.output)
+        environment(args.output, current_only=args.current_only)
         return 0
     return run(args.output, child[1:] if child and child[0] == "--" else child)
 

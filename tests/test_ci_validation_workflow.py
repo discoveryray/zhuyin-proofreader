@@ -12,7 +12,10 @@ import subprocess
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-WORKFLOW = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
+# These ten retained methods verify their exact archived policy; live obligations
+# are independently exercised by CurrentValidationWorkflowTests below.
+from tests.ci_workflow_history_fixture import WORKFLOW
+LIVE_WORKFLOW = (ROOT / '.github/workflows/ci.yml').read_text(encoding='utf-8')
 
 
 def job(name):
@@ -117,7 +120,7 @@ def event_context(event='pull_request', ref='refs/pull/41/merge', **changes):
                   repository='discoveryray/zhuyin-proofreader',
                   event=dict(before='1' * 40, pull_request=dict(number=41,
                     head=dict(repo=dict(full_name='discoveryray/zhuyin-proofreader')),
-                    base=dict(ref='develop', sha='2' * 40))))
+                    base=dict(ref='develop', sha='2' * 40, repo=dict(full_name='discoveryray/zhuyin-proofreader')))))
     for path, value in changes.items():
         target = github; components = path.split('__')
         for component in components[:-1]: target = target[component]
@@ -143,6 +146,65 @@ def summary_environment(context, outcomes):
 
 
 class ValidationWorkflowTests(unittest.TestCase):
+    def test_finalize_main_route_is_exact_and_uses_existing_nonwindow_full_path(self):
+        release = event_context(head_ref='codex/release-v5.8.0-finalize', event__pull_request__base__ref='main')
+        self.assertEqual(set(planned(release)), {'test'})
+        selected = dict(planned(release)['test'])
+        required = {'Check out repository', 'Set up Python', 'Show Python version', 'Upgrade pip',
+                    'Install development dependencies', 'Validate runtime asset integrity', 'Audit test entrypoint coverage',
+                    'Run full pytest suite', 'Verify active test execution', 'Compile Python sources',
+                    'Check committed whitespace (pull request)', 'Check repository working tree',
+                    'Capture main full environment', 'Upload main full evidence', 'Verify required validation results'}
+        self.assertEqual(set(selected), required)
+        self.assertNotIn('Run full unittest suite', selected)
+        self.assertFalse(condition(job('grouped').split('    steps:', 1)[0], release))
+        self.assertFalse(condition(job('short').split('    steps:', 1)[0], release))
+        matrix = re.search(r'^        python-version: (.*)$', job('test'), re.M).group(1)
+        self.assertEqual(expression(matrix, release), ['3.13'])
+        version = re.search(r'^          python-version: (.*)$', step(job('test'), 'Set up Python'), re.M).group(1)
+        self.assertEqual(expression(version, {**release, 'matrix': {'python-version': '3.13'}}), '3.13.0')
+        full_flag = re.search(r'^      FULL_RELEASE_VALIDATION: (.*)$', job('test'), re.M).group(1)
+        self.assertTrue(expression(full_flag, release))
+        self.assertTrue(expression(full_flag, event_context('push', 'refs/heads/main')))
+        self.assertFalse(expression(full_flag, event_context()))
+        for name in ('Upgrade pip', 'Install development dependencies', 'Validate runtime asset integrity', 'Run full pytest suite'):
+            self.assertIn("if (($env:GITHUB_EVENT_NAME -eq 'push' -and $env:GITHUB_REF -eq 'refs/heads/main') -or $env:FULL_RELEASE_VALIDATION -eq 'true')", selected[name][1])
+            self.assertIn('release_ci_evidence.py run --output tmp/main-full/', selected[name][1])
+            self.assertIn('if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }', selected[name][1])
+        self.assertIn('pip==24.2', selected['Upgrade pip'][1])
+        self.assertIn('-r requirements-ci-lock.txt', selected['Install development dependencies'][1])
+        self.assertIn('python -m pytest tests/ -q -rs --junitxml=tmp/ci-pytest.xml', selected['Run full pytest suite'][1])
+        self.assertEqual(selected['Verify active test execution'], ('run', 'python scripts/test_entrypoint_audit.py verify-active tmp/ci-test-inventory.json --junit tmp/ci-pytest.xml'))
+        for name in ('Capture main full environment', 'Upload main full evidence', 'Check repository working tree', 'Verify required validation results'):
+            self.assertTrue(condition(step(job('test'), name), {**release, '_success': False}))
+        for changes in ({'repository': 'foreign/repo'}, {'event__pull_request__head__repo__full_name': 'foreign/repo'},
+                        {'event__pull_request__base__repo__full_name': 'foreign/repo'}, {'event__pull_request__base__ref': 'develop'},
+                        {'head_ref': 'codex/release-v5.8.0-prep'}, {'head_ref': 'codex/release-v5.8.0-finalize-extra'}):
+            negative = event_context(**({'head_ref': 'codex/release-v5.8.0-finalize', 'event__pull_request__base__ref': 'main'} | changes))
+            with self.subTest(changes=changes):
+                self.assertEqual(set(planned(negative)), {'grouped', 'test'})
+                self.assertFalse(expression(full_flag, negative))
+                self.assertNotIn('Run full pytest suite', dict(planned(negative)['test']))
+        self.assertFalse(expression(full_flag, event_context('push', 'refs/heads/codex/release-v5.8.0-finalize')))
+        self.assertFalse(expression(full_flag, event_context('workflow_dispatch', 'refs/heads/main')))
+        for _, (_, command) in selected.items():
+            self.assertNotIn('restore-history', command)
+            self.assertNotIn('--group gui', command)
+            self.assertNotIn('verify-gui', command)
+
+    def test_finalize_summary_requires_every_full_step_success_in_real_powershell(self):
+        release = event_context(head_ref='codex/release-v5.8.0-finalize', event__pull_request__base__ref='main')
+        ids = ['checkout', 'python', 'version', 'pip', 'dependencies', 'runtime', 'inventory', 'pytest',
+               'active', 'compile', 'clean', 'diff_pr', 'main_environment', 'main_evidence']
+        success = {key: 'success' for key in ids};success.update(unittest='skipped', diff_push='skipped')
+        cases = [(release, success, True)]
+        for outcome in ('failure', 'skipped', 'cancelled', ''):
+            for key in ids:cases.append((release, {**success, key: outcome}, False))
+        for grouped, short in (('success', 'skipped'), ('skipped', 'success'), ('failure', 'skipped'), ('cancelled', 'skipped')):
+            context = {**release, 'needs': {'grouped': {'result': grouped}, 'short': {'result': short}}}
+            cases.append((context, success, False))
+        self.execute_summary(cases)
+
     def test_required_check_executes_real_failure_sensitive_summary(self):
         pr = event_context(); pr['needs']['grouped']['result'] = 'success'
         develop = event_context('push', 'refs/heads/develop'); develop['needs']['short']['result'] = 'success'
@@ -323,6 +385,146 @@ foreach ($case in $cases) {
                 self.assertIn(required, condition)
         self.assertNotIn('37000834763', WORKFLOW)
         self.assertNotIn('457707b4c4109c1b10a0da76d8f8a884aca10341', WORKFLOW)
+
+
+
+def current_job(name):
+    match = re.search(r'^  ' + re.escape(name) + r':\n(.*?)(?=^  [a-z][a-z_]*:|\Z)', LIVE_WORKFLOW, re.M | re.S)
+    if match is None: raise AssertionError('current job missing: ' + name)
+    return match.group(1)
+
+
+def current_plan(context):
+    predicate = re.search(r'^      FULL_CURRENT_VALIDATION: (.*)$', current_job('test'), re.M).group(1)
+    context = {**context, 'env': {'FULL_CURRENT_VALIDATION': str(expression(predicate, context)).lower()}}
+    return {name: [(label, action(body)) for label, body in steps(current_job(name)) if condition(body, context)]
+            for name in ('short', 'test') if condition(current_job(name).split('    steps:', 1)[0], context)}
+
+
+class CurrentValidationWorkflowTests(unittest.TestCase):
+    def test_current_four_routes_and_original_legacy_shapes_have_no_live_exemption(self):
+        full_names = {'Check out repository', 'Set up Python', 'Show Python version', 'Upgrade pip',
+            'Install development dependencies', 'Validate runtime asset integrity', 'Audit test entrypoint coverage',
+            'Run full pytest suite', 'Verify active test execution', 'Compile Python sources', 'Check repository working tree',
+            'Capture main full environment', 'Produce current validation coverage', 'Verify current validation coverage',
+            'Upload main full evidence', 'Verify required validation results'}
+        contexts = [event_context(), event_context(event__pull_request__base__ref='main'), event_context('push', 'refs/heads/main'),
+            event_context(event__pull_request__number=29, head_ref='codex/review-confirm-responsive',event__pull_request__base__sha='502414b3b38e004a6d8d9cb693cf21b65148765a'),
+            event_context(head_ref='codex/simplify-validation',event__pull_request__base__sha='1593e7af65596d320b4427f1b15bb2bc0bdc949c')]
+        for context in contexts:
+            with self.subTest(event=context['github']):
+                plan=current_plan(context);self.assertEqual(set(plan),{'test'})
+                selected=dict(plan['test']);diff='Check committed whitespace ('+('push' if context['github']['event_name']=='push' else 'pull request')+')'
+                self.assertEqual(set(selected),full_names|{diff})
+                self.assertNotIn('Run full unittest suite',selected)
+                self.assertEqual(re.search(r'^        python-version: (.*)$',current_job('test'),re.M).group(1),"['3.13']")
+                self.assertEqual(re.search(r'^          python-version: (.*)$',step(current_job('test'),'Set up Python'),re.M).group(1),"'3.13.0'")
+                self.assertEqual(re.search(r'^      PYTEST_ADDOPTS: (.*)$',current_job('test'),re.M).group(1),'""')
+                for label in ('Capture main full environment','Upload main full evidence','Check repository working tree','Verify required validation results'):
+                    declared={'env':{'FULL_CURRENT_VALIDATION':'true'}}
+                    self.assertTrue(condition(step(current_job('test'),label),{**context,**declared,'_success':False}))
+        for context in (event_context('push','refs/heads/develop'),event_context('push','refs/heads/develop',event__before='502414b3b38e004a6d8d9cb693cf21b65148765a')):
+            self.assertEqual(set(current_plan(context)),{'short','test'})
+            self.assertEqual(set(dict(current_plan(context)['test'])),{'Check out repository','Set up Python','Show Python version','Verify required validation results'})
+        for forbidden in ('restore-history','validation_runner.py','Aggregate functional coverage','Run full unittest suite','--capture=sys','LEGACY_VALIDATION','GROUPED_RESULT','needs.grouped.result','--group gui','verify-gui','gui_preflight','Configure same-installation Tcl/Tk'):
+            self.assertNotIn(forbidden,LIVE_WORKFLOW)
+
+    def test_current_full_summary_rejects_every_required_failure_skip_cancel_or_missing(self):
+        ids=['checkout','python','version','pip','dependencies','runtime','inventory','pytest','active','compile','clean','main_environment','coverage','coverage_verify','main_evidence']
+        cases=[]
+        for context in (event_context(),event_context(event__pull_request__base__ref='main'),event_context('push','refs/heads/main')):
+            required=ids+['diff_pr' if context['github']['event_name']=='pull_request' else 'diff_push']
+            success={key:'success' for key in required};cases.append((context,success,True))
+            for outcome in ('failure','skipped','cancelled',''):
+                for key in required:cases.append((context,{**success,key:outcome},False))
+            for outcome in ('success','failure','cancelled',''):
+                cases.append(({**context,'needs':{'short':{'result':outcome}}},success,False))
+        self.execute_current_summary(cases)
+
+    def test_current_short_summary_and_unknown_event_cannot_bypass_required_checks(self):
+        context=event_context('push','refs/heads/develop');context['needs']['short']['result']='success'
+        success={'checkout':'success','python':'success','version':'success'};cases=[(context,success,True)]
+        for outcome in ('failure','skipped','cancelled',''):
+            cases.append(({**context,'needs':{'short':{'result':outcome}}},success,False))
+            for key in success:cases.append((context,{**success,key:outcome},False))
+        for other in (event_context('workflow_dispatch','refs/heads/main'),event_context('push','refs/heads/other'),event_context(event__pull_request__base__ref='unknown')):
+            cases.append((other,success,False))
+        self.execute_current_summary(cases)
+
+    def test_current_commands_lock_capture_scope_and_finite_artifacts_are_explicit(self):
+        full=current_job('test');short=current_job('short')
+        self.assertEqual(action(step(short,'Verify merge and run short validation')),('run','python scripts/validation_evidence.py post-merge --current-only --evidence-root tmp/validation-evidence'))
+        self.assertIn('pip==24.2',step(short,'Install locked validation dependencies'))
+        self.assertIn('-r requirements-ci-lock.txt',step(short,'Install locked validation dependencies'))
+        self.assertEqual(re.search(r'^      PYTEST_ADDOPTS: (.*)$',short,re.M).group(1),'""')
+        for first,second in [('Audit test entrypoint coverage','Run full pytest suite'),('Run full pytest suite','Verify active test execution'),('Verify active test execution','Produce current validation coverage'),('Produce current validation coverage','Verify current validation coverage')]:
+            self.assertLess(full.index(first),full.index(second))
+        for name,expected in [('Audit test entrypoint coverage','collect tmp/ci-test-inventory.json'),('Run full pytest suite','python -m pytest tests/ -q -rs --junitxml=tmp/ci-pytest.xml'),('Verify active test execution','verify-active tmp/ci-test-inventory.json --junit tmp/ci-pytest.xml'),('Compile Python sources',r'python -m compileall -q -x "(^|[\\/])(\.venv|tmp)([\\/]|$)" .')]:
+            body=step(full,name);self.assertIn(expected,body);self.assertIn('release_ci_evidence.py run --output tmp/main-full/',body)
+            self.assertIn('if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }',body)
+        for name in ('Capture main full environment','Produce current validation coverage','Verify current validation coverage'):
+            self.assertNotIn('validation_runner.py',step(full,name))
+        self.assertIn('environment --current-only',step(full,'Capture main full environment'))
+        for section,name in ((full,'Upload main full evidence'),(short,'Upload validation evidence')):
+            upload=step(section,name)
+            for required in ('always()','if-no-files-found: error','overwrite: false','include-hidden-files: false','actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a'):
+                self.assertIn(required,upload)
+            self.assertNotIn('path: tmp\n',upload)
+        full_upload=step(full,'Upload main full evidence')
+        for required in ('tmp/current-coverage.json','tmp/ci-test-inventory.json','tmp/ci-pytest.xml','tmp/main-full/environment.json','tmp/main-full/event.json','tmp/main-full/lock.txt','tmp/main-full/registry.json','tmp/main-full/assets.json'):
+            self.assertIn(required,full_upload)
+        self.assertNotIn('**',full_upload)
+        self.assertIn('tmp/validation-evidence/**/pr-artifact.zip',short)
+        self.assertIn('tmp/validation-evidence/**/pr-evidence/main-full/lock.txt',short)
+        self.assertNotIn('**/*.txt',short)
+        self.assertIn('!tmp/validation-evidence/**/temp/**',short)
+        self.assertNotIn('continue-on-error',LIVE_WORKFLOW)
+        self.assertIn('cancel-in-progress: false',LIVE_WORKFLOW)
+
+    def test_current_locked_install_and_pytest_propagate_real_powershell_child_exit(self):
+        shell=shutil.which('pwsh') or shutil.which('powershell');self.assertIsNotNone(shell)
+        for name,expected in [('Upgrade pip','pip==24.2'),('Install development dependencies','requirements-ci-lock.txt'),('Run full pytest suite','-m pytest tests/ -q -rs --junitxml=tmp/ci-pytest.xml')]:
+            body=action(step(current_job('test'),name))[1]
+            for code in (0,17):
+                with tempfile.TemporaryDirectory() as folder:
+                    # Command transport only; no package install or functional pytest is started.
+                    driver="function python { if ($args[0] -eq '-m' -and $args[1] -eq 'venv') { New-Item -ItemType Directory -Force -Path (Join-Path $args[2] 'Scripts') | Out-Null; $global:LASTEXITCODE=0 } else { $args -join ' '; $global:LASTEXITCODE=[int]$env:FIXTURE_EXIT } }\n"+body
+                    result=subprocess.run([shell,'-NoProfile','-NonInteractive','-Command',driver],cwd=folder,capture_output=True,env={**os.environ,'FIXTURE_EXIT':str(code),'GITHUB_PATH':str(Path(folder)/'github-path.log')},timeout=30)
+                with self.subTest(name=name,code=code):
+                    self.assertEqual(result.returncode,code,result.stderr)
+                    self.assertIn(expected,result.stdout.decode())
+                    self.assertIn('scripts/release_ci_evidence.py',result.stdout.decode())
+                    self.assertNotIn('requirements-ci.txt',result.stdout.decode())
+                    self.assertNotIn('--upgrade',result.stdout.decode())
+
+    def execute_current_summary(self,cases):
+        body=step(current_job('test'),'Verify required validation results');kind,script=action(body);self.assertEqual(kind,'run')
+        bindings=body.split('        env:\n',1)[1].split('        run:',1)[0]
+        inputs=[]
+        for context,outcomes,accepted in cases:
+            context={**context,'steps':{key:dict(outcome=value) for key,value in outcomes.items()}}
+            environment={}
+            for key,value in re.findall(r'^          ([A-Z_]+): (.*)$',bindings,re.M):
+                actual=expression(value,context);environment[key]=str(actual).lower() if isinstance(actual,bool) else str(actual)
+            inputs.append(dict(env=environment,accepted=accepted))
+        shell=shutil.which('pwsh') or shutil.which('powershell');self.assertIsNotNone(shell)
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'cases.json';path.write_text(json.dumps(inputs),encoding='utf-8')
+            driver="""$cases = Get-Content -Raw -LiteralPath $env:SUMMARY_CASES | ConvertFrom-Json
+$body = [scriptblock]::Create($env:SUMMARY_BODY)
+foreach ($case in $cases) {
+  foreach ($property in $case.env.PSObject.Properties) { [Environment]::SetEnvironmentVariable($property.Name, [string]$property.Value, 'Process') }
+  try { & $body; $accepted = $true; $errorText = '' } catch { $accepted = $false; $errorText = $_.Exception.Message }
+  @{ accepted=$accepted; expected=$case.accepted; env=$case.env; error=$errorText } | ConvertTo-Json -Compress
+  if ($accepted -ne $case.accepted) { exit 1 }
+}
+"""
+            result=subprocess.run([shell,'-NoProfile','-NonInteractive','-Command',driver],capture_output=True,env={**os.environ,'SUMMARY_CASES':str(path),'SUMMARY_BODY':script},timeout=60)
+        self.assertEqual(result.returncode,0,(result.stdout+result.stderr).decode('utf-8',errors='replace'))
+        records=[json.loads(line) for line in result.stdout.decode('utf-8').splitlines()]
+        self.assertEqual(len(records),len(cases));self.assertTrue(all(record['accepted']==record['expected'] for record in records))
+        self.assertTrue(all(record['accepted'] or record['error'] for record in records))
+        print(result.stdout.decode('utf-8'))
 
 
 if __name__ == '__main__':

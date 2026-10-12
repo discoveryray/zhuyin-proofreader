@@ -15,7 +15,16 @@ import zipfile
 
 from scripts import build_release_package as package
 from scripts import release_ci_evidence as evidence
-from tests.test_ci_validation_workflow import action, job, step
+from tests.test_ci_validation_workflow import action, step, current_job
+from tests.ci_workflow_history_fixture import E744_WORKFLOW
+
+
+def job(name):
+    """Read only the original e744 package-test workflow; never a live obligation."""
+    match = re.search(r'^  ' + re.escape(name) + r':\n(.*?)(?=^  [a-z][a-z_]*:|\Z)', E744_WORKFLOW, re.M | re.S)
+    if match is None:
+        raise AssertionError('historical package workflow job missing: ' + name)
+    return match.group(1)
 
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE = "151b90f6f5f2a352e828fa6f73402dfb8c4f5617"
@@ -189,6 +198,23 @@ class ReleaseEvidenceTests(unittest.TestCase):
                         if not is_main:
                             self.assertNotIn("release_ci_evidence.py", result.stdout.decode())
 
+        # Historical installer expectations above remain unchanged. New executions
+        # additionally require the actual live current-only installer on every route.
+        for name, expected in [('Upgrade pip', 'pip==24.2'), ('Install development dependencies', 'requirements-ci-lock.txt'), ('Run full pytest suite', '-m pytest tests/ -q -rs --junitxml=tmp/ci-pytest.xml')]:
+            body = action(step(current_job('test'), name))[1]
+            for event, ref in [('push', 'refs/heads/main'), ('pull_request', 'refs/pull/29/merge'), ('pull_request', 'refs/pull/52/merge')]:
+                for code in (0, 17):
+                    with tempfile.TemporaryDirectory() as folder:
+                        driver = "function python { if ($args[0] -eq '-m' -and $args[1] -eq 'venv') { New-Item -ItemType Directory -Force -Path (Join-Path $args[2] 'Scripts') | Out-Null; $global:LASTEXITCODE=0 } else { $args -join ' '; $global:LASTEXITCODE=[int]$env:FIXTURE_EXIT } }\n" + body
+                        result = subprocess.run([shell, '-NoProfile', '-NonInteractive', '-Command', driver], cwd=folder, capture_output=True,
+                            env={**os.environ, 'GITHUB_EVENT_NAME': event, 'GITHUB_REF': ref, 'FIXTURE_EXIT': str(code), 'GITHUB_PATH': str(Path(folder)/'github-path.log')}, timeout=30)
+                    with self.subTest(current_step=name, current_event=event, ref=ref, exit=code):
+                        self.assertEqual(result.returncode, code, result.stderr)
+                        self.assertIn(expected, result.stdout.decode())
+                        self.assertIn('scripts/release_ci_evidence.py', result.stdout.decode())
+                        self.assertNotIn('requirements-ci.txt', result.stdout.decode())
+                        self.assertNotIn('--upgrade', result.stdout.decode())
+
     def test_main_upload_has_finite_failure_time_originals(self):
         upload = step(job("test"), "Upload main full evidence")
         self.assertIn("always() && github.event_name == 'push' && github.ref == 'refs/heads/main'", upload)
@@ -198,6 +224,19 @@ class ReleaseEvidenceTests(unittest.TestCase):
         self.assertNotIn("continue-on-error", upload)
         self.assertIn("overwrite: false", upload)
         self.assertIn("include-hidden-files: false", upload)
+
+        # The old source fixture is immutable; live current output must independently
+        # retain every required raw attachment and fail closed on capture/upload failure.
+        current = step(current_job('test'), 'Upload main full evidence')
+        self.assertIn("always() && env.FULL_CURRENT_VALIDATION == 'true'", current)
+        for path in ('tmp/current-coverage.json', 'tmp/ci-test-inventory.json', 'tmp/ci-pytest.xml', 'tmp/main-full/environment.json', 'tmp/main-full/event.json', 'tmp/main-full/lock.txt', 'tmp/main-full/registry.json', 'tmp/main-full/assets.json', 'tmp/main-full/pip.log', 'tmp/main-full/dependencies.log', 'tmp/main-full/runtime.log', 'tmp/main-full/pytest.log', 'tmp/main-full/inventory.log', 'tmp/main-full/active.log', 'tmp/main-full/compile.log', 'tmp/main-full/diff.log', 'tmp/main-full/clean.log'):
+            self.assertIn(path, current)
+        self.assertIn('current-validation-evidence-${{ github.run_id }}-${{ github.run_attempt }}', current)
+        self.assertIn('if-no-files-found: error', current)
+        self.assertNotIn('**', current)
+        self.assertNotIn('continue-on-error', current)
+        self.assertIn('overwrite: false', current)
+        self.assertIn('include-hidden-files: false', current)
 
 
 if __name__ == "__main__":
