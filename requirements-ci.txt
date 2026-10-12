@@ -1,0 +1,7 @@
+# Windows launcher environment verified 2026-09-22 (Python 3.13.0).
+PyMuPDF==1.26.7
+openpyxl==3.1.5
+fonttools==4.63.0
+# Test/build dependencies absent from the launcher environment; explicit additions.
+python-docx==1.2.0
+pytest==9.1.1

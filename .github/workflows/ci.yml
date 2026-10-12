@@ -2,138 +2,264 @@ name: CI
 
 on:
   pull_request:
-    branches:
-      - develop
-      - main
+    branches: [develop, main]
   push:
-    branches:
-      - develop
-      - main
+    branches: [develop, main]
   workflow_dispatch:
 
 permissions:
   contents: read
+  actions: read
+  pull-requests: read
+
+# Serialize the current candidate without erasing original attempts.
+concurrency:
+  group: validation-${{ github.repository }}-${{ github.event.pull_request.head.ref || github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  test:
-    name: Python ${{ matrix.python-version }}
+  short:
+    name: Merge short validation
+    timeout-minutes: 20
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/develop' }}
     runs-on: windows-latest
     env:
       PYTHONUTF8: "1"
       PYTHONIOENCODING: "utf-8"
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version:
-          - "3.12"
-          - "3.13"
-
+      PYTEST_ADDOPTS: ""
+      GITHUB_TOKEN: ${{ github.token }}
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
-
       - name: Set up Python
         uses: actions/setup-python@v7
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: '3.13.0'
+      - name: Install locked validation dependencies
+        shell: pwsh
+        run: |
+          python -m venv tmp/ci-venv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:CI_PYTHON = (Resolve-Path tmp/ci-venv/Scripts/python.exe).Path
+          & $env:CI_PYTHON -m pip install --disable-pip-version-check pip==24.2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $env:CI_PYTHON -m pip install --disable-pip-version-check -r requirements-ci-lock.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "CI_PYTHON=$env:CI_PYTHON" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          & $env:CI_PYTHON scripts/release_ci_evidence.py run --output tmp/validation-evidence/locked-environment.log -- python scripts/release_ci_evidence.py verify-environment --output tmp/validation-evidence/locked-environment.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify merge and run short validation
+        run: |
+          & $env:CI_PYTHON scripts/validation_evidence.py post-merge --current-only --evidence-root tmp/validation-evidence
+      - name: Upload validation evidence
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: validation-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            tmp/validation-evidence/**/*.json
+            tmp/validation-evidence/**/*.jsonl
+            tmp/validation-evidence/**/*.xml
+            tmp/validation-evidence/**/*.log
+            tmp/validation-evidence/**/pr-artifact.zip
+            tmp/validation-evidence/**/pr-evidence/main-full/lock.txt
+            !tmp/validation-evidence/**/temp/**
+          if-no-files-found: error
+          overwrite: false
+          include-hidden-files: false
 
+  test:
+    name: Python ${{ matrix.python-version }}
+    if: always()
+    needs: [short]
+    runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
+      PYTEST_ADDOPTS: ""
+      FULL_CURRENT_VALIDATION: ${{ (github.event_name == 'pull_request' && (github.event.pull_request.base.ref == 'develop' || github.event.pull_request.base.ref == 'main')) || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.13']
+    steps:
+      - name: Check out repository
+        id: checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Set up Python
+        id: python
+        uses: actions/setup-python@v7
+        with:
+          python-version: '3.13.0'
       - name: Show Python version
+        id: version
         run: python --version
-
       - name: Upgrade pip
-        run: python -m pip install --upgrade pip
-
+        id: pip
+        if: ${{ env.FULL_CURRENT_VALIDATION == 'true' }}
+        shell: pwsh
+        run: |
+          python -m venv tmp/ci-venv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $env:CI_PYTHON = (Resolve-Path tmp/ci-venv/Scripts/python.exe).Path
+          & $env:CI_PYTHON scripts/release_ci_evidence.py run --output tmp/main-full/pip.log -- python -m pip install --disable-pip-version-check pip==24.2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          "CI_PYTHON=$env:CI_PYTHON" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
       - name: Install development dependencies
-        run: python -m pip install -r requirements-dev.txt
-
+        id: dependencies
+        if: ${{ env.FULL_CURRENT_VALIDATION == 'true' }}
+        shell: pwsh
+        run: |
+          & $env:CI_PYTHON scripts/release_ci_evidence.py run --output tmp/main-full/dependencies.log -- python -m pip install --disable-pip-version-check -r requirements-ci-lock.txt
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Capture main full environment
+        id: main_environment
+        if: ${{ always() && env.FULL_CURRENT_VALIDATION == 'true' }}
+        run: |
+          & $env:CI_PYTHON scripts/release_ci_evidence.py environment --current-only --output tmp/main-full/environment.json
       - name: Validate runtime asset integrity
-        run: python -m unittest discover -s tests -p "test_runtime_asset_manifest_integrity_v562.py"
-
-      - name: Run full unittest suite
-        run: python -m unittest discover -s tests -p "test_*.py"
-
+        id: runtime
+        if: ${{ env.FULL_CURRENT_VALIDATION == 'true' }}
+        shell: pwsh
+        run: |
+          & $env:CI_PYTHON scripts/release_ci_evidence.py run --output tmp/main-full/runtime.log -- python -m pytest tests/test_runtime_asset_manifest_integrity_v562.py -q
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Audit test entrypoint coverage
+        id: inventory
+        if: ${{ env.FULL_CURRENT_VALIDATION == 'true' }}
+        shell: pwsh
+        run: |
+          & $env:CI_PYTHON scripts/release_ci_evidence.py run --output tmp/main-full/inventory.log -- python scripts/test_entrypoint_audit.py collect tmp/ci-test-inventory.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Run full pytest suite
-        if: ${{ !cancelled() }}
-        run: python -m pytest -q
-
+        id: pytest
+        if: ${{ success() && env.FULL_CURRENT_VALIDATION == 'true' && !cancelled() }}
+        shell: pwsh
+        run: |
+          & $env:CI_PYTHON scripts/release_ci_evidence.py run --output tmp/main-full/pytest.log -- python -m pytest tests/ -q -rs --junitxml=tmp/ci-pytest.xml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify active test execution
+        id: active
+        if: ${{ success() && env.FULL_CURRENT_VALIDATION == 'true' && !cancelled() }}
+        shell: pwsh
+        run: |
+          & $env:CI_PYTHON scripts/release_ci_evidence.py run --output tmp/main-full/active.log -- python scripts/test_entrypoint_audit.py verify-active tmp/ci-test-inventory.json --junit tmp/ci-pytest.xml
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Compile Python sources
-        if: ${{ !cancelled() }}
-        run: python -m compileall -q .
-
+        id: compile
+        if: ${{ success() && env.FULL_CURRENT_VALIDATION == 'true' && !cancelled() }}
+        shell: pwsh
+        run: |
+          & $env:CI_PYTHON scripts/release_ci_evidence.py run --output tmp/main-full/compile.log -- python -m compileall -q -x "(^|[\\/])(\.venv|tmp)([\\/]|$)" .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Check committed whitespace (pull request)
-        if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+        id: diff_pr
+        if: ${{ env.FULL_CURRENT_VALIDATION == 'true' && github.event_name == 'pull_request' && !cancelled() }}
         shell: pwsh
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          if (
-            [string]::IsNullOrWhiteSpace($env:BASE_SHA) -or
-            [string]::IsNullOrWhiteSpace($env:HEAD_SHA)
-          ) {
-            Write-Error "Pull request base/head SHA is unavailable."
-            exit 1
-          }
-          git diff --check "$($env:BASE_SHA)...$($env:HEAD_SHA)"
-          if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
-          }
-
+          if ($env:BASE_SHA -notmatch '^[0-9a-f]{40}$' -or $env:HEAD_SHA -notmatch '^[0-9a-f]{40}$') { throw 'Missing current PR identity' }
+          & $env:CI_PYTHON scripts/release_ci_evidence.py run --output tmp/main-full/diff.log -- git diff --check "$($env:BASE_SHA)...$($env:HEAD_SHA)"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Check committed whitespace (push)
-        if: ${{ !cancelled() && github.event_name == 'push' }}
+        id: diff_push
+        if: ${{ env.FULL_CURRENT_VALIDATION == 'true' && github.event_name == 'push' && !cancelled() }}
         shell: pwsh
         env:
           BEFORE_SHA: ${{ github.event.before }}
           AFTER_SHA: ${{ github.sha }}
         run: |
-          if (
-            [string]::IsNullOrWhiteSpace($env:BEFORE_SHA) -or
-            [string]::IsNullOrWhiteSpace($env:AFTER_SHA)
-          ) {
-            Write-Error "Push before/after SHA is unavailable."
-            exit 1
-          }
-          if ($env:BEFORE_SHA -match '^0+$') {
-            $emptyTree = (git hash-object -t tree --stdin).Trim()
-            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($emptyTree)) {
-              Write-Error "Unable to derive the empty Git tree for an all-zero before SHA."
-              exit 1
-            }
-            git diff --check "$emptyTree..$($env:AFTER_SHA)"
-          } else {
-            git diff --check "$($env:BEFORE_SHA)..$($env:AFTER_SHA)"
-          }
-          if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
-          }
-
-      - name: Check committed whitespace (workflow dispatch)
-        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' }}
-        shell: pwsh
-        env:
-          HEAD_SHA: ${{ github.sha }}
-        run: |
-          if ([string]::IsNullOrWhiteSpace($env:HEAD_SHA)) {
-            Write-Error "Workflow dispatch HEAD SHA is unavailable."
-            exit 1
-          }
-          git diff --check "$($env:HEAD_SHA)^..$($env:HEAD_SHA)"
-          if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
-          }
-
+          if ($env:BEFORE_SHA -notmatch '^[0-9a-f]{40}$' -or $env:AFTER_SHA -notmatch '^[0-9a-f]{40}$') { throw 'Missing current push identity' }
+          & $env:CI_PYTHON scripts/release_ci_evidence.py run --output tmp/main-full/diff.log -- git diff --check "$($env:BEFORE_SHA)..$($env:AFTER_SHA)"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Check repository working tree
+        id: clean
+        if: ${{ always() && env.FULL_CURRENT_VALIDATION == 'true' }}
+        shell: pwsh
+        run: |
+          & $env:CI_PYTHON scripts/release_ci_evidence.py run --output tmp/main-full/clean.log -- git status --porcelain
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $lines = @(Get-Content tmp/main-full/clean.log)
+          if (($lines[1..($lines.Count - 2)] -join '').Trim()) { throw 'Repository working tree is not clean' }
+      - name: Produce current validation coverage
+        id: coverage
+        if: ${{ success() && env.FULL_CURRENT_VALIDATION == 'true' }}
+        run: |
+          & $env:CI_PYTHON scripts/validation_evidence.py current-coverage --evidence-root tmp --output tmp/current-coverage.json
+      - name: Verify current validation coverage
+        id: coverage_verify
+        if: ${{ success() && env.FULL_CURRENT_VALIDATION == 'true' }}
+        run: |
+          & $env:CI_PYTHON scripts/validation_evidence.py verify-coverage tmp/current-coverage.json
+      - name: Upload main full evidence
+        id: main_evidence
+        if: ${{ always() && env.FULL_CURRENT_VALIDATION == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: current-validation-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            tmp/ci-test-inventory.json
+            tmp/ci-pytest.xml
+            tmp/main-full/environment.json
+            tmp/main-full/pip.log
+            tmp/main-full/dependencies.log
+            tmp/main-full/runtime.log
+            tmp/main-full/pytest.log
+            tmp/main-full/inventory.log
+            tmp/main-full/active.log
+            tmp/main-full/compile.log
+            tmp/main-full/diff.log
+            tmp/main-full/clean.log
+            tmp/main-full/event.json
+            tmp/main-full/lock.txt
+            tmp/main-full/registry.json
+            tmp/main-full/assets.json
+            tmp/current-coverage.json
+          if-no-files-found: error
+          overwrite: false
+          include-hidden-files: false
+      - name: Verify required validation results
         if: always()
         shell: pwsh
+        env:
+          CURRENT_FULL_VALIDATION: ${{ (github.event_name == 'pull_request' && (github.event.pull_request.base.ref == 'develop' || github.event.pull_request.base.ref == 'main')) || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+          SHORT_RESULT: ${{ needs.short.result }}
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_REF: ${{ github.ref }}
+          CHECKOUT_RESULT: ${{ steps.checkout.outcome }}
+          PYTHON_RESULT: ${{ steps.python.outcome }}
+          VERSION_RESULT: ${{ steps.version.outcome }}
+          PIP_RESULT: ${{ steps.pip.outcome }}
+          DEPENDENCIES_RESULT: ${{ steps.dependencies.outcome }}
+          RUNTIME_RESULT: ${{ steps.runtime.outcome }}
+          INVENTORY_RESULT: ${{ steps.inventory.outcome }}
+          PYTEST_RESULT: ${{ steps.pytest.outcome }}
+          ACTIVE_RESULT: ${{ steps.active.outcome }}
+          COMPILE_RESULT: ${{ steps.compile.outcome }}
+          DIFF_PR_RESULT: ${{ steps.diff_pr.outcome }}
+          DIFF_PUSH_RESULT: ${{ steps.diff_push.outcome }}
+          CLEAN_RESULT: ${{ steps.clean.outcome }}
+          MAIN_ENVIRONMENT_RESULT: ${{ steps.main_environment.outcome }}
+          MAIN_EVIDENCE_RESULT: ${{ steps.main_evidence.outcome }}
+          COVERAGE_RESULT: ${{ steps.coverage.outcome }}
+          COVERAGE_VERIFY_RESULT: ${{ steps.coverage_verify.outcome }}
         run: |
-          $status = @(git status --short)
-          if ($LASTEXITCODE -ne 0) {
-            exit $LASTEXITCODE
+          if ($env:CURRENT_FULL_VALIDATION -eq 'true') {
+            if ($env:SHORT_RESULT -ne 'skipped') { throw 'Current full validation must not schedule develop short' }
+            $required = @('CHECKOUT_RESULT', 'PYTHON_RESULT', 'VERSION_RESULT', 'PIP_RESULT', 'DEPENDENCIES_RESULT', 'RUNTIME_RESULT', 'INVENTORY_RESULT', 'PYTEST_RESULT', 'ACTIVE_RESULT', 'COMPILE_RESULT', 'CLEAN_RESULT', 'MAIN_ENVIRONMENT_RESULT', 'MAIN_EVIDENCE_RESULT', 'COVERAGE_RESULT', 'COVERAGE_VERIFY_RESULT')
+            if ($env:EVENT_NAME -eq 'push') { $required += 'DIFF_PUSH_RESULT' } else { $required += 'DIFF_PR_RESULT' }
+          } elseif ($env:EVENT_NAME -eq 'push' -and $env:EVENT_REF -eq 'refs/heads/develop') {
+            if ($env:SHORT_RESULT -ne 'success') { throw 'Required current actual merge short validation did not succeed' }
+            $required = @('CHECKOUT_RESULT', 'PYTHON_RESULT', 'VERSION_RESULT')
+          } else {
+            throw 'Current validation requires PR to develop/main, develop push or main push'
           }
-          $status | ForEach-Object { Write-Output $_ }
-          if ($status.Count -ne 0) {
-            Write-Error "Repository working tree is not clean."
-            exit 1
+          foreach ($name in $required) {
+            if ([Environment]::GetEnvironmentVariable($name) -ne 'success') { throw "Required current-validation step did not succeed: $name" }
           }

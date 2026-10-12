@@ -1,43 +1,56 @@
 from __future__ import annotations
 
-import base64
-import json
+import copy
+import queue
 import re
 import sys
 import threading
+import time
+import traceback
 from collections import Counter
 from datetime import datetime
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
-import fitz
 
-from occurrence_ledger import CONFIRMATION_GATES, NON_TERMINAL_STATES, canonical_bopomofo
+from occurrence_ledger import (
+    NON_TERMINAL_STATES, HARD_BLOCKING_STATES, EXCLUDED_STATES, InvalidTransitionError,
+    canonical_bopomofo, infer_actual_status, infer_expected_status, valid_manual_expected_decision,
+)
 from standalone_proofread import (
     ManualActualPostApplyError,
     VERSION,
     apply_staged_manual_actual_corrections,
+    actual_confirmation_snapshot,
+    build_gui_confirmation,
     build_reusable_rule,
+    build_manual_expected_event,
+    can_confirm_current_actual_as_expected,
+    confirm_current_actual_unavailable_reason,
+    committed_project_recovery,
     friendly_state,
     json_load,
     json_load_strict,
-    json_save,
     load_or_initialize_db,
     manual_actual_staging_summary,
     materialize_ledger,
+    project_actual_evidence_root,
+    recover_committed_actual_project,
     regenerate_report,
     save_reusable_expected_rule,
     stage_manual_actual_correction,
     validate_manifest_integrity,
     validate_output_artifact_hashes,
 )
-from actual_review import build_actual_group_for_entry, render_occurrence_png
+from actual_review import build_actual_group_for_entry
+from review_display import ActionRows, OccurrencePreview, WrappedLabel, scroll_canvas, scrollable_entry, wrap_checkbutton
+from review_save_service import ReviewSaveService
 
 
 STATE_HELP = {
     "DIFFERENCE_PENDING_CONFIRMATION": "課本目前注音與應標注音不同，請確認是教材錯誤，或補充較高優先的正確讀音依據。",
-    "RULE_CONFLICT": "程式找到互相衝突的讀音規則，請選擇本句正確讀音並提供獨立依據。",
+    "RULE_CONFLICT": "程式找到互相衝突的讀音規則，請依原文與語境判定本句應標讀音。文字依據選填。",
     "EXPECTED_AMBIGUOUS": "目前有多個可能讀音，程式無法安全自動決定。",
     "EXPECTED_UNRESOLVED": "尚未找到足夠的正確讀音依據。",
     "REVIEW_PENDING": "目前證據不足，需要人工確認。",
@@ -66,32 +79,129 @@ def apply_screen_safe_geometry(window: tk.Toplevel | tk.Tk, desired_width: int, 
     window.minsize(min(min_width, width), min(min_height, height))
 
 
-def create_scrollable_body(window: tk.Toplevel) -> tuple[tk.Frame, tk.Canvas]:
+def create_scrollable_body(window: tk.Toplevel, *, fill_height=False) -> tuple[tk.Frame, tk.Canvas]:
     """Scrollable content area; callers can keep action buttons in a fixed footer."""
     holder = tk.Frame(window)
     holder.pack(fill="both", expand=True)
-    canvas = tk.Canvas(holder, highlightthickness=0, borderwidth=0)
-    scrollbar = ttk.Scrollbar(holder, orient="vertical", command=canvas.yview)
+    canvas = tk.Canvas(holder, highlightthickness=0, borderwidth=0, yscrollincrement=1)
+    scrollbar = ttk.Scrollbar(holder, orient="vertical", command=lambda *args: scroll_body(*args))
     canvas.configure(yscrollcommand=scrollbar.set)
     scrollbar.pack(side="right", fill="y")
     canvas.pack(side="left", fill="both", expand=True)
 
     content = tk.Frame(canvas)
-    window_id = canvas.create_window((0, 0), window=content, anchor="nw")
+    # Give content an explicit width from creation. Without this initial slot,
+    # Tk sizes the unmapped canvas window from its wrapping children's requests
+    # before the first canvas Configure can supply the viewport width.
+    window_id = canvas.create_window((0, 0), window=content, anchor="nw", width=1)
+    canvas._layout_pending = None
+    layout_busy = False
+    layout_disposed = False
 
-    def update_scrollregion(_event=None):
-        canvas.configure(scrollregion=canvas.bbox("all"))
+    def flush_layout():
+        nonlocal layout_busy
+        if layout_disposed or layout_busy:
+            return False
+        if canvas._layout_pending is not None:
+            canvas.after_cancel(canvas._layout_pending)
+            canvas._layout_pending = None
+        layout_busy = True
+        try:
+            # A canvas height request propagates through several pack parents.
+            # Configure alone need not fire when their actual sizes are fixed.
+            # Drain those idle geometry requests before measuring the minimum.
+            content.update_idletasks()
+            if layout_disposed:
+                return False
+            if fill_height:
+                height = max(canvas.winfo_height(), content.winfo_reqheight())
+                if int(float(canvas.itemcget(window_id, "height"))) != height:
+                    canvas.itemconfigure(window_id, height=height)
+            # Width is already fixed; allocation cannot feed back into the
+            # width-derived preview minimum. This is one bounded allocation,
+            # not a retry or polling loop.
+            content.update_idletasks()
+            if layout_disposed:
+                return False
+            canvas.configure(scrollregion=canvas.bbox("all"))
+            return not fill_height or content.winfo_height() >= content.winfo_reqheight()
+        finally:
+            layout_busy = False
+
+    def request_layout(_event=None):
+        if not layout_disposed and not layout_busy and canvas._layout_pending is None:
+            canvas._layout_pending = canvas.after_idle(flush_layout)
+
+    def dispose_layout(event):
+        nonlocal layout_disposed
+        if event.widget in (holder, canvas, content):
+            layout_disposed = True
+            if canvas._layout_pending is not None:
+                canvas.after_cancel(canvas._layout_pending)
+                canvas._layout_pending = None
+            # These convenience closures otherwise retain the destroyed widget
+            # tree (and its Tk resources) until cyclic GC runs on any thread.
+            canvas.request_layout = canvas.flush_layout = canvas.reveal = None
+
+    canvas.request_layout = request_layout
+    canvas.flush_layout = flush_layout
+    for widget in (holder, canvas, content):
+        widget.bind("<Destroy>", dispose_layout, add="+")
 
     def fit_content_width(event):
         canvas.itemconfigure(window_id, width=max(1, event.width))
+        request_layout()
+
+    def reveal(widget, y0, y1):
+        offset = widget.winfo_rooty() - canvas.winfo_rooty() + canvas.canvasy(0)
+        top, bottom = offset + y0 - 20, offset + y1 + 20
+        visible_top = canvas.canvasy(0)
+        if top < visible_top or bottom > visible_top + canvas.winfo_height():
+            total = max(1, canvas.bbox("all")[3])
+            canvas.yview_moveto(max(0, (top + bottom - canvas.winfo_height()) / 2) / total)
+
+    canvas.reveal = reveal
+
+    def scroll_body(*args):
+        pending = list(content.winfo_children())
+        while pending:
+            widget = pending.pop()
+            if isinstance(widget, OccurrencePreview):
+                widget.cancel_positioning()
+            else:
+                pending.extend(widget.winfo_children())
+        scroll_canvas(canvas, *args)
 
     def on_mousewheel(event):
+        if layout_disposed:
+            return
+        # The inner preview returns break while it can scroll. A wheel at its
+        # boundary reaches here once, as do expanded samples with no inner bar.
+        widget = event.widget
+        while widget is not None and widget is not canvas:
+            if isinstance(widget, (tk.Text, ttk.Combobox)):
+                return
+            widget = getattr(widget, "master", None)
+        if widget is None:
+            return
         delta = int(getattr(event, "delta", 0))
         if delta:
-            canvas.yview_scroll(-1 if delta > 0 else 1, "units")
+            scroll_body("scroll", -1 if delta > 0 else 1, "units")
+            return "break"
 
-    content.bind("<Configure>", update_scrollregion)
+    content.bind("<Configure>", request_layout)
     canvas.bind("<Configure>", fit_content_width)
+    if fill_height:
+        def child_layout(event):
+            widget = event.widget
+            while widget is not None and widget is not content:
+                widget = getattr(widget, "master", None)
+            if widget is content:
+                request_layout()
+
+        # An explicitly sized canvas window need not receive Configure when
+        # its children's requested height changes (e.g. a longer summary).
+        window.bind("<Configure>", child_layout, add="+")
     window.bind("<MouseWheel>", on_mousewheel)
     return content, canvas
 
@@ -109,7 +219,177 @@ def review_action_labels(state: str) -> tuple[str, str | None]:
     return "暫時無法人工處理", None
 
 
-class ExpectedDialog(tk.Toplevel):
+LANE_LABELS = {"expected": "第一組：應標注音待確認", "actual": "第二組：課本目前注音待辨識", "other": "其他差異與待處理事項"}
+LANE_ORDER = {lane: index for index, lane in enumerate(LANE_LABELS)}
+
+
+def review_lane(entry):
+    if entry.get("state") in HARD_BLOCKING_STATES or entry.get("state") in EXCLUDED_STATES:
+        return "other"
+    if entry.get("expected_business_conflict_pending") is True:
+        return "expected"
+    if infer_expected_status(entry) in {"UNRESOLVED", "AMBIGUOUS", "CONFLICT"}:
+        return "expected"
+    if infer_actual_status(entry) in {"UNRESOLVED", "DECODE_ERROR"}:
+        return "actual"
+    return "other"
+
+
+def can_confirm_current_expected(entry):
+    return can_confirm_current_actual_as_expected(entry)
+
+
+def _waits_for_actual(item, checked):
+    if item.get("expected_business_conflict_pending") is True:
+        return False
+    # A pending-comparison view only; it never changes a ledger state.
+    return (str(item.get("occurrence_id") or "") in checked
+            and infer_expected_status(item) == "RESOLVED"
+            and item.get("state") in {
+                "ACTUAL_UNRESOLVED", "ACTUAL_DECODE_ERROR", "DIFFERENCE_PENDING_CONFIRMATION",
+                "PASS", "TEXTBOOK_ERROR_CONFIRMED",
+            }
+            and item.get("blocking_state") not in HARD_BLOCKING_STATES)
+
+
+def prepare_review_queue(manifest, ledger, previous, index, checked, deferred,
+                         character_order=None, *, advance_from=None,
+                         actual_conflict_review_ids=()):
+    """Prepare navigation without Tk calls; synchronous reload and save share it."""
+    old = previous[index] if 0 <= index < len(previous) else None
+    lane = review_lane(old) if old else None
+    same_character = [item for item in previous[index:] + list(reversed(previous[:index]))
+                      if old and review_lane(item) == lane and item.get("char") == old.get("char")]
+    following = [(review_lane(item), str(item.get("occurrence_id") or ""))
+                 for item in same_character + previous[index:]
+                 if review_lane(item) == lane and item.get("review_id") != advance_from]
+    checked = set(checked)
+    waiting = {
+        str(item.get("occurrence_id") or "") for item in ledger if _waits_for_actual(item, checked)
+    }
+    conflict_ids = set(actual_conflict_review_ids)
+    pending = [item for item in ledger if (item.get("state") in NON_TERMINAL_STATES
+                                           or item.get("review_id") in conflict_ids
+                                           or item.get("expected_business_conflict_pending") is True)
+               and not _waits_for_actual(item, checked)]
+    live_keys = {(review_lane(item), str(item.get("occurrence_id") or "")) for item in pending}
+    deferred = deferred & live_keys
+    lane_counts = Counter(review_lane(item) for item in pending)
+    pdf_order = {str(item.get("pdf_name") or ""): n for n, item in enumerate(manifest.get("pdfs", []))}
+
+    def number(value):
+        try:
+            return float(value or 0)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def source_order(item):
+        pdf = str(item.get("pdf_name") or "")
+        return (pdf_order.get(pdf, len(pdf_order)), pdf,
+                number(item.get("physical_page")), number(item.get("source_row_number")),
+                number(item.get("y0")), number(item.get("x0")), str(item.get("occurrence_id") or ""))
+
+    # Anchor groups to the full original roster, including completed/deferred
+    # rows. Refreshing the remaining queue must not move a character group.
+    if character_order is None:
+        character_order = {}
+        for item in sorted(ledger, key=source_order):
+            character_order.setdefault(str(item.get("char") or ""), len(character_order))
+
+    def order(item):
+        item_lane = review_lane(item)
+        char_rank = character_order.get(str(item.get("char") or ""), len(character_order)) if item_lane != "other" else 0
+        return (LANE_ORDER[item_lane], char_rank, source_order(item))
+
+    records = sorted([item for item in pending
+                           if (review_lane(item), str(item.get("occurrence_id") or "")) not in deferred], key=order)
+    indexes = {(review_lane(item), str(item.get("occurrence_id") or "")): n for n, item in enumerate(records)}
+    for key in following:
+        if key in indexes:
+            selected_index = indexes[key]
+            break
+    else:
+        # Finish the current lane before a just-saved row moves to another lane.
+        alternatives = [n for n, item in enumerate(records) if item.get("review_id") != advance_from]
+        same_lane = [n for n in alternatives if review_lane(records[n]) == lane]
+        selected_index = min(same_lane, key=lambda n: abs(n - index)) if same_lane else (alternatives[0] if alternatives else 0)
+    return {"records": records, "index": selected_index, "deferred_items": deferred,
+            "waiting_actual_occurrence_ids": waiting, "pending_lane_counts": lane_counts,
+            "_character_order": character_order}
+
+
+def guarded_review_action(method):
+    """A modal/save action belongs to one item, including queued double clicks."""
+    def run(self, *args, **kwargs):
+        if (getattr(self, "_review_action_in_progress", False)
+                or self._save_busy()
+                or getattr(self, "_apply_in_progress", False)
+                or time.monotonic() < getattr(self, "_review_action_cooldown_until", 0)):
+            return
+        if (getattr(self, "staging_summary", {}).get("staging_validation_pending")
+                and method.__name__ != "resolve_expected"):
+            if method.__name__ == "confirm_current_expected":
+                messagebox.showwarning("目前注音尚不可確認", "actual 暫存仍在核對，請先等待核對完成", parent=self.root)
+            return
+        self._review_action_in_progress = True
+        self._last_event_saved = self._last_actual_staged = False
+        try:
+            return method(self, *args, **kwargs)
+        finally:
+            self._review_action_in_progress = False
+            if self._last_event_saved or self._last_actual_staged:
+                self._review_action_cooldown_until = time.monotonic() + 0.5
+    return run
+
+
+class _ReviewDialog(tk.Toplevel):
+    """Release owned Tk resources and child cycles on the owning Tk thread."""
+    _variable_attributes = ()
+    _widget_attributes = ("body_canvas",)
+
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.bind("<Destroy>", self._release_resources, add="+")
+
+    def _release_resources(self, event):
+        if event.widget is self:
+            # Result dictionaries contain plain data. Variables must not remain
+            # attached to a destroyed dialog's Python cycles for worker GC.
+            for name in self._variable_attributes + self._widget_attributes:
+                value = self.__dict__.pop(name, None)
+                if isinstance(value, list):
+                    value.clear()
+
+
+def expected_conflict_summary(entry):
+    lines = []
+    for conflict in entry.get("expected_business_conflicts", []):
+        source = conflict["source_event"]
+        recheck = conflict.get("dependency_recheck")
+        if recheck is not None:
+            lines.append(f"待重核原來源動作：{source['action']}（未套用過期確認）")
+            for difference in recheck["differences"]:
+                layer = "目標原始基線" if difference["comparison"] == "baseline" else "目標當前判定"
+                lines.append(f"{layer}／{difference['key']}：來源 {difference['source']!r}；目標 {difference['target']!r}")
+            lines.append("核對目前原頁後，可重新排除或輸入本筆應標；原匯入動作與雙方證據仍保留。")
+        basis = conflict.get("target_basis")
+        target = basis["expected_snapshot"] if basis else conflict["target_event"]
+        origin = basis["kind"] if basis else "review_event"
+        def readings(value):
+            return value if isinstance(value, str) else " | ".join(value or [])
+        lines.extend([
+            f"匯入來源應標：{readings(source.get('expected_set'))}；依據：{source.get('expected_evidence', '')}",
+            f"來源語境：{source.get('context_evidence', '')}",
+            f"原目標應標（{'程式規則' if origin == 'sealed_resolver_record' else '人工判定'}）："
+            f"{readings(target.get('expected_set'))}；依據：{target.get('expected_evidence', '')}",
+            f"目標語境：{target.get('context_evidence', '')}",
+        ])
+    return "\n".join(lines)
+
+
+class ExpectedDialog(_ReviewDialog):
+    _variable_attributes = ("expected", "evidence", "context", "reason")
+
     def __init__(self, parent, entry, title: str, *, wait: bool = True):
         super().__init__(parent)
         self.result = None
@@ -121,10 +401,11 @@ class ExpectedDialog(tk.Toplevel):
         self.grab_set()
 
         # Footer is packed first and stays visible even when the form itself must scroll.
-        buttons = tk.Frame(self, bd=1, relief="groove")
+        buttons = ActionRows(self, bd=1, relief="groove")
         buttons.pack(side="bottom", fill="x", padx=0, pady=0)
-        tk.Button(buttons, text="取消", width=12, command=self.destroy).pack(side="right", padx=8, pady=10)
-        tk.Button(buttons, text="套用這筆證據", width=16, command=self.submit, default="active").pack(side="right", padx=4, pady=10)
+        cancel = tk.Button(buttons, text="取消", command=self.destroy)
+        save = tk.Button(buttons, text="儲存本筆應標判定", command=self.submit, default="active")
+        buttons.set_items([save, cancel])
 
         body, self.body_canvas = create_scrollable_body(self)
 
@@ -134,12 +415,12 @@ class ExpectedDialog(tk.Toplevel):
 
         intro = tk.Frame(body)
         intro.pack(fill="x", padx=16, pady=(14, 8))
-        tk.Label(intro, text="請建立「應標讀音」的獨立依據", font=("Microsoft JhengHei UI", 12, "bold")).pack(anchor="w")
-        tk.Label(
+        WrappedLabel(intro, text="請判定本句的應標讀音", font=("Microsoft JhengHei UI", 12, "bold")).pack(fill="x", anchor="w")
+        WrappedLabel(
             intro,
-            text="這裡不會直接把課本判成正確；程式會把你提供的應標讀音與課本目前注音重新比較。應標讀音必須有獨立依據，不能照著課本現標倒推。",
+            text="請看原文與語境後輸入應標注音。程式會保存本筆人工判定並重新比較；文字依據可以留白。只適用此位置，可重用規則須另外建立。",
             justify="left", wraplength=670, fg="#555555",
-        ).pack(anchor="w", pady=(4, 0))
+        ).pack(fill="x", anchor="w", pady=(4, 0))
 
         summary = tk.LabelFrame(body, text="目前位置")
         summary.pack(fill="x", padx=16, pady=6)
@@ -149,67 +430,39 @@ class ExpectedDialog(tk.Toplevel):
             f"所在句：{sentence}\n"
             f"課本目前注音：{entry.get('actual', '')}"
         )
-        tk.Label(summary, text=text, justify="left", anchor="w", wraplength=660).pack(fill="x", padx=10, pady=8)
+        WrappedLabel(summary, text=text, justify="left", anchor="w", wraplength=660).pack(fill="x", padx=10, pady=8)
+        if entry.get("expected_business_conflict_pending") is True:
+            WrappedLabel(summary, text="兩份證據均已保存，原目標判定仍保留。請依本位置獨立裁決：\n"
+                         + expected_conflict_summary(entry), justify="left", anchor="w",
+                         wraplength=660).pack(fill="x", padx=10, pady=8)
 
         form = tk.Frame(body)
         form.pack(fill="x", padx=16, pady=4)
-        self.expected = tk.StringVar()
-        self.evidence = tk.StringVar()
+        self.expected = tk.StringVar(master=self)
+        self.evidence = tk.StringVar(master=self)
         default_context = f"完整詞／局部詞境：{phrase}；所在句：{sentence}；目標字：{entry.get('char', '')}"
-        self.context = tk.StringVar(value=default_context)
-        self.reason = tk.StringVar()
-        complete_word = str(source.get("完整詞語規則") or "").strip()
-        if complete_word.startswith("(") or len(complete_word) > 12 or str(entry.get("char") or "") not in complete_word:
-            complete_word = ""
-        self.promote = tk.BooleanVar(value=False)
-        self.rule_phrase = tk.StringVar(value=complete_word)
-
+        self.context = tk.StringVar(master=self, value=default_context)
+        self.reason = tk.StringVar(master=self)
         labels = [
             ("應標注音", self.expected, "多個可接受音請用 | 分隔；聲調可前置或後置，例如：˙ㄒㄧ 或 ㄒㄧ˙ 會視為同音"),
-            ("依據", self.evidence, "例如：公司現行規定／統一用字手冊／《國語辭典簡編本》完整詞條"),
-            ("詞語與位置", self.context, "保留完整詞、所在句與目標字位置"),
+            ("依據（選填）", self.evidence, "可填實際參考來源或判斷理由，也可以留白；不需要填入代用或虛構來源"),
+            ("詞語與位置", self.context, "由程式保留原文、所在句與目標字位置"),
             ("補充說明（可空白）", self.reason, "例如：另一個讀音屬不同義項，本句不適用"),
         ]
         for row, (label, var, hint) in enumerate(labels):
-            tk.Label(form, text=label).grid(row=row * 2, column=0, sticky="w", pady=(7, 1))
-            tk.Entry(form, textvariable=var, width=64).grid(row=row * 2, column=1, sticky="ew", padx=(10, 0), pady=(7, 1))
-            tk.Label(form, text=hint, fg="#666666", justify="left", wraplength=520).grid(row=row * 2 + 1, column=1, sticky="w", padx=(10, 0))
-        form.columnconfigure(1, weight=1)
-
-        reuse = tk.LabelFrame(body, text="減少未來重複人工確認（可選）")
-        reuse.pack(fill="x", padx=16, pady=(4, 2))
-        tk.Checkbutton(
-            reuse,
-            text="將這個應標讀音儲存為可重用規則；未來相同完整詞＋相同目標位置自動套用",
-            variable=self.promote,
-            anchor="w",
-            justify="left",
-            command=self.toggle_reuse_details,
-        ).pack(fill="x", anchor="w", padx=8, pady=(6, 6))
-        self.reuse_details = tk.Frame(reuse)
-        tk.Label(self.reuse_details, text="完整詞：").grid(row=0, column=0, sticky="w", padx=8, pady=(2, 6))
-        tk.Entry(self.reuse_details, textvariable=self.rule_phrase, width=48).grid(row=0, column=1, sticky="ew", padx=(0, 8), pady=(2, 6))
-        tk.Label(
-            self.reuse_details,
-            text="只建立 exact 完整詞規則，不會擴張成單字通用音。",
-            fg="#666666",
-            wraplength=500,
-            justify="left",
-        ).grid(row=1, column=1, sticky="w", padx=(0, 8), pady=(0, 6))
-        self.reuse_details.columnconfigure(1, weight=1)
+            WrappedLabel(form, text=label, width_fraction=0.25).grid(row=row * 2, column=0, sticky="ew", pady=(7, 1))
+            scrollable_entry(form, var, readonly=var is self.context).grid(row=row * 2, column=1, sticky="ew", padx=(10, 0), pady=(7, 1))
+            WrappedLabel(form, text=hint, width_fraction=0.75, fg="#666666", justify="left", wraplength=520).grid(row=row * 2 + 1, column=1, sticky="ew", padx=(10, 0))
+        # Both columns derive their width from the full-width form, not from
+        # the wrapping labels' own requested sizes.
+        form.columnconfigure(0, weight=1, uniform="expected-form")
+        form.columnconfigure(1, weight=3, uniform="expected-form")
 
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         self.bind("<Escape>", lambda _event: self.destroy())
         self.bind("<Control-Return>", lambda _event: self.submit())
         if wait:
             self.wait_window(self)
-
-    def toggle_reuse_details(self):
-        if self.promote.get():
-            self.reuse_details.pack(fill="x", padx=0, pady=(0, 2))
-        else:
-            self.reuse_details.pack_forget()
-        self.body_canvas.configure(scrollregion=self.body_canvas.bbox("all"))
 
     def submit(self):
         expected_raw = self.expected.get().strip()
@@ -230,29 +483,41 @@ class ExpectedDialog(tk.Toplevel):
             return
         # Deduplicate equivalent spellings after canonicalization while preserving order.
         expected = "|".join(dict.fromkeys(canonical_readings))
-        if not evidence:
-            messagebox.showerror("缺少依據", "請輸入公司規定、手冊、辭典完整詞條等獨立來源。", parent=self)
-            return
         if not context:
             messagebox.showerror("缺少詞境", "請保留完整詞語、所在句與目標位置證據。", parent=self)
-            return
-        if self.promote.get() and not self.rule_phrase.get().strip():
-            messagebox.showerror("缺少完整詞", "要儲存可重用規則時，必須填寫完整詞。", parent=self)
             return
         self.result = {
             "expected_set": expected,
             "expected_evidence": evidence,
             "context_evidence": context,
             "resolution_reason": self.reason.get().strip(),
-            "promote_rule": bool(self.promote.get()),
-            "rule_phrase": self.rule_phrase.get().strip(),
         }
         self.destroy()
 
 
-class ActualReadingDialog(tk.Toplevel):
+def actual_review_samples(entry, group, *, verified_checked_occurrence_ids=()):
+    """List every exact-group occurrence, putting validated staged peers last."""
+    members = list(group.get("members") or [])
+    target_id = str(entry.get("occurrence_id") or "")
+    target_char = str(entry.get("char") or "")
+    checked = set(verified_checked_occurrence_ids)
+    members.sort(key=lambda member: (
+        0 if str(member.get("occurrence_id") or "") == target_id else
+        2 if str(member.get("occurrence_id") or "") in checked else 1,
+        str(member.get("char") or "") != target_char,
+    ))
+    return members
+
+
+class ActualReadingDialog(_ReviewDialog):
     """Human visual confirmation for the actual evidence chain only."""
-    def __init__(self, parent, entry, group, output_dir: Path, *, wait: bool = True):
+    _variable_attributes = ("checked_vars", "reading", "note")
+    _widget_attributes = ("body_canvas", "previews", "preview_slots", "preview_buttons",
+                          "check_buttons", "preview_guidance", "_body_scrollbar")
+    _PREVIEW_READY_RETRIES = 40
+
+    def __init__(self, parent, entry, group, output_dir: Path, *, wait: bool = True,
+                 verified_checked_occurrence_ids=()):
         super().__init__(parent)
         self.result = None
         self.entry = entry
@@ -262,16 +527,35 @@ class ActualReadingDialog(tk.Toplevel):
         apply_screen_safe_geometry(self, 980, 760, min_width=720, min_height=520)
         self.transient(parent)
         self.grab_set()
-        self.photos = []
+        self.previews = []
+        self.sample_available = []
+        self.preview_slots = []
+        self.preview_buttons = []
+        self.check_buttons = []
+        self._preview_ready_after = []
+        self._visibility_after = None
+        self._destroying = False
+        self._active_peer = None
+        self.verified_checked_occurrence_ids = set(verified_checked_occurrence_ids)
 
-        footer = tk.Frame(self, bd=1, relief="groove")
+        footer = ActionRows(self, bd=1, relief="groove")
         footer.pack(side="bottom", fill="x")
-        tk.Button(footer, text="取消", width=12, command=self.destroy).pack(side="right", padx=8, pady=10)
-        tk.Button(footer, text="暫存這筆 actual", width=20, command=self.submit).pack(side="right", padx=4, pady=10)
-        body, _canvas = create_scrollable_body(self)
+        cancel = tk.Button(footer, text="取消", command=self.destroy)
+        save = tk.Button(footer, text="暫存這筆 actual", command=self.submit)
+        footer.set_items([save, cancel])
+        self.preview_guidance = WrappedLabel(
+            self, text="", fg="#555555", justify="left", wraplength=900,
+        )
+        self.preview_guidance.pack(side="bottom", fill="x", padx=16, pady=(2, 4))
+        body, self.body_canvas = create_scrollable_body(self)
+        self._body_scrollbar = next(
+            child for child in self.body_canvas.master.winfo_children() if isinstance(child, ttk.Scrollbar)
+        )
+        self.body_canvas.configure(yscrollcommand=self._body_scrolled)
+        self.body_canvas.bind("<Configure>", lambda _event: self._schedule_visibility_check(), add="+")
 
-        tk.Label(body, text="只看 PDF 原頁，確認實際印出的注音", font=("Microsoft JhengHei UI", 13, "bold")).pack(anchor="w", padx=16, pady=(14,4))
-        tk.Label(
+        WrappedLabel(body, text="只看 PDF 原頁，確認實際印出的注音", font=("Microsoft JhengHei UI", 13, "bold")).pack(fill="x", anchor="w", padx=16, pady=(14,4))
+        WrappedLabel(
             body,
             text=(
                 "這個視窗不提供 expected／字典答案，請只依原頁可見字形輸入 actual。"
@@ -279,59 +563,263 @@ class ActualReadingDialog(tk.Toplevel):
                 "最後由主畫面的「套用 actual 修正」一次處理。"
             ),
             fg="#555555", justify="left", wraplength=900,
-        ).pack(anchor="w", padx=16, pady=(0,8))
+        ).pack(fill="x", anchor="w", padx=16, pady=(0,8))
 
-        members = list(group.get("members") or [])
-        target_id = str(entry.get("occurrence_id") or "")
-        members.sort(key=lambda m: 0 if str(m.get("occurrence_id") or "") == target_id else 1)
-        self.samples = members[:2]
+        self.samples = actual_review_samples(
+            entry, group, verified_checked_occurrence_ids=verified_checked_occurrence_ids,
+        )
+        if len(self.samples) == 2:
+            load_instruction = "A、B 兩張原頁會先載入；請分別看圖，未暫存的位置仍要親自勾選。"
+        elif len(self.samples) > 2:
+            load_instruction = "先載入 A；其他位置按「顯示原頁」逐張載入，再看圖並親自勾選。"
+        else:
+            load_instruction = "先載入目前位置 A，請看圖並親自勾選。"
+        self.preview_guidance.configure(
+            text=f"本群組共 {len(self.samples)} 個位置：向下捲查看各張原頁與其下方的勾選框；"
+                 f"A 必須核對。{load_instruction}",
+        )
+        target_char = str(entry.get("char") or "")
+        other_char_count = sum(
+            str(sample.get("char") or "") != target_char for sample in self.samples
+        )
+        self.previously_checked = [
+            i > 0 and str(sample.get("occurrence_id") or "") in self.verified_checked_occurrence_ids
+            for i, sample in enumerate(self.samples)
+        ]
+        self._viewed_target = [False] * len(self.samples)
+        WrappedLabel(
+            body,
+            text=(f"本核對群組共有 {len(self.samples)} 個位置，全部列在下方；同頁不同位置仍分開列出。"
+                  + (f"其中 {other_char_count} 個位置的文字與目前字不同，但屬於同一 exact 字形群組；"
+                     "請個別看原頁確認，不能依字形推定讀音。" if other_char_count else "") +
+                  "請向下捲到原頁圖片及其下方的勾選框，逐個位置核對。"
+                  f"為避免大量 PDF 影像使視窗停住，{load_instruction}"
+                  "同時最多保留 A 與一張其他位置的影像。已核對並暫存的位置仍列出，但不必重做。"),
+            fg="#555555", justify="left", wraplength=900,
+        ).pack(fill="x", anchor="w", padx=16, pady=(0, 8))
+
         self.checked_vars = []
-        tmp_dir = self.output_dir / ".actual_review_preview"
         for i, sample in enumerate(self.samples, 1):
-            frame = tk.LabelFrame(body, text=f"樣本 {chr(64+i)}")
+            index = i - 1
+            label = chr(64 + i) if i <= 26 else str(i)
+            different_char = str(sample.get("char") or "") != target_char
+            frame = tk.LabelFrame(
+                body,
+                text=f"樣本 {label}" + ("（目前位置，必須核對）" if i == 1 else
+                                        "（字不同，須個別確認）" if different_char else ""),
+            )
             frame.pack(fill="x", padx=16, pady=6)
             info = f"{sample.get('pdf_name','')}  課本頁 {sample.get('printed_page','')}  字：{sample.get('char','')}  occurrence：{sample.get('occurrence_id','')}"
-            tk.Label(frame, text=info, anchor="w", justify="left").pack(fill="x", padx=8, pady=(6,2))
-            try:
-                img_path = tmp_dir / f"manual_{group.get('group_id','group')}_{i}.png"
-                render_occurrence_png(sample, img_path, context=True, output_dir=self.output_dir)
-                photo = tk.PhotoImage(file=str(img_path))
-                factor = max(1, (photo.width() + 720 - 1) // 720)
-                if factor > 1:
-                    photo = photo.subsample(factor, factor)
-                self.photos.append(photo)
-                tk.Label(frame, image=photo, bg="white").pack(padx=8, pady=5)
-            except Exception as exc:
-                tk.Label(frame, text=f"無法顯示圖片：{exc}", fg="#aa0000").pack(anchor="w", padx=8, pady=6)
-            var = tk.BooleanVar(value=(i == 1))
+            WrappedLabel(frame, text=info).pack(fill="x", padx=8, pady=(6, 2))
+            self.previews.append(None)
+            self.sample_available.append(False)
+            self._preview_ready_after.append(None)
+            slot = tk.Frame(frame)
+            slot.pack(fill="x", padx=8)
+            self.preview_slots.append(slot)
+            button = tk.Button(frame, text="顯示原頁", command=lambda j=index: self.show_sample_preview(j))
+            button.pack(anchor="w", padx=8, pady=(2, 4))
+            self.preview_buttons.append(button)
+            var = tk.BooleanVar(master=self, value=False)
             self.checked_vars.append(var)
-            tk.Checkbutton(frame, text="我已直接核對這張 PDF 原頁", variable=var).pack(anchor="w", padx=8, pady=(2,7))
+            if self.previously_checked[index]:
+                WrappedLabel(frame, text="已直接核對並暫存；本次不必重新勾選。", fg="#555555").pack(fill="x", padx=8, pady=(2, 7))
+                self.check_buttons.append(None)
+            else:
+                check = wrap_checkbutton(tk.Checkbutton(
+                    frame, text="我已直接核對這張 PDF 原頁", variable=var, state="disabled",
+                ))
+                check.pack(fill="x", padx=8, pady=(2, 7))
+                self.check_buttons.append(check)
 
         form = tk.LabelFrame(body, text="實際注音")
         form.pack(fill="x", padx=16, pady=8)
-        self.reading = tk.StringVar(value="")
-        self.note = tk.StringVar(value="")
-        tk.Label(form, text=f"程式目前 actual：{entry.get('actual') or '尚未辨識'}").grid(row=0,column=0,columnspan=2,sticky="w",padx=8,pady=(8,4))
-        tk.Label(form, text="原頁真正 actual：").grid(row=1,column=0,sticky="w",padx=8,pady=4)
-        tk.Entry(form, textvariable=self.reading, width=36).grid(row=1,column=1,sticky="ew",padx=8,pady=4)
-        tk.Label(form, text="備註（可空白）：").grid(row=2,column=0,sticky="w",padx=8,pady=4)
-        tk.Entry(form, textvariable=self.note, width=60).grid(row=2,column=1,sticky="ew",padx=8,pady=(4,8))
-        form.columnconfigure(1, weight=1)
+        self.reading = tk.StringVar(master=self, value="")
+        self.note = tk.StringVar(master=self, value="")
+        WrappedLabel(form, text=f"程式目前 actual：{entry.get('actual') or '尚未辨識'}").grid(row=0,column=0,columnspan=2,sticky="ew",padx=8,pady=(8,4))
+        WrappedLabel(form, text="原頁真正 actual：", width_fraction=0.25).grid(row=1,column=0,sticky="ew",padx=8,pady=4)
+        scrollable_entry(form, self.reading).grid(row=1,column=1,sticky="ew",padx=8,pady=4)
+        WrappedLabel(form, text="備註（可空白）：", width_fraction=0.25).grid(row=2,column=0,sticky="ew",padx=8,pady=4)
+        scrollable_entry(form, self.note).grid(row=2,column=1,sticky="ew",padx=8,pady=(4,8))
+        form.columnconfigure(0, weight=1, uniform="actual-form")
+        form.columnconfigure(1, weight=3, uniform="actual-form")
+
+        if self.samples:
+            self.show_sample_preview(0)
+        if len(self.samples) == 2:
+            # Preserve the two-sample visual layout contract without eagerly
+            # rasterizing a larger exact group or checking B on the user's behalf.
+            self.show_sample_preview(1)
         kind = str(group.get("kind") or "")
-        if len(self.samples) > 1 and kind in {"TTF_GLYF_SHA256", "CFF_GLYPH_SHA256"}:
-            tk.Label(body, text="若 A、B 都勾選且讀音相同，批次套用時這個 exact 字形可升格為跨位置重用真值；只勾 A 則只修正本位置。", fg="#555555").pack(anchor="w", padx=18, pady=(0,10))
+        checked_peers = set(verified_checked_occurrence_ids) & {
+            str(member.get("occurrence_id") or "") for member in group.get("members") or []
+            if str(member.get("occurrence_id") or "") != str(entry.get("occurrence_id") or "")
+        }
+        if checked_peers:
+            hint = ("同組先前已直接核對的位置仍保留在暫存。請核對樣本 A；其他位置請逐張載入原頁核對。"
+                    "本次讀音須與先前暫存一致，批次套用時才會一併驗證。")
+        elif len(self.samples) > 1 and kind in {"TTF_GLYF_SHA256", "CFF_GLYPH_SHA256"}:
+            hint = ("每個位置都要看過原頁並各自勾選；未勾選的位置不視為核對。"
+                    "暫存後批次套用時，才會依已核對位置及既有證據判斷能否重用 exact 字形。")
         else:
-            tk.Label(body, text="目前沒有第二個可交叉核對的 exact glyph；本次會先暫存 occurrence-specific actual 修正。", fg="#555555").pack(anchor="w", padx=18, pady=(0,10))
+            hint = "目前沒有第二個可交叉核對的 exact glyph；本次會先暫存 occurrence-specific actual 修正。"
+        WrappedLabel(body, text=hint, fg="#555555").pack(fill="x", anchor="w", padx=18, pady=(0,10))
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         if wait:
             self.wait_window(self)
+
+    def _cancel_preview_ready(self, index):
+        pending = self._preview_ready_after[index]
+        if pending is not None:
+            self.after_cancel(pending)
+            self._preview_ready_after[index] = None
+
+    def _body_scrolled(self, first, last):
+        if self._destroying or not self._body_scrollbar.winfo_exists():
+            return
+        self._body_scrollbar.set(first, last)
+        self._schedule_visibility_check()
+
+    def _schedule_visibility_check(self):
+        if not self._destroying and self._visibility_after is None:
+            self._visibility_after = self.after_idle(self._check_target_visibility)
+
+    def _preview_drawn_for_sample(self, index, preview):
+        return (preview._entry == self.samples[index] and preview.photo is not None
+                and preview.target is not None and preview._draw_pending is None
+                and preview._render_pending is None and preview.canvas.winfo_ismapped()
+                and preview.canvas.find_withtag("page") and preview.canvas.find_withtag("target"))
+
+    def _target_in_viewport(self, preview):
+        target = preview.canvas.find_withtag("target")
+        if not target:
+            return False
+        x0, y0, x1, y1 = preview.canvas.coords(target[-1])
+        left = preview.canvas.winfo_rootx() + x0 - preview.canvas.canvasx(0)
+        right = preview.canvas.winfo_rootx() + x1 - preview.canvas.canvasx(0)
+        top = preview.canvas.winfo_rooty() + y0 - preview.canvas.canvasy(0)
+        bottom = preview.canvas.winfo_rooty() + y1 - preview.canvas.canvasy(0)
+        outer = self.body_canvas
+        return (left >= outer.winfo_rootx() - 1 and right <= outer.winfo_rootx() + outer.winfo_width() + 1
+                and top >= outer.winfo_rooty() - 1 and bottom <= outer.winfo_rooty() + outer.winfo_height() + 1)
+
+    def _check_target_visibility(self):
+        self._visibility_after = None
+        if self._destroying or not self.winfo_exists() or not self.body_canvas.winfo_ismapped():
+            return
+        for index, preview in enumerate(self.previews):
+            if (preview is None or self.previously_checked[index] or self.sample_available[index]
+                    or not self._preview_drawn_for_sample(index, preview)):
+                continue
+            if self._target_in_viewport(preview):
+                self._viewed_target[index] = True
+                self.sample_available[index] = True
+                self.check_buttons[index].configure(state="normal")
+
+    def _check_preview_ready(self, index, preview, remaining):
+        self._preview_ready_after[index] = None
+        if not self.winfo_exists() or self.previews[index] is not preview:
+            return
+        if self._preview_drawn_for_sample(index, preview):
+            self._schedule_visibility_check()
+            return
+        if remaining > 0 and preview.pixmap is not None and preview.target is not None:
+            self._preview_ready_after[index] = self.after(
+                50, lambda: self._check_preview_ready(index, preview, remaining - 1),
+            )
+            return
+        self.sample_available[index] = False
+        self.checked_vars[index].set(False)
+        self.check_buttons[index].configure(state="disabled")
+        self.preview_buttons[index].configure(text="原頁未顯示，請重新載入")
+
+    def _cancel_owned_preview_callbacks(self):
+        self._destroying = True
+        if getattr(self, "_visibility_after", None) is not None:
+            self.after_cancel(self._visibility_after)
+            self._visibility_after = None
+        for index in range(len(getattr(self, "_preview_ready_after", []))):
+            self._cancel_preview_ready(index)
+
+    def _release_resources(self, event):
+        if event.widget is self:
+            # Native/Tcl owner destruction does not call Python destroy().
+            # Cancel callbacks before the shared handler drops widget refs.
+            self._cancel_owned_preview_callbacks()
+        super()._release_resources(event)
+
+    def destroy(self):
+        self._cancel_owned_preview_callbacks()
+        super().destroy()
+
+    def show_sample_preview(self, index):
+        """Render on demand, retaining at most A and one peer PDF image."""
+        if index and self._active_peer is not None and self._active_peer != index:
+            previous = self._active_peer
+            self._cancel_preview_ready(previous)
+            old = self.previews[previous]
+            if old is not None:
+                old.destroy()
+                self.previews[previous] = None
+            check = self.check_buttons[previous]
+            if check is not None:
+                check.configure(state="disabled")
+                if not self.checked_vars[previous].get():
+                    self.sample_available[previous] = False
+                    self._viewed_target[previous] = False
+            self.preview_buttons[previous].configure(text="重新顯示原頁")
+
+        if index:
+            self._active_peer = index
+        self._cancel_preview_ready(index)
+        preview = self.previews[index]
+        if preview is None:
+            preview = OccurrencePreview(
+                self.preview_slots[index], expand_content=True,
+                on_locate=self.body_canvas.reveal if index == 0 else None,
+                on_layout=self.body_canvas.request_layout,
+                before_locate=self.body_canvas.flush_layout,
+            )
+            preview.pack(fill="x", pady=5)
+            self.previews[index] = preview
+
+        def unavailable():
+            self._cancel_preview_ready(index)
+            self.sample_available[index] = False
+            self._viewed_target[index] = False
+            self.checked_vars[index].set(False)
+            check = self.check_buttons[index]
+            if check is not None:
+                check.configure(state="disabled")
+            self.preview_buttons[index].configure(text="原頁無法顯示，請重新載入")
+
+        preview.on_failure = unavailable
+        self.sample_available[index] = False
+        self._viewed_target[index] = False
+        self.checked_vars[index].set(False)
+        check = self.check_buttons[index]
+        if check is not None:
+            check.configure(state="disabled")
+        available = preview.load(self.samples[index], padding=(95, 60), output_dir=self.output_dir)
+        if not available:
+            self.checked_vars[index].set(False)
+        elif not self.previously_checked[index]:
+            # load() only proves that a target was found in the PDF. The image
+            # may still be waiting for the canvas's first usable width.
+            self._preview_ready_after[index] = self.after_idle(
+                lambda: self._check_preview_ready(index, preview, self._PREVIEW_READY_RETRIES),
+            )
+        if available:
+            self.preview_buttons[index].configure(text="重新載入原頁")
 
     def submit(self):
         reading = canonical_bopomofo(self.reading.get())
         if not reading:
             messagebox.showerror("注音格式不合法", "請輸入單一合法注音；聲調可放音節最前或最後。", parent=self)
             return
-        checked = [str(sample.get("occurrence_id") or "") for sample, var in zip(self.samples, self.checked_vars) if var.get()]
+        checked = [str(sample.get("occurrence_id") or "") for sample, var, available, previous, viewed in zip(
+            self.samples, self.checked_vars, self.sample_available, self.previously_checked, self._viewed_target,
+        ) if var.get() and available and viewed and not previous]
         target_id = str(self.entry.get("occurrence_id") or "")
         if target_id not in checked:
             messagebox.showerror("尚未核對目前位置", "樣本 A（目前位置）必須勾選已直接核對。", parent=self)
@@ -340,153 +828,213 @@ class ActualReadingDialog(tk.Toplevel):
         self.destroy()
 
 
-class ConfirmationDialog(tk.Toplevel):
-    def __init__(self, parent, entry, *, wait: bool = True):
+class ConfirmedItemsDialog(_ReviewDialog):
+    """Find a durable local expected decision without using the pending queue."""
+
+    _variable_attributes = ("pdf_filter", "page_filter", "text_filter")
+
+    def __init__(self, parent, entries, *, wait=True):
         super().__init__(parent)
         self.result = None
-        self.entry = entry
-        self.title("確認教材錯誤")
-        apply_screen_safe_geometry(self, 780, 680, min_width=620, min_height=440)
-        self.resizable(True, True)
+        self.entries = list(entries)
+        self.title("查看已確認項目")
+        apply_screen_safe_geometry(self, 900, 560, min_width=650, min_height=400)
         self.transient(parent)
         self.grab_set()
-
-        buttons = tk.Frame(self, bd=1, relief="groove")
-        buttons.pack(side="bottom", fill="x")
-        tk.Button(buttons, text="取消", width=12, command=self.destroy).pack(side="right", padx=8, pady=10)
-        tk.Button(buttons, text="確認為教材錯誤", width=18, command=self.submit, default="active").pack(side="right", padx=4, pady=10)
-
-        body, self.body_canvas = create_scrollable_body(self)
-
-        source = entry.get("source_record") or {}
-        phrase = str(source.get("局部詞境") or entry.get("context_evidence") or "").strip()
-        sentence = str(source.get("所在行") or "").strip()
-        expected_text = " | ".join(entry.get("expected_set") or [])
-
-        tk.Label(body, text="確認教材錯誤", font=("Microsoft JhengHei UI", 14, "bold")).pack(anchor="w", padx=18, pady=(16, 6))
-        summary = tk.LabelFrame(body, text="本筆證據")
-        summary.pack(fill="x", padx=18, pady=6)
-        lines = (
-            f"課本頁：{entry.get('printed_page', '')}　詞語：{phrase}\n"
-            f"所在句：{sentence}\n"
-            f"課本現標：{entry.get('char', '')}　{entry.get('actual', '')}\n"
-            f"應標：{entry.get('char', '')}　{expected_text}\n"
-            f"應標依據：{entry.get('expected_evidence', '')}"
-        )
-        tk.Label(summary, text=lines, justify="left", anchor="w", wraplength=700).pack(fill="x", padx=10, pady=10)
-
-        tk.Label(
-            body,
-            text="思考模式 2.5 的六閘門全部保留，但集中在同一個視窗。只有六項都確認才會正式列為教材錯誤。",
-            justify="left", wraplength=700, fg="#555555",
-        ).pack(anchor="w", padx=18, pady=(4, 8))
-
-        gate_texts = [
-            "我已回原頁確認課本現標注音。",
-            "我已確認應標注音的現行來源證據。",
-            "課本現標與應標讀音的兩條證據鏈互相獨立。",
-            "完整詞語、所在句與目標字位置都已確認。",
-            "我已檢查公司規定／來源優先序，沒有更高優先的衝突規則。",
-            "我本人確認這個現版差異是教材錯誤。",
-        ]
-        self.vars = []
-        gate_frame = tk.Frame(body)
-        gate_frame.pack(fill="x", padx=24, pady=4)
-        for text in gate_texts:
-            var = tk.BooleanVar(value=False)
-            self.vars.append(var)
-            tk.Checkbutton(gate_frame, text=text, variable=var, anchor="w", justify="left", wraplength=680).pack(fill="x", anchor="w", pady=5)
-
-        note_frame = tk.LabelFrame(body, text="補充說明（可空白）")
-        note_frame.pack(fill="x", padx=18, pady=6)
-        self.note = tk.Text(note_frame, height=4, wrap="word")
-        self.note.pack(fill="x", padx=8, pady=8)
-
-        self.protocol("WM_DELETE_WINDOW", self.destroy)
-        self.bind("<Escape>", lambda _event: self.destroy())
-        self.bind("<Control-Return>", lambda _event: self.submit())
+        filters = tk.Frame(self)
+        filters.pack(fill="x", padx=12, pady=10)
+        self.pdf_filter = tk.StringVar()
+        self.page_filter = tk.StringVar()
+        self.text_filter = tk.StringVar()
+        for column, (label, value) in enumerate((
+                ("教材", self.pdf_filter), ("頁碼", self.page_filter), ("文字", self.text_filter))):
+            tk.Label(filters, text=label).grid(row=0, column=column, sticky="w")
+            field = tk.Entry(filters, textvariable=value)
+            field.grid(row=1, column=column, sticky="ew", padx=(0, 8))
+            field.bind("<Return>", lambda _event: self.refresh())
+            filters.columnconfigure(column, weight=1)
+        tk.Button(filters, text="查找", command=self.refresh).grid(row=1, column=3)
+        columns = ("pdf", "page", "context", "char", "expected")
+        self.table = ttk.Treeview(self, columns=columns, show="headings", selectmode="browse")
+        for key, title, width in (("pdf", "教材", 190), ("page", "頁碼", 70),
+                                  ("context", "文字／語境", 330), ("char", "字", 55),
+                                  ("expected", "應標注音", 140)):
+            self.table.heading(key, text=title)
+            self.table.column(key, width=width, stretch=key in {"pdf", "context"})
+        self.table.pack(fill="both", expand=True, padx=12, pady=(0, 8))
+        self.table.bind("<Double-1>", lambda _event: self.choose())
+        buttons = ActionRows(self)
+        buttons.pack(fill="x", padx=12, pady=(0, 10))
+        buttons.set_items([tk.Button(buttons, text="查看原頁與判定", command=self.choose),
+                           tk.Button(buttons, text="關閉", command=self.destroy)])
+        self.refresh()
         if wait:
-            self.wait_window(self)
+            self.wait_window()
 
-    def submit(self):
-        if not all(var.get() for var in self.vars):
-            messagebox.showinfo("尚未完成", "六項確認必須全部勾選；不確定時請先取消並保留待處理。", parent=self)
-            return
-        source = self.entry.get("source_record") or {}
-        phrase = str(source.get("局部詞境") or self.entry.get("context_evidence") or "").strip()
-        auto_note = (
-            f"P{self.entry.get('printed_page', '')}「{phrase}」之「{self.entry.get('char', '')}」現標"
-            f"{self.entry.get('actual', '')}；應標{' | '.join(self.entry.get('expected_set') or [])}。"
-            f"已完成思考模式2.5現版六閘門確認。"
-        )
-        extra = self.note.get("1.0", "end").strip()
-        note = auto_note if not extra else f"{auto_note} {extra}"
-        self.result = {gate: True for gate in CONFIRMATION_GATES}
-        self.result["note"] = note
-        self.destroy()
+    def refresh(self):
+        self.table.delete(*self.table.get_children())
+        pdf = self.pdf_filter.get().strip().casefold()
+        page = self.page_filter.get().strip().casefold()
+        text = self.text_filter.get().strip().casefold()
+        for entry in self.entries:
+            source = entry.get("source_record") or {}
+            context = " ".join(str(value or "") for value in (
+                source.get("所在行"), source.get("局部詞境"), entry.get("char")))
+            if (pdf not in str(entry.get("pdf_name") or "").casefold()
+                    or page not in str(entry.get("printed_page") or "").casefold()
+                    or text not in context.casefold()):
+                continue
+            self.table.insert("", "end", iid=entry["review_id"], values=(
+                entry.get("pdf_name", ""), entry.get("printed_page", ""), context,
+                entry.get("char", ""), " | ".join(entry.get("expected_set") or [])))
+
+    def choose(self):
+        selected = self.table.selection()
+        if selected:
+            self.result = selected[0]
+            self.destroy()
+
+
+def load_review_project(output_dir, progress):
+    """Prepare the verified queue once; actual staging remains background work."""
+    progress("讀取校對工作階段")
+    service = ReviewSaveService(output_dir)
+    progress("驗證工作階段、來源與輸出資產完整性")
+    snapshot = service.load_resume_snapshot()
+    manifest, db = copy.deepcopy(snapshot.manifest), copy.deepcopy(snapshot.db)
+    progress("核對跨專案判定衝突")
+    from pdf_portability import validate_conflict_state, actual_excel_conflict_state, expected_conflict_review_view
+    conflicts = validate_conflict_state(output_dir, manifest, db)
+    actual_conflicts = set(actual_excel_conflict_state(output_dir, manifest, db))
+    progress("整理已核對的校對項目")
+    summary = {"staging_validation_pending": True}
+    review_view = expected_conflict_review_view(output_dir, manifest, db, snapshot.ledger)
+    prepared = prepare_review_queue(manifest, review_view, [], 0, set(), set(),
+                                    actual_conflict_review_ids=actual_conflicts)
+    progress("校對清單已備妥；actual 暫存將在背景核對")
+    return dict(manifest=manifest, db=db, summary=summary, prepared=prepared,
+                conflicts=conflicts, actual_conflicts=actual_conflicts,
+                service=service, snapshot=snapshot,
+                source_actual_pending=(output_dir / "來源actual待重新核對.json").exists())
+
+
+class ReviewStartupCancelled(Exception):
+    """The startup owner closed before the next loading phase."""
+
+
+def review_startup_worker(output_dir, messages, cancelled):
+    # Only plain paths, data and a queue cross the worker boundary.
+    def progress(phase):
+        if cancelled.is_set():
+            raise ReviewStartupCancelled()
+        messages.put(("progress", phase))
+        _review_log(f"[人工校對] {phase}")
+    try:
+        result = load_review_project(output_dir, progress)
+    except ReviewStartupCancelled:
+        return
+    except Exception as exc:
+        _review_log(f"[人工校對載入失敗] {exc}\n{traceback.format_exc()}", error=True)
+        messages.put(("error", str(exc)))
+    else:
+        if not cancelled.is_set():
+            messages.put(("result", result))
+
+
+def _review_log(text, *, error=False):
+    try:
+        print(text, file=sys.stderr if error else sys.stdout, flush=True)
+    except Exception:
+        # A launcher pipe/console closing does not invalidate loaded evidence.
+        pass
 
 
 class ReviewApp:
     def __init__(self, root, output_dir: Path):
         self.root = root
         self.output_dir = output_dir
-        self.manifest = json_load_strict(output_dir / "校對工作階段.json")
-        validate_manifest_integrity(self.manifest)
-        validate_output_artifact_hashes(self.manifest)
-        self.db = load_or_initialize_db(output_dir)
+        self.manifest, self.db = {}, {}
+        self.unresolved_portability_conflicts = set()
+        self.actual_excel_conflict_review_ids = set()
+        self._startup_in_progress = False
+        self._startup_failed = False
+        self.exit_code = 0
         self.index = 0
         self.photo = None
         self.records = []
+        self.focused_entry = None
+        self._focused_from_undo = False
+        self.last_expected_review_id = None
         self.tech_visible = False
         self.staging_summary = {}
         self.staged_member_occurrence_ids = set()
         self.staged_checked_occurrence_ids = set()
+        self.deferred_items = set()
+        self._save_in_progress = False
+        self._project_generation = 0
+        self._save_service = ReviewSaveService(output_dir)
+        self._save_recovery_required = False
+        self.last_save_timings = {}
+        self.waiting_actual_occurrence_ids = set()
+        root.protocol("WM_DELETE_WINDOW", self.close)
 
         root.title(f"注音校對－人工確認 v{VERSION}")
         apply_screen_safe_geometry(root, 1180, 850, min_width=760, min_height=520)
 
-        top = tk.Frame(root)
+        actions = tk.Frame(root)
+        actions.pack(side="bottom", fill="x", padx=12, pady=(4, 10))
+        body, self.body_canvas = create_scrollable_body(root, fill_height=True)
+        top = tk.Frame(body)
         top.pack(fill="x", padx=12, pady=(10, 4))
-        self.status = tk.Label(top, text="", font=("Microsoft JhengHei UI", 11, "bold"))
-        self.status.pack(side="left")
-        tk.Button(top, text="上一筆", command=self.prev).pack(side="right", padx=3)
-        tk.Button(top, text="下一筆", command=self.next).pack(side="right", padx=3)
+        self.status = WrappedLabel(top, text="", font=("Microsoft JhengHei UI", 11, "bold"))
+        self.status.pack(fill="x")
+        self.retry_startup_button = tk.Button(top, text="重新載入校對專案", command=self._start_review_loading)
+        navigation = ActionRows(top)
+        navigation.pack(fill="x")
+        self.revisit_button = tk.Button(navigation, text="重新查看稍後處理（0）", command=self.revisit_deferred, state="disabled")
+        self.confirmed_button = tk.Button(navigation, text="查看已確認項目", command=self.open_confirmed_items)
+        self.undo_expected_button = tk.Button(navigation, text="撤銷上一次判定", command=self.undo_last_expected, state="disabled")
+        navigation.set_items([tk.Button(navigation, text="上一筆", command=self.prev),
+                              tk.Button(navigation, text="下一筆", command=self.next), self.revisit_button,
+                              self.confirmed_button, self.undo_expected_button])
+        self.navigation = navigation
 
-        self.summary = tk.LabelFrame(root, text="這一筆要確認什麼")
+        self.summary = tk.LabelFrame(body, text="這一筆要確認什麼")
         self.summary.pack(fill="x", padx=12, pady=5)
-        self.summary_text = tk.Label(self.summary, text="", justify="left", anchor="w", wraplength=1120, font=("Microsoft JhengHei", 11))
+        self.summary_text = WrappedLabel(self.summary, text="", justify="left", anchor="w", wraplength=1120, font=("Microsoft JhengHei", 11))
         self.summary_text.pack(fill="x", padx=10, pady=8)
 
-        self.image = tk.Label(root, bg="white")
+        self.image = OccurrencePreview(body, on_locate=self.body_canvas.reveal, on_failure=self._preview_failed,
+                                       on_layout=self.body_canvas.request_layout,
+                                       before_locate=self.body_canvas.flush_layout)
         self.image.pack(fill="both", expand=True, padx=12, pady=6)
 
-        self.tech_frame = tk.LabelFrame(root, text="技術資訊")
+        self.tech_frame = tk.LabelFrame(body, text="技術資訊")
         self.tech_text = tk.Text(self.tech_frame, height=8, wrap="word", font=("Consolas", 9))
         self.tech_text.pack(fill="x", padx=8, pady=6)
 
-        actions = tk.Frame(root)
-        actions.pack(fill="x", padx=12, pady=(4, 10))
-        decision_actions = tk.Frame(actions)
+        decision_actions = ActionRows(actions)
         decision_actions.pack(fill="x")
+        self.decision_actions = decision_actions
         self.primary = tk.Button(decision_actions, text="", width=18, height=2)
-        self.primary.pack(side="left", padx=(0, 6))
         self.secondary = tk.Button(decision_actions, text="", width=18, height=2)
-        self.secondary.pack(side="left", padx=6)
-        self.later = tk.Button(decision_actions, text="稍後處理", width=14, height=2, command=self.next)
-        self.later.pack(side="left", padx=6)
+        self.later = tk.Button(decision_actions, text="稍後處理", width=14, height=2, command=self.defer_current)
 
         self.more_button = tk.Menubutton(decision_actions, text="更多…", width=12, height=2, relief="raised")
         self.more_menu = tk.Menu(self.more_button, tearoff=False)
         self.more_button.config(menu=self.more_menu)
-        self.more_button.pack(side="left", padx=6)
         self.more_menu.add_command(label="此處不需校對…", command=self.exclude)
         self.more_menu.add_command(label="實際注音辨識有誤…", command=self.correct_actual)
+        self.more_menu.add_command(label="輸入其他應標注音…", command=self.resolve_expected)
         self.more_menu.add_command(label="撤銷本筆人工判定", command=self.clear)
+        self.more_menu.add_command(label="返回待辦", command=self.return_to_pending)
+        self.more_menu.add_command(label="另行建立上筆應標可重用規則…", command=self.create_reusable_expected_rule)
         self.more_menu.add_separator()
         self.more_menu.add_command(label="查看／隱藏技術資訊", command=self.toggle_tech)
         self.more_menu.add_command(label="更新 Excel 報告", command=self.report)
 
-        batch_actions = tk.Frame(actions)
+        batch_actions = ActionRows(actions)
+        self.batch_actions = batch_actions
         batch_actions.pack(fill="x", pady=(6, 0))
         self.apply_actual_button = tk.Button(
             batch_actions,
@@ -496,75 +1044,333 @@ class ReviewApp:
             state="disabled",
             command=self.apply_staged_actuals,
         )
-        self.apply_actual_button.pack(side="right")
-        tk.Label(
-            batch_actions,
+        batch_actions.set_items([self.apply_actual_button])
+        self.staging_status = WrappedLabel(
+            actions,
             text="先逐筆暫存原頁 actual；確認完後再一次套用與增量更新。",
             fg="#555555",
             anchor="w",
-        ).pack(side="left", fill="x", expand=True)
+        )
+        self.staging_status.pack(fill="x")
 
-        self.reload_records()
+        self._disable_save_controls()
+        self._start_review_loading()
+
+    def _start_review_loading(self):
+        if (getattr(self, "_startup_in_progress", False) or getattr(self, "_async_disposed", False)
+                or getattr(self, "_apply_in_progress", False) or getattr(self, "_save_in_progress", False)):
+            return
+        self._startup_in_progress = True
+        self._startup_failed = False
+        self.retry_startup_button.pack_forget()
+        request = {"started": time.perf_counter(), "phase": "準備載入校對專案"}
+        self._startup_request = request
+        self._startup_cancelled = threading.Event()
+        messages = queue.Queue()
+        self.status.config(text="正在載入校對專案，完成完整性核對後即可開始…")
+        try:
+            self._startup_worker = threading.Thread(target=review_startup_worker,
+                                                    args=(self.output_dir, messages, self._startup_cancelled), daemon=False)
+            self._schedule_async_poll(self._poll_review_loading, request, messages)
+            self._startup_worker.start()
+        except Exception as exc:
+            self._review_loading_failed(str(exc))
+
+    def _review_loading_failed(self, error):
+        self._startup_in_progress = False
+        self._startup_failed = True
+        self.exit_code = 1
+        self._startup_request = None
+        self._resume_source_error = error
+        self._publish_staging_summary(self._source_error_staging_summary(error))
+        self._show_staging_status()
+        self.status.config(text=f"校對專案載入失敗：{error}。可重新載入或關閉。")
+        self.retry_startup_button.pack(anchor="w")
+        messagebox.showerror("無法載入人工校對", error, parent=self.root)
+
+    def _poll_review_loading(self, request, messages):
+        if getattr(self, "_async_disposed", False) or getattr(self, "_startup_request", None) is not request:
+            return
+        try:
+            while True:
+                kind, payload = messages.get_nowait()
+                if kind == "progress":
+                    request["phase"] = payload
+                elif kind == "error":
+                    self._review_loading_failed(payload)
+                    return
+                else:
+                    try:
+                        self._publish_review_project(payload)
+                    except Exception as exc:
+                        self._disable_save_controls()
+                        self._review_loading_failed(str(exc))
+                    return
+        except queue.Empty:
+            elapsed = int(time.perf_counter() - request["started"])
+            self.status.config(text=f"正在{request['phase']}…（已等候 {elapsed} 秒；可關閉）")
+            self._schedule_async_poll(self._poll_review_loading, request, messages)
+
+    def _publish_review_project(self, result):
+        self.manifest, self.db = result["manifest"], result["db"]
+        self.unresolved_portability_conflicts = result["conflicts"]
+        self.actual_excel_conflict_review_ids = result["actual_conflicts"]
+        self._startup_in_progress = self._startup_failed = False
+        self._startup_request = None
+        self.exit_code = 0
+        self._restore_save_controls()
+        self._save_service = result["service"]
+        self._resume_source_error = None
+        self._publish_staging_summary(result["summary"])
+        self._publish_review_queue(result["prepared"])
+        self.last_resume_timings = dict(result["snapshot"].timings)
+        self._start_staging_validation(result["snapshot"])
         self.show()
+        _review_log("[人工校對] 已載入，可以開始校對")
+        if result["source_actual_pending"]:
+            messagebox.showwarning(
+                "來源 actual 暫存待重新核對",
+                "來源專案的 actual 暫存與原始識別已保存，但沒有套用到當地 PDF。"
+                "請依當地原頁重新核對；搬移/匯入不算新的獨立 Global 人工證據。",
+                parent=self.root,
+            )
+        if self.unresolved_portability_conflicts:
+            messagebox.showwarning(
+                "跨專案判定衝突",
+                "同位置不同判定沒有自動覆寫。來源與目標原資料均保留，"
+                "請查看專案詳細資訊並回原頁人工核對衝突。",
+                parent=self.root,
+            )
         if not self.records:
             title, detail, _primary_text = self._empty_actionable_state()
             messagebox.showinfo(title, detail, parent=self.root)
 
-    def reload_records(self):
-        self.reload_staging_summary()
-        ledger = materialize_ledger(self.manifest, self.db)
-        self._set_actionable_records_from_ledger(ledger)
-
-    def _set_actionable_records_from_ledger(self, ledger):
-        previous_records = list(getattr(self, "records", []))
-        previous_index = int(getattr(self, "index", 0))
-        following_occurrence_ids = []
-        if 0 <= previous_index < len(previous_records):
-            following_occurrence_ids = [
-                str(item.get("occurrence_id") or "")
-                for item in previous_records[previous_index:]
-            ]
-
-        checked_ids = set(getattr(self, "staged_checked_occurrence_ids", set()))
-        self.records = [
-            entry
-            for entry in ledger
-            if entry.get("state") in NON_TERMINAL_STATES
-            and str(entry.get("occurrence_id") or "") not in checked_ids
-        ]
-        if not self.records:
-            self.index = 0
+    def reload_records(self, *, advance_from=None, defer_staging=None):
+        if getattr(self, "_save_in_progress", False):
             return
+        if defer_staging is None:
+            defer_staging = getattr(self, "staging_summary", {}).get("staging_validation_pending", False)
+        self.focused_entry = None
+        self._focused_from_undo = False
+        self._invalidate_save_snapshot()
+        if getattr(self, "_character_order_manifest", None) is not self.manifest:
+            self.__dict__.pop("_character_order", None)
+            self._character_order_manifest = self.manifest
+        try:
+            snapshot = self._save_service.load_resume_snapshot(
+                expected_manifest=self.manifest, expected_db=self.db)
+        except Exception as exc:
+            # Keep the historical diagnostic roster visible, with no trusted
+            # staged checks or actionable source claim. Saves still revalidate
+            # durable bytes and reject drift; no snapshot cache is accepted.
+            self._resume_source_error = str(exc)
+            self._publish_staging_summary(self._source_error_staging_summary(exc))
+            ledger = materialize_ledger(self.manifest, self.db)
+            self._set_actionable_records_from_ledger(ledger, advance_from=advance_from)
+            return
+        self._resume_source_error = None
+        ledger = copy.deepcopy(snapshot.ledger)
+        if defer_staging:
+            self._publish_staging_summary({"staging_validation_pending": True})
+        else:
+            self._publish_staging_summary(self._save_service.validate_resume_staging(snapshot))
+        self._set_actionable_records_from_ledger(ledger, advance_from=advance_from)
+        self.last_resume_timings = dict(snapshot.timings)
+        if defer_staging:
+            self._start_staging_validation(snapshot)
 
-        current_indexes = {
-            str(item.get("occurrence_id") or ""): index
-            for index, item in enumerate(self.records)
-            if str(item.get("occurrence_id") or "")
-        }
-        for occurrence_id in following_occurrence_ids:
-            if occurrence_id in current_indexes:
-                self.index = current_indexes[occurrence_id]
-                return
-        self.index = max(0, min(previous_index, len(self.records) - 1))
+    def _source_error_staging_summary(self, error):
+        """Recovery availability is independent of accepting a resume snapshot."""
+        summary = {"staging_error": str(error)}
+        try:
+            summary["actual_recovery_pending"] = committed_project_recovery(
+                project_actual_evidence_root(self.output_dir)) is not None
+        except Exception as recovery_error:
+            summary["staging_error"] += f"；actual 復原紀錄無法驗證：{recovery_error}"
+        return summary
 
-    def reload_staging_summary(self):
-        summary = manual_actual_staging_summary(self.output_dir)
+    def _cancel_staging_validation(self):
+        request = getattr(self, "_staging_request", None)
+        if request is not None:
+            request["cancelled"].set()
+        self._staging_request = None
+
+    def _start_staging_validation(self, snapshot):
+        self._cancel_staging_validation()
+        request = {"generation": getattr(self, "_project_generation", 0),
+                   "manifest": self.manifest, "db": self.db, "output_dir": self.output_dir,
+                   "cancelled": threading.Event()}
+        self._staging_request = request
+        completed = queue.Queue(maxsize=1)
+        service = self._save_service
+
+        def worker():
+            try:
+                summary = service.validate_resume_staging(snapshot, cancelled=request["cancelled"].is_set)
+            except Exception as exc:
+                summary = {"staging_error": str(exc), "staged_checked_occurrence_ids": []}
+            completed.put((summary, snapshot.ledger, snapshot.timings))
+
+        try:
+            self._staging_worker = threading.Thread(target=worker, daemon=True)
+            self._schedule_async_poll(self._poll_staging_validation, request, completed)
+            self._staging_worker.start()
+        except Exception as exc:
+            self._cancel_staging_validation()
+            self._publish_staging_summary({"staging_error": str(exc)})
+            self._show_staging_status()
+
+    def _poll_staging_validation(self, request, completed):
+        if (getattr(self, "_staging_request", None) is not request
+                or getattr(self, "_async_disposed", False)):
+            return
+        if getattr(self, "_review_action_in_progress", False):
+            # A modal expected editor owns its current occurrence until submit
+            # or cancel. Do not switch its queue while its nested event loop runs.
+            self._schedule_async_poll(self._poll_staging_validation, request, completed)
+            return
+        try:
+            summary, ledger, timings = completed.get_nowait()
+        except queue.Empty:
+            self._schedule_async_poll(self._poll_staging_validation, request, completed)
+            return
+        self._staging_request = None
+        if (request["generation"] != getattr(self, "_project_generation", 0)
+                or request["manifest"] is not self.manifest or request["db"] is not self.db
+                or request["output_dir"] != self.output_dir):
+            return
+        self._publish_staging_summary(summary)
+        # Preserve the selection as it exists now, not the startup selection.
+        current = self.current()
+        current_id = current.get("review_id") if current else None
+        focused = getattr(self, "focused_entry", None)
+        self._set_actionable_records_from_ledger(copy.deepcopy(ledger))
+        if focused is None and current_id is not None:
+            self.index = next((n for n, row in enumerate(self.records)
+                               if row.get("review_id") == current_id), self.index)
+        self.last_resume_timings = dict(timings)
+        self.show()
+
+    def _queue_inputs(self):
+        return (self.manifest, self.records, self.index,
+                set(getattr(self, "deferred_items", set())),
+                dict(self._character_order) if hasattr(self, "_character_order") else None)
+
+    def _set_actionable_records_from_ledger(self, ledger, *, advance_from=None):
+        if hasattr(self, "output_dir") and hasattr(self, "db"):
+            from pdf_portability import actual_excel_conflict_state, expected_conflict_review_view
+            self.actual_excel_conflict_review_ids = set(actual_excel_conflict_state(
+                self.output_dir, self.manifest, self.db))
+            ledger = expected_conflict_review_view(self.output_dir, self.manifest, self.db, ledger)
+        else:
+            # Pure queue/navigation fixtures have no persisted project to read.
+            self.actual_excel_conflict_review_ids = set()
+        manifest, previous, index, deferred, character_order = self._queue_inputs()
+        prepared = prepare_review_queue(manifest, ledger, previous, index,
+                                        self.staged_checked_occurrence_ids, deferred,
+                                        character_order, advance_from=advance_from,
+                                        actual_conflict_review_ids=self.actual_excel_conflict_review_ids)
+        self._publish_review_queue(prepared)
+
+    def _publish_review_queue(self, prepared):
+        self.__dict__.update(prepared)
+        if hasattr(self, "revisit_button"):
+            count = len(self.deferred_items)
+            self.revisit_button.config(text=f"重新查看稍後處理（{count}）", state="normal" if count else "disabled")
+            if hasattr(self, "navigation"):
+                self.navigation.refresh()
+        self._show_staging_status()
+
+    def defer_current(self):
+        if self._save_busy() or getattr(self, "_apply_in_progress", False):
+            return
+        entry = self.current()
+        if not entry:
+            return
+        self.deferred_items = set(getattr(self, "deferred_items", set()))
+        self.deferred_items.add((review_lane(entry), str(entry.get("occurrence_id") or "")))
+        self.reload_records()
+        self.show()
+
+    def revisit_deferred(self):
+        if self._save_busy() or getattr(self, "_apply_in_progress", False):
+            return
+        self.deferred_items = set()
+        self.records = []
+        self.index = 0
+        self.reload_records()
+        self.show()
+
+    def reload_staging_summary(self, ledger=None):
+        if ledger is None:
+            ledger = materialize_ledger(self.manifest, self.db)
+        try:
+            summary = manual_actual_staging_summary(self.output_dir, ledger=ledger)
+        except Exception as exc:
+            # Do not retain an earlier trusted checked roster on a read failure.
+            summary = {"staging_error": str(exc)}
+        return self._publish_staging_summary(summary)
+
+    def _publish_staging_summary(self, summary):
         self.staging_summary = dict(summary)
-        self.staged_member_occurrence_ids = set(summary.get("staged_member_occurrence_ids") or [])
-        self.staged_checked_occurrence_ids = set(summary.get("staged_checked_occurrence_ids") or [])
-        count = int(summary.get("staged_group_count") or 0)
+        # An error-bearing summary cannot authorize hiding any pending row,
+        # even if it also carries an obsolete checked roster.
+        trusted = not (summary.get("staging_error") or summary.get("staging_validation_pending"))
+        if not trusted:
+            self.staging_summary.update(
+                staged_group_count=0,
+                staged_member_occurrence_ids=[],
+                staged_checked_occurrence_ids=[],
+            )
+        self.staged_member_occurrence_ids = set(summary.get("staged_member_occurrence_ids") or []) if trusted else set()
+        self.staged_checked_occurrence_ids = set(summary.get("staged_checked_occurrence_ids") or []) if trusted else set()
+        count = int(self.staging_summary.get("staged_group_count") or 0)
         self.apply_actual_button.config(
-            text=f"套用 actual 修正（{count}）",
-            state="normal" if count > 0 else "disabled",
+            text="繼續 actual 更新（已提交）" if summary.get("actual_recovery_pending") else f"套用 actual 修正（{count}）",
+            state="normal" if (not summary.get("staging_validation_pending")
+                               and (count > 0 or summary.get("actual_recovery_pending"))) else "disabled",
         )
+        if hasattr(self, "batch_actions"):
+            self.batch_actions.refresh()
         return self.staging_summary
 
+    def _show_staging_status(self):
+        if not hasattr(self, "staging_status"):
+            return
+        error = self.staging_summary.get("staging_error")
+        count = int(self.staging_summary.get("staged_group_count") or 0)
+        checked = len(self.staged_checked_occurrence_ids)
+        waiting = len(getattr(self, "waiting_actual_occurrence_ids", set()))
+        self.staging_status.config(text=(
+            "actual 暫存仍在核對；可先依原文輸入應標注音。尚未將任何暫存位置視為已核對或完成。"
+            if self.staging_summary.get("staging_validation_pending") else
+            f"actual 暫存無法驗證：{error}。未將任何項目視為已處理；請修復來源／暫存後重新開啟。"
+            if error else
+            "actual 已提交，後續更新尚未完成。請按「繼續 actual 更新（已提交）」；不會重複套用暫存。"
+            if self.staging_summary.get("actual_recovery_pending") else
+            f"待套用 {count} 組 actual 修正（已核對 {checked} 個位置）；其中 {waiting} 筆等待套用後重新比較。"
+            "請按「套用 actual 修正」；等待套用不等於完成。"
+        ))
+
     def _empty_actionable_state(self):
+        if self.staging_summary.get("staging_validation_pending"):
+            return ("actual 暫存仍在核對", "尚未完成暫存驗證，未將任何位置視為已核對或完成。", "請等候 actual 核對")
+        if self.staging_summary.get("staging_error"):
+            return ("actual 暫存無法驗證", f"尚未完成：{self.staging_summary['staging_error']}。請修復後重新開啟。", "請先處理暫存阻擋")
+        if self.staging_summary.get("actual_recovery_pending"):
+            return ("actual 後續更新尚未完成", "actual 已提交；請按「繼續 actual 更新（已提交）」恢復更新，尚未視為校對完成。", "請繼續 actual 更新")
+        deferred = len(getattr(self, "deferred_items", set()))
+        if deferred:
+            return (
+                "這輪待辦已走完，仍有稍後處理項目",
+                f"仍有 {deferred} 筆待處理，未視為完成。請按「重新查看稍後處理（{deferred}）」。actual 暫存仍須另行批次套用。",
+                "請重新查看稍後處理",
+            )
         count = int(self.staging_summary.get("staged_group_count") or 0)
         if count > 0:
             return (
                 "目前沒有尚未暫存的待人工項目",
-                f"仍有 {count} 組 actual 修正等待批次套用，"
+                f"仍有 {count} 組 actual 修正等待批次套用（已核對 {len(self.staged_checked_occurrence_ids)} 個位置），未視為完成。"
                 f"請按「套用 actual 修正（{count}）」。",
                 "請使用批次套用按鈕",
             )
@@ -575,130 +1381,481 @@ class ReviewApp:
         )
 
     def current(self):
-        return self.records[self.index] if self.records else None
+        return getattr(self, "focused_entry", None) or (self.records[self.index] if self.records else None)
 
-    def save_event(self, entry, event):
-        review_id = entry["review_id"]
-        staged = json.loads(json.dumps(self.db, ensure_ascii=False))
-        staged.setdefault("events", {})[review_id] = event
-        try:
-            staged_ledger = materialize_ledger(self.manifest, staged)
-        except Exception as exc:
-            # Do not leave the operator on an apparently unchanged row with only
-            # a console traceback.  A failed event must remain unsaved and visible.
-            messagebox.showerror("無法儲存人工判定", str(exc), parent=self.root)
-            return False
-
-        resolved_entry = next((item for item in staged_ledger if item.get("review_id") == review_id), None)
-        if resolved_entry is None:
-            messagebox.showerror("無法儲存人工判定", "儲存後找不到本筆 review_id，已取消寫入。", parent=self.root)
-            return False
-
-        json_save(self.output_dir / "人工判定資料庫.json", staged)
-        self.db = staged
-        self._set_actionable_records_from_ledger(staged_ledger)
+    def return_to_pending(self):
+        if self._save_busy() or getattr(self, "_apply_in_progress", False):
+            return
+        self.focused_entry = None
+        self._focused_from_undo = False
         self.show()
-        return resolved_entry.get("state") not in NON_TERMINAL_STATES
+
+    def open_confirmed_items(self):
+        if self._save_busy() or getattr(self, "_apply_in_progress", False):
+            return
+        try:
+            ledger = materialize_ledger(self.manifest, self.db)
+            events = self.db.get("events", {})
+            entries = [entry for entry in ledger
+                       if isinstance(events.get(entry["review_id"]), dict)
+                       and "manual_expected_decision" in events[entry["review_id"]]]
+        except Exception as exc:
+            messagebox.showerror("無法查看已確認項目", str(exc), parent=self.root)
+            return
+        dialog = ConfirmedItemsDialog(self.root, entries)
+        if dialog.result:
+            self.focused_entry = next(entry for entry in entries if entry["review_id"] == dialog.result)
+            self._focused_from_undo = False
+            self.show()
+
+    def _last_expected_target(self):
+        review_id = getattr(self, "last_expected_review_id", None)
+        event = getattr(self, "db", {}).get("events", {}).get(review_id)
+        if (not isinstance(event, dict) or "manual_expected_decision" not in event
+                or "undo_previous_event" not in event):
+            return None
+        return review_id
+
+    @guarded_review_action
+    def undo_last_expected(self):
+        review_id = self._last_expected_target()
+        if not review_id:
+            return
+        try:
+            entry = next(row for row in materialize_ledger(self.manifest, self.db)
+                         if row["review_id"] == review_id)
+        except Exception as exc:
+            messagebox.showerror("無法撤銷應標判定", str(exc), parent=self.root)
+            return
+        if not messagebox.askyesno("撤銷上一次判定", "確定撤銷這次應標判定並回到這一筆？", parent=self.root):
+            return
+        previous = self.db["events"][review_id]["undo_previous_event"]
+        self.save_event(entry, copy.deepcopy(previous), focus_after_save=True)
+
+    def _remember_previous_expected_event(self, entry, event):
+        previous = copy.deepcopy(getattr(self, "db", {}).get("events", {}).get(entry["review_id"]))
+        if previous is not None:
+            previous.pop("undo_previous_event", None)
+        event["undo_previous_event"] = previous
+        return event
+
+    def _save_busy(self):
+        return (getattr(self, "_save_in_progress", False)
+                or getattr(self, "_startup_in_progress", False)
+                or getattr(self, "_startup_failed", False)
+                or getattr(self, "_save_recovery_required", False)
+                or getattr(self, "_async_disposed", False))
+
+    def _ensure_async_lifecycle(self):
+        if hasattr(self, "_async_after_ids"):
+            return
+        self._async_after_ids = set()
+        self._async_disposed = False
+        self.root.bind("<Destroy>", self._dispose_async, add="+")
+
+    def _dispose_async(self, event):
+        if event.widget is not self.root:
+            return
+        self._async_disposed = True
+        self._cancel_staging_validation()
+        self._project_generation = getattr(self, "_project_generation", 0) + 1
+        self._save_request = None
+        self._startup_request = None
+        self._startup_in_progress = False
+        cancelled = getattr(self, "_startup_cancelled", None)
+        if cancelled is not None:
+            cancelled.set()
+        for timer_id in self._async_after_ids:
+            self.root.after_cancel(timer_id)
+        self._async_after_ids.clear()
+        # The worker may still finish its durable write. It never touches Tk;
+        # reopening reads the saved result instead of publishing to this owner.
+        self._save_in_progress = False
+
+    def _schedule_async_poll(self, callback, *args):
+        self._ensure_async_lifecycle()
+        if self._async_disposed:
+            return
+        timer_id = None
+
+        def deliver():
+            self._async_after_ids.discard(timer_id)
+            if not self._async_disposed:
+                callback(*args)
+
+        timer_id = self.root.after(20, deliver)
+        if timer_id is not None:
+            self._async_after_ids.add(timer_id)
+
+    def _invalidate_save_snapshot(self):
+        self._cancel_staging_validation()
+        self._project_generation = getattr(self, "_project_generation", 0) + 1
+        # Evict computation only. A rejected evidence change remains rejected
+        # across retry, queue reload and defer/revisit of the same session.
+        service = getattr(self, "_save_service", None)
+        self._save_service = (service.with_invalidated_cache() if service is not None
+                              else ReviewSaveService(self.output_dir))
+
+    def close(self):
+        if getattr(self, "_save_in_progress", False) or getattr(self, "_apply_in_progress", False):
+            self.status.config(text="人工判定儲存中，完成後即可關閉。")
+            return
+        self._cancel_staging_validation()
+        self._project_generation = getattr(self, "_project_generation", 0) + 1
+        self.root.destroy()
+
+    def _disable_save_controls(self):
+        widgets = [getattr(self, name, None) for name in
+                   ("primary", "secondary", "later", "more_button", "apply_actual_button", "revisit_button",
+                    "confirmed_button", "undo_expected_button")]
+        navigation = getattr(self, "navigation", None)
+        if navigation is not None:
+            widgets.extend(navigation.winfo_children())
+        saved = getattr(self, "_saved_control_states", [])
+        first_snapshot = not saved
+        seen = {id(widget) for widget, _state in saved}
+        self._saved_control_states = saved
+        for widget in widgets:
+            if widget is not None and hasattr(widget, "cget"):
+                if id(widget) not in seen:
+                    saved.append((widget, widget.cget("state")))
+                    seen.add(id(widget))
+                widget.config(state="disabled")
+        if hasattr(self, "status"):
+            if first_snapshot:
+                self._saved_status_text = self.status.cget("text")
+            self.status.config(text="正在儲存人工判定與更新待辦，請稍候…")
+
+    def _restore_save_controls(self):
+        for widget, state in getattr(self, "_saved_control_states", []):
+            widget.config(state=state)
+        self._saved_control_states = []
+        entry = self.current()
+        if (entry and can_confirm_current_expected(entry) and hasattr(self, "primary")
+                and getattr(self, "_rendered_review_id", None) != entry.get("review_id")):
+            # A resize/render may fail while the save worker is running. Do not
+            # restore the shortcut's old enabled state after a failed write.
+            getattr(self, "_confirm_current_expected_button", self.primary).config(state="disabled")
+        if hasattr(self, "status") and hasattr(self, "_saved_status_text"):
+            self.status.config(text=self._saved_status_text)
+
+    def save_event(self, entry, event, *, explain_expected=False, focus_after_save=False):
+        """Start one durable save; publish only from the Tk polling callback."""
+        if self._save_busy() or getattr(self, "_apply_in_progress", False):
+            return False
+        current = self.current()
+        if not focus_after_save and (not current or current.get("review_id") != entry.get("review_id")):
+            return False
+        pending_staging = getattr(self, "staging_summary", {}).get("staging_validation_pending", False)
+        if pending_staging:
+            decision = event.get("manual_expected_decision", {}) if isinstance(event, dict) else {}
+            if not isinstance(decision, dict) or decision.get("operation") != "ENTER_EXPECTED":
+                return False
+        self._cancel_staging_validation()
+        self._save_in_progress = True
+        self._last_event_saved = self._last_event_refreshed = False
+        if not hasattr(self, "_save_service"):
+            self._save_service = ReviewSaveService(self.output_dir)
+        started = time.perf_counter()
+        request = {"generation": getattr(self, "_project_generation", 0),
+                   "review_id": entry["review_id"], "manifest": self.manifest,
+                   "db": self.db, "output_dir": self.output_dir,
+                   "entry": entry, "event": event, "explain_expected": explain_expected,
+                   "current_review_id": current.get("review_id") if current else None,
+                   "focus_after_save": focus_after_save or (
+                       getattr(self, "focused_entry", None) is not None
+                       and not getattr(self, "_focused_from_undo", False)),
+                   "return_after_undo": focus_after_save,
+                   "pending_staging": pending_staging,
+                   "confirm_current_actual_snapshot": copy.deepcopy(actual_confirmation_snapshot(entry))
+                   if isinstance(event, dict) and (event.get("manual_expected_decision") or {}).get("operation")
+                   == "CONFIRM_CURRENT_AS_EXPECTED" else None,
+                   "started": started}
+        self._save_request = request
+        completed = queue.Queue(maxsize=1)
+        progress = queue.Queue()
+        request["progress"] = progress
+        request["phase"] = "準備儲存人工判定"
+        service = self._save_service
+        manifest, previous, index, deferred, character_order = self._queue_inputs()
+        actual_conflict_review_ids = set(getattr(self, "actual_excel_conflict_review_ids", set()))
+
+        def worker():
+            result = prepared = error = None
+            try:
+                result = service.save_event(request["review_id"], event,
+                                            expected_manifest=manifest, expected_db=request["db"],
+                                            progress=progress.put,
+                                            **({"confirm_current_actual_snapshot": request["confirm_current_actual_snapshot"]}
+                                               if isinstance(event, dict) and (event.get("manual_expected_decision") or {}).get("operation")
+                                               == "CONFIRM_CURRENT_AS_EXPECTED" else {}),
+                                            **({"defer_staging_validation": True} if pending_staging else {}))
+                progress.put("判定已寫入，正在整理待辦")
+                queue_started = time.perf_counter()
+                from pdf_portability import expected_conflict_review_view
+                review_view = getattr(result, "review_view", None)
+                if review_view is None:
+                    review_view = expected_conflict_review_view(request["output_dir"], manifest, result.db, result.ledger)
+                prepared = prepare_review_queue(
+                    manifest, review_view, previous, index,
+                    set(result.staging_summary.get("staged_checked_occurrence_ids") or []),
+                    deferred, character_order, advance_from=request["review_id"],
+                    actual_conflict_review_ids=actual_conflict_review_ids)
+                result.timings["todo_update"] = time.perf_counter() - queue_started
+            except Exception as exc:
+                error = exc
+            # No root.after or other Tk call is permitted from this worker.
+            completed.put((result, prepared, error))
+
+        try:
+            self._disable_save_controls()
+            self._save_worker = threading.Thread(target=worker, daemon=False)
+            self._schedule_async_poll(self._poll_event_save, request, completed)
+            self._save_worker.start()
+        except Exception as exc:
+            self._save_request = None
+            self._save_in_progress = False
+            self._restore_save_controls()
+            messagebox.showerror("無法開始儲存人工判定", str(exc), parent=self.root)
+            if pending_staging:
+                self.reload_records(defer_staging=True)
+                self.show()
+            return False
+        return True
+
+    def _poll_event_save(self, request, completed):
+        # A method avoids a self-referencing local poll closure that would keep
+        # the destroyed Tk owner alive until arbitrary worker-thread GC.
+        if getattr(self, "_save_request", None) is not request:
+            return
+        progress = request.get("progress")
+        if progress is not None:
+            try:
+                while True:
+                    request["phase"] = progress.get_nowait()
+            except queue.Empty:
+                pass
+            if hasattr(self, "status"):
+                elapsed = int(time.perf_counter() - request["started"])
+                self.status.config(text=f"{request['phase']}…（已等候 {elapsed} 秒）")
+        try:
+            result, prepared, error = completed.get_nowait()
+        except queue.Empty:
+            self._schedule_async_poll(self._poll_event_save, request, completed)
+            return
+        self._finish_event_save(request, result, prepared, error)
+
+    def _finish_event_save(self, request, result, prepared, error):
+        if (getattr(self, "_async_disposed", False)
+                or getattr(self, "_save_request", None) is not request):
+            return
+        current = self.current()
+        applies = (request["generation"] == getattr(self, "_project_generation", 0)
+                   and request["manifest"] is self.manifest and request["db"] is self.db
+                   and request["output_dir"] == self.output_dir
+                   and (current.get("review_id") if current else None) == request["current_review_id"])
+        self._last_event_saved = result is not None
+        self._last_event_refreshed = False
+        self.last_save_timings = dict(result.timings) if result is not None else {}
+        publish_started = time.perf_counter()
+        try:
+            if not applies:
+                self._save_recovery_required = True
+                self._rendered_review_id = None
+                if hasattr(self, "status"):
+                    self.status.config(text="儲存結果未套用到目前畫面；請關閉並重新開啟以恢復待辦。")
+                messagebox.showwarning(
+                    "人工判定已保存，但畫面已變更" if result is not None else "畫面已變更，無法套用儲存結果",
+                    "背景結果未套用到目前項目。請關閉並重新開啟人工校對，以磁碟中的判定恢復。",
+                    parent=self.root)
+                return
+            if result is None:
+                self._restore_save_controls()
+                self._invalidate_save_snapshot()
+                messagebox.showerror("無法儲存人工判定", str(error), parent=self.root)
+                return
+            # This is the first mutation of authoritative UI data after the write.
+            self.db = result.db
+            self._saved_version_token = result.version_token
+            if request["event"] and "manual_expected_decision" in request["event"]:
+                self.last_saved_expected = result.resolved_entry
+                if "undo_previous_event" in request["event"]:
+                    self.last_expected_review_id = request["review_id"]
+            elif request["focus_after_save"]:
+                self.last_expected_review_id = None
+            try:
+                self._restore_save_controls()
+                if error is not None:
+                    raise error
+                self._publish_staging_summary(result.staging_summary)
+                self._publish_review_queue(prepared)
+                if request["focus_after_save"]:
+                    self.focused_entry = result.resolved_entry
+                    self._focused_from_undo = request["return_after_undo"]
+                else:
+                    self.focused_entry = None
+                    self._focused_from_undo = False
+                render_started = time.perf_counter()
+                self.show()
+                self.last_save_timings["preview_and_show"] = time.perf_counter() - render_started
+                self._last_event_refreshed = True
+                if getattr(result, "resume_snapshot", None) is not None:
+                    self._start_staging_validation(result.resume_snapshot)
+                if request["explain_expected"]:
+                    self._explain_saved_expected(request["entry"])
+            except Exception as exc:
+                self._save_recovery_required = True
+                self._rendered_review_id = None
+                self._disable_save_controls()
+                if hasattr(self, "status"):
+                    self.status.config(text="判定已保存，畫面更新失敗；請關閉並重新開啟以恢復待辦。")
+                messagebox.showwarning("人工判定已保存，但畫面更新失敗",
+                                       f"本筆人工判定已寫入，請重新開啟畫面恢復待辦。\n{exc}", parent=self.root)
+        finally:
+            if result is not None:
+                # Keep the existing 0.5 s click/key debounce separate from work.
+                self._review_action_cooldown_until = time.monotonic() + 0.5
+                self._shortcut_cooldown_until = self._review_action_cooldown_until
+            self.last_save_timings["ui_publish"] = time.perf_counter() - publish_started
+            self.last_save_timings["operation_total"] = time.perf_counter() - request["started"]
+            self.last_save_timings["cooldown_seconds"] = 0.5 if result is not None else 0.0
+            self._save_in_progress = False
+            if result is None and applies and request.get("pending_staging"):
+                # The old worker was cancelled before saving. Restart from
+                # freshly checked bytes rather than leave a permanent pending
+                # label after an I/O failure.
+                self.reload_records(defer_staging=True)
+                self.show()
 
     def prev(self):
+        if self._save_busy() or getattr(self, "_apply_in_progress", False):
+            return
+        self.focused_entry = None
+        self._focused_from_undo = False
         self.index = max(0, self.index - 1)
         self.show()
 
     def next(self):
+        if self._save_busy() or getattr(self, "_apply_in_progress", False):
+            return
+        if getattr(self, "focused_entry", None) is not None:
+            self.focused_entry = None
+            self._focused_from_undo = False
         if not self.records:
             return
         self.index = min(len(self.records) - 1, self.index + 1)
         self.show()
 
+    @guarded_review_action
+    def confirm_current_expected(self, review_id=None):
+        if getattr(self, "staging_summary", {}).get("staging_validation_pending"):
+            messagebox.showwarning("目前注音尚不可確認", "actual 暫存仍在核對，請先等待核對完成", parent=self.root)
+            return
+        if time.monotonic() < getattr(self, "_shortcut_cooldown_until", 0):
+            return
+        entry = self.current()
+        if not entry or (review_id is not None and entry.get("review_id") != review_id):
+            return
+        if not can_confirm_current_expected(entry):
+            messagebox.showwarning("目前注音尚不可確認", confirm_current_actual_unavailable_reason(entry), parent=self.root)
+            return
+        if str(entry.get("occurrence_id") or "") in self.staged_checked_occurrence_ids:
+            messagebox.showwarning("目前注音尚不可確認", "本筆 actual 已暫存但尚未套用，不能採用套用前的讀音", parent=self.root)
+            return
+        if getattr(self, "_rendered_review_id", None) != entry.get("review_id"):
+            messagebox.showwarning("目前注音尚不可確認", "目前項目的原頁尚未成功顯示，請重新核對來源", parent=self.root)
+            return
+        if getattr(self, "_resume_source_error", None):
+            messagebox.showwarning("目前注音尚不可確認", "來源尚未通過驗證：" + str(self._resume_source_error), parent=self.root)
+            return
+        try:
+            event = build_manual_expected_event(entry, operation="CONFIRM_CURRENT_AS_EXPECTED")
+        except Exception as exc:
+            messagebox.showerror("無法儲存人工判定", str(exc), parent=self.root)
+            return
+        self.save_event(entry, self._remember_previous_expected_event(entry, event), explain_expected=True)
+
+    @guarded_review_action
     def resolve_expected(self):
         entry = self.current()
-        if not entry:
+        if (not entry or entry.get("state") in HARD_BLOCKING_STATES
+                or (review_lane(entry) not in {"expected", "other"}
+                    and not valid_manual_expected_decision(entry))):
             return
-        if entry.get("state") not in {
-            "EXPECTED_UNRESOLVED", "EXPECTED_AMBIGUOUS", "REVIEW_PENDING",
-            "RULE_CONFLICT", "DIFFERENCE_PENDING_CONFIRMATION",
-        }:
-            messagebox.showinfo("這筆不需要補讀音", "目前這筆不適合用人工補充應標讀音。")
-            return
-        title = "課本其實正確－補充正確讀音依據" if entry.get("state") == "DIFFERENCE_PENDING_CONFIRMATION" else "選擇／補充正確讀音"
-        dialog = ExpectedDialog(self.root, entry, title)
+        dialog = ExpectedDialog(self.root, entry, "輸入其他應標注音")
         if not dialog.result:
             return
-        reusable_rule = None
-        if dialog.result.get("promote_rule"):
-            try:
-                reusable_rule = build_reusable_rule(
-                    entry,
-                    phrase=dialog.result.get("rule_phrase", ""),
-                    expected_set=dialog.result.get("expected_set", ""),
-                    evidence=dialog.result.get("expected_evidence", ""),
-                    note=dialog.result.get("resolution_reason", ""),
-                )
-            except Exception as exc:
-                messagebox.showerror("無法建立可重用規則", str(exc), parent=self.root)
-                return
-        event_payload = {
-            "action": "解決expected證據",
-            "expected_set": dialog.result.get("expected_set", ""),
-            "expected_evidence": dialog.result.get("expected_evidence", ""),
-            "context_evidence": dialog.result.get("context_evidence", ""),
-            "resolution_reason": dialog.result.get("resolution_reason", ""),
-            "source": "人工 GUI 現版 expected 證據",
-            "updated_at": datetime.now().isoformat(timespec="seconds"),
-            "note": dialog.result.get("resolution_reason", ""),
-        }
-        original_review_id = entry.get("review_id")
-        self.save_event(entry, event_payload)
-        if reusable_rule is not None:
-            try:
-                saved = save_reusable_expected_rule(reusable_rule)
-                messagebox.showinfo(
-                    "已儲存可重用規則",
-                    f"已儲存：{saved.get('phrase')}／{saved.get('target_char')} → {' | '.join(saved.get('expected_set') or [])}\n"
-                    "本筆已完成；按『更新 Excel 報告』後，本冊其他相同完整詞也會重新套用。未來新教材亦會使用此規則。",
+        try:
+            event = build_manual_expected_event(
+                entry, operation="ENTER_EXPECTED",
+                expected_set=dialog.result.get("expected_set", ""),
+                rationale=dialog.result.get("expected_evidence", ""),
+                note=dialog.result.get("resolution_reason", ""),
+            )
+        except Exception as exc:
+            messagebox.showerror("無法儲存人工判定", str(exc), parent=self.root)
+            return
+        self.save_event(entry, self._remember_previous_expected_event(entry, event), explain_expected=True)
+
+    def _explain_saved_expected(self, entry):
+        if not getattr(self, "_last_event_refreshed", False):
+            return
+        if self.staging_summary.get("staging_error"):
+            messagebox.showwarning("應標注音已保存，暫存待檢查", "應標注音已保存；actual 暫存無法驗證，仍保留待處理。請先處理畫面上的暫存阻擋。", parent=self.root)
+            return
+        if str(entry.get("occurrence_id") or "") in self.staged_checked_occurrence_ids:
+            messagebox.showinfo("應標注音已保存", "應標注音已保存，目前注音套用後再比較。請繼續下一筆，最後按「套用 actual 修正」。", parent=self.root)
+            return
+        updated = getattr(self, "last_saved_expected", None)
+        if updated and updated.get("state") == "DIFFERENCE_PENDING_CONFIRMATION":
+            messagebox.showwarning(
+                    "仍有注音差異，尚未確認教材錯誤",
+                    f"本筆應標判定已保存。課本目前注音：{updated.get('actual')}；"
+                    f"應標注音：{' | '.join(updated.get('expected_set') or [])}。\n"
+                    "仍保留差異待確認；需要時另按「確認教材錯誤」確認本筆。",
                     parent=self.root,
                 )
-            except Exception as exc:
-                messagebox.showwarning("本筆已完成，但規則未儲存", str(exc), parent=self.root)
 
-        # Re-evaluate after applying the independent expected evidence.
-        # If it matches actual, save_event() has already turned the row into PASS
-        # and removed it from the pending list.  If it still mismatches, do NOT
-        # auto-open the six-gate textbook-error dialog: the operator explicitly
-        # chose "課本其實正確", so automatic escalation would contradict that
-        # intent and can cause accidental textbook-error confirmation.  Instead,
-        # keep the row pending and explain the canonical values.  The operator
-        # can either correct the expected evidence or explicitly press
-        # "確認教材錯誤" from the main screen.
-        updated_entry = next(
-            (item for item in self.records if item.get("review_id") == original_review_id),
-            None,
-        )
-        if updated_entry and updated_entry.get("state") == "DIFFERENCE_PENDING_CONFIRMATION":
-            actual_value = canonical_bopomofo(updated_entry.get("actual")) or str(updated_entry.get("actual") or "")
-            expected_values = [
-                canonical_bopomofo(item) or str(item)
-                for item in (updated_entry.get("expected_set") or [])
-                if str(item or "").strip()
-            ]
-            expected_text = " | ".join(dict.fromkeys(expected_values)) or "（未建立）"
-            messagebox.showwarning(
-                "仍有注音差異，尚未確認教材錯誤",
-                "已套用新的應標讀音依據，但課本現標與應標仍不同。\n\n"
-                f"課本目前注音：{actual_value or '（未辨識）'}\n"
-                f"應標注音：{expected_text}\n\n"
-                "因為你剛才選的是『課本其實正確』，程式不會自動進入『確認教材錯誤』流程。\n"
-                "若課本確實正確，請重新檢查應標注音與依據；只有確定教材有誤時，才從主畫面按『確認教材錯誤』。",
-                parent=self.root,
-            )
+    def create_reusable_expected_rule(self):
+        if getattr(self, "staging_summary", {}).get("staging_validation_pending"):
+            messagebox.showinfo(
+                "actual 暫存仍在核對", "請等暫存核對結束後，再建立可重用規則。核對期間仍可輸入個別位置的應標注音。",
+                parent=self.root)
+            return
+        if self._save_busy() or getattr(self, "_apply_in_progress", False):
+            return
+        # A separate explicit operation, available even after the saved row left
+        # the current lane. Its stronger requirements cannot prevent item saving.
+        entry = getattr(self, "last_saved_expected", None)
+        if not entry:
+            messagebox.showinfo("請先保存本筆判定", "保存應標判定後，可另行建立可重用規則。", parent=self.root)
+            return
+        phrase = simpledialog.askstring("另行建立可重用規則", "請輸入適用的完整詞：", parent=self.root)
+        if not phrase:
+            return
+        evidence = simpledialog.askstring("可重用規則依據", "跨位置規則需提供實際來源依據：", parent=self.root)
+        if evidence is None:
+            return
+        try:
+            rule = build_reusable_rule(entry, phrase=phrase, expected_set=entry["expected_set"], evidence=evidence)
+            save_reusable_expected_rule(rule)
+            self._invalidate_save_snapshot()
+        except Exception as exc:
+            messagebox.showerror("可重用規則未儲存", f"{exc}\n本筆已保存的人工判定仍保留。", parent=self.root)
+            return
+        messagebox.showinfo("已儲存可重用規則", "本規則會在更新報告及未來校對時套用相同完整詞與目標位置。", parent=self.root)
 
     def _confirm_difference_entry(self, entry):
-        dialog = ConfirmationDialog(self.root, entry)
-        if not dialog.result:
+        if entry.get("state") != "DIFFERENCE_PENDING_CONFIRMATION":
+            return
+        try:
+            confirmation = build_gui_confirmation(entry)
+        except InvalidTransitionError as exc:
+            messagebox.showerror("無法確認教材錯誤", str(exc), parent=self.root)
             return
         self.save_event(entry, {
             "action": "確認現版差異",
-            **dialog.result,
+            "gui_confirmation": confirmation,
             # Preserve the independent expected evidence in the same authoritative
             # event.  This is required when the current mismatch was created by a
             # prior GPT/GUI expected-evidence event, because the DB stores one event
@@ -709,10 +1866,18 @@ class ReviewApp:
             "expected_resolution_source": str(entry.get("expected_resolution_source") or entry.get("expected_evidence") or ""),
             "expected_resolution_reason": str(entry.get("expected_resolution_reason") or ""),
             "expected_resolution_note": str(entry.get("note") or ""),
-            "source": "人工 GUI 現版六閘門",
-            "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "confirmation_actual_snapshot": actual_confirmation_snapshot(entry),
+            **({"expected_resolution_binding": copy.deepcopy(entry["expected_resolution_binding"])}
+               if "expected_resolution_binding" in entry else {}),
+            **({"manual_expected_decision": entry["manual_expected_decision"]} if "manual_expected_decision" in entry else {}),
+            **({"undo_previous_event": copy.deepcopy(self.db["events"][entry["review_id"]]["undo_previous_event"])}
+               if "undo_previous_event" in self.db.get("events", {}).get(entry["review_id"], {}) else {}),
+            "source": "人工 GUI 本筆單次確認",
+            "note": f"本筆主畫面單次確認教材錯誤；確認時間：{confirmation['confirmed_at']}",
+            "updated_at": confirmation["confirmed_at"],
         })
 
+    @guarded_review_action
     def confirm_difference(self):
         entry = self.current()
         if not entry:
@@ -722,6 +1887,7 @@ class ReviewApp:
             return
         self._confirm_difference_entry(entry)
 
+    @guarded_review_action
     def exclude(self):
         entry = self.current()
         if not entry:
@@ -742,17 +1908,37 @@ class ReviewApp:
             "updated_at": datetime.now().isoformat(timespec="seconds"),
         })
 
+    @guarded_review_action
     def correct_actual(self):
+        if getattr(self, "staging_summary", {}).get("staging_validation_pending"):
+            return
         entry = self.current()
         if not entry:
             return
         try:
             full_ledger = materialize_ledger(self.manifest, self.db)
             group = build_actual_group_for_entry(full_ledger, entry)
+            # Revalidate durable checks against this live ledger. On an invalid
+            # summary, no occurrence is treated as already checked.
+            self.reload_staging_summary(full_ledger)
+            # The checked roster also controls the actionable queue. Refresh it
+            # before the dialog, since cancelling must not leave positions hidden
+            # by checks that the revalidation just rejected.
+            self._set_actionable_records_from_ledger(full_ledger)
+            self.show()
         except Exception as exc:
             messagebox.showerror("無法建立 actual 核對群組", str(exc), parent=self.root)
             return
-        dialog = ActualReadingDialog(self.root, entry, group, self.output_dir)
+        if not self.current() or self.current().get("review_id") != entry.get("review_id"):
+            return
+        verified_checked = (
+            self.staged_checked_occurrence_ids
+            if not self.staging_summary.get("staging_error") else ()
+        )
+        dialog = ActualReadingDialog(
+            self.root, entry, group, self.output_dir,
+            verified_checked_occurrence_ids=verified_checked,
+        )
         if not dialog.result:
             return
         try:
@@ -766,8 +1952,9 @@ class ReviewApp:
         except Exception as exc:
             messagebox.showerror("actual 暫存失敗", str(exc), parent=self.root)
             return
+        self._last_actual_staged = True
         try:
-            self.reload_records()
+            self.reload_records(advance_from=entry.get("review_id"))
             self.show()
         except Exception as exc:
             messagebox.showwarning(
@@ -777,6 +1964,9 @@ class ReviewApp:
             )
             return
         fresh_summary = self.staging_summary
+        if fresh_summary.get("staging_error"):
+            messagebox.showwarning("actual 已暫存，但尚未通過驗證", f"暫存仍保留，未移除待辦；請處理來源／暫存阻擋。\n{fresh_summary['staging_error']}", parent=self.root)
+            return
         count = int(fresh_summary.get("staged_group_count") or 0)
         messagebox.showinfo(
             "actual 已暫存",
@@ -786,51 +1976,105 @@ class ReviewApp:
         )
 
     def apply_staged_actuals(self):
+        if getattr(self, "staging_summary", {}).get("staging_validation_pending"):
+            return
+        # A failed startup may still expose independently verified committed
+        # recovery. It never enables a fresh actual decision or an expected save.
+        startup_recovery = (getattr(self, "_startup_failed", False)
+                            and getattr(self, "staging_summary", {}).get("actual_recovery_pending"))
+        busy = (any(getattr(self, name, False) for name in
+                    ("_save_in_progress", "_save_recovery_required", "_async_disposed", "_startup_in_progress"))
+                if startup_recovery else self._save_busy())
+        if busy or getattr(self, "_apply_in_progress", False) or getattr(self, "_review_action_in_progress", False):
+            return
+        self._apply_in_progress = True
+        recovery_only = bool(getattr(self, "_resume_source_error", None))
         try:
-            summary = self.reload_staging_summary()
+            summary = (self._publish_staging_summary(self._source_error_staging_summary(self._resume_source_error))
+                       if recovery_only else self.reload_staging_summary())
         except Exception as exc:
+            self._apply_in_progress = False
             messagebox.showerror("無法讀取 actual 暫存清單", str(exc), parent=self.root)
             return
+        if summary.get("staging_error") and not summary.get("actual_recovery_pending"):
+            self._apply_in_progress = False
+            self.reload_records()
+            self.show()
+            messagebox.showerror("actual 暫存尚未通過驗證", summary["staging_error"], parent=self.root)
+            return
         count = int(summary.get("staged_group_count") or 0)
-        if count <= 0:
+        if count <= 0 and not summary.get("actual_recovery_pending"):
+            self._apply_in_progress = False
+            if summary.get("staging_error"):
+                messagebox.showerror("無法讀取 actual 暫存清單", summary["staging_error"], parent=self.root)
             return
         if not messagebox.askyesno(
             "套用 actual 修正",
-            f"目前有 {count} 組 actual 人工確認等待套用。\n"
+            ("actual 已提交，將依既有交易紀錄繼續未完成的更新。\n" if summary.get("actual_recovery_pending")
+             else f"目前有 {count} 組 actual 人工確認等待套用。\n") +
             "套用後會正式寫入 actual 證據，並一次增量重新處理受影響 PDF。\n"
             "是否繼續？",
             parent=self.root,
         ):
+            self._apply_in_progress = False
             return
 
+        try:
+            if recovery_only:
+                self._start_staged_actual_apply(count, recovery_only=True)
+            else:
+                self._start_staged_actual_apply(count)
+        except Exception as exc:
+            self._apply_in_progress = False
+            progress = getattr(self, "_actual_progress_window", None)
+            if progress is not None:
+                try:
+                    progress.destroy()
+                except tk.TclError:
+                    pass
+            messagebox.showerror("無法開始套用 actual 修正", str(exc), parent=self.root)
+
+    def _start_staged_actual_apply(self, count, *, recovery_only=False):
         progress = tk.Toplevel(self.root)
+        self._actual_progress_window = progress
         progress.title("批次套用 actual")
         apply_screen_safe_geometry(progress, 560, 210, min_width=440, min_height=170)
         progress.transient(self.root)
         progress.grab_set()
-        tk.Label(
+        # Reserve the progress indicator before the resizable explanation.
+        bar = ttk.Progressbar(progress, mode="indeterminate", length=400)
+        bar.pack(side="bottom", fill="x", padx=18, pady=12)
+        WrappedLabel(
             progress,
             text=f"正在一次套用 {count} 組 actual 修正",
             font=("Microsoft JhengHei UI", 11, "bold"),
-        ).pack(padx=18, pady=(28, 8))
-        tk.Label(
+        ).pack(fill="x", padx=18, pady=(18, 8))
+        WrappedLabel(
             progress,
             text="未受影響 PDF 將直接沿用 cache；請勿關閉程式。",
             fg="#555555",
-        ).pack(padx=18, pady=4)
-        bar = ttk.Progressbar(progress, mode="indeterminate", length=400)
-        bar.pack(padx=18, pady=12)
+        ).pack(fill="x", padx=18, pady=4)
         bar.start(12)
         old_index = self.index
+        completed = queue.Queue(maxsize=1)
+        output_dir = self.output_dir
 
         def worker():
             try:
-                result = apply_staged_manual_actual_corrections(self.output_dir)
-                self.root.after(0, lambda: done(result, None))
+                if recovery_only:
+                    # Re-read the strict durable plan at the recovery boundary.
+                    # A removed plan must not fall through to applying staging.
+                    result = recover_committed_actual_project(output_dir)
+                    if result is None:
+                        raise ValueError("已提交 actual 復原紀錄已變更；未套用任何新暫存，請重新載入")
+                else:
+                    result = apply_staged_manual_actual_corrections(output_dir)
+                completed.put((result, None))
             except Exception as exc:
-                self.root.after(0, lambda exc=exc: done(None, exc))
+                completed.put((None, exc))
 
         def done(result, error):
+            self._apply_in_progress = False
             try:
                 bar.stop()
                 progress.grab_release()
@@ -839,10 +2083,16 @@ class ReviewApp:
                 pass
             if error:
                 try:
-                    self.reload_staging_summary()
+                    self.manifest = json_load_strict(self.output_dir / "校對工作階段.json")
+                    validate_manifest_integrity(self.manifest)
+                    validate_output_artifact_hashes(self.manifest, output_dir=self.output_dir)
+                    self.db = load_or_initialize_db(self.output_dir)
+                    self.reload_records()
                     self.show()
-                except Exception:
-                    pass
+                except Exception as reload_error:
+                    self.staged_checked_occurrence_ids = set()
+                    self.staging_summary = {"staging_error": str(reload_error)}
+                    self._show_staging_status()
                 if isinstance(error, ManualActualPostApplyError):
                     title = "actual evidence 已套用，但後續未完成"
                 else:
@@ -852,10 +2102,16 @@ class ReviewApp:
             try:
                 self.manifest = json_load_strict(self.output_dir / "校對工作階段.json")
                 validate_manifest_integrity(self.manifest)
-                validate_output_artifact_hashes(self.manifest)
+                validate_output_artifact_hashes(self.manifest, output_dir=self.output_dir)
                 self.db = load_or_initialize_db(self.output_dir)
                 self.index = old_index
                 self.reload_records()
+                if not getattr(self, "_resume_source_error", None):
+                    self._startup_failed = False
+                    self.exit_code = 0
+                    if hasattr(self, "retry_startup_button"):
+                        self.retry_startup_button.pack_forget()
+                    self._restore_save_controls()
                 self.show()
             except Exception as exc:
                 messagebox.showerror(
@@ -894,11 +2150,21 @@ class ReviewApp:
             messagebox.showinfo("actual 批次套用完成", "\n".join(lines), parent=self.root)
 
         threading.Thread(target=worker, daemon=True).start()
+        self._schedule_async_poll(self._poll_actual_apply, completed, done)
+
+    def _poll_actual_apply(self, completed, done):
+        try:
+            result, error = completed.get_nowait()
+        except queue.Empty:
+            self._schedule_async_poll(self._poll_actual_apply, completed, done)
+            return
+        done(result, error)
 
     def actual_instruction(self):
         # Backward-compatible alias for old callbacks/hotkeys.
         return self.correct_actual()
 
+    @guarded_review_action
     def clear(self):
         entry = self.current()
         if not entry:
@@ -908,12 +2174,13 @@ class ReviewApp:
             return
         if not messagebox.askyesno("撤銷本筆判定", "確定撤銷這一筆的人工作業，回到程式原本狀態？"):
             return
-        self.db.setdefault("events", {}).pop(entry["review_id"], None)
-        json_save(self.output_dir / "人工判定資料庫.json", self.db)
-        self.reload_records()
-        self.show()
+        self.save_event(entry, None)
 
     def report(self):
+        if getattr(self, "staging_summary", {}).get("staging_validation_pending"):
+            return
+        if self._save_busy() or getattr(self, "_apply_in_progress", False):
+            return
         try:
             path = regenerate_report(self.output_dir)
             status = json_load(self.output_dir / "pipeline_status.json", {}).get("status", "")
@@ -928,50 +2195,79 @@ class ReviewApp:
     def toggle_tech(self):
         self.tech_visible = not self.tech_visible
         if self.tech_visible:
-            self.tech_frame.pack(fill="x", padx=12, pady=(0, 6), before=self.root.winfo_children()[-1])
+            self.tech_frame.pack(fill="x", padx=12, pady=(0, 6))
         else:
             self.tech_frame.pack_forget()
 
     def configure_actions(self, entry):
         state = str(entry.get("state") or "")
-        # Never leave a disabled blank button on screen. Only legal actions are packed.
-        self.primary.pack_forget()
-        self.secondary.pack_forget()
+        lane = review_lane(entry)
         primary_text, secondary_text = review_action_labels(state)
-
-        if state == "DIFFERENCE_PENDING_CONFIRMATION":
+        primary_command = secondary_command = None
+        if entry.get("review_id") in getattr(self, "actual_excel_conflict_review_ids", set()):
+            primary_text = "重新核對 actual 衝突"
+            primary_command = self.correct_actual
+        elif getattr(self, "focused_entry", None) is not None and valid_manual_expected_decision(entry):
+            primary_text = "輸入其他應標注音"
+            primary_command = self.resolve_expected
+            if (can_confirm_current_expected(entry)
+                    and str(entry.get("occurrence_id") or "") not in self.staged_checked_occurrence_ids):
+                primary_text = "確認目前注音就是應標注音"
+                primary_command = lambda rid=entry["review_id"]: self.confirm_current_expected(rid)
+                secondary_text = "輸入其他應標注音"
+                secondary_command = self.resolve_expected
+        elif lane == "expected":
+            primary_text = "輸入其他應標注音"
+            primary_command = self.resolve_expected
+            if (can_confirm_current_expected(entry)
+                    and str(entry.get("occurrence_id") or "") not in self.staged_checked_occurrence_ids):
+                primary_text = "確認目前注音就是應標注音"
+                primary_command = lambda rid=entry["review_id"]: self.confirm_current_expected(rid)
+                secondary_text = "輸入其他應標注音"
+                secondary_command = self.resolve_expected
+        elif lane == "actual":
+            primary_command = self.correct_actual
+        elif state == "DIFFERENCE_PENDING_CONFIRMATION":
             primary_command = self.confirm_difference
             secondary_command = self.resolve_expected
-        elif state == "RULE_CONFLICT":
+            if (can_confirm_current_expected(entry)
+                    and str(entry.get("occurrence_id") or "") not in self.staged_checked_occurrence_ids):
+                secondary_text = "確認目前注音就是應標注音"
+                secondary_command = lambda rid=entry["review_id"]: self.confirm_current_expected(rid)
+        elif state == "REVIEW_PENDING":
             primary_command = self.resolve_expected
-            secondary_command = None
-        elif state in {"EXPECTED_AMBIGUOUS", "EXPECTED_UNRESOLVED", "REVIEW_PENDING"}:
-            primary_command = self.resolve_expected
-            secondary_command = None
-        elif state in {"ACTUAL_DECODE_ERROR", "ACTUAL_UNRESOLVED"}:
-            primary_command = self.correct_actual
-            secondary_command = None
-        else:
-            primary_command = None
-            secondary_command = None
-
-        self.primary.config(text=primary_text, state="normal" if primary_command else "disabled", command=primary_command or (lambda: None))
-        self.primary.pack(side="left", padx=(0, 6), before=self.later)
+        if getattr(self, "_resume_source_error", None):
+            primary_text = "來源尚未通過驗證"
+            primary_command = secondary_text = secondary_command = None
+        elif getattr(self, "staging_summary", {}).get("staging_validation_pending"):
+            primary_text = "輸入其他應標注音" if lane == "expected" else "actual 暫存仍在核對"
+            primary_command = self.resolve_expected if lane == "expected" else None
+            secondary_text = secondary_command = None
+        self.primary.config(text=primary_text, width=0, state="normal" if primary_command else "disabled", command=primary_command or (lambda: None))
+        self._confirm_current_expected_button = (
+            self.primary if primary_text == "確認目前注音就是應標注音" else self.secondary)
+        buttons = [self.primary]
         if secondary_text and secondary_command:
             self.secondary.config(text=secondary_text, state="normal", command=secondary_command)
-            self.secondary.pack(side="left", padx=6, before=self.later)
+            buttons.append(self.secondary)
+        if hasattr(self, "decision_actions"):
+            self.decision_actions.set_items(buttons + ([] if getattr(self, "focused_entry", None) is not None else [self.later]) + [self.more_button])
 
     def show(self):
+        self._show_staging_status()
+        if hasattr(self, "undo_expected_button"):
+            self.undo_expected_button.config(state="normal" if self._last_expected_target() else "disabled")
         entry = self.current()
         if not entry:
             title, detail, primary_text = self._empty_actionable_state()
             self.status.config(text=title)
             self.summary_text.config(text=detail)
-            self.image.config(image="", text="")
+            self._rendered_review_id = None
+            self.image.clear()
             self.tech_text.delete("1.0", "end")
             self.primary.config(text=primary_text, state="disabled")
-            self.primary.pack(side="left", padx=(0, 6), before=self.later)
-            self.secondary.pack_forget()
+            if hasattr(self, "decision_actions"):
+                self.decision_actions.set_items([self.primary, self.later, self.more_button])
             return
 
         source = entry.get("source_record") or {}
@@ -979,21 +2275,29 @@ class ReviewApp:
         phrase = str(source.get("局部詞境") or entry.get("context_evidence") or "").strip()
         sentence = str(source.get("所在行") or phrase).strip()
         expected_text = " | ".join(entry.get("expected_set") or []) or "尚未確定"
-        if state in {"ACTUAL_DECODE_ERROR", "ACTUAL_UNRESOLVED"}:
+        lane = review_lane(entry)
+        if lane == "actual":
             expected_text = "（actual 獨立辨識階段不顯示）"
-        group_key = (state, str(entry.get("char") or ""), phrase, tuple(entry.get("expected_set") or []))
-        group_count = Counter(
-            (str(r.get("state") or ""), str(r.get("char") or ""), str((r.get("source_record") or {}).get("局部詞境") or r.get("context_evidence") or "").strip(), tuple(r.get("expected_set") or []))
-            for r in self.records
-        )[group_key]
+        group_count = sum(review_lane(item) == lane and item.get("char") == entry.get("char") for item in self.records)
 
         is_staged = str(entry.get("occurrence_id") or "") in self.staged_checked_occurrence_ids
         staged_status = "｜actual 已暫存，等待批次套用" if is_staged else ""
-        self.status.config(text=f"第 {self.index + 1} / {len(self.records)} 筆待人工處理｜{friendly_state(state)}{staged_status}")
+        lane_count = sum(review_lane(item) == lane for item in self.records)
+        deferred = len(getattr(self, "deferred_items", set()))
+        self.status.config(text=(
+            f"{'已確認項目' if entry.get('review_id') in self.db.get('events', {}) else '返回此項目'}"
+            f"｜課本頁 {entry.get('printed_page', '')}｜{state}"
+            if getattr(self, "focused_entry", None) is not None else
+            f"{LANE_LABELS[lane]}｜本組剩餘 {lane_count} 筆｜稍後 {deferred} 筆{staged_status}"
+        ))
         help_text = STATE_HELP.get(state, "這一筆需要人工處理。")
-        staged_line = "\nactual 狀態：已暫存人工核對結果，等待批次套用。" if is_staged else ""
+        if entry.get("review_id") in getattr(self, "actual_excel_conflict_review_ids", set()):
+            help_text = "跨電腦 Excel actual 在此位置有不同讀音；請查看原頁並重新核對，未套用匯入讀音。"
+        if lane == "expected":
+            help_text = "請先依原文與語境判定應標注音；目前注音待辨識時，儲存後再進第二組。依據選填。"
+        staged_line = "\nactual 狀態：已暫存人工核對結果，等待批次套用；上方目前注音是套用前的正式結果，應標仍須依語境獨立判定。" if is_staged else ""
         summary = (
-            f"課本頁：{entry.get('printed_page', '')}　　目標字：{entry.get('char', '')}　　同類項目：{group_count} 筆\n"
+            f"課本頁：{entry.get('printed_page', '')}　　目標字：{entry.get('char', '')}　　本組此字剩餘 {group_count} 筆（含本筆，不含稍後處理）\n"
             f"詞語／局部詞境：{phrase}\n"
             f"所在句：{sentence}\n"
             f"課本目前注音：{entry.get('actual', '') or '尚未辨識'}　　應標注音：{expected_text}\n"
@@ -1018,27 +2322,22 @@ class ReviewApp:
         self.render(entry)
 
     def render(self, entry):
+        started = time.perf_counter()
+        self._rendered_review_id = None
         try:
-            page_number = int(entry.get("physical_page")) - 1
-            doc = fitz.open(entry["pdf"])
-            page = doc[page_number]
-            x0, y0, x1, y1 = [float(entry.get(key) or 0) for key in ("x0", "y0", "x1", "y1")]
-            if x1 > x0 and y1 > y0:
-                padding_x = 150
-                padding_y = 115
-                clip = fitz.Rect(
-                    max(0, x0 - padding_x), max(0, y0 - padding_y),
-                    min(page.rect.width, x1 + padding_x), min(page.rect.height, y1 + padding_y),
-                )
-            else:
-                clip = page.rect
-            pixmap = page.get_pixmap(matrix=fitz.Matrix(2.2, 2.2), clip=clip, alpha=False)
-            data = base64.b64encode(pixmap.tobytes("png"))
-            self.photo = tk.PhotoImage(data=data)
-            self.image.config(image=self.photo, text="")
-            doc.close()
-        except Exception as exc:
-            self.image.config(image="", text=f"無法顯示頁面：{exc}")
+            if self.image.load(entry):
+                self._rendered_review_id = entry.get("review_id")
+            elif can_confirm_current_expected(entry):
+                getattr(self, "_confirm_current_expected_button", self.primary).config(state="disabled")
+        finally:
+            if getattr(self, "_save_in_progress", False):
+                self.last_save_timings["preview_render"] = time.perf_counter() - started
+
+    def _preview_failed(self):
+        self._rendered_review_id = None
+        entry = self.current()
+        if entry and can_confirm_current_expected(entry):
+            getattr(self, "_confirm_current_expected_button", self.primary).config(state="disabled")
 
 
 def main():
@@ -1052,9 +2351,9 @@ def main():
             return 0
         output = Path(directory)
     root = tk.Tk()
-    ReviewApp(root, output)
+    app = ReviewApp(root, output)
     root.mainloop()
-    return 0
+    return app.exit_code
 
 
 if __name__ == "__main__":

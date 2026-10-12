@@ -1,0 +1,5 @@
+# Codex CLI 0.153.4: verified with app-server config/read and role discovery.
+# Inherit the user's model, reasoning effort and approval policy.
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 4

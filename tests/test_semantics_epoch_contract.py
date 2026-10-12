@@ -12,14 +12,33 @@ import runtime_source_validation as source
 def actual_components(**updates):
     components = {
         "fingerprint_schema_version": source.ACTUAL_FINGERPRINT_SCHEMA_VERSION,
-        "reuse_policy": "evidence_assets_v1",
+        "reuse_policy": "evidence_assets_with_global_exact_v1",
         "actual_decoder_semantics_epoch": compat.ACTUAL_DECODER_SEMANTICS_EPOCH,
         "pdf_sha256": "a" * 64,
         "actual_asset_hashes": {"actual-map": "b" * 64},
         "dynamic_actual_evidence_hashes": {"scoped-glyphs": "c" * 64},
+        "global_exact_glyph_evidence_hashes": {
+            "dependency_contract_version": "1.0",
+            "identity_contract_version": "1.0",
+            "promotion_policy_version": "1.0",
+            "scope_mode": "per_pdf_exact_identity_v1",
+            "ttf_subset_sha256": "1" * 64,
+            "cff_subset_sha256": "2" * 64,
+            "conflict_subset_sha256": "3" * 64,
+        },
         "decoder_version": "5.6.2",
         "actual_decoder_source_hashes": {"decoder.py": "d" * 64},
     }
+    components.update(updates)
+    return components
+
+
+def legacy_actual_components(**updates):
+    components = actual_components(
+        fingerprint_schema_version="2.9.0",
+        reuse_policy="evidence_assets_v1",
+    )
+    components.pop("global_exact_glyph_evidence_hashes")
     components.update(updates)
     return components
 
@@ -140,14 +159,14 @@ def test_missing_current_epoch_and_blank_stored_epoch_fail_closed():
     )
 
 
-def test_released_v562_actual_digest_maps_missing_epoch_to_initial_epoch():
-    stored = actual_components()
+def test_released_v562_actual_digest_has_no_adapter_to_v30():
+    stored = legacy_actual_components()
     stored.pop("actual_decoder_semantics_epoch")
     old_digest = released_v562_fingerprint(stored, chain="actual")
     current = actual_components()
     new_digest = fingerprint(current, chain="actual")
     assert old_digest != new_digest
-    assert compatible(
+    assert not compatible(
         stored,
         current,
         chain="actual",
@@ -173,7 +192,7 @@ def test_released_v562_expected_digest_maps_missing_epoch_to_initial_epoch():
 
 
 def test_released_v562_actual_digest_is_incompatible_with_current_epoch_two():
-    stored = actual_components()
+    stored = legacy_actual_components()
     stored.pop("actual_decoder_semantics_epoch")
     assert not compatible(
         stored,
@@ -195,7 +214,7 @@ def test_released_v562_expected_digest_is_incompatible_with_current_epoch_two():
 
 
 def test_unknown_legacy_schema_or_policy_missing_epoch_is_incompatible():
-    unknown_actual = actual_components(fingerprint_schema_version="2.9.1")
+    unknown_actual = legacy_actual_components(fingerprint_schema_version="2.9.1")
     unknown_actual.pop("actual_decoder_semantics_epoch")
     assert not compatible(
         unknown_actual,
@@ -203,7 +222,7 @@ def test_unknown_legacy_schema_or_policy_missing_epoch_is_incompatible():
         chain="actual",
         stored_fingerprint=released_v562_fingerprint(unknown_actual, chain="actual"),
     )
-    wrong_policy_actual = actual_components(reuse_policy="evidence_assets_v2")
+    wrong_policy_actual = legacy_actual_components(reuse_policy="evidence_assets_v2")
     wrong_policy_actual.pop("actual_decoder_semantics_epoch")
     assert not compatible(
         wrong_policy_actual,
@@ -392,6 +411,7 @@ def test_actual_producer_writes_epoch_to_components_reuse_and_digest(tmp_path: P
         validation_report(),
         decoder_version="5.6.2",
         source_files=[decoder.name],
+        global_exact_glyph_evidence_hashes=actual_components()["global_exact_glyph_evidence_hashes"],
     )
     with patch.object(source, "ACTUAL_DECODER_SEMANTICS_EPOCH", "2"):
         second = source.compute_actual_asset_fingerprint(
@@ -400,6 +420,7 @@ def test_actual_producer_writes_epoch_to_components_reuse_and_digest(tmp_path: P
             validation_report(),
             decoder_version="5.6.2",
             source_files=[decoder.name],
+            global_exact_glyph_evidence_hashes=actual_components()["global_exact_glyph_evidence_hashes"],
         )
     assert first["components"]["actual_decoder_semantics_epoch"] == "1"
     assert first["reuse_components"]["actual_decoder_semantics_epoch"] == "1"
@@ -436,7 +457,12 @@ def test_producer_epoch_bumps_do_not_cross_invalidate_chains(tmp_path: Path):
     resolver.write_text("resolver", encoding="utf-8")
 
     actual = source.compute_actual_asset_fingerprint(
-        tmp_path, pdf, validation_report(), decoder_version="5.6.2", source_files=[decoder.name]
+        tmp_path,
+        pdf,
+        validation_report(),
+        decoder_version="5.6.2",
+        source_files=[decoder.name],
+        global_exact_glyph_evidence_hashes=actual_components()["global_exact_glyph_evidence_hashes"],
     )
     expected = source.compute_expected_asset_fingerprint(
         tmp_path, validation_report(), resolver_version="5.6.2", source_files=[resolver.name]
@@ -447,7 +473,12 @@ def test_producer_epoch_bumps_do_not_cross_invalidate_chains(tmp_path: Path):
         )
     with patch.object(source, "EXPECTED_RESOLVER_SEMANTICS_EPOCH", "2"):
         actual_after_expected_bump = source.compute_actual_asset_fingerprint(
-            tmp_path, pdf, validation_report(), decoder_version="5.6.2", source_files=[decoder.name]
+            tmp_path,
+            pdf,
+            validation_report(),
+            decoder_version="5.6.2",
+            source_files=[decoder.name],
+            global_exact_glyph_evidence_hashes=actual_components()["global_exact_glyph_evidence_hashes"],
         )
     assert expected_after_actual_bump["fingerprint"] == expected["fingerprint"]
     assert actual_after_expected_bump["fingerprint"] == actual["fingerprint"]
@@ -496,11 +527,11 @@ def test_legacy_fingerprint_profiles_are_finite_chain_specific_and_frozen():
 
 
 def test_phase0b1_transitional_actual_digest_maps_only_to_initial_epoch():
-    stored = actual_components()
+    stored = legacy_actual_components()
     stored.pop("actual_decoder_semantics_epoch")
     transitional_digest = phase0b1_transitional_fingerprint(stored, chain="actual")
     assert transitional_digest != released_v562_fingerprint(stored, chain="actual")
-    assert compatible(
+    assert not compatible(
         stored,
         actual_components(),
         chain="actual",
@@ -533,11 +564,11 @@ def test_phase0b1_transitional_expected_digest_maps_only_to_initial_epoch():
     )
 
 
-def test_v551_schema_adapters_remain_pinned_to_epoch_one():
-    stored_actual = actual_components(fingerprint_schema_version="2.8.0")
+def test_v551_actual_has_no_transitive_adapter_to_v30_while_expected_adapter_remains():
+    stored_actual = legacy_actual_components(fingerprint_schema_version="2.8.0")
     stored_actual.pop("reuse_policy")
     stored_actual.pop("actual_decoder_semantics_epoch")
-    assert compatible(stored_actual, actual_components(), chain="actual")
+    assert not compatible(stored_actual, actual_components(), chain="actual")
     assert not compatible(
         stored_actual, actual_components(actual_decoder_semantics_epoch="2"), chain="actual"
     )

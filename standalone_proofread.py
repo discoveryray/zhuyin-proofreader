@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import csv
 import hashlib
 import json
@@ -12,10 +13,13 @@ import shutil
 import subprocess
 import sys
 from collections import Counter, defaultdict
+from dataclasses import dataclass
 from datetime import datetime
+from functools import wraps
 from pathlib import Path
 from typing import Any, Mapping
 from uuid import uuid4
+from sealed_workbook_paths import binding_scope, bind_workbooks, workbook_path, owned_path, descriptor, bound_operation, trusted_root
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -44,7 +48,9 @@ from occurrence_ledger import (
     ALL_STATES,
     COMPARABLE_TERMINAL_STATES,
     CONFIRMATION_GATES,
+    GUI_CONFIRMATION_METHOD,
     EXCLUDED_STATES,
+    HARD_BLOCKING_STATES,
     LEDGER_SCHEMA_VERSION,
     NON_TERMINAL_STATES,
     PIPELINE_BLOCKED,
@@ -68,6 +74,11 @@ from occurrence_ledger import (
     validate_terminal_state,
     infer_actual_status,
     infer_expected_status,
+    has_expected_evidence,
+    manual_expected_target,
+    confirmation_expected_snapshot,
+    valid_gui_confirmation,
+    valid_manual_expected_decision,
     derive_comparison_result,
     derive_authoritative_state,
     refresh_derived_state,
@@ -81,6 +92,7 @@ from runtime_source_validation import (
     write_pipeline_blocked,
 )
 from cross_version_compat import (
+    EXPECTED_RESOLVER_SEMANTICS_EPOCH,
     fingerprint_compatible,
     metadata_compatibility_warnings,
     review_id_schema_compatible,
@@ -93,17 +105,30 @@ from actual_review import (
     apply_staged_manual_actual_batch,
     build_actual_review_groups,
     build_actual_group_for_entry,
+    index_actual_group_members,
     apply_verified_actual_group,
+    apply_direct_visual_actual_batch,
     export_actual_review_package,
     import_actual_review_workbook,
+    actual_sample_availability,
+    validate_actual_sample_profile,
     ensure_user_evidence_files,
     actual_workbook_dynamic_dependencies,
+    actual_workbook_global_exact_dependencies,
     load_manual_actual_staging,
     stage_manual_actual_group,
+    _revalidate_staged_manual_actual_group,
+    _actual_workbook_schema_mismatches,
+    _resolve_pdf_path,
+    _staging_id_list,
+)
+from global_exact_glyph_library import (
+    GlobalExactGlyphRepository,
+    global_exact_glyph_evidence_hashes,
 )
 
 PROGRAM = "注音校對工具－單機端到端控制器"
-VERSION = "5.7.0"
+VERSION = "5.8.0"
 # Tool release number is not a cache/session boundary. Compatibility is decided
 # by schema family, durable review IDs, PDF bytes and evidence assets.
 COMPATIBLE_SESSION_VERSIONS = None
@@ -126,6 +151,226 @@ NO_ACTUAL_PENDING_MESSAGE = (
 )
 
 
+from global_glyph_promotion import (
+    deliver_pending_promotion_outbox, project_refresh_token, acknowledge_project_refresh,
+    recover_pending_project_actual_write, committed_project_recovery, project_delivery_lock,
+)
+
+
+class ActualBundleImportResult(tuple):
+    """Five-value bundle result retaining the actual lane's split status."""
+    def __new__(cls, values, status):
+        result = super().__new__(cls, values)
+        result.status = dict(status)
+        return result
+
+
+class ActualImportResult(tuple):
+    """Backward-compatible three-value import result with truthful split status."""
+    def __new__(cls, count, removed, report, status):
+        result = super().__new__(cls, (count, removed, report))
+        result.status = dict(status)
+        return result
+
+
+class ExpectedImportResult(tuple):
+    """Three-value API plus saved business-conflict/supplement counts."""
+    def __new__(cls, count, skipped, report, status):
+        result = super().__new__(cls, (count, skipped, report))
+        result.status = dict(status)
+        return result
+
+
+def _serialized_user_project_entry(operation):
+    """Hold the project lock from the first user-facing gate through delivery."""
+    @wraps(operation)
+    def locked(output_dir, *args, **kwargs):
+        output_dir = resolve_existing_project_dir(trusted_root(output_dir))
+        with binding_scope(), project_delivery_lock(project_actual_evidence_root(output_dir)):
+            if operation.__name__ == "repair_project_state":
+                from pdf_portability import INCOMPLETE_FILE, resume_portable_project
+                if (output_dir / INCOMPLETE_FILE).exists():
+                    result = resume_portable_project(output_dir)
+                    if result["status"] != "PRESENTATION_RECOVERED":
+                        raise ValueError("未完成專案仍無可發布判定；已還原提交前回執，請重試操作")
+                    return Path(result["report"])
+            _reject_incomplete_portable_project(output_dir)
+            return operation(output_dir, *args, **kwargs)
+    return locked
+
+
+def _global_direct_source_context(output_dir, manifest):
+    # Called only after the controller validates the sealed manifest/artifacts.
+    # No expected fields cross this boundary.
+    infos = {str(info.get("pdf_name") or ""): {
+        "pdf": str(info.get("pdf") or ""), "pdf_sha256": info.get("pdf_sha256"),
+    } for info in manifest.get("pdfs", [])}
+    if any(not Path(info["pdf"]).is_file() for info in infos.values()):
+        try:
+            for pdf in _resolve_session_pdfs(output_dir, manifest):
+                if pdf.name in infos:
+                    infos[pdf.name]["pdf"] = str(pdf)
+        except (OSError, ValueError):
+            # Missing bytes produce explicit per-occurrence ineligibility below.
+            pass
+    return {"session_id": manifest.get("session_id"), "pdfs": infos}
+
+
+def _deliver_after_actual_commit(output_dir, result):
+    result.setdefault("project_actual_commit",
+                      "COMMITTED" if result.get("group_results", result.get("results")) else "NO_CHANGES")
+    result["global_promotion_delivery"] = deliver_pending_promotion_outbox(
+        project_actual_evidence_root(output_dir)
+    )
+    result["project_refresh"] = "NOT_STARTED"
+    try:
+        result["project_refresh_token"] = project_refresh_token(project_actual_evidence_root(output_dir))
+        if result["project_refresh_token"]:
+            result["project_actual_commit"] = "COMMITTED"
+    except Exception as exc:
+        raise ManualActualPostApplyError(
+            "project_refresh_recovery", exc, batch_result=result, cleared_event_count=None,
+        ) from exc
+
+
+def _publish_local_actual_conflict_resolution(output_dir: Path, report: Path) -> Path:
+    """Republish only after a new visual commit has cleared the durable conflict."""
+    from pdf_portability import ACTUAL_EXCEL_CONFLICT_FILE, actual_excel_conflict_state
+
+    if not (Path(output_dir) / ACTUAL_EXCEL_CONFLICT_FILE).exists():
+        return Path(report)
+    manifest = json_load_strict(Path(output_dir) / "校對工作階段.json")
+    db = load_or_initialize_db(output_dir)
+    if actual_excel_conflict_state(output_dir, manifest, db):
+        return Path(report)
+    return regenerate_report(output_dir)
+
+
+@bound_operation(project_parameter="output_dir")
+def recover_committed_actual_project(output_dir: Path, *, acknowledge: bool = True):
+    """Explicit restart recovery; staging is never reapplied here.
+
+    The single-correction caller defers acknowledgement until its additional
+    target postcondition succeeds. Explicit restart recovery acknowledges here.
+    """
+    from pdf_portability import INCOMPLETE_FILE
+
+    output_dir = Path(output_dir)
+    if type(acknowledge) is not bool:
+        raise ValueError("actual refresh acknowledgement policy must be boolean")
+    if acknowledge and (output_dir / INCOMPLETE_FILE).exists():
+        raise ValueError("專案未完成標記仍存在；請先使用所屬交易的恢復入口，未 acknowledgement")
+    root = project_actual_evidence_root(output_dir)
+    from global_glyph_promotion import PROJECT_TRANSACTION_FILE
+    if not (root / PROJECT_TRANSACTION_FILE).exists() and not (output_dir / ACTUAL_REFRESH_PUBLICATION).exists():
+        return None
+    with project_delivery_lock(root):
+        if acknowledge and (output_dir / INCOMPLETE_FILE).exists():
+            raise ValueError("專案未完成標記仍存在；請先使用所屬交易的恢復入口，未 acknowledgement")
+        recover_pending_project_actual_write(root)
+        if committed_project_recovery(root) is None and not (output_dir / ACTUAL_REFRESH_PUBLICATION).exists():
+            return None
+        resumed = _resume_actual_refresh_publication(output_dir.resolve(), acknowledge=acknowledge)
+        if resumed is not None and resumed["phase"] == "ACKNOWLEDGING":
+            from global_glyph_promotion import load_promotion_outbox
+            items = load_promotion_outbox(root)["items"]
+            plan = resumed["_recovery_plan"]
+            return {"project_actual_commit": "COMMITTED", "project_refresh": "SUCCESS",
+                    "global_promotion_delivery": {"status": "DELIVERED" if all(item["status"] == "DELIVERED" for item in items) else "PENDING_RETRY"},
+                    "affected_occurrence_ids": plan["affected_occurrence_ids"], "recovery_plan": plan,
+                    "project_refresh_token": resumed["token"], "refresh_performed": True,
+                    "cleared_actual_dependent_event_count": resumed["cleared_count"],
+                    "refresh_report": str(output_dir / "注音校對_最終報告.xlsx"),
+                    "postcondition_checked_occurrence_ids": [item["occurrence_id"] for item in plan["checked_postconditions"]]}
+        pending = committed_project_recovery(root)
+        if pending is None:
+            return None
+        token, plan = pending
+        result = {"project_actual_commit": "COMMITTED", "project_refresh": "NOT_STARTED",
+                  "global_promotion_delivery": {"status": "NOT_ATTEMPTED"},
+                  "affected_occurrence_ids": plan["affected_occurrence_ids"],
+                  "recovery_plan": plan, "project_refresh_token": token}
+        phase, removed = "global_promotion_delivery", None
+        try:
+            result["global_promotion_delivery"] = deliver_pending_promotion_outbox(root)
+            phase = "reload_current_ledger"
+            manifest = json_load_strict(output_dir / "校對工作階段.json")
+            validate_manifest_integrity(manifest)
+            validate_output_artifact_hashes(manifest, output_dir=output_dir)
+            ledger = materialize_ledger(manifest, load_or_initialize_db(output_dir))
+            phase = "refresh_actual_project"
+            refresh_status = {}
+            report = refresh_actual_project(output_dir, _refresh_plan=plan, _refresh_status=refresh_status,
+                                            _refresh_acknowledge=acknowledge)
+            removed = refresh_status["cleared_actual_dependent_event_count"]
+            phase = "post_refresh_actual_verification"
+            manifest = json_load_strict(output_dir / "校對工作階段.json")
+            validate_manifest_integrity(manifest)
+            validate_output_artifact_hashes(manifest, output_dir=output_dir)
+            refreshed = materialize_ledger(manifest, load_or_initialize_db(output_dir))
+            _verify_manual_actual_batch_postconditions(refreshed, plan["checked_postconditions"])
+            phase = "acknowledge_project_refresh"
+            if acknowledge:
+                _acknowledge_actual_refresh(output_dir, token)
+                report = _publish_local_actual_conflict_resolution(output_dir, report)
+        except Exception as exc:
+            raise ManualActualPostApplyError(
+                phase, exc, batch_result=result, cleared_event_count=removed,
+            ) from exc
+        result.update(project_refresh="SUCCESS", cleared_actual_dependent_event_count=removed,
+                      refresh_performed=True, refresh_report=str(report),
+                      postcondition_checked_occurrence_ids=[item["occurrence_id"] for item in plan["checked_postconditions"]])
+        return result
+
+
+def refresh_actual_with_recovery(output_dir: Path) -> Path:
+    recovered = recover_committed_actual_project(output_dir)
+    if recovered is None:
+        return refresh_actual_project(output_dir)
+    print("actual recovery: COMMITTED; Global: " + recovered["global_promotion_delivery"]["status"]
+          + "; project refresh: SUCCESS", flush=True)
+    return Path(recovered["refresh_report"])
+
+
+def _finish_direct_actual_commit(output_dir, ledger, result, *, refresh=True, acknowledge=True):
+    if committed_project_recovery(project_actual_evidence_root(output_dir)) is not None:
+        recovered = recover_committed_actual_project(output_dir, acknowledge=acknowledge)
+        result.update(recovered)
+        return recovered["cleared_actual_dependent_event_count"], Path(recovered["refresh_report"])
+    _deliver_after_actual_commit(output_dir, result)
+    group_results = result.get("group_results", result.get("results", []))
+    affected = {
+        oid for item in group_results
+        for oid in (item.get("affected_occurrence_ids") or item.get("target_occurrence_ids") or [])
+        if oid
+    }
+    removed = None
+    phase = "clear_actual_dependent_events"
+    try:
+        phase = "refresh_actual_project"
+        if refresh or result.get("project_refresh_token"):
+            plan = {"schema_version": "1.0", "affected_occurrence_ids": sorted(affected),
+                    "checked_postconditions": sorted(_manual_actual_batch_postconditions(result), key=lambda item: item["occurrence_id"])}
+            refresh_status = {}
+            report = refresh_actual_project(output_dir, _refresh_plan=plan, _refresh_status=refresh_status,
+                                            _refresh_acknowledge=acknowledge)
+            removed = refresh_status["cleared_actual_dependent_event_count"]
+            result["project_refresh"] = "SUCCESS"
+            phase = "acknowledge_project_refresh"
+            if acknowledge:
+                _acknowledge_actual_refresh(output_dir, result.get("project_refresh_token"))
+                report = _publish_local_actual_conflict_resolution(output_dir, report)
+        else:
+            removed = 0
+            report = Path(output_dir) / "注音校對_最終報告.xlsx"
+            result["project_refresh"] = "NOT_REQUIRED"
+        return removed, report
+    except Exception as exc:
+        raise ManualActualPostApplyError(
+            phase, exc, batch_result=result, cleared_event_count=removed,
+        ) from exc
+
+
 class ManualActualPostApplyError(RuntimeError):
     """Authoritative actual committed, but a later project step did not finish."""
 
@@ -140,6 +385,13 @@ class ManualActualPostApplyError(RuntimeError):
         self.phase = str(phase)
         self.cause = cause
         self.batch_result = dict(batch_result)
+        self.batch_result["project_actual_commit"] = "COMMITTED"
+        self.batch_result["project_refresh"] = "FAILED"
+        self.project_actual_commit = "COMMITTED"
+        self.global_promotion_delivery = self.batch_result.get(
+            "global_promotion_delivery", {"status": "NOT_ATTEMPTED"}
+        )
+        self.project_refresh = "FAILED"
         self.cleared_event_count = cleared_event_count
         if self.phase == "clear_actual_dependent_events":
             recovery = (
@@ -148,7 +400,7 @@ class ManualActualPostApplyError(RuntimeError):
             )
         else:
             recovery = (
-                "可在排除錯誤後使用既有 --refresh-actual／refresh_actual_project() 恢復；"
+                "可在排除錯誤後使用 --refresh-actual／refresh_actual_with_recovery() 恢復；"
                 "不要重新套用已 acknowledgement 的 staging。"
             )
         super().__init__(
@@ -191,6 +443,9 @@ ACTUAL_DECODER_SOURCE_FILES = [
     "cff_zero_map_batch.py",
     "occurrence_ledger.py",
     "actual_review.py",
+    "exact_glyph_identity.py",
+    "global_exact_glyph_library.py",
+    "global_glyph_promotion.py",
 ]
 
 DECISION_SEED = Path(__file__).with_name("校對判定記憶.json")
@@ -570,6 +825,7 @@ def workbook_metadata(path: Path, sheet: str = "v5.2中繼資料") -> dict[str, 
         wb.close()
 
 
+@bound_operation(project_parameter="output_dir")
 def output_is_reusable(
     output_dir: Path,
     pdf: Path,
@@ -590,7 +846,7 @@ def output_is_reusable(
         try:
             manifest = json_load_strict(output_dir / "校對工作階段.json")
             validate_manifest_integrity(manifest)
-            validate_output_artifact_hashes(manifest, require_candidate=False)
+            validate_output_artifact_hashes(manifest, require_candidate=False, output_dir=output_dir)
         except (FileNotFoundError, ValueError):
             return False
     if not isinstance(manifest, dict):
@@ -624,12 +880,13 @@ def output_is_reusable(
                 return False
     return False
 
+@bound_operation(project_parameter="output_dir")
 def load_reuse_baseline_manifest(output_dir: Path) -> dict[str, Any] | None:
     """Load and seal-check the previous session before any incremental writes."""
     try:
         manifest = json_load_strict(Path(output_dir) / "校對工作階段.json")
         validate_manifest_integrity(manifest)
-        validate_output_artifact_hashes(manifest)
+        validate_output_artifact_hashes(manifest, output_dir=output_dir)
         return manifest
     except (FileNotFoundError, ValueError):
         return None
@@ -894,10 +1151,12 @@ def needs_expected_review(entry: Mapping[str, Any]) -> bool:
     return state in {"DIFFERENCE_PENDING_CONFIRMATION", "REVIEW_PENDING"}
 
 
-def export_pending_for_gpt(output_dir: Path) -> Path:
+@bound_operation(project_parameter="output_dir")
+def export_pending_for_gpt(output_dir: Path, *, _allow_unpublished_pipeline: bool = False,
+                           _allow_internal_portable: bool = False) -> Path:
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
-    validate_output_artifact_hashes(manifest)
+    validate_output_artifact_hashes(manifest, output_dir=output_dir)
     if not schema_compatible(manifest.get("session_schema_version"), SESSION_SCHEMA_VERSION):
         raise ValueError("SESSION_SCHEMA_INCOMPATIBLE：工作階段資料布局不同，需有明確轉接器")
     db = load_or_initialize_db(output_dir)
@@ -993,6 +1252,11 @@ def export_pending_for_gpt(output_dir: Path) -> Path:
             ws.column_dimensions[get_column_letter(headers.index(col_name) + 1)].hidden = True
     for sheet in wb.worksheets:
         _style_sheet(sheet)
+    from pdf_portability import write_excel_content_proof
+    from pdf_portability import INCOMPLETE_FILE
+    if not (_allow_unpublished_pipeline and (Path(output_dir) / INCOMPLETE_FILE).exists()):
+        write_excel_content_proof(wb, output_dir, manifest, db, kind="expected",
+                                  allow_internal_incomplete=_allow_internal_portable)
     out = output_dir / "待判定候選_給GPT.xlsx"
     wb.save(out)
     return out
@@ -1158,6 +1422,46 @@ def _validate_gpt_bundle_metadata(meta: Mapping[str, Any], manifest: Mapping[str
     if bad:
         raise ValueError(f"GPT 判定包 session/schema 不相容：{bad}")
 
+def _read_actual_csv_rows(csv_path):
+    required = {
+        "occurrence_id", "review_id", "pdf_name", "physical_page", "char",
+        "exported_actual", "exported_actual_evidence_sha256", "verified_actual",
+        "visual_confirmation", "note",
+    }
+    with Path(csv_path).open("r", encoding="utf-8-sig", newline="") as stream:
+        reader = csv.DictReader(stream)
+        if not reader.fieldnames or not required.issubset(set(reader.fieldnames)):
+            raise ValueError(f"GPT actual occurrence 決策表缺少欄位：{sorted(required - set(reader.fieldnames or []))}")
+        return list(reader)
+
+
+def _guard_actual_csv_sources(output_dir, ledger, rows):
+    # This visual-confirmation route is separate from local manual correction.
+    by_occ = {entry["occurrence_id"]: entry for entry in ledger}
+    for row in rows:
+        entry = by_occ.get(str(row.get("occurrence_id") or "").strip())
+        if entry is None or str(row.get("review_id") or "").strip() != entry["review_id"]:
+            raise ValueError("GPT actual visual source identity 未知或不符；未 recovery／初始化")
+        if actual_sample_availability(entry, output_dir) != "READABLE":
+            raise ValueError("SOURCE_DRAWING_CLIPPED 不允許 GPT CSV visual_confirmation")
+    if not rows:
+        from actual_render_geometry import source_clipped_candidate
+        for entry in ledger:
+            if source_clipped_candidate(entry) is not None:
+                actual_sample_availability(entry, output_dir)
+
+
+def _read_actual_source_db(output_dir):
+    # Avoid load_or_initialize_db's legacy orphan report and all recovery writes.
+    path = Path(output_dir) / "人工判定資料庫.json"
+    raw = json_load_strict(path) if path.exists() else {}
+    if not isinstance(raw, dict):
+        raise ValueError("DATA_INTEGRITY_ERROR：人工判定資料庫根節點必須是物件")
+    return normalize_db(raw)
+
+
+@_serialized_user_project_entry
+@bound_operation(project_parameter="output_dir")
 def import_actual_occurrence_decisions(output_dir: Path, csv_path: Path, *, package_meta: Mapping[str, Any]) -> tuple[int, int, Path]:
     """Import occurrence-scoped visual actual decisions from a GPT bundle.
 
@@ -1171,23 +1475,21 @@ def import_actual_occurrence_decisions(output_dir: Path, csv_path: Path, *, pack
     output_dir = Path(output_dir)
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
-    validate_output_artifact_hashes(manifest)
+    validate_output_artifact_hashes(manifest, output_dir=output_dir)
     _validate_gpt_bundle_metadata(package_meta, manifest)
+    rows = _read_actual_csv_rows(csv_path)
+    _guard_actual_csv_sources(output_dir, materialize_ledger(manifest, _read_actual_source_db(output_dir)), rows)
+    recover_pending_project_actual_write(project_actual_evidence_root(output_dir))
     db = load_or_initialize_db(output_dir)
     ledger = materialize_ledger(manifest, db)
     by_occ = {str(e.get("occurrence_id") or ""): e for e in ledger}
 
-    required = {
-        "occurrence_id", "review_id", "pdf_name", "physical_page", "char",
-        "exported_actual", "exported_actual_evidence_sha256", "verified_actual",
-        "visual_confirmation", "note",
-    }
-    with Path(csv_path).open("r", encoding="utf-8-sig", newline="") as f:
-        reader = csv.DictReader(f)
-        if not reader.fieldnames or not required.issubset(set(reader.fieldnames)):
-            raise ValueError(f"GPT actual occurrence 決策表缺少欄位：{sorted(required - set(reader.fieldnames or []))}")
-        rows = list(reader)
+    def prewrite_guard():
+        _validate_actual_import_target(output_dir, manifest, db)
+        _guard_actual_csv_sources(output_dir, ledger, rows)
+    _guard_actual_csv_sources(output_dir, ledger, rows)
     if not rows:
+        prewrite_guard()
         return 0, 0, generate_report(output_dir, manifest, db)
 
     staged_by_group: dict[str, dict[str, Any]] = {}
@@ -1259,52 +1561,44 @@ def import_actual_occurrence_decisions(output_dir: Path, csv_path: Path, *, pack
     if errors:
         raise ValueError("GPT actual occurrence 匯入整批拒絕；未寫入任何一列：\n" + "\n".join(errors[:100]))
 
-    root = initialize_project_actual_evidence(output_dir, Path(__file__).resolve().parent)
-    dynamic_names = [OCCURRENCE_OVERRIDE_FILE, USER_GLYF_FILE, USER_CFF_FILE, GLYPH_CONFLICT_FILE, GLYPH_PROVENANCE_FILE]
-    backups = {root / name: (root / name).read_bytes() if (root / name).exists() else None for name in dynamic_names}
-    results = []
-    try:
-        for slot in staged_by_group.values():
-            results.append(apply_verified_actual_group(
-                root,
-                slot["group"],
-                slot["reading"],
-                checked_occurrence_ids=slot["ids"],
-                source="GPT 判定包 actual 原頁視覺覆核",
-                note="；".join(slot["notes"]) or "GPT 判定包：actual 僅由原頁可見注音判定",
-            ))
-    except Exception:
-        for path, data in backups.items():
-            if data is None:
-                if path.exists():
-                    path.unlink()
-            else:
-                path.write_bytes(data)
-        raise
-
-    affected = {oid for item in results for oid in (item.get("affected_occurrence_ids") or item.get("target_occurrence_ids") or []) if oid}
-    removed = _clear_actual_dependent_events(output_dir, ledger, affected)
+    root = project_actual_evidence_root(output_dir)
+    transaction_result = apply_direct_visual_actual_batch(
+        root,
+        [{"group": slot["group"], "reading": slot["reading"],
+          "checked_occurrence_ids": slot["ids"], "source": "GPT 判定包 actual 原頁視覺覆核",
+          "note": "；".join(slot["notes"]) or "GPT 判定包：actual 僅由原頁可見注音判定"}
+         for slot in staged_by_group.values()],
+        source_context=_global_direct_source_context(output_dir, manifest),
+        apply_function=apply_verified_actual_group,
+        initialize_evidence=lambda: initialize_project_actual_evidence(output_dir),
+        prewrite_guard=prewrite_guard,
+    )
+    results = transaction_result["group_results"]
+    removed, report = _finish_direct_actual_commit(
+        output_dir, ledger, transaction_result, refresh=bool(results), acknowledge=False,
+    )
+    from pdf_portability import _load_project
+    _load_project(output_dir)
+    _acknowledge_actual_refresh(output_dir, transaction_result.get("project_refresh_token"))
     if already_applied_ids:
         print(
             f"  GPT actual 判定包重試：{len(already_applied_ids)} 筆 current actual 已等於 verified_actual；"
             "視為前次已安全套用。",
             flush=True,
         )
-    if results:
-        report = refresh_actual_project(output_dir)
-    else:
-        # A previous bundle attempt may already have completed the expensive
-        # actual refresh and then failed in the expected phase.  Re-importing the
-        # same bundle should continue directly from expected instead of decoding
-        # the same PDFs again.
-        report = output_dir / "注音校對_最終報告.xlsx"
-        if not report.exists():
+    if not results and not report.exists():
+        try:
             report = generate_report(output_dir, manifest, db)
-        if already_applied_ids:
-            print("  actual 階段已在前次完成；略過重解碼，直接續跑 expected 階段。", flush=True)
-    return len(rows), removed, report
+        except Exception as exc:
+            raise ManualActualPostApplyError(
+                "report_recovery", exc, batch_result=transaction_result, cleared_event_count=removed,
+            ) from exc
+    return ActualImportResult(len(rows), removed, report, transaction_result)
 
 
+
+@_serialized_user_project_entry
+@bound_operation(project_parameter="output_dir")
 def import_gpt_decision_bundle(output_dir: Path, bundle: Path) -> tuple[int, int, int, int, Path]:
     """One-file round import with expected preflight and lane-ordered commit.
 
@@ -1314,9 +1608,10 @@ def import_gpt_decision_bundle(output_dir: Path, bundle: Path) -> tuple[int, int
     """
     output_dir = Path(output_dir)
     bundle = Path(bundle)
+    _reject_incomplete_portable_project(output_dir)
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
-    validate_output_artifact_hashes(manifest)
+    validate_output_artifact_hashes(manifest, output_dir=output_dir)
     with zipfile.ZipFile(bundle, "r") as zf:
         meta = _load_gpt_bundle_metadata(zf)
         _validate_gpt_bundle_metadata(meta, manifest)
@@ -1328,6 +1623,9 @@ def import_gpt_decision_bundle(output_dir: Path, bundle: Path) -> tuple[int, int
             td = Path(td)
             actual_csv = td / "actual_occurrence_decisions.csv"
             actual_csv.write_bytes(zf.read("actual_occurrence_decisions.csv"))
+            _guard_actual_csv_sources(
+                output_dir, materialize_ledger(manifest, _read_actual_source_db(output_dir)),
+                _read_actual_csv_rows(actual_csv))
             expected_path = None
             if expected_name:
                 expected_path = td / Path(expected_name).name
@@ -1335,11 +1633,14 @@ def import_gpt_decision_bundle(output_dir: Path, bundle: Path) -> tuple[int, int
                 # Fail before actual mutation if the expected workbook is already
                 # invalid for this printed occurrence/context or source version.
                 import_gpt_decisions(output_dir, expected_path, dry_run=True)
-            actual_n, removed, report = import_actual_occurrence_decisions(output_dir, actual_csv, package_meta=meta)
+            actual_result = import_actual_occurrence_decisions(output_dir, actual_csv, package_meta=meta)
+            actual_n, removed, report = actual_result
             expected_n = skipped = 0
             if expected_path is not None:
                 expected_n, skipped, report = import_gpt_decisions(output_dir, expected_path)
-            return actual_n, removed, expected_n, skipped, report
+            return ActualBundleImportResult(
+                (actual_n, removed, expected_n, skipped, report), getattr(actual_result, "status", {}),
+            )
 
 
 def current_pending_state_counts(output_dir: Path) -> dict[str, int]:
@@ -1397,10 +1698,25 @@ def plan_gpt_auto_imports(paths: Iterable[str | Path]) -> list[tuple[Path, str]]
     return sorted(items, key=lambda item: (order.get(item[1], 99), str(item[0])))
 
 
-def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False) -> tuple[int, int, Path]:
-    manifest = json_load_strict(output_dir / "校對工作階段.json")
+def _snapshot_gpt_decisions_entry(operation):
+    """Keep one workbook snapshot inside the serialized public import."""
+    @wraps(operation)
+    def snapshotted(output_dir: Path, xlsx: Path, *, dry_run: bool = False):
+        from pdf_portability import _stable_excel_import
+
+        return _stable_excel_import(operation)(output_dir, xlsx, dry_run=dry_run)
+    return snapshotted
+
+
+@_serialized_user_project_entry
+@_snapshot_gpt_decisions_entry
+@bound_operation(project_parameter="output_dir")
+def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False,
+                         _original_xlsx: Path, _snapshot_sha: str) -> tuple[int, int, Path]:
+    _reject_incomplete_portable_project(output_dir)
+    manifest, manifest_before_sha = json_load_snapshot(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
-    validate_output_artifact_hashes(manifest)
+    validate_output_artifact_hashes(manifest, output_dir=output_dir)
     if (
         not schema_compatible(manifest.get("session_schema_version"), SESSION_SCHEMA_VERSION)
         or not review_id_schema_compatible(manifest.get("review_id_schema_version"), REVIEW_ID_SCHEMA_VERSION)
@@ -1409,14 +1725,24 @@ def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False)
 
     metadata = workbook_metadata(xlsx, "匯入中繼資料")
     mismatched = {}
-    if str(metadata.get("session_id") or "") != str(manifest.get("session_id") or ""):
-        mismatched["session_id"] = (manifest.get("session_id"), metadata.get("session_id"))
     if not schema_compatible(metadata.get("session_schema_version"), SESSION_SCHEMA_VERSION):
         mismatched["session_schema_version"] = (SESSION_SCHEMA_VERSION, metadata.get("session_schema_version"))
     if not schema_compatible(metadata.get("workbook_schema_version"), WORKBOOK_SCHEMA_VERSION):
         mismatched["workbook_schema_version"] = (WORKBOOK_SCHEMA_VERSION, metadata.get("workbook_schema_version"))
     if not review_id_schema_compatible(metadata.get("review_id_schema_version"), REVIEW_ID_SCHEMA_VERSION):
         mismatched["review_id_schema_version"] = (REVIEW_ID_SCHEMA_VERSION, metadata.get("review_id_schema_version"))
+    if mismatched:
+        raise ValueError(f"匯入 workbook session/evidence 不相容：{mismatched}")
+    from pdf_portability import import_expected_excel, EXCEL_PROOF_SHEET
+    workbook = load_workbook(xlsx, read_only=True, data_only=True)
+    try:
+        portable_expected = EXCEL_PROOF_SHEET in workbook.sheetnames
+    finally:
+        workbook.close()
+    if portable_expected or str(metadata.get("session_id") or "") != str(manifest.get("session_id") or ""):
+        return import_expected_excel.__wrapped__(output_dir, xlsx, dry_run=dry_run,
+            _original_xlsx=_original_xlsx, _snapshot_sha=_snapshot_sha,
+            _target_manifest_sha=manifest_before_sha)
     # Tool version is intentionally ignored. The exported expected fingerprint
     # is compared to the session snapshot, so an old workbook from the same
     # project remains importable after an application upgrade.
@@ -1440,8 +1766,15 @@ def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False)
     assert_unique_ids(rows, "occurrence_id")
     assert_unique_ids(rows, "review_id")
 
-    db = load_or_initialize_db(output_dir)
-    current_ledger = materialize_ledger(manifest, db)
+    db_path = output_dir / "人工判定資料庫.json"
+    raw_db, db_before_sha = json_load_snapshot(db_path)
+    db = normalize_db(raw_db)
+    from pdf_portability import (_read_presentation_receipts, _receipt_snapshot_shas,
+                                 _check_receipt_shas, _actual_transfer_state)
+    receipt_snapshots = _read_presentation_receipts(output_dir)
+    receipt_shas = _receipt_snapshot_shas(receipt_snapshots)
+    import_baseline, current_ledger = prepare_review_ledger(manifest, db)
+    import_baseline_by_id = {entry["review_id"]: entry for entry in import_baseline}
     assert_unique_ids(current_ledger, "occurrence_id")
     assert_unique_ids(current_ledger, "review_id")
     by_review_id = {entry["review_id"]: entry for entry in current_ledger}
@@ -1522,6 +1855,8 @@ def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False)
             if value not in {"", "Y", "N"}:
                 errors.append(f"row {row_number}: gate {gate} 必須是 Y/N")
             event[gate] = value == "Y"
+        if action in expected_only_actions and manifest.get("expected_asset_fingerprint"):
+            event = bind_expected_resolution(import_baseline_by_id[review_id], event, manifest)
         staged_events[review_id] = event
 
     if errors:
@@ -1532,13 +1867,52 @@ def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False)
     # Full materialization validates every transition and terminal invariant
     # before the first persistent write.
     materialize_ledger(manifest, staged_db)
+    from pdf_portability import validate_conflict_state, _verify_excel_import_snapshot
+    _verify_excel_import_snapshot(xlsx, _original_xlsx, _snapshot_sha)
+    unresolved_conflicts = validate_conflict_state(output_dir, manifest, db)
+    if set(staged_events) & set(unresolved_conflicts):
+        raise ValueError("同 session Excel 判定包含未經本地裁決的跨專案衝突位置；未寫入任何判定")
+    validate_conflict_state(output_dir, manifest, staged_db)
+    from pdf_portability import _verify_available_session_pdfs
+    def validate_prewrite():
+        _reject_incomplete_portable_project(output_dir)
+        if (sha256_file(output_dir / "校對工作階段.json") != manifest_before_sha
+                or sha256_file(db_path) != db_before_sha):
+            raise ValueError("匯入期間工作階段或判定資料庫已變動；未寫入判定")
+        _verify_available_session_pdfs(output_dir, manifest)
+        _actual_transfer_state(output_dir, manifest)
+        _check_receipt_shas(output_dir, receipt_shas)
+    validate_prewrite()
     if dry_run:
         # Bundle preflight: validate expected actions before any actual evidence
         # is committed.  This prevents avoidable half-applied bundles.
         return len(staged_events), ignored_noop_rows, output_dir / "注音校對_最終報告.xlsx"
-    json_save(output_dir / "人工判定資料庫.json", staged_db)
-    save_pending_json(output_dir, manifest, staged_db)
-    report = generate_report(output_dir, manifest, staged_db)
+    _reject_incomplete_portable_project(output_dir)
+    if sha256_file(output_dir / "校對工作階段.json") != manifest_before_sha:
+        raise ValueError("匯入期間工作階段已變動；未寫入判定")
+    unresolved_conflicts = validate_conflict_state(output_dir, manifest, db)
+    if set(staged_events) & set(unresolved_conflicts):
+        raise ValueError("匯入期間同 session Excel 判定位置出現未裁決跨專案衝突；未寫入任何判定")
+    validate_conflict_state(output_dir, manifest, staged_db)
+    _verify_excel_import_snapshot(xlsx, _original_xlsx, _snapshot_sha)
+    from pdf_portability import INCOMPLETE_FILE, _new_presentation_marker, resume_portable_project
+    marker = output_dir / INCOMPLETE_FILE
+    owned_marker = _new_presentation_marker(
+        output_dir, manifest, db_before_sha, staged_db, {}, phase="SAME_SESSION_EXPECTED",
+        _receipt_snapshots=receipt_snapshots)
+    validate_prewrite()
+    marker_sha = json_save(marker, owned_marker, expected_sha256="")
+    from pdf_portability import _assert_actual_marker_owner
+    _assert_actual_marker_owner(marker, marker_sha)
+    if sha256_file(output_dir / "校對工作階段.json") != manifest_before_sha:
+        raise ValueError("匯入期間工作階段已變動；保留發布計畫")
+    _verify_available_session_pdfs(output_dir, manifest)
+    _assert_actual_marker_owner(marker, marker_sha)
+    _actual_transfer_state(output_dir, manifest)
+    _check_receipt_shas(output_dir, receipt_shas)
+    json_save(db_path, staged_db, expected_sha256=db_before_sha)
+    _assert_actual_marker_owner(marker, marker_sha)
+    report = Path(resume_portable_project(output_dir, _expected_marker_sha=marker_sha)["report"])
     # skipped counts only explicit no-op/keep rows; safe rebases are successful
     # imports and remain included in len(staged_events).
     return len(staged_events), ignored_noop_rows, report
@@ -1570,9 +1944,11 @@ def json_load(path: Path, default):
 
 
 def json_load_strict(path: Path) -> Any:
-    if not path.exists():
-        raise FileNotFoundError(path)
+    return json_load_snapshot(path)[0]
 
+
+def json_parse_strict(raw: bytes, source: Path) -> Any:
+    """Strictly parse the exact bytes used by a snapshot, digest or backup."""
     def reject_duplicate_keys(pairs):
         out = {}
         for key, value in pairs:
@@ -1580,17 +1956,43 @@ def json_load_strict(path: Path) -> Any:
                 raise ValueError(f"JSON 重複 key：{key}")
             out[key] = value
         return out
-
     try:
-        return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=reject_duplicate_keys)
+        return json.loads(raw.decode("utf-8"), object_pairs_hook=reject_duplicate_keys)
     except Exception as exc:
-        raise ValueError(f"JSON 損壞或含重複 key：{path}") from exc
+        raise ValueError(f"JSON 損壞或含重複 key：{source}") from exc
 
 
-def json_save(path: Path, data) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    tmp.replace(path)
+def json_load_snapshot(path: Path) -> tuple[Any, str]:
+    """Parse and hash one immutable byte sequence, including duplicate-key checks."""
+    raw = path.read_bytes()
+    return json_parse_strict(raw, path), hashlib.sha256(raw).hexdigest()
+
+
+def json_save(path: Path, data, *, expected_sha256: str | None = None) -> str:
+    """Atomically replace JSON, optionally rejecting a concurrent DB edit.
+
+    A private temporary file avoids collisions between writers; failed writes
+    leave the prior document intact. The optional guard is used by review saves.
+    """
+    path = Path(path)
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         prefix=path.name + ".", suffix=".tmp", delete=False) as stream:
+            tmp = Path(stream.name)
+            json.dump(data, stream, ensure_ascii=False, indent=2)
+            stream.flush()
+            os.fsync(stream.fileno())
+        saved_sha256 = sha256_file(tmp)
+        if expected_sha256 is not None:
+            observed = sha256_file(path) if path.exists() else ""
+            if observed != expected_sha256:
+                raise ValueError("人工判定資料庫已由其他操作變更；未覆寫，請重新載入")
+        tmp.replace(path)
+        return saved_sha256
+    finally:
+        if tmp is not None and tmp.exists():
+            tmp.unlink()
 
 
 def manifest_integrity_sha256(manifest: Mapping[str, Any]) -> str:
@@ -1611,16 +2013,21 @@ def validate_manifest_integrity(manifest: Mapping[str, Any]) -> None:
         raise ValueError("DATA_INTEGRITY_ERROR：校對工作階段 payload hash 缺失或不符")
 
 
-def validate_output_artifact_hashes(manifest: Mapping[str, Any], *, require_candidate: bool = True) -> None:
-    for info in manifest.get("pdfs", []):
-        checks = [("actual_workbook", "actual_workbook_sha256")]
-        if require_candidate:
-            checks.append(("candidate_workbook", "candidate_workbook_sha256"))
-        for path_key, hash_key in checks:
-            path = Path(str(info.get(path_key) or ""))
-            recorded = str(info.get(hash_key) or "")
-            if not path.exists() or not recorded or sha256_file(path) != recorded:
-                raise ValueError(f"DATA_INTEGRITY_ERROR：輸出資產 hash 不符：{info.get('pdf_name')}/{path_key}")
+def validate_output_artifact_hashes(manifest: Mapping[str, Any], *, require_candidate: bool = True,
+                                    output_dir: Path | None = None) -> None:
+    if output_dir is None:
+        # Finite legacy direct-API adapter. Production user entrypoints always
+        # provide the selected root explicitly; never guess a relocated root.
+        roots = {Path(info[kind + "_workbook"]).absolute().parent.parent
+                 for info in manifest.get("pdfs", [])
+                 for kind in (("actual", "candidate") if require_candidate else ("actual",))}
+        if not roots:
+            validate_manifest_integrity(manifest)
+            return
+        if len(roots) != 1:
+            raise ValueError("workbook binding 缺少 selected project root")
+        output_dir = roots.pop()
+    bind_workbooks(output_dir, manifest, require_candidate=require_candidate)
 
 
 def resolve_pdfs(input_path: Path) -> list[Path]:
@@ -1998,6 +2405,7 @@ def collect_manifest(
     actual_fingerprints: Mapping[str, Mapping[str, Any]],
     source_validation: Mapping[str, Any],
     runtime_root: Path | None = None,
+    sealed_workbook_manifest: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     root = Path(runtime_root or Path(__file__).resolve().parent).resolve()
     manifest = {
@@ -2031,10 +2439,22 @@ def collect_manifest(
     mandatory_reports = []
     pdf_regression_reports = []
     pdf_regression_rows_by_pdf: list[tuple[str, list[dict[str, Any]]]] = []
+    sealed_locations = ({(index, kind): relative for index, kind, relative, sha in
+                         bind_workbooks(actual_dir.parent, sealed_workbook_manifest)}
+                        if sealed_workbook_manifest is not None else {})
     for pdf in pdfs:
         ph = sha256_file(pdf)
-        actual = actual_workbook_path(actual_dir, pdf)
-        cand = candidate_workbook_path(cand_dir, pdf)
+        if sealed_workbook_manifest is not None:
+            if actual_dir.parent != cand_dir.parent:
+                raise ValueError("sealed workbook role roots 不同")
+            infos = [index for index, info in enumerate(sealed_workbook_manifest["pdfs"]) if info["pdf_sha256"] == ph]
+            if len(infos) != 1:
+                raise ValueError("sealed workbook PDF identity 不唯一")
+            actual = owned_path(actual_dir.parent, sealed_locations[infos[0], "actual"])
+            cand = owned_path(cand_dir.parent, sealed_locations[infos[0], "candidate"])
+        else:
+            actual = actual_workbook_path(actual_dir, pdf)
+            cand = candidate_workbook_path(cand_dir, pdf)
         if not actual.exists() or not cand.exists():
             raise FileNotFoundError(f"缺少輸出：{pdf.name}")
         actual_metadata = workbook_metadata(actual)
@@ -2249,18 +2669,301 @@ def load_or_initialize_db(output_dir: Path) -> dict[str, Any]:
         return normalize_db({})
 
 
-def _apply_review_event(entry: dict[str, Any], event: Mapping[str, Any]) -> dict[str, Any]:
+def confirm_current_actual_unavailable_reason(entry: Mapping[str, Any]) -> str:
+    """Allow an explicit local choice, including an existing expected conflict.
+
+    Completed items are not reopened; the existing explicit redecision path
+    and receipt-backed pending workflow remain eligible.
+    """
+    state = entry.get("state")
+    if state in HARD_BLOCKING_STATES or entry.get("blocking_state") in HARD_BLOCKING_STATES:
+        return "來源或資料尚未通過驗證（" + str(entry.get("blocking_state") or state) + "），不能確認目前注音"
+    if not (state in NON_TERMINAL_STATES
+            or state in {"PASS", "TEXTBOOK_ERROR_CONFIRMED"}
+            and (valid_manual_expected_decision(entry)
+                 or entry.get("expected_business_conflict_pending") is True)):
+        return "此項目已完成或不屬於可裁決的待辦"
+    target = manual_expected_target(entry)
+    if (not all(target[key] for key in ("occurrence_id", "review_id", "char", "physical_page"))
+            or target["review_id"] != ledger_make_review_id(target["occurrence_id"])
+            or not re.fullmatch(r"[0-9a-f]{64}", target["pdf_sha256"])):
+        return "目前項目的來源或位置識別不完整"
+    import math
+    try:
+        page = float(target["physical_page"])
+        coords = [float(target[key]) for key in ("x0", "y0", "x1", "y1")]
+        if (not math.isfinite(page) or not page.is_integer() or page < 1
+                or not all(math.isfinite(value) for value in coords)
+                or coords[0] > coords[2] or coords[1] >= coords[3]):
+            return "目前項目的頁碼或位置資料無效"
+    except (ValueError, TypeError, OverflowError):
+        return "目前項目的頁碼或位置資料無效"
+    if (infer_actual_status(entry) != "RESOLVED"
+            or not canonical_bopomofo(entry.get("actual"))
+            or not str(entry.get("actual_evidence") or "").strip()):
+        return "目前注音尚未有效確定或缺少 actual 證據"
+    return ""
+
+
+def can_confirm_current_actual_as_expected(entry: Mapping[str, Any]) -> bool:
+    return not confirm_current_actual_unavailable_reason(entry)
+
+
+def build_manual_expected_event(
+    entry: Mapping[str, Any], *, operation: str, expected_set: Any = None,
+    rationale: str = "", note: str = "",
+) -> dict[str, Any]:
+    """Called only for an explicit human GUI operation, never replay or import.
+
+    CONFIRM_CURRENT_AS_EXPECTED freezes the human-selected current reading now;
+    replay only consumes that saved expected value, regardless of later actual.
+    """
+    redecision = valid_manual_expected_decision(entry)
+    if (entry.get("state") not in NON_TERMINAL_STATES
+            and not ((redecision or entry.get("expected_business_conflict_pending") is True)
+                     and entry.get("state") in {"PASS", "TEXTBOOK_ERROR_CONFIRMED"})) or entry.get("state") in {
+        "SOURCE_INVALID", "DATA_INTEGRITY_ERROR", "REGRESSION_BLOCKED",
+    }:
+        raise InvalidTransitionError("此項目目前不可保存人工應標判定")
+    if operation == "CONFIRM_CURRENT_AS_EXPECTED":
+        reading = canonical_bopomofo(entry.get("actual"))
+        reason = confirm_current_actual_unavailable_reason(entry)
+        if reason:
+            raise InvalidTransitionError(reason)
+        expected_set = [reading]
+    elif operation != "ENTER_EXPECTED":
+        raise InvalidTransitionError("未知的人工應標操作")
+    raw = re.split(r"[|；;]", expected_set) if isinstance(expected_set, str) else list(expected_set or [])
+    if not raw or any(not canonical_bopomofo(item) for item in raw):
+        raise InvalidTransitionError("人工應標必須是合法注音")
+    readings = list(normalize_expected_set(raw))
+    source = entry.get("source_record") or {}
+    context = (
+        f"完整詞／局部詞境：{source.get('局部詞境') or ''}；"
+        f"所在句：{source.get('所在行') or ''}；目標字：{entry.get('char') or ''}；"
+        f"課本頁：{entry.get('printed_page') or ''}"
+    )
+    timestamp = datetime.now().astimezone().isoformat(timespec="microseconds")
+    event = {
+        "action": "解決expected證據", "expected_set": readings,
+        "expected_evidence": str(rationale or "").strip(), "context_evidence": context,
+        "source": "人工 GUI 本筆應標判定", "updated_at": timestamp,
+        "resolution_reason": str(note or "").strip(), "note": str(note or "").strip(),
+        "manual_expected_decision": {
+            "version": 1, "operation": operation, "target": manual_expected_target(entry),
+            "expected_set": readings.copy(), "context_evidence": context, "decided_at": timestamp,
+        },
+    }
+    if not valid_manual_expected_decision({**entry, **event}):
+        raise InvalidTransitionError("人工應標判定缺少有效項目識別或語境")
+    return event
+
+
+def actual_confirmation_snapshot(entry: Mapping[str, Any]) -> dict[str, str]:
+    # This belongs only to the final comparison confirmation, never expected.
+    return {"actual": canonical_bopomofo(entry.get("actual")),
+            "actual_evidence": str(entry.get("actual_evidence") or ""),
+            "actual_status": infer_actual_status(entry)}
+
+
+def build_gui_confirmation(entry: Mapping[str, Any]) -> dict[str, Any]:
+    """Record the one explicit GUI action against this occurrence and both lanes."""
+    record = {
+        "version": 1,
+        "method": GUI_CONFIRMATION_METHOD,
+        "target": manual_expected_target(entry),
+        "actual_snapshot": actual_confirmation_snapshot(entry),
+        "expected_snapshot": confirmation_expected_snapshot(entry),
+        "confirmed_at": datetime.now().astimezone().isoformat(timespec="microseconds"),
+    }
+    if entry.get("state") != "DIFFERENCE_PENDING_CONFIRMATION" or not valid_gui_confirmation({**entry, "gui_confirmation": record}):
+        raise InvalidTransitionError("本筆缺少可確認的來源、位置、語境或獨立差異證據")
+    return record
+
+
+EXPECTED_RESOLUTION_BINDING_VERSION = 1
+EXPECTED_RESOLUTION_ACTIONS = {"補建expected證據", "解決expected證據"}
+_EXPECTED_RESOLUTION_PAYLOAD_KEYS = {
+    "action", "expected_set", "expected_evidence", "context_evidence", "source", "resolution_reason", "note",
+}
+_EXPECTED_RESOLUTION_BINDING_KEYS = {
+    "version", "session_id", "target", "baseline_expected_snapshot", "expected_asset_fingerprint",
+    "expected_resolver_semantics_epoch", "resolution", "legacy_evidence", "integrity_sha256",
+}
+
+
+def expected_resolution_payload(event: Mapping[str, Any]) -> dict[str, Any]:
+    """Canonical independent source event, never derived from a GUI snapshot."""
+    if event.get("action") not in EXPECTED_RESOLUTION_ACTIONS or "manual_expected_decision" in event:
+        raise InvalidTransitionError("expected binding 必須來自獨立 expected 操作；人工本筆判定使用既有契約")
+    readings = list(normalize_expected_set(event.get("expected_set")))
+    raw = event.get("expected_set")
+    raw_items = re.split(r"[|；;]", raw) if isinstance(raw, str) else raw
+    if not isinstance(raw_items, list) or not raw_items or any(not canonical_bopomofo(x) for x in raw_items):
+        raise InvalidTransitionError("expected binding 讀音必須完整合法")
+    payload = {"action": event["action"], "expected_set": readings}
+    for key in _EXPECTED_RESOLUTION_PAYLOAD_KEYS - {"action", "expected_set"}:
+        value = event.get(key, "")
+        if not isinstance(value, str):
+            raise InvalidTransitionError(f"expected binding {key} 必須是文字")
+        payload[key] = value.strip()
+    payload["source"] = payload["source"] or "人工現版證據"
+    if not readings or not payload["expected_evidence"] or not payload["context_evidence"]:
+        raise InvalidTransitionError("expected binding 缺少獨立讀音／來源／語境")
+    return payload
+
+
+def bind_expected_resolution(entry, event, manifest, *, legacy_evidence=None):
+    """Called only after the expected save/import transaction has validated inputs."""
+    payload = expected_resolution_payload(event)
+    fingerprint = manifest.get("expected_asset_fingerprint")
+    epoch = (manifest.get("expected_asset_fingerprint_components") or {}).get("expected_resolver_semantics_epoch")
+    if (not isinstance(manifest.get("session_id"), str) or not manifest["session_id"]
+            or not isinstance(fingerprint, str) or not re.fullmatch(r"[0-9a-f]{64}", fingerprint)
+            or epoch != EXPECTED_RESOLVER_SEMANTICS_EPOCH):
+        raise InvalidTransitionError("expected binding 缺少已知 session／fingerprint／semantics 契約")
+    binding = {
+        "version": EXPECTED_RESOLUTION_BINDING_VERSION,
+        "session_id": manifest["session_id"], "target": manual_expected_target(entry),
+        "baseline_expected_snapshot": confirmation_expected_snapshot(entry),
+        "expected_asset_fingerprint": fingerprint, "expected_resolver_semantics_epoch": epoch,
+        "resolution": payload, "legacy_evidence": copy.deepcopy(legacy_evidence),
+    }
+    binding["integrity_sha256"] = _hash_review_payload(binding)
+    out = {**event, "expected_resolution_binding": binding}
+    _validate_expected_resolution_binding(entry, out, manifest)
+    return out
+
+
+@dataclass(frozen=True)
+class _ExpectedResolutionContext:
+    session_id: str | None
+    expected_asset_fingerprint: str | None
+    expected_resolver_semantics_epoch: str | None
+
+
+def _validated_expected_manifest(manifest):
+    """Detach replay inputs before validating; retain only immutable context."""
+    if manifest is None:
+        raise InvalidTransitionError("expected resolution binding 缺少目前 sealed manifest context")
+    snapshot = copy.deepcopy(dict(manifest))
+    validate_manifest_integrity(snapshot)
+    values = (
+        snapshot.get("session_id"), snapshot.get("expected_asset_fingerprint"),
+        (snapshot.get("expected_asset_fingerprint_components") or {}).get("expected_resolver_semantics_epoch"),
+    )
+    context = _ExpectedResolutionContext(*(value if isinstance(value, str) else None for value in values))
+    return snapshot, context
+
+
+def _validate_expected_resolution_binding(entry, event, manifest):
+    # Standalone callers always validate fresh data, including mutable manifests
+    # that have already been used by a previous materialization.
+    _, context = _validated_expected_manifest(manifest)
+    return _validate_expected_resolution_binding_in_context(entry, event, context)
+
+
+def _validate_expected_resolution_binding_in_context(entry, event, context):
+    """Return the saved source only after format/integrity/applicability checks.
+
+    None means a known binding has become stale; malformed or missing proof is
+    an error. No actual evidence participates in this expected-only contract.
+    """
+    binding = event.get("expected_resolution_binding")
+    if (not isinstance(binding, dict) or set(binding) != _EXPECTED_RESOLUTION_BINDING_KEYS
+            or type(binding["version"]) is not int or binding["version"] != EXPECTED_RESOLUTION_BINDING_VERSION):
+        raise InvalidTransitionError("未知或缺失的 expected resolution binding")
+    if (not isinstance(binding["integrity_sha256"], str)
+            or binding["integrity_sha256"] != _hash_review_payload({k:v for k,v in binding.items() if k != "integrity_sha256"})):
+        raise InvalidTransitionError("expected resolution binding integrity 不符")
+    resolution = binding["resolution"]
+    if (not isinstance(resolution, dict) or set(resolution) != _EXPECTED_RESOLUTION_PAYLOAD_KEYS
+            or expected_resolution_payload(resolution) != resolution):
+        raise InvalidTransitionError("expected resolution binding payload 非完整 canonical 格式")
+    target = binding["target"]
+    snapshot = binding["baseline_expected_snapshot"]
+    if (not isinstance(target, dict) or set(target) != set(manual_expected_target(entry))
+            or any(not isinstance(v, str) for v in target.values())
+            or not all(target[k] for k in ("occurrence_id", "review_id", "pdf_sha256", "pdf_name", "char", "physical_page", "x0", "y0", "x1", "y1"))
+            or not (target["line"] or target["local_context"])
+            or not re.fullmatch(r"[0-9a-f]{64}", target["pdf_sha256"])
+            or not isinstance(snapshot, dict) or set(snapshot) != set(confirmation_expected_snapshot(entry))
+            or not isinstance(snapshot["expected_set"], list)
+            or list(normalize_expected_set(snapshot["expected_set"])) != snapshot["expected_set"]
+            or any(not isinstance(snapshot[k], str) for k in ("expected_evidence", "expected_status", "context_evidence"))
+            or snapshot["expected_status"] not in {"RESOLVED", "UNRESOLVED", "AMBIGUOUS", "CONFLICT", "EXCLUDED"}
+            or snapshot["manual_expected_decision"] is not None
+            or not isinstance(binding["session_id"], str) or not binding["session_id"]
+            or not isinstance(binding["expected_asset_fingerprint"], str)
+            or not re.fullmatch(r"[0-9a-f]{64}", binding["expected_asset_fingerprint"])
+            or binding["expected_resolver_semantics_epoch"] != EXPECTED_RESOLVER_SEMANTICS_EPOCH):
+        raise InvalidTransitionError("expected resolution binding target／baseline／fingerprint 格式無效")
+    legacy = binding["legacy_evidence"]
+    if legacy is not None and (not isinstance(legacy, dict) or set(legacy) != {
+            "adapter", "workbook_sha256", "manifest_sha256", "decision_db_sha256", "source_row"}
+            or legacy["adapter"] != "explicit_expected_workbook_v1"
+            or type(legacy["source_row"]) is not int or legacy["source_row"] < 2
+            or any(not isinstance(legacy[k], str) or not re.fullmatch(r"[0-9a-f]{64}", legacy[k])
+                   for k in ("workbook_sha256", "manifest_sha256", "decision_db_sha256"))):
+        raise InvalidTransitionError("未知或缺失的 legacy expected binding proof")
+    if event.get("action") in EXPECTED_RESOLUTION_ACTIONS:
+        candidate = expected_resolution_payload(event)
+    elif event.get("action") == "確認現版差異":
+        candidate = expected_resolution_payload({
+            "action": resolution["action"], "expected_set": event.get("expected_set"),
+            "expected_evidence": event.get("expected_evidence"), "context_evidence": event.get("context_evidence"),
+            "source": event.get("expected_resolution_source", ""),
+            "resolution_reason": event.get("expected_resolution_reason", ""),
+            "note": event.get("expected_resolution_note", ""),
+        })
+    else:
+        raise InvalidTransitionError("expected resolution binding 不適用此 action")
+    if candidate != resolution:
+        raise InvalidTransitionError("expected resolution binding 與事件來源 payload 不一致")
+    if context is None:
+        raise InvalidTransitionError("expected resolution binding 缺少目前 sealed manifest context")
+    if (binding["session_id"] != context.session_id
+            or binding["expected_asset_fingerprint"] != context.expected_asset_fingerprint
+            or binding["expected_resolver_semantics_epoch"] != context.expected_resolver_semantics_epoch
+            or target != manual_expected_target(entry)
+            or snapshot != confirmation_expected_snapshot(entry)):
+        return None
+    return copy.deepcopy(resolution)
+
+
+def _apply_review_event(entry: dict[str, Any], event: Mapping[str, Any], *, expected_manifest=None) -> dict[str, Any]:
+    context = None
+    if "expected_resolution_binding" in event and str(event.get("action") or "").strip() != "保留待人工":
+        _, context = _validated_expected_manifest(expected_manifest)
+    return _apply_review_event_in_context(entry, event, context)
+
+
+def _apply_review_event_in_context(entry, event, context):
     action = str(event.get("action") or "").strip()
     if action == "保留待人工":
         return dict(entry)
+    saved_resolution = None
+    if "expected_resolution_binding" in event:
+        saved_resolution = _validate_expected_resolution_binding_in_context(entry, event, context)
+        if saved_resolution is None:
+            out = dict(entry)
+            out["review_event_replay_status"] = "INVALIDATED_EXPECTED_BINDING_DRIFT"
+            out["review_event_replay_note"] = "保存 expected resolution 的 baseline／target／session／fingerprint 已變更"
+            return out
     if action in {"補建expected證據", "解決expected證據"}:
         # v5.5.0: expected events write only the expected lane.  They never
         # consult current actual to decide *what* expected should be, and they
         # never fail merely because the public composite state is ACTUAL_*.
         expected_set = list(normalize_expected_set(event.get("expected_set")))
+        if "manual_expected_decision" in event and event.get("expected_set") != expected_set:
+            raise InvalidTransitionError("人工 expected 判定必須保存完整合法 canonical 讀音集合")
         evidence = str(event.get("expected_evidence") or "").strip()
         context = str(event.get("context_evidence") or entry.get("context_evidence") or entry.get("char") or "").strip()
-        if not expected_set or not evidence or not context:
+        candidate = {**entry, "expected_set": expected_set, "expected_evidence": evidence, "context_evidence": context}
+        candidate.pop("manual_expected_decision", None)
+        if "manual_expected_decision" in event:
+            candidate["manual_expected_decision"] = event["manual_expected_decision"]
+        if not expected_set or not has_expected_evidence(candidate) or not context:
             raise InvalidTransitionError("expected 必須提供讀音、獨立來源證據與詞語／語境／位置證據")
 
         current_expected = list(normalize_expected_set(entry.get("expected_set")))
@@ -2288,6 +2991,12 @@ def _apply_review_event(entry: dict[str, Any], event: Mapping[str, Any]) -> dict
             return out
 
         out = dict(entry)
+        out.pop("expected_resolution_binding", None)
+        if "expected_resolution_binding" in event:
+            out["expected_resolution_binding"] = copy.deepcopy(event["expected_resolution_binding"])
+        out.pop("manual_expected_decision", None)
+        if "manual_expected_decision" in event:
+            out["manual_expected_decision"] = copy.deepcopy(event["manual_expected_decision"])
         out.update({
             "previous_expected_set": list(entry.get("expected_set") or []),
             "previous_expected_evidence": str(entry.get("expected_evidence") or ""),
@@ -2317,6 +3026,47 @@ def _apply_review_event(entry: dict[str, Any], event: Mapping[str, Any]) -> dict
         # so the confirmation event must carry enough independent expected evidence
         # to reconstruct that intermediate DIFFERENCE state from the frozen manifest.
         working = dict(entry)
+        if saved_resolution is not None:
+            # Reapply only the validated original independent expected action.
+            # The GUI comparison snapshot is never used to manufacture a source.
+            working = _apply_review_event(working, saved_resolution)
+            working["expected_resolution_binding"] = copy.deepcopy(event["expected_resolution_binding"])
+        gui_record = event.get("gui_confirmation")
+        if "gui_confirmation" in event:
+            if (not isinstance(gui_record, dict) or set(gui_record) != {
+                    "version", "method", "target", "actual_snapshot", "expected_snapshot", "confirmed_at"}
+                    or type(gui_record["version"]) is not int or gui_record["version"] != 1
+                    or gui_record["method"] != GUI_CONFIRMATION_METHOD
+                    or not isinstance(gui_record["target"], dict)
+                    or not isinstance(gui_record["actual_snapshot"], dict)
+                    or not isinstance(gui_record["expected_snapshot"], dict)):
+                raise InvalidTransitionError("未知或缺失的 GUI 確認方式")
+            if any(event.get(gate) is True for gate in CONFIRMATION_GATES):
+                raise InvalidTransitionError("GUI 單次確認不得冒稱舊六閘門已完成")
+            if (saved_resolution is None and "manual_expected_decision" not in event
+                    and gui_record["expected_snapshot"] != confirmation_expected_snapshot(working)):
+                # Unbound GUI history may confirm unchanged baseline evidence,
+                # but cannot reconstruct a historical source from its snapshot.
+                working["review_event_replay_status"] = "INVALIDATED_CONFIRMATION_SNAPSHOT"
+                return working
+        if "manual_expected_decision" in event:
+            # Reconstruct the explicitly reviewed expected lane before comparing.
+            # A later automatic resolver cannot silently replace a local human judgment.
+            working = _apply_review_event(working, {
+                **event, "action": "解決expected證據",
+                "source": str(event.get("expected_resolution_source") or event.get("source") or "人工現版證據"),
+                "resolution_reason": str(event.get("expected_resolution_reason") or ""),
+                "note": str(event.get("expected_resolution_note") or ""),
+            })
+            snapshot = event.get("confirmation_actual_snapshot")
+            if not isinstance(snapshot, dict) or set(snapshot) != {"actual", "actual_evidence", "actual_status"}:
+                raise InvalidTransitionError("人工差異確認缺少當次 actual 比較 snapshot")
+            if snapshot != actual_confirmation_snapshot(working):
+                working["review_event_replay_status"] = "INVALIDATED_ACTUAL_DRIFT"
+                return working
+            if working.get("state") != "DIFFERENCE_PENDING_CONFIRMATION":
+                working["review_event_replay_status"] = "INVALIDATED_COMPARISON_DRIFT"
+                return working
         event_expected = list(normalize_expected_set(event.get("expected_set")))
         current_expected = list(normalize_expected_set(working.get("expected_set")))
         if (
@@ -2324,7 +3074,7 @@ def _apply_review_event(entry: dict[str, Any], event: Mapping[str, Any]) -> dict
             and event_expected
             and current_expected != event_expected
         ):
-            # A six-gate conclusion is bound to the expected truth reviewed at
+            # A final conclusion is bound to the expected truth reviewed at
             # that time.  Rebuilding candidates with a different independent
             # expected truth invalidates only the terminal conclusion; it must
             # not resurrect the embedded historical expected evidence.
@@ -2349,12 +3099,19 @@ def _apply_review_event(entry: dict[str, Any], event: Mapping[str, Any]) -> dict
                 })
             if working.get("state") != "DIFFERENCE_PENDING_CONFIRMATION":
                 raise InvalidTransitionError(
-                    "只有現版機械比較差異可進六閘門確認；若此差異由先前 expected 證據建立，"
+                    "只有現版機械比較差異可確認教材錯誤；若此差異由先前 expected 證據建立，"
                     "確認事件必須一併保留該 expected 讀音、來源與詞境證據"
                 )
         gates = {gate: event.get(gate) is True for gate in CONFIRMATION_GATES}
+        if gui_record is not None:
+            working["gui_confirmation"] = copy.deepcopy(gui_record)
+            if not valid_gui_confirmation(working):
+                working.pop("gui_confirmation", None)
+                working["review_event_replay_status"] = "INVALIDATED_CONFIRMATION_SNAPSHOT"
+                return working
         return transition_state(working, "TEXTBOOK_ERROR_CONFIRMED", {
             "confirmation_gates": gates,
+            **({"gui_confirmation": gui_record} if gui_record is not None else {}),
             "note": str(event.get("note") or "").strip(),
         })
     if action == "確認非校對範圍":
@@ -2388,8 +3145,20 @@ def _apply_review_event(entry: dict[str, Any], event: Mapping[str, Any]) -> dict
     raise InvalidTransitionError(f"未知或禁止的人工／GPT action：{action}")
 
 
-def materialize_ledger(manifest: Mapping[str, Any], db: Mapping[str, Any]) -> list[dict[str, Any]]:
+def prepare_review_ledger(manifest: Mapping[str, Any], db: Mapping[str, Any]):
+    """Build the rule-applied baseline and full ledger in one materialization.
+
+    The baseline is the only valid starting point for replacing or deleting an
+    occurrence event; replaying onto an already reviewed row changes semantics.
+    """
     db = normalize_db(dict(db))
+    context = None
+    if any(isinstance(event, dict) and "expected_resolution_binding" in event
+           and str(event.get("action") or "").strip() != "保留待人工"
+           for event in db.get("events", {}).values()):
+        # One sealed snapshot supplies both the rule-applied rows and immutable
+        # binding context for this operation. Never cache trust on caller data.
+        manifest, context = _validated_expected_manifest(manifest)
     ledger = [dict(entry) for entry in manifest.get("records", [])]
     rules_doc = _canonical_rule_doc(manifest.get("reusable_expected_rules") or {})
     expected_rules_hash = str(manifest.get("reusable_expected_rules_sha256") or reusable_rules_sha256(rules_doc))
@@ -2398,6 +3167,7 @@ def materialize_ledger(manifest: Mapping[str, Any], db: Mapping[str, Any]) -> li
     ledger = _apply_reusable_rules(ledger, rules_doc)
     assert_unique_ids(ledger, "occurrence_id")
     assert_unique_ids(ledger, "review_id")
+    baseline = list(ledger)
     by_review_id = {entry["review_id"]: index for index, entry in enumerate(ledger)}
     events = db.get("events", {})
     unknown = sorted(set(events) - set(by_review_id))
@@ -2408,7 +3178,7 @@ def materialize_ledger(manifest: Mapping[str, Any], db: Mapping[str, Any]) -> li
             raise ValueError(f"review event 格式錯誤：{review_id}")
         index = by_review_id[review_id]
         try:
-            ledger[index] = _apply_review_event(ledger[index], event)
+            ledger[index] = _apply_review_event_in_context(ledger[index], event, context)
         except InvalidTransitionError as exc:
             raise InvalidTransitionError(
                 f"review event replay 失敗：review_id={review_id}；"
@@ -2417,12 +3187,122 @@ def materialize_ledger(manifest: Mapping[str, Any], db: Mapping[str, Any]) -> li
             ) from exc
     if ledger:
         validate_occurrence_ledger(ledger)
-    return ledger
+    return baseline, ledger
+
+
+def materialize_ledger(manifest: Mapping[str, Any], db: Mapping[str, Any]) -> list[dict[str, Any]]:
+    return prepare_review_ledger(manifest, db)[1]
+
+
+@_serialized_user_project_entry
+@bound_operation(project_parameter="output_dir")
+def bind_legacy_gui_expected_resolutions(output_dir: Path, workbook: Path, *, review_ids: list[str],
+                                        expected_manifest_sha256: str, expected_db_sha256: str,
+                                        expected_workbook_sha256: str, dry_run: bool = False) -> dict[str, Any]:
+    """Explicit adapter for same-baseline GUI v1 confirmations with workbook proof.
+
+    No discovery, new decision, timestamp or GUI snapshot source is generated.
+    Callers select the existing project, original filled workbook and exact IDs.
+    The only persisted change is attaching a validated expected-only binding.
+    """
+    from pdf_portability import _workbook_snapshot, _verify_available_session_pdfs
+
+    output_dir, workbook = Path(output_dir).resolve(), Path(workbook).resolve()
+    _reject_incomplete_portable_project(output_dir)
+    if (not isinstance(review_ids, list) or not review_ids or any(not isinstance(x, str) or not x for x in review_ids)
+            or len(review_ids) != len(set(review_ids))):
+        raise ValueError("legacy adapter 必須明確指定唯一非空 review_ids")
+    for value in (expected_manifest_sha256, expected_db_sha256, expected_workbook_sha256):
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+            raise ValueError("legacy adapter 缺少原始 SHA proof")
+    manifest_path, db_path = output_dir / "校對工作階段.json", output_dir / "人工判定資料庫.json"
+    manifest, manifest_sha = json_load_snapshot(manifest_path)
+    raw_db, db_sha = json_load_snapshot(db_path)
+    if (manifest_sha, db_sha) != (expected_manifest_sha256, expected_db_sha256):
+        raise ValueError("legacy adapter 原 manifest／decision DB SHA 不符")
+    validate_manifest_integrity(manifest)
+    validate_output_artifact_hashes(manifest, output_dir=output_dir)
+    db = normalize_db(raw_db)
+    baseline = {row["review_id"]:row for row in prepare_review_ledger(manifest, normalize_db({}))[0]}
+    staged = copy.deepcopy(raw_db)
+    expected_keys = {"action", "confirmation_actual_snapshot", "context_evidence", "expected_evidence",
+                     "expected_resolution_note", "expected_resolution_reason", "expected_resolution_source",
+                     "expected_set", "gui_confirmation", "note", "source", "updated_at"}
+    with _workbook_snapshot(workbook, expected_sha256=expected_workbook_sha256) as (snapshot, observed_sha):
+        metadata = workbook_metadata(snapshot, "匯入中繼資料")
+        if (metadata.get("session_id") != manifest.get("session_id")
+                or metadata.get("expected_asset_fingerprint") != manifest.get("expected_asset_fingerprint")
+                or not schema_compatible(metadata.get("session_schema_version"), SESSION_SCHEMA_VERSION)
+                or not schema_compatible(metadata.get("workbook_schema_version"), WORKBOOK_SCHEMA_VERSION)
+                or not review_id_schema_compatible(metadata.get("review_id_schema_version"), REVIEW_ID_SCHEMA_VERSION)):
+            raise ValueError("legacy adapter workbook session／fingerprint／schema 不符")
+        rows = workbook_rows(snapshot, "待判定候選", ["review_id", "occurrence_id", "expected_snapshot",
+            "expected_target_snapshot", "action", "proposed_expected_set", "proposed_expected_evidence",
+            "proposed_context_evidence", "note"])
+        assert_unique_ids(rows, "review_id")
+        assert_unique_ids(rows, "occurrence_id")
+        by_id = {row["review_id"]:(number,row) for number,row in enumerate(rows,2)}
+        for rid in review_ids:
+            entry, event = baseline.get(rid), db["events"].get(rid)
+            if entry is None or not isinstance(event, dict) or rid not in by_id:
+                raise ValueError(f"legacy adapter unknown review_id：{rid}")
+            if (set(event) != expected_keys or event.get("action") != "確認現版差異"
+                    or event.get("source") != "人工 GUI 本筆單次確認"
+                    or event.get("expected_resolution_source") != "GPT／人工 expected 證據報表匯入（v5.5 dual-lane transaction）"
+                    or event.get("expected_resolution_reason") != ""
+                    or entry.get("state") != "DIFFERENCE_PENDING_CONFIRMATION"
+                    or event.get("expected_set") != list(normalize_expected_set(entry.get("expected_set")))):
+                raise ValueError(f"legacy adapter 不支援的歷史事件：{rid}")
+            number,row = by_id[rid]
+            if (row.get("occurrence_id") != entry["occurrence_id"]
+                    or row.get("expected_snapshot") != _expected_review_snapshot_from_export_row(row)
+                    or row.get("expected_snapshot") != _expected_review_snapshot(entry)
+                    or row.get("expected_target_snapshot") != _expected_target_snapshot_from_export_row(row)
+                    or row.get("expected_target_snapshot") != _expected_target_snapshot(entry)):
+                raise ValueError(f"legacy adapter 原 baseline／target 已漂移：{rid}")
+            source_event = expected_resolution_payload({
+                "action": row.get("action"), "expected_set": row.get("proposed_expected_set"),
+                "expected_evidence": row.get("proposed_expected_evidence"),
+                "context_evidence": row.get("proposed_context_evidence"),
+                "source": "GPT／人工 expected 證據報表匯入（v5.5 dual-lane transaction）",
+                "resolution_reason": "", "note": str(row.get("note") or ""),
+            })
+            if any(source_event[key] != event.get(event_key) for key,event_key in (
+                    ("expected_set","expected_set"), ("expected_evidence","expected_evidence"),
+                    ("context_evidence","context_evidence"), ("note","expected_resolution_note"))):
+                raise ValueError(f"legacy adapter 原 workbook resolution 與事件不符：{rid}")
+            bound = bind_expected_resolution(entry, source_event, manifest, legacy_evidence={
+                "adapter": "explicit_expected_workbook_v1", "workbook_sha256": observed_sha,
+                "manifest_sha256": manifest_sha, "decision_db_sha256": db_sha, "source_row": number,
+            })
+            staged["events"][rid] = {**copy.deepcopy(event), "expected_resolution_binding": bound["expected_resolution_binding"]}
+        ledger = materialize_ledger(manifest, staged)
+        selected = {r["review_id"]:r for r in ledger if r["review_id"] in review_ids}
+        if any(r.get("state") != "TEXTBOOK_ERROR_CONFIRMED" or r.get("review_event_replay_status") for r in selected.values()):
+            raise ValueError("legacy adapter 原 GUI／actual confirmation 不適用；未寫入")
+        _reject_incomplete_portable_project(output_dir)
+        from pdf_portability import validate_conflict_state
+        if validate_conflict_state(output_dir, manifest, db):
+            raise ValueError("legacy adapter 專案存在未裁決衝突；未寫入")
+        _verify_available_session_pdfs(output_dir, manifest)
+        validate_output_artifact_hashes(manifest, output_dir=output_dir)
+        if sha256_file(manifest_path) != manifest_sha or sha256_file(workbook) != observed_sha:
+            raise ValueError("legacy adapter 驗證期間原 proof 已變動；未寫入")
+        if sha256_file(db_path) != db_sha:
+            raise ValueError("legacy adapter 驗證期間 decision DB 已變動；未寫入")
+        if not dry_run:
+            json_save(db_path, staged, expected_sha256=db_sha)
+    return {"bound_review_ids": list(review_ids), "dry_run": dry_run,
+            "workbook_sha256": expected_workbook_sha256, "manifest_sha256": manifest_sha,
+            "original_db_sha256": db_sha, "decision_db_sha256": sha256_file(db_path)}
 
 
 def save_pending_json(output_dir: Path, manifest: dict[str, Any], db: dict[str, Any]) -> int:
     ledger = materialize_ledger(manifest, db)
-    pending = [dict(entry) for entry in ledger if entry.get("state") in NON_TERMINAL_STATES]
+    from pdf_portability import expected_conflict_review_view
+    ledger = expected_conflict_review_view(output_dir, manifest, db, ledger)
+    pending = [dict(entry) for entry in ledger if entry.get("state") in NON_TERMINAL_STATES
+               or entry.get("expected_business_conflict_pending") is True]
     gaps = [dict(entry) for entry in ledger if infer_expected_status(entry) == "UNRESOLVED"]
     json_save(output_dir / "待人工確認.json", {
         "version": VERSION,
@@ -2675,6 +3555,8 @@ def _ledger_report_row(entry: Mapping[str, Any]) -> list[Any]:
         entry.get("canonical_occurrence_id"), entry.get("exclusion_reason"), entry.get("stable_key"),
         entry.get("font"), entry.get("font_xref"), entry.get("glyph_id"), entry.get("zhuyin_component_id"),
         entry.get("x0"), entry.get("y0"), entry.get("x1"), entry.get("y1"), entry.get("note"),
+        json.dumps(entry["manual_expected_decision"], ensure_ascii=False, sort_keys=True) if "manual_expected_decision" in entry else "",
+        json.dumps(entry["gui_confirmation"], ensure_ascii=False, sort_keys=True) if "gui_confirmation" in entry else "",
     ]
 
 
@@ -2716,11 +3598,11 @@ def _friendly_issue(entry: Mapping[str, Any]) -> tuple[str, str]:
     if state == "DIFFERENCE_PENDING_CONFIRMATION":
         return "課本目前注音與應標注音不同。", "核對原頁與規範；確定有誤再確認教材錯誤，若課本其實正確則補充較高優先的應標讀音依據。"
     if state == "RULE_CONFLICT":
-        return "程式找到互相衝突的讀音規則。", "選擇本句正確讀音並提供規範／辭典／公司規定等獨立依據。"
+        return "程式找到互相衝突的讀音規則。", "看原文與語境後判定本句應標讀音，文字依據選填。"
     if state == "EXPECTED_AMBIGUOUS":
-        return "目前有多個可能讀音，證據不足以自動決定。", "有正式依據時補充正確讀音；沒有就保留待確認。"
+        return "目前有多個可能讀音，證據不足以自動決定。", "看原文與語境後判定應標讀音；尚無法判斷時保留待確認。"
     if state == "EXPECTED_UNRESOLVED":
-        return "尚未建立可獨立重現的應標注音。", "查完整詞條或公司規定後補充應標讀音；不能照著課本目前注音倒推。"
+        return "尚未建立可獨立重現的應標注音。", "看原文與語境後，可主動確認有效目前讀音為應標，或輸入其他應標讀音；文字依據選填。"
     if state == "ACTUAL_DECODE_ERROR":
         return "程式可能把課本現標注音辨識錯誤。", "回頁確認後以指定位置辨識修正處理，再重新解碼。"
     if state == "ACTUAL_UNRESOLVED":
@@ -2731,6 +3613,18 @@ def _friendly_issue(entry: Mapping[str, Any]) -> tuple[str, str]:
         return friendly_state(state), "這是程式／資料完整性問題，先修復後再繼續校對。"
     return friendly_state(state), "保留待處理。"
 
+def _serialized_report_publication(render):
+    @wraps(render)
+    def serialized(output_dir, manifest, db, *, runtime_root=None):
+        # Conflict receipt and completion report share one publication lock.
+        # This project lock is reentrant during local visual refresh/recovery.
+        with project_delivery_lock(project_actual_evidence_root(output_dir)):
+            return render(output_dir, manifest, db, runtime_root=runtime_root)
+    return serialized
+
+
+@_serialized_report_publication
+@bound_operation(project_parameter="output_dir")
 def generate_report(
     output_dir: Path,
     manifest: dict[str, Any],
@@ -2740,7 +3634,7 @@ def generate_report(
 ) -> Path:
     """Render mutually-exclusive ledger views and the v2.5 completion gate."""
     validate_manifest_integrity(manifest)
-    validate_output_artifact_hashes(manifest)
+    validate_output_artifact_hashes(manifest, output_dir=output_dir)
     if (
         not schema_compatible(manifest.get("session_schema_version"), SESSION_SCHEMA_VERSION)
         or not schema_compatible(manifest.get("workbook_schema_version"), WORKBOOK_SCHEMA_VERSION)
@@ -2783,6 +3677,9 @@ def generate_report(
         manifest.get("regression_gate") or {},
         source_validation_ok=bool(source_validation.get("ok")),
     )
+    from pdf_portability import hold_actual_excel_completion, hold_expected_conflict_completion
+    gate = hold_actual_excel_completion(output_dir, manifest, db, gate)
+    gate = hold_expected_conflict_completion(output_dir, manifest, db, gate)
 
     wb = Workbook()
     ws = wb.active
@@ -2817,7 +3714,7 @@ def generate_report(
         ("規則衝突", state_counts["RULE_CONFLICT"]),
         ("解碼錯誤", state_counts["ACTUAL_DECODE_ERROR"] + state_counts["ACTUAL_UNRESOLVED"]),
         ("確認通過", state_counts["PASS"]),
-        ("現版六閘門確認教材錯誤", state_counts["TEXTBOOK_ERROR_CONFIRMED"]),
+        ("已確認教材錯誤", state_counts["TEXTBOOK_ERROR_CONFIRMED"]),
         ("非獨立技術層排除", state_counts["EXCLUDED_NONINDEPENDENT_LAYER"]),
         ("真正不在範圍排除", state_counts["EXCLUDED_OUT_OF_SCOPE"]),
         ("mandatory regression required", (manifest.get("mandatory_regression") or {}).get("required", 0)),
@@ -2851,7 +3748,7 @@ def generate_report(
         "occurrence_id", "review_id", "state", "active_review", "actual_status", "expected_status", "PDF", "課本頁", "實體頁碼", "字元",
         "所在行", "局部詞境", "actual", "expected_set", "機械比較", "actual證據", "expected證據", "語境／位置證據",
         "來源view", "identity confidence", "row fallback", "canonical occurrence", "排除理由", "穩定注音鍵",
-        "font", "font_xref", "glyph_id", "注音元件ID", "x0", "y0", "x1", "y1", "備註",
+        "font", "font_xref", "glyph_id", "注音元件ID", "x0", "y0", "x1", "y1", "備註", "本筆人工應標判定紀錄", "本筆 GUI 教材錯誤確認紀錄",
     ]
     ws_ledger = wb.create_sheet("Occurrence Ledger")
     ws_ledger.append(headers)
@@ -2868,16 +3765,18 @@ def generate_report(
                 state_sheet.append(_ledger_report_row(entry))
 
     wr = wb.create_sheet("已補建預期音_稽核事件")
-    wr.append(["review_id", "occurrence_id", "action", "expected_set", "expected_evidence", "event_source", "updated_at", "note"])
+    wr.append(["review_id", "occurrence_id", "action", "expected_set", "expected_evidence", "event_source", "updated_at", "note", "manual_expected_decision", "gui_confirmation"])
     by_review_id = {entry["review_id"]: entry for entry in ledger}
     for review_id, event in normalize_db(db).get("events", {}).items():
-        if event.get("action") != "補建expected證據":
+        if event.get("action") not in {"補建expected證據", "解決expected證據", "確認現版差異"}:
             continue
         entry = by_review_id.get(review_id, {})
         wr.append([
             review_id, entry.get("occurrence_id", ""), event.get("action", ""),
             "|".join(normalize_expected_set(event.get("expected_set"))), event.get("expected_evidence", ""),
             event.get("source", ""), event.get("updated_at", ""), event.get("note", ""),
+            json.dumps(event["manual_expected_decision"], ensure_ascii=False, sort_keys=True) if "manual_expected_decision" in event else "",
+            json.dumps(event["gui_confirmation"], ensure_ascii=False, sort_keys=True) if "gui_confirmation" in event else "",
         ])
 
     wc = wb.create_sheet("集合對帳")
@@ -2898,7 +3797,7 @@ def generate_report(
         pdf_entries = [entry for entry in ledger if entry.get("pdf_name") == info.get("pdf_name")]
         in_scope = [entry for entry in pdf_entries if entry.get("state") not in EXCLUDED_STATES]
         actual_covered = sum(1 for entry in in_scope if canonical_bopomofo(entry.get("actual")) and entry.get("actual_evidence"))
-        expected_covered = sum(1 for entry in in_scope if normalize_expected_set(entry.get("expected_set")) and entry.get("expected_evidence"))
+        expected_covered = sum(1 for entry in in_scope if infer_expected_status(entry) == "RESOLVED" and has_expected_evidence(entry))
         wf.append([
             info.get("pdf_name"), info.get("pdf_sha256"), info.get("actual_asset_fingerprint"), len(pdf_entries), len(in_scope),
             actual_covered / len(in_scope) if in_scope else 0, expected_covered / len(in_scope) if in_scope else 0,
@@ -3010,7 +3909,7 @@ def generate_report(
         ])
 
     ur = user_wb.create_sheet("人工與公司規則")
-    ur.append(["來源類型", "PDF", "課本頁", "詞語／局部詞境", "字", "應標注音", "依據／來源", "適用範圍", "備註"])
+    ur.append(["來源類型", "PDF", "課本頁", "詞語／局部詞境", "字", "應標注音", "依據／來源（人工文字依據選填）", "適用範圍", "備註", "人工判定操作", "人工判定時間"])
 
     # Reusable rules are intentionally shown in the human-facing report because
     # they affect future expected evidence. Machine IDs/hashes remain confined to
@@ -3038,14 +3937,14 @@ def generate_report(
         if action in {"補建expected證據", "解決expected證據"}:
             label = "人工建立／解決應標讀音"
             expected_text = " | ".join(normalize_expected_set(event.get("expected_set")))
-            evidence_text = str(event.get("expected_evidence") or event.get("source") or "")
+            evidence_text = str(event.get("expected_evidence") or ("" if "manual_expected_decision" in event else event.get("source")) or "")
         elif action == "確認現版差異":
-            if entry.get("review_event_replay_status") == "INVALIDATED_EXPECTED_DRIFT":
-                label = "舊確認已失效（expected 已變更）"
+            if entry.get("review_event_replay_status", "").startswith("INVALIDATED_"):
+                label = "舊確認已失效"
             else:
                 label = "確認教材錯誤"
             expected_text = " | ".join(entry.get("expected_set") or [])
-            evidence_text = str(entry.get("expected_evidence") or event.get("source") or "")
+            evidence_text = str(entry.get("expected_evidence") or ("" if "manual_expected_decision" in event else event.get("source")) or "")
         elif action == "確認非校對範圍":
             label = "確認不需校對"
             expected_text = ""
@@ -3062,6 +3961,8 @@ def generate_report(
                 or event.get("resolution_reason")
                 or ""
             ),
+            {"CONFIRM_CURRENT_AS_EXPECTED": "確認目前注音就是應標注音", "ENTER_EXPECTED": "人工輸入應標注音"}.get((event.get("manual_expected_decision") or {}).get("operation"), ""),
+            (event.get("manual_expected_decision") or {}).get("decided_at", ""),
         ])
 
     for sheet in user_wb.worksheets:
@@ -3147,11 +4048,13 @@ def _resolve_session_pdfs(output_dir: Path, manifest: Mapping[str, Any]) -> list
     return resolved
 
 
+@bound_operation(project_parameter="output_dir")
 def export_actual_pending_for_gpt(output_dir: Path) -> Path | None:
     output_dir = Path(output_dir)
+    _reject_incomplete_portable_project(output_dir)
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
-    validate_output_artifact_hashes(manifest)
+    validate_output_artifact_hashes(manifest, output_dir=output_dir)
     if (
         not schema_compatible(manifest.get("session_schema_version"), SESSION_SCHEMA_VERSION)
         or not review_id_schema_compatible(manifest.get("review_id_schema_version"), REVIEW_ID_SCHEMA_VERSION)
@@ -3170,12 +4073,67 @@ def export_actual_pending_for_gpt(output_dir: Path) -> Path | None:
         session_schema_version=SESSION_SCHEMA_VERSION,
         workbook_schema_version=WORKBOOK_SCHEMA_VERSION,
         review_id_schema_version=REVIEW_ID_SCHEMA_VERSION,
+        portable_source=(manifest, db),
     )
 
 
-def manual_actual_staging_summary(output_dir: Path) -> dict[str, Any]:
-    """Return a read-only summary of durable, not-yet-authoritative actual intent."""
-    staging = load_manual_actual_staging(project_actual_evidence_root(Path(output_dir)))
+def _manual_actual_snapshot_ledger(manifest, db, ledger, *, base_ledger=None):
+    """Recover only the known sealed state before a verified expected-only event.
+
+    Manual group snapshots historically include the composite workflow state.
+    Expected-only edits may change that state without changing actual. Use one
+    provable sealed projection, never guessed historical states or a new hash
+    contract. Hard blocks, exclusions and comparison confirmations stay live.
+    """
+    expected_events = {rid: event for rid, event in db.get("events", {}).items()
+                       if event.get("action") in {"補建expected證據", "解決expected證據"}}
+    if not expected_events:
+        return ledger
+    base = {row["review_id"]: row for row in (
+        materialize_ledger(manifest, normalize_db({})) if base_ledger is None else base_ledger
+    )}
+    context = None
+    if any("expected_resolution_binding" in event for event in expected_events.values()):
+        _, context = _validated_expected_manifest(manifest)
+    projected = []
+    for row in ledger:
+        event = expected_events.get(row["review_id"])
+        original = base.get(row["review_id"])
+        if (event and original and row.get("state") not in HARD_BLOCKING_STATES | EXCLUDED_STATES
+                and original.get("state") not in HARD_BLOCKING_STATES | EXCLUDED_STATES
+                and row.get("blocking_state") not in HARD_BLOCKING_STATES
+                and original.get("blocking_state") not in HARD_BLOCKING_STATES
+                and not row.get("review_event_replay_status")):
+            replayed = _apply_review_event_in_context(original, event, context)
+            if replayed != row or actual_confirmation_snapshot(original) != actual_confirmation_snapshot(row):
+                raise ValueError("manual actual snapshot 無法證明是獨立 expected 變更")
+            # The whole source record (PDF/identity/coordinates/exact metadata)
+            # must remain identical, not just its visible reading.
+            if original.get("source_record") != row.get("source_record"):
+                raise ValueError("manual actual snapshot source_record 已變更")
+            projected.append({**row, "state": original["state"]})
+        else:
+            projected.append(row)
+    return projected
+
+
+def _validate_manual_actual_group_sources(output_dir, live_groups, *, source_hashes=None):
+    """Reprove the source bytes before retaining any prior visual checks."""
+    checked_sources = set()
+    for live in live_groups:
+        for member in live["members"]:
+            path = _resolve_pdf_path(member, output_dir)
+            wanted = str(member.get("pdf_sha256") or "")
+            key = (path, wanted)
+            if key not in checked_sources:
+                observed = (source_hashes.get(str(path.resolve())) if source_hashes is not None
+                            else sha256_file(path))
+                if not wanted or observed != wanted:
+                    raise ValueError(f"SOURCE_INVALID：actual 暫存來源 PDF 已變更：{path.name}")
+                checked_sources.add(key)
+
+
+def _manual_actual_staging_inventory(staging):
     groups = list(staging.get("staged_groups") or [])
     return {
         "staged_group_count": len(groups),
@@ -3195,6 +4153,62 @@ def manual_actual_staging_summary(output_dir: Path) -> dict[str, Any]:
     }
 
 
+def _manual_actual_summary_from_verified_snapshot(output_dir, staging, manifest, db, ledger,
+                                                *, base_ledger=None, source_hashes=None, cancelled=None):
+    """Internal save path: all arguments belong to one content-verified snapshot.
+
+    This shares group/source validators with the ordinary read path. It never
+    promotes unvalidated checked IDs when projection or group validation fails.
+    """
+    summary = _manual_actual_staging_inventory(staging)
+    groups = list(staging.get("staged_groups") or [])
+    try:
+        summary["actual_recovery_pending"] = committed_project_recovery(project_actual_evidence_root(output_dir)) is not None
+        if groups:
+            projected = _manual_actual_snapshot_ledger(manifest, db, ledger, base_ledger=base_ledger)
+            live_groups = _current_live_groups_for_staged_manual_actual(
+                ledger, groups, snapshot_ledger=projected, cancelled=cancelled)
+            # Supplying snapshot_ledger makes the group builder validate each
+            # live (or proven expected-only projected) group before returning.
+            _validate_manual_actual_group_sources(output_dir, live_groups, source_hashes=source_hashes)
+    except Exception as exc:
+        summary["staging_error"] = str(exc)
+        summary["staged_checked_occurrence_ids"] = []
+    return summary
+
+
+@bound_operation(project_parameter="output_dir")
+def manual_actual_staging_summary(output_dir: Path, *, ledger=None) -> dict[str, Any]:
+    """Read durable intent; a GUI ledger requests live validation before hiding.
+
+    Without ``ledger`` this remains the historical storage-only inventory. It
+    cannot attest that a checked occurrence is still actionable/applicable.
+    """
+    output_dir = Path(output_dir)
+    staging = load_manual_actual_staging(project_actual_evidence_root(output_dir))
+    summary = _manual_actual_staging_inventory(staging)
+    if ledger is not None:
+        try:
+            summary["actual_recovery_pending"] = committed_project_recovery(project_actual_evidence_root(output_dir)) is not None
+            if not staging.get("staged_groups"):
+                return summary
+            manifest = json_load_strict(output_dir / "校對工作階段.json")
+            validate_manifest_integrity(manifest)
+            validate_output_artifact_hashes(manifest, output_dir=output_dir)
+            # Strict reading, not load_or_initialize_db: summary never writes.
+            db = normalize_db(json_load_strict(output_dir / "人工判定資料庫.json"))
+            baseline, current = prepare_review_ledger(manifest, db)
+            if current != ledger:
+                raise ValueError("工作階段已變更，請重新開啟人工校對畫面")
+            return _manual_actual_summary_from_verified_snapshot(
+                output_dir, staging, manifest, db, current, base_ledger=baseline)
+        except Exception as exc:
+            summary["staging_error"] = str(exc)
+            summary["staged_checked_occurrence_ids"] = []
+    return summary
+
+
+@bound_operation(project_parameter="output_dir")
 def stage_manual_actual_correction(
     output_dir: Path,
     review_id: str,
@@ -3206,7 +4220,7 @@ def stage_manual_actual_correction(
     output_dir = Path(output_dir)
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
-    validate_output_artifact_hashes(manifest)
+    validate_output_artifact_hashes(manifest, output_dir=output_dir)
     db = load_or_initialize_db(output_dir)
     ledger = materialize_ledger(manifest, db)
     entry = next(
@@ -3215,12 +4229,37 @@ def stage_manual_actual_correction(
     )
     if entry is None:
         raise ValueError("找不到目前 review_id；請重新開啟人工校對畫面")
-    group = build_actual_group_for_entry(ledger, entry)
+    snapshot_ledger = _manual_actual_snapshot_ledger(manifest, db, ledger)
+    snapshot_entry = next(row for row in snapshot_ledger if row["review_id"] == entry["review_id"])
+    group = build_actual_group_for_entry(snapshot_ledger, snapshot_entry)
+    # Keep a historical current-state snapshot when it is exactly provable.
+    # An unknown older snapshot is intentionally still rejected by stage/upsert.
+    existing = load_manual_actual_staging(project_actual_evidence_root(output_dir))["staged_groups"]
+    prior = next((item for item in existing if item["group_id"] == group["group_id"]), None)
+    if prior:
+        group = _current_live_groups_for_staged_manual_actual(ledger, [prior], snapshot_ledger=snapshot_ledger)[0]
     checked_ids = (
         [str(entry.get("occurrence_id") or "")]
         if checked_occurrence_ids is None
         else list(checked_occurrence_ids)
     )
+    from pdf_portability import actual_excel_conflict_notes
+    conflict_note = actual_excel_conflict_notes(output_dir, manifest, db, checked_ids)
+    if conflict_note:
+        note = f"{note}；{conflict_note}" if note else conflict_note
+    if prior:
+        # The lower-level API intentionally replaces a whole group's decision.
+        # This GUI service instead accumulates individually checked peers, but
+        # only after proving the retained snapshot, sources and same reading.
+        if canonical_bopomofo(reading) != prior["reading"]:
+            raise ValueError("此字形已有不同讀音的 actual 暫存；未覆寫既有確認。請先釐清既有暫存，再重新核對本筆。")
+        _validate_manual_actual_group_sources(output_dir, [group])
+        checked_ids = _staging_id_list(checked_ids, "input.checked_occurrence_ids")
+        if not checked_ids:
+            raise ValueError("manual actual staging checked_occurrence_ids 不得為空")
+        # Keep unknown IDs for the existing writer's rejection, rather than
+        # filtering them away when constructing the union in member order.
+        checked_ids = list(dict.fromkeys(prior["checked_occurrence_ids"] + checked_ids))
     staged = stage_manual_actual_group(
         project_actual_evidence_root(output_dir),
         group,
@@ -3259,7 +4298,21 @@ def _clear_actual_dependent_events(output_dir: Path, ledger: list[dict[str, Any]
             expected_set = list(normalize_expected_set(event.get("expected_set")))
             expected_evidence = str(event.get("expected_evidence") or "").strip()
             context_evidence = str(event.get("context_evidence") or "").strip()
-            if expected_set and expected_evidence and context_evidence:
+            retained = {**next((entry for entry in ledger if entry.get("review_id") == rid), {}), **event}
+            if expected_set and has_expected_evidence(retained) and context_evidence:
+                if "expected_resolution_binding" in event:
+                    # Revoke only the actual-dependent conclusion. The original
+                    # expected payload/binding remains byte-for-byte independent.
+                    events[rid] = {
+                        **copy.deepcopy(event["expected_resolution_binding"]["resolution"]),
+                        "expected_resolution_binding": copy.deepcopy(event["expected_resolution_binding"]),
+                        "updated_at": datetime.now().isoformat(timespec="seconds"),
+                        "confirmation_revocation_note": "actual 更新後撤銷差異確認；保留原 expected resolution",
+                    }
+                    if "undo_previous_event" in event:
+                        events[rid]["undo_previous_event"] = copy.deepcopy(event["undo_previous_event"])
+                    removed += 1
+                    continue
                 old_note = str(event.get("note") or "").strip()
                 events[rid] = {
                     "action": "解決expected證據",
@@ -3272,6 +4325,10 @@ def _clear_actual_dependent_events(output_dir: Path, ledger: list[dict[str, Any]
                     "updated_at": datetime.now().isoformat(timespec="seconds"),
                     "_safe_expected_rebase": True,
                 }
+                if "manual_expected_decision" in event:
+                    events[rid]["manual_expected_decision"] = copy.deepcopy(event["manual_expected_decision"])
+                if "undo_previous_event" in event:
+                    events[rid]["undo_previous_event"] = copy.deepcopy(event["undo_previous_event"])
             else:
                 events.pop(rid, None)
             removed += 1
@@ -3279,48 +4336,529 @@ def _clear_actual_dependent_events(output_dir: Path, ledger: list[dict[str, Any]
     return removed
 
 
-def refresh_actual_project(output_dir: Path, *, defer_excel_reports: bool = True) -> Path:
+ACTUAL_REFRESH_PUBLICATION = "actual_refresh_publication.json"
+
+
+def _refresh_source_snapshot(output_dir):
+    root = project_actual_evidence_root(output_dir)
+    names = (OCCURRENCE_OVERRIDE_FILE, USER_GLYF_FILE, USER_CFF_FILE,
+             GLYPH_CONFLICT_FILE, GLYPH_PROVENANCE_FILE, "global_exact_glyph_promotion_outbox.json")
+    return {name: sha256_file(root / name) if (root / name).is_file() else None for name in names}
+
+
+def _refresh_file_sha(path):
+    return sha256_file(path) if path.is_file() else None
+
+
+def _refresh_plan_digest(output_dir):
+    pending = committed_project_recovery(project_actual_evidence_root(output_dir))
+    return _hash_review_payload(pending[1]) if pending is not None else None
+
+
+def _refresh_owned_path(base, relative):
+    target = base / relative
+    for part in (target, *target.parents):
+        if part == base.parent:
+            break
+        if part.is_symlink() or part.is_junction():
+            raise ValueError("actual refresh publication path link/junction 不允許")
+    if target.resolve() != base.resolve() / relative:
+        raise ValueError("actual refresh publication path 不屬於 owner")
+    return target
+
+
+def _refresh_rebase_manifest(manifest, source, destination):
+    """Rebase only the pipeline's known workbook locators, never identity."""
+    result = copy.deepcopy(manifest)
+    source, destination = Path(source).resolve(), Path(destination).resolve()
+    bindings = bind_workbooks(source, manifest)
+    locations = {(index, kind): relative for index, kind, relative, sha in bindings}
+    known = {kind + "_workbook": {str(info[kind + "_workbook"]): locations[index, kind]
+             for index, info in enumerate(manifest["pdfs"])} for kind in ("actual", "candidate")}
+    for index, info in enumerate(result["pdfs"]):
+        for kind in ("actual", "candidate"):
+            key = kind + "_workbook"
+            relative = locations[index, kind]
+            directory = "01_實際注音" if kind == "actual" else "02_候選報告"
+            if relative.parent != Path(directory) or relative.suffix != ".xlsx":
+                raise ValueError("actual refresh 工作簿路徑不在有限專案目錄")
+            info[key] = str(destination / relative)
+    for entry in result.get("records", []):
+        for key in ("actual_workbook", "candidate_workbook"):
+            if entry.get(key):
+                if str(entry[key]) not in known[key]:
+                    raise ValueError("actual refresh record workbook locator 不符")
+                entry[key] = str(destination / known[key][str(entry[key])])
+    result["dynamic_actual_evidence_root"] = str(project_actual_evidence_root(destination))
+    return seal_manifest(result)
+
+
+def _refresh_atomic_bytes(path, raw):
+    temporary = path.with_name(".ar-" + uuid4().hex[:8])
+    try:
+        with temporary.open("xb") as stream:
+            stream.write(raw)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.replace(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _read_actual_refresh_publication(output_dir, *, acknowledged=None):
+    """Verify every byte and owner before any interrupted publication write."""
+    path = output_dir / ACTUAL_REFRESH_PUBLICATION
+    if not path.exists():
+        return None
+    journal, digest = json_load_snapshot(path)
+    keys = {"schema", "phase", "project", "session_id", "token", "plan_sha", "source", "stage", "entries", "cleared_count"}
+    if isinstance(journal, dict) and journal.get("phase") == "ACKNOWLEDGING":
+        keys.add("ack_sha")
+    if (not isinstance(journal, dict) or set(journal) != keys
+            or journal["schema"] != "actual-deferred-refresh/1"
+            or journal["phase"] not in {"PREPARED", "PUBLISHED", "ACKNOWLEDGING"}
+            or journal["project"] != str(output_dir.resolve())
+            or not isinstance(journal["stage"], str)
+            or re.fullmatch(r"\.ar-[a-zA-Z0-9_]{8}", journal["stage"]) is None
+            or type(journal["cleared_count"]) is not int or journal["cleared_count"] < 0):
+        raise ValueError("actual refresh publication journal contract/owner 不符")
+    stage = output_dir.parent / journal["stage"]
+    if not stage.is_dir() or stage.is_symlink() or stage.is_junction():
+        raise ValueError("actual refresh publication backup 缺失或不可信")
+    entries = journal["entries"]
+    if not isinstance(entries, list) or not entries:
+        raise ValueError("actual refresh publication entries 缺失")
+    originals = {}
+    seen = set()
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict) or set(entry) != {"path", "old_sha", "new_sha"}:
+            raise ValueError("actual refresh publication entry contract 不符")
+        relative = Path(entry["path"])
+        if relative.is_absolute() or ".." in relative.parts or str(relative) != entry["path"] or entry["path"] in seen:
+            raise ValueError("actual refresh publication path 重複或越界")
+        seen.add(entry["path"])
+        for name in ("old_sha", "new_sha"):
+            value = entry[name]
+            if (name == "new_sha" or value is not None) and (not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None):
+                raise ValueError("actual refresh publication SHA 格式不符")
+        backup = _refresh_owned_path(stage, Path("previous") / str(index))
+        if entry["old_sha"] is not None:
+            if not backup.is_file() or sha256_file(backup) != entry["old_sha"]:
+                raise ValueError("actual refresh publication backup SHA 不符")
+            originals[entry["path"]] = backup.read_bytes()
+        elif backup.exists():
+            raise ValueError("actual refresh publication unexpected backup")
+        target = _refresh_owned_path(output_dir, relative)
+        if target.exists() and not target.is_file():
+            raise ValueError("actual refresh publication target 不是一般檔案")
+        current = _refresh_file_sha(target)
+        allowed = {entry["old_sha"], entry["new_sha"]} if journal["phase"] == "PREPARED" else {entry["new_sha"]}
+        if current not in allowed:
+            raise ValueError("actual refresh publication target 已由其他來源變動")
+    old_manifest = json_parse_strict(originals.get("校對工作階段.json", b""), path)
+    validate_manifest_integrity(old_manifest)
+    allowed = {"校對工作階段.json", "人工判定資料庫.json", "待人工確認.json", "pipeline_status.json"}
+    for info in old_manifest["pdfs"]:
+        for kind in ("actual", "candidate"):
+            relative = descriptor(info, kind)
+            directory = "01_實際注音" if kind == "actual" else "02_候選報告"
+            if relative.parent != Path(directory) or relative.suffix != ".xlsx":
+                raise ValueError("actual refresh publication workbook allowlist 不符")
+            allowed.add(str(relative))
+            item = next((e for e in entries if e["path"] == str(relative)), None)
+            if item is not None and item["old_sha"] != info[kind + "_workbook_sha256"]:
+                raise ValueError("actual refresh publication backup 與原封印不符")
+    if (not seen.issubset(allowed) or not {"校對工作階段.json", "人工判定資料庫.json", "待人工確認.json", "pipeline_status.json"}.issubset(seen)
+            or old_manifest["session_id"] != journal["session_id"]
+            or journal["source"] != _refresh_source_snapshot(output_dir)):
+        raise ValueError("actual refresh publication source/allowlist 不符")
+    token = project_refresh_token(project_actual_evidence_root(output_dir))
+    acknowledged_here = False
+    if journal["phase"] == "ACKNOWLEDGING":
+        from global_glyph_promotion import _validated_project_journal
+        receipt = _refresh_owned_path(stage, Path("ack-committed.json"))
+        if (not receipt.is_file() or sha256_file(receipt) != journal["ack_sha"]):
+            raise ValueError("actual refresh acknowledgement 原件 SHA 不符")
+        original = _validated_project_journal(receipt.read_bytes())
+        if (original["state"] != "COMMITTED" or original["transaction_id"] != journal["token"]
+                or _hash_review_payload(original["recovery_plan"]) != journal["plan_sha"]):
+            raise ValueError("actual refresh acknowledgement 原件 token/plan 不符")
+        acknowledged_here = token is None
+    if token != journal["token"] and not acknowledged_here:
+        raise ValueError("actual refresh publication COMMITTED token 不符")
+    if token is not None and journal["plan_sha"] != _refresh_plan_digest(output_dir):
+        raise ValueError("actual refresh publication COMMITTED plan 不符")
+    if token is None and journal["phase"] == "PREPARED" and journal["plan_sha"] is not None:
+        raise ValueError("actual refresh publication unexpected recovery plan")
+    return journal, digest, stage, originals
+
+
+def _verify_actual_refresh_pdf_binding(output_dir, manifest, *, sealed_manifest=None):
+    """Require readable bytes bound to the original sealed PDF roster."""
+    def roster(value):
+        pdfs = value.get("pdfs")
+        if not isinstance(pdfs, list) or not pdfs:
+            raise ValueError("actual refresh sealed PDF roster 缺失")
+        result = []
+        for info in pdfs:
+            digest = info.get("pdf_sha256") if isinstance(info, dict) else None
+            name = info.get("pdf_name") if isinstance(info, dict) else None
+            if (not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+                    or not isinstance(name, str) or not name):
+                raise ValueError("actual refresh sealed PDF name/SHA 缺失或不符")
+            result.append((name, digest))
+        return sorted(result)
+
+    current = roster(manifest)
+    if sealed_manifest is not None and current != roster(sealed_manifest):
+        raise ValueError("actual refresh staged PDF roster 改變原封印")
+    return _resolve_session_pdfs(output_dir, manifest)
+
+
+@bound_operation(project_parameter="output_dir")
+def _resume_actual_refresh_publication(output_dir, *, cleanup=False, acknowledged=None,
+                                       acknowledge=True, _post_ack_guard=None):
+    if type(acknowledge) is not bool:
+        raise ValueError("actual refresh acknowledgement policy must be boolean")
+    pending = _read_actual_refresh_publication(output_dir, acknowledged=acknowledged)
+    if pending is None:
+        return
+    journal, digest, stage, originals = pending
+    if journal["phase"] == "PREPARED":
+        for entry in reversed(journal["entries"]):
+            target = output_dir / entry["path"]
+            if entry["old_sha"] is None:
+                target.unlink(missing_ok=True)
+            else:
+                _refresh_atomic_bytes(target, originals[entry["path"]])
+    manifest = json_load_strict(output_dir / "校對工作階段.json")
+    validate_manifest_integrity(manifest)
+    validate_output_artifact_hashes(manifest, output_dir=output_dir)
+    sealed_manifest = json_parse_strict(originals["校對工作階段.json"], output_dir / ACTUAL_REFRESH_PUBLICATION)
+    _verify_actual_refresh_pdf_binding(output_dir, manifest, sealed_manifest=sealed_manifest)
+    if journal["phase"] != "PREPARED":
+        pending_actual = committed_project_recovery(project_actual_evidence_root(output_dir))
+        recovery_plan = pending_actual[1] if pending_actual is not None else None
+        if journal["phase"] == "ACKNOWLEDGING":
+            from global_glyph_promotion import _validated_project_journal
+            recovery_plan = _validated_project_journal((stage / "ack-committed.json").read_bytes())["recovery_plan"]
+        if recovery_plan is not None:
+            _verify_manual_actual_batch_postconditions(
+                materialize_ledger(manifest, load_or_initialize_db(output_dir)), recovery_plan["checked_postconditions"])
+        _verify_actual_refresh_pdf_binding(output_dir, manifest, sealed_manifest=sealed_manifest)
+        if journal["phase"] == "ACKNOWLEDGING":
+            if not acknowledge:
+                if sha256_file(output_dir / ACTUAL_REFRESH_PUBLICATION) != digest:
+                    raise ValueError("actual refresh publication journal 已變動")
+                return {**journal, "_recovery_plan": recovery_plan}
+            if _post_ack_guard is not None:
+                _post_ack_guard()
+            if pending_actual is not None:
+                acknowledge_project_refresh(project_actual_evidence_root(output_dir), journal["token"])
+        elif not cleanup or pending_actual is not None:
+            return journal
+    if _post_ack_guard is not None:
+        _post_ack_guard()
+    path = output_dir / ACTUAL_REFRESH_PUBLICATION
+    if sha256_file(path) != digest:
+        raise ValueError("actual refresh publication journal 已變動")
+    path.unlink()
+    try:
+        shutil.rmtree(stage)
+    except OSError:
+        pass  # Successful publication/rollback remains truthful; retain backups.
+    if journal["phase"] == "ACKNOWLEDGING":
+        return {**journal, "_recovery_plan": recovery_plan}
+
+
+def _acknowledge_actual_refresh(output_dir, token, *, _post_ack_guard=None):
+    with project_delivery_lock(project_actual_evidence_root(output_dir)):
+        return _acknowledge_actual_refresh_locked(output_dir, token, _post_ack_guard=_post_ack_guard)
+
+
+def _acknowledge_actual_refresh_locked(output_dir, token, *, _post_ack_guard=None):
+    output_dir = Path(output_dir).resolve()
+    pending = _read_actual_refresh_publication(output_dir)
+    if pending is not None and pending[0]["phase"] not in {"PUBLISHED", "ACKNOWLEDGING"}:
+        raise ValueError("actual refresh 未完整發布；未 acknowledgement")
+    if pending is not None:
+        journal, digest, stage, _ = pending
+        if token != journal["token"]:
+            from global_exact_glyph_library import GlobalLibraryIntentConflictError
+            raise GlobalLibraryIntentConflictError("project refresh acknowledgement is stale")
+        manifest = json_load_strict(output_dir / "校對工作階段.json")
+        validate_manifest_integrity(manifest)
+        sealed_manifest = json_parse_strict(pending[3]["校對工作階段.json"], output_dir / ACTUAL_REFRESH_PUBLICATION)
+        _verify_actual_refresh_pdf_binding(output_dir, manifest, sealed_manifest=sealed_manifest)
+        if journal["phase"] == "PUBLISHED":
+            from global_glyph_promotion import PROJECT_TRANSACTION_FILE
+            raw = (project_actual_evidence_root(output_dir) / PROJECT_TRANSACTION_FILE).read_bytes()
+            _refresh_atomic_bytes(stage / "ack-committed.json", raw)
+            journal.update(phase="ACKNOWLEDGING", ack_sha=hashlib.sha256(raw).hexdigest())
+            json_save(output_dir / ACTUAL_REFRESH_PUBLICATION, journal, expected_sha256=digest)
+    manifest = json_load_strict(output_dir / "校對工作階段.json")
+    validate_manifest_integrity(manifest)
+    _verify_actual_refresh_pdf_binding(output_dir, manifest,
+                                      sealed_manifest=sealed_manifest if pending is not None else None)
+    acknowledge_project_refresh(project_actual_evidence_root(output_dir), token)
+    if _post_ack_guard is not None:
+        _post_ack_guard()
+    _resume_actual_refresh_publication(output_dir, cleanup=True, _post_ack_guard=_post_ack_guard)
+
+
+@bound_operation(project_parameter="output_dir")
+def _publish_actual_refresh(output_dir, stage, manifest, *, source, token, before, cleared_count=0, _prewrite_guard=None):
+    if _prewrite_guard is not None:
+        _prewrite_guard()
+    sealed_manifest = json_load_strict(output_dir / "校對工作階段.json")
+    validate_manifest_integrity(sealed_manifest)
+    _verify_actual_refresh_pdf_binding(output_dir, manifest, sealed_manifest=sealed_manifest)
+    if (source != _refresh_source_snapshot(output_dir)
+            or token != project_refresh_token(project_actual_evidence_root(output_dir))):
+        raise ValueError("actual refresh 來源/COMMITTED token 已變動")
+    for relative, digest in before.items():
+        if _refresh_file_sha(_refresh_owned_path(output_dir, Path(relative))) != digest:
+            raise ValueError("actual refresh 發布前原專案已變動")
+    names = []
+    for info in manifest["pdfs"]:
+        for kind in ("actual", "candidate"):
+            relative = descriptor(info, kind)
+            if sha256_file(stage / relative) != before[str(relative)]:
+                names.append(str(relative))
+    names.extend(["人工判定資料庫.json", "待人工確認.json", "pipeline_status.json", "校對工作階段.json"])
+    (stage / "previous").mkdir()
+    entries = []
+    for index, name in enumerate(names):
+        old = before[name]
+        if old is not None:
+            raw = (output_dir / name).read_bytes()
+            _refresh_atomic_bytes(stage / "previous" / str(index), raw)
+            if sha256_file(stage / "previous" / str(index)) != old:
+                raise ValueError("actual refresh backup source 已變動")
+        entries.append({"path": name, "old_sha": old, "new_sha": sha256_file(stage / name)})
+    journal = {"schema": "actual-deferred-refresh/1", "phase": "PREPARED",
+               "project": str(output_dir.resolve()), "session_id": manifest["session_id"],
+               "token": token, "plan_sha": _refresh_plan_digest(output_dir), "source": source,
+               "stage": stage.name, "entries": entries, "cleared_count": cleared_count}
+    journal_path = output_dir / ACTUAL_REFRESH_PUBLICATION
+    journal_sha = json_save(journal_path, journal, expected_sha256="")
+    try:
+        for name in names:
+            (stage / name).replace(output_dir / name)
+        validate_manifest_integrity(json_load_strict(output_dir / "校對工作階段.json"))
+        validate_output_artifact_hashes(manifest, output_dir=output_dir)
+        for entry in entries:
+            if _refresh_file_sha(output_dir / entry["path"]) != entry["new_sha"]:
+                raise ValueError("actual refresh 發布後 SHA 不符")
+        pending = committed_project_recovery(project_actual_evidence_root(output_dir))
+        if pending is not None:
+            _verify_manual_actual_batch_postconditions(
+                materialize_ledger(manifest, load_or_initialize_db(output_dir)), pending[1]["checked_postconditions"])
+        _verify_actual_refresh_pdf_binding(output_dir, manifest, sealed_manifest=sealed_manifest)
+        journal["phase"] = "PUBLISHED"
+        json_save(journal_path, journal, expected_sha256=journal_sha)
+    except BaseException:
+        _resume_actual_refresh_publication(output_dir)
+        raise
+    if token is None:
+        _resume_actual_refresh_publication(output_dir, cleanup=True)
+
+
+@bound_operation(project_parameter="output_dir")
+def refresh_actual_project(output_dir: Path, *, defer_excel_reports: bool = True,
+                           _prewrite_guard=None, _refresh_plan=None, _refresh_status=None,
+                           _refresh_acknowledge=True) -> Path:
     """Incrementally re-decode current project after dynamic actual evidence changes."""
-    output_dir = Path(output_dir)
+    output_dir = Path(output_dir).resolve()
+    if defer_excel_reports:
+        with project_delivery_lock(project_actual_evidence_root(output_dir)):
+            return _stage_actual_refresh(output_dir, _prewrite_guard=_prewrite_guard,
+                                         plan=_refresh_plan, status=_refresh_status,
+                                         acknowledge=_refresh_acknowledge)
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
     # Workbooks may now be stale relative to dynamic actual evidence, but must
     # still be intact relative to the last sealed session before we replace them.
-    validate_output_artifact_hashes(manifest)
+    validate_output_artifact_hashes(manifest, output_dir=output_dir)
     pdfs = _resolve_session_pdfs(output_dir, manifest)
     return run_pipeline_pdfs(
         pdfs,
         output_dir,
         session_id_override=str(manifest.get("session_id") or ""),
         defer_excel_reports=defer_excel_reports,
+        **({"_prewrite_guard": _prewrite_guard} if _prewrite_guard is not None else {}),
     )
 
 
-def import_actual_gpt_decisions(output_dir: Path, xlsx: Path) -> tuple[int, int, Path]:
-    output_dir = Path(output_dir)
+@bound_operation(project_parameter="output_dir")
+def _stage_actual_refresh(output_dir, *, _prewrite_guard=None, plan=None, status=None, acknowledge=True):
+    published = _resume_actual_refresh_publication(output_dir, acknowledge=acknowledge)
+    if published is not None:
+        if published["phase"] == "ACKNOWLEDGING":
+            if status is not None:
+                status["cleared_actual_dependent_event_count"] = published["cleared_count"]
+            return output_dir / "注音校對_最終報告.xlsx"
+        if project_refresh_token(project_actual_evidence_root(output_dir)) is not None:
+            if status is not None:
+                status["cleared_actual_dependent_event_count"] = published["cleared_count"]
+            return output_dir / "注音校對_最終報告.xlsx"
+        _resume_actual_refresh_publication(output_dir, cleanup=True, acknowledge=acknowledge)
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
-    validate_output_artifact_hashes(manifest)
+    validate_output_artifact_hashes(manifest, output_dir=output_dir)
+    from actual_review import dynamic_actual_hashes
+    dynamic_actual_hashes(project_actual_evidence_root(output_dir), read_only=True)
+    pdfs = _verify_actual_refresh_pdf_binding(output_dir, manifest)
+    if _prewrite_guard is not None:
+        _prewrite_guard()
+    token = project_refresh_token(project_actual_evidence_root(output_dir))
+    pending = committed_project_recovery(project_actual_evidence_root(output_dir))
+    if plan is None and pending is not None:
+        plan = pending[1]
+    if plan is not None:
+        from global_glyph_promotion import validate_post_commit_recovery_plan
+        plan = validate_post_commit_recovery_plan(plan)
+        if pending is not None and plan != pending[1]:
+            raise ValueError("actual refresh recovery plan 與 COMMITTED 不符")
+    source = _refresh_source_snapshot(output_dir)
+    names = ["校對工作階段.json", "人工判定資料庫.json", "待人工確認.json", "pipeline_status.json"]
+    names.extend(str(relative) for index, kind, relative, sha in bind_workbooks(output_dir, manifest))
+    before = {name: _refresh_file_sha(output_dir / name) for name in names}
+    stage = Path(tempfile.mkdtemp(prefix=".ar-", dir=output_dir.parent))
+    try:
+        staged_manifest = _refresh_rebase_manifest(manifest, output_dir, stage)
+        for name in names:
+            if name in {"校對工作階段.json", "待人工確認.json", "pipeline_status.json"}:
+                continue
+            target = stage / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            if before[name] is not None:
+                shutil.copyfile(output_dir / name, target)
+        if before["人工判定資料庫.json"] is None:
+            json_save(stage / "人工判定資料庫.json", normalize_db({}))
+        json_save(stage / "校對工作階段.json", staged_manifest)
+        db = load_or_initialize_db(stage)
+        removed = 0
+        if plan is not None:
+            ledger = materialize_ledger(manifest, db)
+            removed = _clear_actual_dependent_events(stage, ledger, set(plan["affected_occurrence_ids"]))
+        run_pipeline_pdfs(pdfs, stage, session_id_override=manifest["session_id"],
+                          defer_excel_reports=True, _source_project_dir=output_dir,
+                          **({"_prewrite_guard": _prewrite_guard} if _prewrite_guard is not None else {}))
+        updated = json_load_strict(stage / "校對工作階段.json")
+        validate_manifest_integrity(updated)
+        validate_output_artifact_hashes(updated, output_dir=stage)
+        identities = lambda value: sorted((entry["occurrence_id"], entry["review_id"]) for entry in value.get("records", []))
+        if (updated.get("session_id") != manifest["session_id"]
+                or identities(updated) != identities(manifest)
+                or sorted(updated.get("actual_source_ids", [])) != sorted(manifest.get("actual_source_ids", []))):
+            raise ValueError("actual refresh stage 改變原 session/occurrence/review identity")
+        refreshed_db = load_or_initialize_db(stage)
+        ledger = materialize_ledger(updated, refreshed_db)
+        if plan is not None:
+            _verify_manual_actual_batch_postconditions(ledger, plan["checked_postconditions"])
+        final = _refresh_rebase_manifest(updated, stage, output_dir)
+        json_save(stage / "校對工作階段.json", final)
+        save_pending_json(stage, final, refreshed_db)
+        pipeline_status = json_load_strict(stage / "pipeline_status.json")
+        pipeline_status["user_report"] = str(output_dir / "注音校對_最終報告.xlsx")
+        pipeline_status["technical_audit_report"] = str(output_dir / "注音校對_技術稽核.xlsx")
+        json_save(stage / "pipeline_status.json", pipeline_status)
+        _publish_actual_refresh(output_dir, stage, final, source=source, token=token,
+                                before=before, cleared_count=removed, _prewrite_guard=_prewrite_guard)
+        if status is not None:
+            status["cleared_actual_dependent_event_count"] = removed
+        return output_dir / "注音校對_最終報告.xlsx"
+    finally:
+        if not (output_dir / ACTUAL_REFRESH_PUBLICATION).exists():
+            try:
+                shutil.rmtree(stage)
+            except OSError:
+                pass
+
+
+def _validate_actual_import_target(output_dir: Path, manifest, db):
+    from pdf_portability import _load_project
+    live_manifest, live_db = _load_project(output_dir)
+    if live_manifest != manifest or live_db != db:
+        raise ValueError("actual 匯入期間封印或人工判定已變動；未寫入")
+    if live_manifest["pdfs"]:
+        _resolve_session_pdfs(output_dir, live_manifest)
+
+
+@bound_operation(project_parameter="output_dir")
+def import_actual_gpt_decisions(output_dir: Path, xlsx: Path) -> tuple[int, int, Path]:
+    from pdf_portability import _stable_excel_import
+    output_dir = resolve_existing_project_dir(Path(output_dir))
+    return _stable_excel_import(_import_actual_gpt_decisions_snapshot)(output_dir, xlsx)
+
+
+@bound_operation(project_parameter="output_dir")
+def _import_actual_gpt_decisions_snapshot(output_dir: Path, xlsx: Path, *,
+                                         _original_xlsx: Path, _snapshot_sha: str):
+    output_dir = Path(output_dir)
+    from pdf_portability import INCOMPLETE_FILE
+    if (output_dir / INCOMPLETE_FILE).exists():
+        _reject_incomplete_portable_project(output_dir)
+    manifest = json_load_strict(output_dir / "校對工作階段.json")
+    validate_manifest_integrity(manifest)
+    validate_output_artifact_hashes(manifest, output_dir=output_dir)
+    metadata = workbook_metadata(Path(xlsx), "匯入中繼資料")
+    if str(metadata.get("session_id") or "") != str(manifest.get("session_id") or ""):
+        mismatched = _actual_workbook_schema_mismatches(metadata, _session_metadata_for_actual(manifest))
+        if mismatched:
+            raise ValueError(f"actual GPT workbook session/schema 不相容：{mismatched}")
+        from pdf_portability import import_actual_excel
+        return import_actual_excel.__wrapped__(output_dir, xlsx,
+            _original_xlsx=_original_xlsx, _snapshot_sha=_snapshot_sha)
+    with project_delivery_lock(project_actual_evidence_root(output_dir)):
+        return _import_same_session_actual_snapshot(
+            output_dir, xlsx, _original_xlsx=_original_xlsx, _snapshot_sha=_snapshot_sha)
+
+
+@bound_operation(project_parameter="output_dir")
+def _import_same_session_actual_snapshot(output_dir: Path, xlsx: Path, *,
+                                         _original_xlsx: Path, _snapshot_sha: str):
+    # The routing read is advisory. Reload the complete same-session target
+    # under the lock held through its transaction and publication.
+    _reject_incomplete_portable_project(output_dir)
+    manifest = json_load_strict(output_dir / "校對工作階段.json")
+    validate_manifest_integrity(manifest)
+    validate_output_artifact_hashes(manifest, output_dir=output_dir)
+    readonly_db = _read_actual_source_db(output_dir)
+    readonly_groups = build_actual_review_groups(materialize_ledger(manifest, readonly_db))
+    validate_actual_sample_profile(xlsx, readonly_groups, output_dir,
+                                  require_content_proof=bool(manifest.get("pdfs")), source_manifest=manifest)
+    recover_pending_project_actual_write(project_actual_evidence_root(output_dir))
     db = load_or_initialize_db(output_dir)
     ledger = materialize_ledger(manifest, db)
     groups = build_actual_review_groups(ledger)
+    def prewrite_guard():
+        from pdf_portability import _verify_excel_import_snapshot
+        _verify_excel_import_snapshot(xlsx, _original_xlsx, _snapshot_sha)
+        _validate_actual_import_target(output_dir, manifest, db)
+        validate_actual_sample_profile(xlsx, groups, output_dir,
+                                      require_content_proof=bool(manifest.get("pdfs")), source_manifest=manifest)
     result = import_actual_review_workbook(
-        initialize_project_actual_evidence(output_dir, Path(__file__).resolve().parent),
+        project_actual_evidence_root(output_dir),
         Path(xlsx),
         groups,
         expected_metadata=_session_metadata_for_actual(manifest),
+        source_context=_global_direct_source_context(output_dir, manifest),
+        initialize_evidence=lambda: initialize_project_actual_evidence(output_dir),
+        prewrite_guard=prewrite_guard,
+        source_output_dir=output_dir,
     )
-    occurrence_ids = {
-        oid
-        for item in result.get("results", [])
-        for oid in (item.get("affected_occurrence_ids") or item.get("target_occurrence_ids") or [])
-        if oid
-    }
-    removed = _clear_actual_dependent_events(output_dir, ledger, occurrence_ids)
-    report = refresh_actual_project(output_dir)
-    return int(result.get("imported_groups") or 0), removed, report
+    _reject_incomplete_portable_project(output_dir)
+    removed, report = _finish_direct_actual_commit(output_dir, ledger, result, acknowledge=False)
+    from pdf_portability import _load_project
+    _load_project(output_dir)
+    _acknowledge_actual_refresh(output_dir, result.get("project_refresh_token"))
+    return ActualImportResult(int(result.get("imported_groups") or 0), removed, report, result)
 
 
+
+@bound_operation(project_parameter="output_dir")
 def apply_manual_actual_correction(
     output_dir: Path,
     review_id: str,
@@ -3332,69 +4870,87 @@ def apply_manual_actual_correction(
     output_dir = Path(output_dir)
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
-    validate_output_artifact_hashes(manifest)
+    validate_output_artifact_hashes(manifest, output_dir=output_dir)
+    recover_pending_project_actual_write(project_actual_evidence_root(output_dir))
     db = load_or_initialize_db(output_dir)
     ledger = materialize_ledger(manifest, db)
     entry = next((row for row in ledger if str(row.get("review_id") or "") == str(review_id)), None)
     if entry is None:
         raise ValueError("找不到目前 review_id；請重新開啟人工校對畫面")
     group = build_actual_group_for_entry(ledger, entry)
-    result = apply_verified_actual_group(
-        initialize_project_actual_evidence(output_dir, Path(__file__).resolve().parent),
-        group,
-        reading,
-        checked_occurrence_ids=checked_occurrence_ids,
-        source="人工 GUI actual 視覺確認",
-        note=note,
+    checked = list(checked_occurrence_ids) if checked_occurrence_ids else [entry["occurrence_id"]]
+    from pdf_portability import actual_excel_conflict_notes
+    conflict_note = actual_excel_conflict_notes(output_dir, manifest, db, checked)
+    if conflict_note:
+        note = f"{note}；{conflict_note}" if note else conflict_note
+    transaction_result = apply_direct_visual_actual_batch(
+        project_actual_evidence_root(output_dir),
+        [{"group": group, "reading": reading, "checked_occurrence_ids": checked,
+          "source": "人工 GUI actual 視覺確認", "note": note}],
+        source_context=_global_direct_source_context(output_dir, manifest),
+        apply_function=apply_verified_actual_group,
+        initialize_evidence=lambda: initialize_project_actual_evidence(output_dir),
     )
-    affected = set(result.get("affected_occurrence_ids") or result.get("target_occurrence_ids") or [])
-    _clear_actual_dependent_events(output_dir, ledger, affected)
-    report = refresh_actual_project(output_dir)
+    removed, report = _finish_direct_actual_commit(
+        output_dir, ledger, transaction_result, acknowledge=False,
+    )
+    result = dict(transaction_result["group_results"][0])
+    for key in ("project_actual_commit", "global_promotion_delivery", "project_refresh"):
+        result[key] = transaction_result[key]
 
     # Hard postcondition: a visual actual correction is not considered applied
     # merely because the refresh command completed.  The rebuilt ledger must
     # show the submitted actual at the same occurrence; otherwise surface a
     # deterministic error instead of silently leaving the same review card.
-    refreshed_manifest = json_load_strict(output_dir / "校對工作階段.json")
-    refreshed_db = load_or_initialize_db(output_dir)
-    refreshed_ledger = materialize_ledger(refreshed_manifest, refreshed_db)
-    target_occurrence_id = str(entry.get("occurrence_id") or "")
-    refreshed_entry = next(
-        (row for row in refreshed_ledger if str(row.get("occurrence_id") or "") == target_occurrence_id),
-        None,
-    )
-    if refreshed_entry is None:
-        # Defensive fallback for a future identity-schema migration: coordinates
-        # plus PDF/page/character are still occurrence-scoped and auditable.
-        def same_location(row):
-            if str(row.get("pdf_name") or "") != str(entry.get("pdf_name") or ""):
-                return False
-            if str(row.get("char") or "") != str(entry.get("char") or ""):
-                return False
-            if int(row.get("physical_page") or 0) != int(entry.get("physical_page") or 0):
-                return False
-            try:
-                return abs(float(row.get("x0") or 0) - float(entry.get("x0") or 0)) <= 0.8 and abs(float(row.get("y0") or 0) - float(entry.get("y0") or 0)) <= 0.8
-            except Exception:
-                return False
-        refreshed_entry = next((row for row in refreshed_ledger if same_location(row)), None)
-    wanted = canonical_bopomofo(reading)
-    observed = canonical_bopomofo((refreshed_entry or {}).get("actual"))
-    if refreshed_entry is None or not wanted or observed != wanted:
-        raise ValueError(
-            "actual 視覺修正已寫入，但重新解碼後未套用到目標位置；"
-            f"要求={wanted or reading}，重解結果={observed or '未辨識'}。"
-            "程式已停止把此筆視為完成，請使用 v5.5.x 的 occurrence 匹配修正後再試。"
+    try:
+        refreshed_manifest = json_load_strict(output_dir / "校對工作階段.json")
+        refreshed_db = load_or_initialize_db(output_dir)
+        refreshed_ledger = materialize_ledger(refreshed_manifest, refreshed_db)
+        target_occurrence_id = str(entry.get("occurrence_id") or "")
+        refreshed_entry = next(
+            (row for row in refreshed_ledger if str(row.get("occurrence_id") or "") == target_occurrence_id),
+            None,
         )
-    result["post_actual"] = observed
-    result["post_state"] = str(refreshed_entry.get("state") or "")
-    result["resolved_from_pending"] = result["post_state"] not in NON_TERMINAL_STATES
+        if refreshed_entry is None:
+            # Defensive fallback for a future identity-schema migration: coordinates
+            # plus PDF/page/character are still occurrence-scoped and auditable.
+            def same_location(row):
+                if str(row.get("pdf_name") or "") != str(entry.get("pdf_name") or ""):
+                    return False
+                if str(row.get("char") or "") != str(entry.get("char") or ""):
+                    return False
+                if int(row.get("physical_page") or 0) != int(entry.get("physical_page") or 0):
+                    return False
+                try:
+                    return abs(float(row.get("x0") or 0) - float(entry.get("x0") or 0)) <= 0.8 and abs(float(row.get("y0") or 0) - float(entry.get("y0") or 0)) <= 0.8
+                except Exception:
+                    return False
+            refreshed_entry = next((row for row in refreshed_ledger if same_location(row)), None)
+        wanted = canonical_bopomofo(reading)
+        observed = canonical_bopomofo((refreshed_entry or {}).get("actual"))
+        if refreshed_entry is None or not wanted or observed != wanted:
+            raise ValueError(
+                "actual 視覺修正已寫入，但重新解碼後未套用到目標位置；"
+                f"要求={wanted or reading}，重解結果={observed or '未辨識'}。"
+                "程式已停止把此筆視為完成，請使用 v5.5.x 的 occurrence 匹配修正後再試。"
+            )
+        result["post_actual"] = observed
+        result["post_state"] = str(refreshed_entry.get("state") or "")
+        result["resolved_from_pending"] = result["post_state"] not in NON_TERMINAL_STATES
+        _acknowledge_actual_refresh(output_dir, transaction_result.get("project_refresh_token"))
+        report = _publish_local_actual_conflict_resolution(output_dir, report)
+    except Exception as exc:
+        raise ManualActualPostApplyError(
+            "post_refresh_actual_verification", exc, batch_result=transaction_result,
+            cleared_event_count=removed,
+        ) from exc
     return result, report
 
 
 def _current_live_groups_for_staged_manual_actual(
     ledger: list[dict[str, Any]],
     staged_decisions: list[Mapping[str, Any]],
+    *, snapshot_ledger=None, cancelled=None,
 ) -> list[dict[str, Any]]:
     """Rebuild every Phase 2A live group from the current materialized ledger."""
     by_occurrence_id: dict[str, dict[str, Any]] = {}
@@ -3406,8 +4962,13 @@ def _current_live_groups_for_staged_manual_actual(
             raise DuplicateIdError(f"manual actual batch current ledger occurrence_id 重複：{occurrence_id}")
         by_occurrence_id[occurrence_id] = entry
 
+    member_index = index_actual_group_members(ledger)
+    projected_index = None
+    projected_by_id = None
     live_groups: list[dict[str, Any]] = []
     for staged in sorted(staged_decisions, key=lambda item: str(item.get("group_id") or "")):
+        if cancelled is not None and cancelled():
+            raise InterruptedError("actual 暫存核對已由新操作取代")
         current_member = next(
             (
                 by_occurrence_id.get(str(occurrence_id or ""))
@@ -3421,7 +4982,20 @@ def _current_live_groups_for_staged_manual_actual(
                 "manual actual batch staged group 在目前 ledger 找不到任何 member："
                 f"{staged.get('group_id') or ''}；整批拒絕"
             )
-        live_groups.append(build_actual_group_for_entry(ledger, current_member))
+        live = build_actual_group_for_entry(ledger, current_member, member_index=member_index)
+        if snapshot_ledger is not None:
+            try:
+                _revalidate_staged_manual_actual_group(staged, live)
+            except ValueError:
+                if projected_index is None:
+                    projected_index = index_actual_group_members(snapshot_ledger)
+                    projected_by_id = {row["occurrence_id"]: row for row in snapshot_ledger}
+                projected_member = projected_by_id[current_member["occurrence_id"]]
+                projected = build_actual_group_for_entry(
+                    snapshot_ledger, projected_member, member_index=projected_index)
+                _revalidate_staged_manual_actual_group(staged, projected)
+                live = projected
+        live_groups.append(live)
     return live_groups
 
 
@@ -3486,12 +5060,16 @@ def _verify_manual_actual_batch_postconditions(
             )
 
 
+@bound_operation(project_parameter="output_dir")
 def apply_staged_manual_actual_corrections(output_dir: Path) -> dict[str, Any]:
     """Apply the durable GUI queue once, clear once, refresh once, then verify."""
     output_dir = Path(output_dir)
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
-    validate_output_artifact_hashes(manifest)
+    validate_output_artifact_hashes(manifest, output_dir=output_dir)
+    recover_pending_project_actual_write(project_actual_evidence_root(output_dir))
+    if committed_project_recovery(project_actual_evidence_root(output_dir)) is not None:
+        return recover_committed_actual_project(output_dir)
     db = load_or_initialize_db(output_dir)
     pre_refresh_ledger = materialize_ledger(manifest, db)
     actual_root = project_actual_evidence_root(output_dir)
@@ -3500,10 +5078,21 @@ def apply_staged_manual_actual_corrections(output_dir: Path) -> dict[str, Any]:
     live_groups = _current_live_groups_for_staged_manual_actual(
         pre_refresh_ledger,
         frozen_staged_decisions,
+        snapshot_ledger=_manual_actual_snapshot_ledger(manifest, db, pre_refresh_ledger),
     )
 
-    batch_result = dict(apply_staged_manual_actual_batch(actual_root, live_groups))
-    if int(batch_result.get("applied_group_count") or 0) == 0:
+    if frozen_staged_decisions:
+        batch_result = dict(apply_staged_manual_actual_batch(
+            actual_root, live_groups,
+            source_context=_global_direct_source_context(output_dir, manifest),
+        ))
+    else:
+        batch_result = dict(apply_staged_manual_actual_batch(actual_root, live_groups))
+    if committed_project_recovery(actual_root) is not None:
+        return {**batch_result, **recover_committed_actual_project(output_dir)}
+    _deliver_after_actual_commit(output_dir, batch_result)
+    if (int(batch_result.get("applied_group_count") or 0) == 0
+            and not batch_result.get("project_refresh_token")):
         return {
             **batch_result,
             "cleared_actual_dependent_event_count": 0,
@@ -3527,34 +5116,24 @@ def apply_staged_manual_actual_corrections(output_dir: Path) -> dict[str, Any]:
         for occurrence_id in (batch_result.get("affected_occurrence_ids") or [])
         if str(occurrence_id)
     }
+    refresh_status = {}
     try:
-        cleared_event_count = _clear_actual_dependent_events(
-            output_dir,
-            pre_refresh_ledger,
-            affected_occurrence_ids,
-        )
-    except Exception as exc:
-        raise ManualActualPostApplyError(
-            "clear_actual_dependent_events",
-            exc,
-            batch_result=batch_result,
-            cleared_event_count=None,
-        ) from exc
-
-    try:
-        report = refresh_actual_project(output_dir)
+        plan = {"schema_version": "1.0", "affected_occurrence_ids": sorted(affected_occurrence_ids),
+                "checked_postconditions": sorted(postconditions, key=lambda item: item["occurrence_id"])}
+        report = refresh_actual_project(output_dir, _refresh_plan=plan, _refresh_status=refresh_status)
+        cleared_event_count = refresh_status["cleared_actual_dependent_event_count"]
     except Exception as exc:
         raise ManualActualPostApplyError(
             "refresh_actual_project",
             exc,
             batch_result=batch_result,
-            cleared_event_count=cleared_event_count,
+            cleared_event_count=refresh_status.get("cleared_actual_dependent_event_count"),
         ) from exc
 
     try:
         refreshed_manifest = json_load_strict(output_dir / "校對工作階段.json")
         validate_manifest_integrity(refreshed_manifest)
-        validate_output_artifact_hashes(refreshed_manifest)
+        validate_output_artifact_hashes(refreshed_manifest, output_dir=output_dir)
         refreshed_db = load_or_initialize_db(output_dir)
         refreshed_ledger = materialize_ledger(refreshed_manifest, refreshed_db)
         _verify_manual_actual_batch_postconditions(refreshed_ledger, postconditions)
@@ -3566,6 +5145,15 @@ def apply_staged_manual_actual_corrections(output_dir: Path) -> dict[str, Any]:
             cleared_event_count=cleared_event_count,
         ) from exc
 
+    try:
+        _acknowledge_actual_refresh(output_dir, batch_result.get("project_refresh_token"))
+        report = _publish_local_actual_conflict_resolution(output_dir, report)
+    except Exception as exc:
+        raise ManualActualPostApplyError(
+            "acknowledge_project_refresh", exc, batch_result=batch_result,
+            cleared_event_count=cleared_event_count,
+        ) from exc
+    batch_result["project_refresh"] = "SUCCESS"
     return {
         **batch_result,
         "cleared_actual_dependent_event_count": int(cleared_event_count),
@@ -3621,42 +5209,90 @@ def run_pipeline_pdfs(
     session_id_override: str | None = None,
     defer_excel_reports: bool = False,
     runtime_root: Path | None = None,
+    _prewrite_guard=None,
+    _source_project_dir: Path | None = None,
 ) -> Path:
-    output_dir.mkdir(parents=True,exist_ok=True)
-    actual_dir=output_dir/"01_實際注音"; cand_dir=output_dir/"02_候選報告"
-    actual_dir.mkdir(exist_ok=True); cand_dir.mkdir(exist_ok=True)
-
+    if _prewrite_guard is not None:
+        _prewrite_guard()
     pdfs = [Path(pdf).resolve() for pdf in pdfs]
     root=Path(runtime_root or Path(__file__).resolve().parent).resolve()
-    dynamic_actual_root = initialize_project_actual_evidence(output_dir, root)
     source_validation = validate_asset_manifest(root)
     if not source_validation.get("ok"):
         blocked_path = write_pipeline_blocked(output_dir, source_validation, "SOURCE_INVALID")
         raise SourceValidationError(f"核心資料來源驗證失敗；處理被阻擋：{blocked_path}")
+    try:
+        # One immutable snapshot is the sole global truth view for this whole
+        # session.  Fingerprint computation, every PDF decode, and final
+        # metadata sealing all receive this same object.
+        global_snapshot = GlobalExactGlyphRepository.resolved().load_snapshot()
+    except Exception as exc:
+        blocked_report = {
+            **dict(source_validation),
+            "ok": False,
+            "errors": [
+                *list(source_validation.get("errors") or []),
+                f"global exact glyph source validation failed：{type(exc).__name__}: {exc}",
+            ],
+        }
+        blocked_path = write_pipeline_blocked(
+            output_dir,
+            blocked_report,
+            "GLOBAL_EXACT_SOURCE_INVALID",
+        )
+        raise SourceValidationError(
+            f"global exact glyph 資料來源驗證失敗；處理被阻擋：{blocked_path}"
+        ) from exc
+
+    output_dir.mkdir(parents=True,exist_ok=True)
+    actual_dir=output_dir/"01_實際注音"; cand_dir=output_dir/"02_候選報告"
+    actual_dir.mkdir(exist_ok=True); cand_dir.mkdir(exist_ok=True)
+    if _source_project_dir is not None:
+        from actual_review import dynamic_actual_hashes
+        dynamic_actual_root = project_actual_evidence_root(Path(_source_project_dir).resolve())
+        dynamic_actual_hashes(dynamic_actual_root, read_only=True)
+    else:
+        dynamic_actual_root = initialize_project_actual_evidence(output_dir, root)
     # Freeze the previous session before any output file is touched.  Reuse
     # decisions must not be recomputed after the first rewritten workbook,
     # otherwise one changed file would invalidate the old manifest and make all
     # later PDFs look stale.
-    baseline_manifest = load_reuse_baseline_manifest(output_dir)
-    expected_chain_fingerprint = compute_expected_asset_fingerprint(
-        root,
-        source_validation,
-        resolver_version=EXPECTED_RESOLVER_VERSION,
-        source_files=EXPECTED_RESOLVER_SOURCE_FILES,
-    )
-    actual_fingerprints: dict[str, dict[str, Any]] = {}
-    for pdf in pdfs:
-        actual = actual_workbook_path(actual_dir, pdf)
-        dependencies = actual_workbook_dynamic_dependencies(actual)
-        actual_fingerprints[pdf.name] = compute_actual_asset_fingerprint(
+    try:
+        baseline_manifest = load_reuse_baseline_manifest(output_dir)
+        expected_chain_fingerprint = compute_expected_asset_fingerprint(
             root,
-            pdf,
             source_validation,
-            decoder_version=ACTUAL_DECODER_VERSION,
-            source_files=ACTUAL_DECODER_SOURCE_FILES,
-            dynamic_dependencies=dependencies,
-            dynamic_evidence_root=dynamic_actual_root,
+            resolver_version=EXPECTED_RESOLVER_VERSION,
+            source_files=EXPECTED_RESOLVER_SOURCE_FILES,
         )
+        actual_fingerprints: dict[str, dict[str, Any]] = {}
+        for pdf in pdfs:
+            actual = actual_workbook_path(actual_dir, pdf)
+            dependencies = actual_workbook_dynamic_dependencies(actual)
+            global_dependencies = actual_workbook_global_exact_dependencies(actual, pdf)
+            actual_fingerprints[pdf.name] = compute_actual_asset_fingerprint(
+                root,
+                pdf,
+                source_validation,
+                decoder_version=ACTUAL_DECODER_VERSION,
+                source_files=ACTUAL_DECODER_SOURCE_FILES,
+                global_exact_glyph_evidence_hashes=global_exact_glyph_evidence_hashes(
+                    global_snapshot,
+                    global_dependencies,
+                ),
+                dynamic_dependencies=dependencies,
+                dynamic_evidence_root=dynamic_actual_root,
+            )
+    except Exception as exc:
+        blocked_report = {
+            **dict(source_validation),
+            "ok": False,
+            "errors": [
+                *list(source_validation.get("errors") or []),
+                f"actual dependency validation failed：{type(exc).__name__}: {exc}",
+            ],
+        }
+        write_pipeline_blocked(output_dir, blocked_report, "ACTUAL_DEPENDENCY_INVALID")
+        raise
     resume_manifest: dict[str, Any] | None = None
     if baseline_manifest is None and _has_complete_pre_session_outputs(pdfs, actual_dir, cand_dir):
         _write_pipeline_progress(
@@ -3708,18 +5344,27 @@ def run_pipeline_pdfs(
                        root / DEFAULT_OUTLINE_SIGNATURES.name, root / DEFAULT_MAPPING_CORRECTIONS.name,
                        root / DEFAULT_SYMBOL_TEMPLATES.name, dynamic_actual_root / OCCURRENCE_OVERRIDE_FILE,
                        root / DEFAULT_STRUCTURAL_EXCLUSIONS.name, root / DEFAULT_CFF_CONSENSUS.name,
-                       fingerprint, dynamic_actual_root)
+                       fingerprint, dynamic_actual_root, global_snapshot=global_snapshot)
                 # A brand-new/legacy workbook may have required a conservative
                 # global-fallback fingerprint before its exact glyph dependencies
                 # were known.  Re-seal only the metadata with the final per-PDF
                 # dependency fingerprint; pronunciation cells are untouched.
                 final_dependencies = actual_workbook_dynamic_dependencies(actual)
+                final_global_dependencies = actual_workbook_global_exact_dependencies(actual, pdf)
+                if final_global_dependencies is None:
+                    raise SourceValidationError(
+                        f"新 actual workbook 無法建立完整 global exact dependency roster：{pdf.name}"
+                    )
                 final_fingerprint = compute_actual_asset_fingerprint(
                     root,
                     pdf,
                     source_validation,
                     decoder_version=ACTUAL_DECODER_VERSION,
                     source_files=ACTUAL_DECODER_SOURCE_FILES,
+                    global_exact_glyph_evidence_hashes=global_exact_glyph_evidence_hashes(
+                        global_snapshot,
+                        final_global_dependencies,
+                    ),
                     dynamic_dependencies=final_dependencies,
                     dynamic_evidence_root=dynamic_actual_root,
                 )
@@ -3768,6 +5413,7 @@ def run_pipeline_pdfs(
                     root / DEFAULT_CONTEXT_OVERRIDES.name,
                     dynamic_actual_root,
                     runtime_root=root,
+                    global_snapshot=global_snapshot,
                 )
 
             _write_pipeline_progress(output_dir, "3/3", "[3/3] 建立 occurrence ledger、全量對帳與 completion gate")
@@ -3787,38 +5433,48 @@ def run_pipeline_pdfs(
         if session_id_override:
             manifest["session_id"] = str(session_id_override)
             seal_manifest(manifest)
-        json_save(output_dir/"校對工作階段.json",manifest)
-        db=load_or_initialize_db(output_dir)
-        json_save(output_dir/"人工判定資料庫.json",db)
-        pending=save_pending_json(output_dir,manifest,db)
-        ledger = materialize_ledger(manifest, db)
-        reconciliation = reconcile_ledger(ledger, manifest.get("actual_source_ids") or [])
-        gate = completion_gate(ledger, reconciliation, manifest.get("regression_gate") or {}, source_validation_ok=True)
-        if defer_excel_reports:
-            # Interactive actual correction should refresh the authoritative
-            # ledger quickly.  The large Excel technical/user reports and GPT
-            # workbook are presentation artifacts and can be regenerated from
-            # the sealed manifest on demand via「更新 Excel 報告」.
-            report = output_dir / "注音校對_最終報告.xlsx"
-            status_text = {
-                PROCESSING_FINISHED: "處理結束；校對尚未完成。",
-                PROOFREAD_COMPLETE: "全冊注音校對完成。",
-                PIPELINE_BLOCKED: "處理被阻擋。",
-            }[gate["status"]]
-            json_save(output_dir / "pipeline_status.json", {
-                "version": VERSION,
-                "status": gate["status"],
-                "status_text": status_text,
-                "completion_gate": gate,
-                "reconciliation": reconciliation.as_dict(),
-                "user_report": str(report),
-                "technical_audit_report": str(output_dir / "注音校對_技術稽核.xlsx"),
-                "excel_report_deferred": True,
-            })
-            gpt_report = None
-        else:
-            report=generate_report(output_dir,manifest,db,runtime_root=root)
-            gpt_report = export_pending_for_gpt(output_dir) if pending else None
+        with project_delivery_lock(project_actual_evidence_root(output_dir)):
+            if _prewrite_guard is not None:
+                _prewrite_guard()
+            json_save(output_dir/"校對工作階段.json",manifest)
+            db=load_or_initialize_db(output_dir)
+            if _prewrite_guard is not None:
+                _prewrite_guard()
+            json_save(output_dir/"人工判定資料庫.json",db)
+            if _prewrite_guard is not None:
+                _prewrite_guard()
+            pending=save_pending_json(output_dir,manifest,db)
+            ledger = materialize_ledger(manifest, db)
+            reconciliation = reconcile_ledger(ledger, manifest.get("actual_source_ids") or [])
+            gate = completion_gate(ledger, reconciliation, manifest.get("regression_gate") or {}, source_validation_ok=True)
+            from pdf_portability import hold_actual_excel_completion, hold_expected_conflict_completion
+            gate = hold_actual_excel_completion(_source_project_dir or output_dir, manifest, db, gate)
+            gate = hold_expected_conflict_completion(_source_project_dir or output_dir, manifest, db, gate)
+            if _prewrite_guard is not None:
+                _prewrite_guard()
+            if defer_excel_reports:
+                # Interactive actual correction should refresh the authoritative
+                # ledger quickly. The large reports can be regenerated on demand.
+                report = output_dir / "注音校對_最終報告.xlsx"
+                status_text = {
+                    PROCESSING_FINISHED: "處理結束；校對尚未完成。",
+                    PROOFREAD_COMPLETE: "全冊注音校對完成。",
+                    PIPELINE_BLOCKED: "處理被阻擋。",
+                }[gate["status"]]
+                json_save(output_dir / "pipeline_status.json", {
+                    "version": VERSION,
+                    "status": gate["status"],
+                    "status_text": status_text,
+                    "completion_gate": gate,
+                    "reconciliation": reconciliation.as_dict(),
+                    "user_report": str(report),
+                    "technical_audit_report": str(output_dir / "注音校對_技術稽核.xlsx"),
+                    "excel_report_deferred": True,
+                })
+                gpt_report = None
+            else:
+                report=generate_report(output_dir,manifest,db,runtime_root=root)
+                gpt_report = export_pending_for_gpt(output_dir, _allow_unpublished_pipeline=True) if pending else None
         if gate["status"] == PROOFREAD_COMPLETE:
             print(f"全冊注音校對完成。\n報告：{report}",flush=True)
         else:
@@ -3830,6 +5486,8 @@ def run_pipeline_pdfs(
             print(f"證據補建／六閘門確認報表：{gpt_report}",flush=True)
         return report
     except Exception as exc:
+        if _prewrite_guard is not None:
+            _prewrite_guard()
         blocked_report = dict(source_validation)
         blocked_report.setdefault("errors", []).append(f"runtime fatal error：{type(exc).__name__}: {exc}")
         write_pipeline_blocked(output_dir, blocked_report, "RUNTIME_FATAL_OR_DATA_INTEGRITY_ERROR")
@@ -3886,10 +5544,13 @@ def _refresh_manifest_from_outputs_legacy_disabled(output_dir: Path, old_manifes
     return manifest
 
 
+@_serialized_user_project_entry
+@bound_operation(project_parameter="output_dir")
 def regenerate_report(output_dir: Path) -> Path:
+    _reject_incomplete_portable_project(output_dir)
     old_manifest=json_load_strict(output_dir/"校對工作階段.json")
     validate_manifest_integrity(old_manifest)
-    validate_output_artifact_hashes(old_manifest)
+    validate_output_artifact_hashes(old_manifest, output_dir=output_dir)
     if (
         not schema_compatible(old_manifest.get("session_schema_version"), SESSION_SCHEMA_VERSION)
         or not schema_compatible(old_manifest.get("ledger_schema_version"), LEDGER_SCHEMA_VERSION)
@@ -3897,41 +5558,88 @@ def regenerate_report(output_dir: Path) -> Path:
     ):
         raise ValueError("SESSION_SCHEMA_INCOMPATIBLE：資料布局或 occurrence identity 規則不同，需有明確轉接器")
     root = Path(__file__).resolve().parent
-    dynamic_actual_root = initialize_project_actual_evidence(output_dir, root)
     source_validation = validate_asset_manifest(root)
     if not source_validation.get("ok"):
         write_pipeline_blocked(output_dir, source_validation, "SOURCE_INVALID_DURING_REGENERATE")
         raise SourceValidationError("資料來源驗證失敗；未覆寫上一份最終報告")
+    try:
+        global_snapshot = GlobalExactGlyphRepository.resolved().load_snapshot()
+    except Exception as exc:
+        blocked_report = {
+            **dict(source_validation),
+            "ok": False,
+            "errors": [
+                *list(source_validation.get("errors") or []),
+                f"global exact glyph source validation failed：{type(exc).__name__}: {exc}",
+            ],
+        }
+        write_pipeline_blocked(
+            output_dir,
+            blocked_report,
+            "GLOBAL_EXACT_SOURCE_INVALID_DURING_REGENERATE",
+        )
+        raise SourceValidationError("global exact glyph 資料來源驗證失敗；未覆寫最終報告") from exc
+    dynamic_actual_root = initialize_project_actual_evidence(output_dir, root)
     pdfs = _resolve_session_pdfs(output_dir, old_manifest)
-    fingerprints = {
-        pdf.name: compute_actual_asset_fingerprint(
+    fingerprints = {}
+    sealed_locations = {(index, kind): relative for index, kind, relative, sha in bind_workbooks(output_dir, old_manifest)}
+    for pdf in pdfs:
+        infos = [index for index, info in enumerate(old_manifest["pdfs"]) if info["pdf_sha256"] == sha256_file(pdf)]
+        if len(infos) != 1:
+            raise ValueError("sealed workbook PDF identity 不唯一")
+        actual_path = owned_path(output_dir, sealed_locations[infos[0], "actual"])
+        global_dependencies = actual_workbook_global_exact_dependencies(actual_path, pdf)
+        fingerprints[pdf.name] = compute_actual_asset_fingerprint(
             root,
             pdf,
             source_validation,
             decoder_version=ACTUAL_DECODER_VERSION,
             source_files=ACTUAL_DECODER_SOURCE_FILES,
+            global_exact_glyph_evidence_hashes=global_exact_glyph_evidence_hashes(
+                global_snapshot,
+                global_dependencies,
+            ),
             dynamic_dependencies=actual_workbook_dynamic_dependencies(
-                actual_workbook_path(output_dir / "01_實際注音", pdf)
+                actual_path
             ),
             dynamic_evidence_root=dynamic_actual_root,
         )
-        for pdf in pdfs
-    }
     manifest = collect_manifest(
         pdfs,
         output_dir / "01_實際注音",
         output_dir / "02_候選報告",
         actual_fingerprints=fingerprints,
         source_validation=source_validation,
+        sealed_workbook_manifest=old_manifest,
     )
     manifest = _carry_forward_cross_version_identity(manifest, old_manifest)
     db = load_or_initialize_db(output_dir)
     materialize_ledger(manifest, db)
+    _reject_incomplete_portable_project(output_dir)
+    from pdf_portability import validate_conflict_state
+    if validate_conflict_state(output_dir, old_manifest, db):
+        raise ValueError("專案出現未裁決衝突；未重新發布")
+    validate_output_artifact_hashes(old_manifest, output_dir=output_dir)
     json_save(output_dir/"校對工作階段.json",manifest)
     save_pending_json(output_dir,manifest,db)
     return generate_report(output_dir,manifest,db)
 
 
+def _reject_incomplete_portable_project(output_dir: Path) -> None:
+    from pdf_portability import INCOMPLETE_FILE, actual_excel_conflict_state
+
+    if (Path(output_dir) / INCOMPLETE_FILE).exists():
+        raise ValueError("跨電腦接續未完成；不得匯入判定、重新產生一般報告或修復專案")
+    if (Path(output_dir) / "跨Excel_actual衝突.json").exists():
+        manifest = json_load_strict(Path(output_dir) / "校對工作階段.json")
+        validate_manifest_integrity(manifest)
+        db = load_or_initialize_db(output_dir)
+        if actual_excel_conflict_state(output_dir, manifest, db):
+            raise ValueError("Excel actual 衝突尚未在原頁重新核對；不得匯出、重新產生一般報告或修復專案")
+
+
+@_serialized_user_project_entry
+@bound_operation(project_parameter="output_dir")
 def repair_project_state(output_dir: Path, *, runtime_root: Path | None = None) -> Path:
     """Rebuild expected candidates and completion state without forcing actual decode.
 
@@ -3942,9 +5650,10 @@ def repair_project_state(output_dir: Path, *, runtime_root: Path | None = None) 
     then replays durable manual decisions and regenerates the completion gate.
     """
     output_dir = resolve_existing_project_dir(Path(output_dir))
+    _reject_incomplete_portable_project(output_dir)
     old_manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(old_manifest)
-    validate_output_artifact_hashes(old_manifest)
+    validate_output_artifact_hashes(old_manifest, output_dir=output_dir)
     if (
         not schema_compatible(old_manifest.get("session_schema_version"), SESSION_SCHEMA_VERSION)
         or not schema_compatible(old_manifest.get("ledger_schema_version"), LEDGER_SCHEMA_VERSION)
@@ -3964,8 +5673,15 @@ def repair_project_state(output_dir: Path, *, runtime_root: Path | None = None) 
         "[專案修復] 沿用相同 PDF 與既有人工判定；actual 證據相容時直接 reuse，只重建受影響的 expected 候選與完成門檻。",
         flush=True,
     )
+    def validate_repair_publication():
+        _reject_incomplete_portable_project(output_dir)
+        from pdf_portability import validate_conflict_state
+        current_db = normalize_db(json_load_strict(decision_path))
+        if validate_conflict_state(output_dir, old_manifest, current_db):
+            raise ValueError("專案出現未裁決衝突；未修復發布")
     pipeline_kwargs: dict[str, Any] = {
         "session_id_override": str(old_manifest.get("session_id") or "") or None,
+        "_prewrite_guard": validate_repair_publication,
     }
     if runtime_root is not None:
         pipeline_kwargs["runtime_root"] = Path(runtime_root)
@@ -4020,13 +5736,37 @@ def main():
     ap.add_argument("--export-actual-gpt",action="store_true",help="輸出 actual 字形待判定 GPT 包")
     ap.add_argument("--import-actual-gpt",help="匯入 GPT 已填寫的 actual待判定_給GPT.xlsx，驗證後自動重新解碼")
     ap.add_argument("--refresh-actual",action="store_true",help="依目前 user actual 證據重新解碼現有工作階段")
+    ap.add_argument("--prepare-portable",action="store_true",help="原 PDF 仍可讀時建立跨電腦全頁內容證據")
+    ap.add_argument("--attach-portable-excel",help="A 原專案及 PDF 仍可讀時，核對並為舊已填 Excel 補上跨電腦內容證據")
+    ap.add_argument("--resume-portable-excel",action="store_true",help="恢復或回滾未完成的跨電腦 actual Excel 交易")
+    ap.add_argument("--continue-from-project",help="以來源專案與當地 PDF 建立新的接續專案")
+    ap.add_argument("--merge-with-project",help="接續時一併匯入另一來源專案，原兩專案均不修改")
+    ap.add_argument("--local-pdf",help="跨電腦接續時指定當地下載的 PDF")
     args=ap.parse_args()
-    if args.report_only or args.repair_project or args.export_gpt or args.import_gpt or args.import_gpt_auto or args.export_actual_gpt or args.import_actual_gpt or args.refresh_actual:
+    if args.report_only or args.repair_project or args.export_gpt or args.import_gpt or args.import_gpt_auto or args.export_actual_gpt or args.import_actual_gpt or args.refresh_actual or args.prepare_portable or args.attach_portable_excel or args.resume_portable_excel or args.continue_from_project:
         if not args.output_dir: raise SystemExit("此操作需要 -o 輸出資料夾")
+        if args.continue_from_project:
+            if not args.local_pdf:
+                raise SystemExit("跨電腦接續需要 --local-pdf 明確指定當地 PDF")
+            from pdf_portability import merge_projects
+            sources = [Path(args.continue_from_project)]
+            if args.merge_with_project:
+                sources.append(Path(args.merge_with_project))
+            print(json.dumps(merge_projects(sources, Path(args.local_pdf), Path(args.output_dir)), ensure_ascii=False))
+            return 0
         requested_outdir = Path(args.output_dir)
         outdir = resolve_existing_project_dir(requested_outdir)
         if outdir != requested_outdir:
             print(f"[專案路徑修正] {requested_outdir} -> {outdir}", flush=True)
+        if args.prepare_portable:
+            from pdf_portability import prepare_portable_project
+            print(prepare_portable_project(outdir)); return 0
+        if args.attach_portable_excel:
+            from pdf_portability import attach_filled_excel_proof
+            print(attach_filled_excel_proof(outdir, Path(args.attach_portable_excel))); return 0
+        if args.resume_portable_excel:
+            from pdf_portability import resume_actual_excel_project
+            print(json.dumps(resume_actual_excel_project(outdir), ensure_ascii=False)); return 0
         if args.repair_project:
             print(repair_project_state(outdir)); return 0
         if args.export_actual_gpt:
@@ -4034,6 +5774,7 @@ def main():
             print(package if package is not None else NO_ACTUAL_PENDING_MESSAGE)
             return 0
         if args.import_gpt_auto:
+            _reject_incomplete_portable_project(outdir)
             planned = plan_gpt_auto_imports(args.import_gpt_auto)
             if not planned:
                 raise ValueError("沒有可匯入的 GPT 判定檔")
@@ -4056,10 +5797,27 @@ def main():
                         flush=True,
                     )
                 else:
-                    n, skipped, report = import_gpt_decisions(outdir, import_path)
+                    expected_result = import_gpt_decisions(outdir, import_path)
+                    n, skipped, report = expected_result
+                    business = getattr(expected_result, "status", {})
+                    business_text = (f"本次已保存：新增 {business['imported']} 筆；"
+                                     f"一致保留／補充 {business['consistent_supplements']} 筆；"
+                                     f"已處理重複 {business['duplicates']} 筆（未新增判定）；"
+                                     f"新增衝突 {business['new_conflicts']} 筆；"
+                                     f"待本地裁決 {business['pending_conflicts']} 筆。\n"
+                                     f"原待辦保留：保留待人工 {business['retained_manual']} 筆；"
+                                     f"未操作列 {business['skipped_unoperated']} 筆。\n"
+                                     + (f"依賴變動待重核 {business['dependency_rechecks']} 筆；"
+                                        f"有效本地完成判定保留 {business['preserved_local_decisions']} 筆（只保存來源稽核）。\n"
+                                        if 'dependency_rechecks' in business else "")
+                                     + ("請按「繼續校對」，查看雙方證據後用「輸入其他應標注音」裁決。\n"
+                                        if business['pending_conflicts'] else "")
+                                     + ("非校對範圍提案請重核原頁後使用既有排除入口；不會自動沿用舊排除。\n"
+                                        if business.get('dependency_rechecks') else "")
+                                     if business else "")
                     print(
                         f"自動辨識：{import_path.name} = expected／差異 GPT 證據檔。"
-                        f"匯入 {n} 筆，略過 {skipped} 筆未操作列。\n{report}\n"
+                        f"{business_text if business else f'匯入 {n} 筆，略過 {skipped} 筆。'}\n{report}\n"
                         "完成狀態請以本次產生的報告／pipeline_status.json 為準；"
                         "若剛升級規則，請按「修復／更新報告」。",
                         flush=True,
@@ -4068,7 +5826,7 @@ def main():
         if args.import_actual_gpt:
             n,removed,report=import_actual_gpt_decisions(outdir,Path(args.import_actual_gpt)); print(f"匯入 actual {n} 組；撤銷 {removed} 筆依賴舊 actual 的人工事件。\n{report}"); return 0
         if args.refresh_actual:
-            print(refresh_actual_project(outdir)); return 0
+            print(refresh_actual_with_recovery(outdir)); return 0
         if args.export_gpt:
             print(export_pending_for_gpt(outdir)); return 0
         if args.import_gpt:

@@ -1,0 +1,962 @@
+from __future__ import annotations
+
+import copy
+from contextlib import closing
+import hashlib
+import json
+import tempfile
+import threading
+import tkinter as tk
+import tkinter.font as tkfont
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import fitz
+from openpyxl import Workbook, load_workbook
+
+import occurrence_ledger as ol
+import review_gui as gui
+from tests.no_window_review_support import (Surface, ReviewApp as HeadlessReviewApp, ExpectedDialog as HeadlessExpectedDialog, ConfirmedDialog as HeadlessConfirmedDialog, ActualDialog as HeadlessActualDialog, Preview, Value)
+import standalone_proofread as sp
+from tests.review_save_test_support import wait_for_save
+
+ROOT = Path(__file__).resolve().parents[1]
+REGRESSION = {"ok": True, "required": 1, "executed": 1, "passed": 1, "failed": 0,
+              "not_executed": 0, "duplicate_case_id": 0}
+
+
+def make_entry(n=1, *, actual="ㄎㄢˋ", expected=(), blocked="", excluded=False, pdf="fixture.pdf", pdf_sha="f" * 64,
+               printed_page="1"):
+    source = {"ledger_schema_version": ol.LEDGER_SCHEMA_VERSION,
+              "workbook_schema_version": ol.WORKBOOK_SCHEMA_VERSION, "pdf_sha256": pdf_sha, "pdf": str(pdf), "pdf_name": Path(pdf).name,
+              "實體頁碼": 1, "課本頁": printed_page, "字元": "看", "穩定注音鍵": f"fixture-{n}",
+              "font": "fixture", "font_xref": 1, "glyph_id_字形索引": n, "注音元件ID": "",
+              "x0": 72.0, "y0": float(72 + n * 45), "x1": 96.0, "y1": float(96 + n * 45),
+              "source_row_number": n, "所在行": f"看一看窗外的風景（隔離操作樣本 {n}）", "局部詞境": "看一看"}
+    ol.prepare_occurrence_rows(pdf_sha, [source])
+    classified = {"actual": actual, "actual_evidence": "isolated fixture reading" if actual else "",
+                  "actual_status": "RESOLVED" if actual else "UNRESOLVED",
+                  "expected_set": list(expected), "expected_status": "RESOLVED" if expected else "UNRESOLVED",
+                  "expected_evidence": "isolated expected fixture" if expected else "", "context_evidence": "看一看",
+                  "state": blocked or ("EXCLUDED_OUT_OF_SCOPE" if excluded else "REVIEW_PENDING"),
+                  "exclusion_reason": "isolated out-of-scope fixture" if excluded else ""}
+    classified["state"] = ol.derive_authoritative_state(classified)
+    return ol.build_occurrence_ledger([source], {source["occurrence_id"]: classified})[0]
+
+
+def make_manifest(entries):
+    validation = sp.validate_asset_manifest(ROOT)
+    fp = sp.compute_expected_asset_fingerprint(ROOT, validation, resolver_version=sp.EXPECTED_RESOLVER_VERSION,
+                                              source_files=sp.EXPECTED_RESOLVER_SOURCE_FILES)
+    return sp.seal_manifest({
+        "version": sp.VERSION, "session_schema_version": ol.SESSION_SCHEMA_VERSION,
+        "workbook_schema_version": ol.WORKBOOK_SCHEMA_VERSION, "ledger_schema_version": ol.LEDGER_SCHEMA_VERSION,
+        "review_id_schema_version": ol.REVIEW_ID_SCHEMA_VERSION, "session_id": "isolated-manual-usability",
+        "records": entries, "actual_source_ids": [e["occurrence_id"] for e in entries], "pdfs": [],
+        "expected_asset_fingerprint": fp["fingerprint"], "expected_asset_fingerprint_components": fp["components"],
+        "regression_gate": REGRESSION, "mandatory_regression": REGRESSION,
+        "pdf_regression": {"failed": 0, "not_executed": 0},
+    })
+
+
+def create_gui_fixture(output_dir: Path, *, mixed=True, missing_printed_page=False):
+    """Isolated synthetic PDF/session for tests and actual Windows GUI evidence.
+
+    The source reading and regression rows are explicit fixture inputs, not a
+    claim that a real textbook or decoder acceptance run passed.
+    """
+    output_dir.mkdir(parents=True, exist_ok=True)
+    pdf = output_dir / "隔離操作樣本.pdf"
+    with fitz.open() as doc:
+        page = doc.new_page(width=595, height=842)
+        page.insert_text((40, 45), "人工確認操作隔離樣本（非使用者教材）", fontname="china-t", fontsize=16)
+        for n in range(1, 8):
+            page.insert_text((72, 91 + n * 45), f"看一看窗外的風景  樣本 {n}   ㄎㄢˋ", fontname="china-t", fontsize=15)
+        doc.save(pdf)
+    sha = hashlib.sha256(pdf.read_bytes()).hexdigest()
+    entries = [make_entry(1, pdf=pdf, pdf_sha=sha), make_entry(2, pdf=pdf, pdf_sha=sha)]
+    if mixed:
+        entries.extend([
+            make_entry(3, actual="", pdf=pdf, pdf_sha=sha),
+            make_entry(4, actual="", expected=["ㄎㄢˋ"], pdf=pdf, pdf_sha=sha),
+            make_entry(5, expected=["ㄎㄢ"], pdf=pdf, pdf_sha=sha,
+                       printed_page="" if missing_printed_page else "1"),
+            make_entry(6, blocked="DATA_INTEGRITY_ERROR", pdf=pdf, pdf_sha=sha),
+            make_entry(7, excluded=True, pdf=pdf, pdf_sha=sha),
+        ])
+    manifest = make_manifest(entries)
+    sp.json_save(output_dir / "校對工作階段.json", manifest)
+    sp.json_save(output_dir / "人工判定資料庫.json", sp.normalize_db({}))
+    return manifest
+
+
+class ManualExpectedContractTests(unittest.TestCase):
+    def test_gui_confirmation_allows_missing_printed_page_but_requires_physical_target(self):
+        row = make_entry(expected=["ㄎㄢ"], printed_page="")
+        self.assertEqual(row["printed_page"], "")
+        self.assertEqual(row["state"], "DIFFERENCE_PENDING_CONFIRMATION")
+        record = sp.build_gui_confirmation(row)
+        self.assertEqual(record["target"]["printed_page"], "")
+        self.assertTrue(ol.valid_gui_confirmation({**row, "gui_confirmation": record}))
+        self.assertFalse(ol.valid_gui_confirmation({**row, "printed_page": "2", "gui_confirmation": record}))
+        for missing in ("physical_page", "x0", "y0", "x1", "y1", "pdf_sha256"):
+            with self.subTest(missing=missing), self.assertRaises(ol.InvalidTransitionError):
+                sp.build_gui_confirmation({**row, missing: ""})
+
+    def test_gui_confirmation_is_bound_to_one_mismatch_and_both_evidence_lanes(self):
+        row = make_entry(expected=["ㄎㄢ"])
+        record = sp.build_gui_confirmation(row)
+        event = {"action": "確認現版差異", "gui_confirmation": record,
+                 "expected_set": ["ㄎㄢ"], "expected_evidence": row["expected_evidence"],
+                 "context_evidence": row["context_evidence"]}
+        confirmed = sp._apply_review_event(row, event)
+        self.assertEqual(confirmed["state"], "TEXTBOOK_ERROR_CONFIRMED")
+        self.assertEqual(confirmed["confirmation_gates"], {gate: False for gate in ol.CONFIRMATION_GATES})
+        ol.validate_occurrence_ledger([confirmed])
+        for change in ({"actual": "ㄎㄢˊ"}, {"actual_evidence": "different decoder proof"},
+                       {"expected_evidence": "different rule proof"}, {"context_evidence": "different context"}):
+            with self.subTest(change=change):
+                replayed = sp._apply_review_event(dict(row, **change), event)
+                self.assertEqual(replayed["state"], "DIFFERENCE_PENDING_CONFIRMATION")
+                self.assertNotIn("gui_confirmation", replayed)
+        for bad_record in (None, {**record, "method": "UNKNOWN"}):
+            with self.subTest(bad_record=bad_record), self.assertRaises(ol.InvalidTransitionError):
+                sp._apply_review_event(row, {**event, "gui_confirmation": bad_record})
+        with self.assertRaises(ol.InvalidTransitionError):
+            sp._apply_review_event(row, {"action": "確認現版差異", "source": "人工 GUI 本筆單次確認"})
+        with self.assertRaises(ol.InvalidTransitionError):
+            sp._apply_review_event(row, {**event, "gui_confirmation": record,
+                                         **{gate: True for gate in ol.CONFIRMATION_GATES}})
+        for blocked in ol.HARD_BLOCKING_STATES | {"RULE_CONFLICT", "ACTUAL_UNRESOLVED"}:
+            with self.subTest(blocked=blocked), self.assertRaises(ol.InvalidTransitionError):
+                sp.build_gui_confirmation(dict(row, state=blocked))
+        with self.assertRaises(ol.InvalidTransitionError):
+            sp.build_gui_confirmation(dict(row, blocking_state="SOURCE_INVALID"))
+
+    def test_gui_confirmation_replay_keeps_manual_expected_and_actual_revoke(self):
+        row = make_entry()
+        expected_event = sp.build_manual_expected_event(row, operation="ENTER_EXPECTED", expected_set="ㄎㄢ")
+        reviewed = sp._apply_review_event(row, expected_event)
+        event = {**expected_event, "action": "確認現版差異",
+                 "gui_confirmation": sp.build_gui_confirmation(reviewed),
+                 "confirmation_actual_snapshot": sp.actual_confirmation_snapshot(reviewed),
+                 "expected_resolution_source": "原人工 expected 來源",
+                 "expected_resolution_reason": "保留原人工判定理由",
+                 "expected_resolution_note": "保留原 expected 備註"}
+        confirmed = sp._apply_review_event(row, event)
+        self.assertEqual(confirmed["state"], "TEXTBOOK_ERROR_CONFIRMED")
+        self.assertEqual(confirmed["manual_expected_decision"], expected_event["manual_expected_decision"])
+        self.assertEqual(confirmed["expected_resolution_source"], "原人工 expected 來源")
+        self.assertEqual(confirmed["expected_resolution_reason"], "保留原人工判定理由")
+        drifted = sp._apply_review_event(dict(row, actual="ㄎㄢˊ", actual_evidence="new glyph proof"), event)
+        self.assertEqual(drifted["state"], "DIFFERENCE_PENDING_CONFIRMATION")
+        self.assertEqual(drifted["manual_expected_decision"], expected_event["manual_expected_decision"])
+        with tempfile.TemporaryDirectory() as td:
+            output = Path(td)
+            sp.json_save(output / "人工判定資料庫.json", sp.normalize_db({**sp.normalize_db({}),
+                                                                          "events": {row["review_id"]: event}}))
+            self.assertEqual(sp._clear_actual_dependent_events(output, [reviewed], {row["occurrence_id"]}), 1)
+            retained = sp.load_or_initialize_db(output)["events"][row["review_id"]]
+            self.assertEqual(retained["manual_expected_decision"], expected_event["manual_expected_decision"])
+            self.assertEqual(retained["source"], "原人工 expected 來源")
+            self.assertNotIn("gui_confirmation", retained)
+
+    def test_no_operation_no_event_and_shortcut_freezes_one_occurrence(self):
+        first, second = make_entry(), make_entry(2)
+        manifest = make_manifest([first, second])
+        self.assertEqual(sp.materialize_ledger(manifest, sp.normalize_db({})), [first, second])
+        event = sp.build_manual_expected_event(first, operation="CONFIRM_CURRENT_AS_EXPECTED")
+        resolved = sp.materialize_ledger(manifest, sp.normalize_db({**sp.normalize_db({}), "events": {first["review_id"]: event}}))
+        self.assertEqual(resolved[0]["state"], "PASS")
+        self.assertEqual(resolved[1], second)
+        self.assertEqual(event["expected_evidence"], "")
+        self.assertTrue(ol.valid_manual_expected_decision(resolved[0]))
+        drifted = dict(first, actual="ㄎㄢ", actual_evidence="new fixture actual")
+        reviewed = sp._apply_review_event(drifted, event)
+        self.assertEqual(reviewed["expected_set"], ["ㄎㄢˋ"])
+        self.assertEqual(reviewed["state"], "DIFFERENCE_PENDING_CONFIRMATION")
+        self.assertEqual(reviewed["manual_expected_decision"], event["manual_expected_decision"])
+
+    def test_shortcut_rejects_unresolved_invalid_or_missing_actual_proof(self):
+        for updates in ({"actual_status": "UNRESOLVED"}, {"actual_status": "DECODE_ERROR"},
+                        {"actual": "bad"}, {"actual": ""}, {"actual_evidence": "  "},
+                        {"state": "SOURCE_INVALID"}):
+            with self.subTest(updates=updates), self.assertRaises(ol.InvalidTransitionError):
+                sp.build_manual_expected_event(dict(make_entry(), **updates), operation="CONFIRM_CURRENT_AS_EXPECTED")
+
+    def test_blank_rationale_reopen_replay_report_and_completion(self):
+        for rationale in ("", " \n\t "):
+            with self.subTest(rationale=rationale), tempfile.TemporaryDirectory() as td:
+                output = Path(td)
+                row = make_entry()
+                manifest = make_manifest([row])
+                sp.json_save(output / "校對工作階段.json", manifest)
+                event = sp.build_manual_expected_event(row, operation="ENTER_EXPECTED", expected_set="ㄎㄢˋ", rationale=rationale)
+                sp.json_save(output / "人工判定資料庫.json", sp.normalize_db({**sp.normalize_db({}), "events": {row["review_id"]: event}}))
+                db = sp.load_or_initialize_db(output)
+                ledger = sp.materialize_ledger(sp.json_load_strict(output / "校對工作階段.json"), db)
+                ol.validate_occurrence_ledger(ledger)
+                gate = ol.completion_gate(ledger, {"ok": True}, REGRESSION)
+                self.assertEqual(gate["expected_covered"], 1)
+                self.assertEqual(gate["status"], ol.PROOFREAD_COMPLETE)
+                path = sp.generate_report(output, sp.json_load_strict(output / "校對工作階段.json"), sp.load_or_initialize_db(output))
+                status = sp.json_load_strict(output / "pipeline_status.json")
+                self.assertEqual(status["completion_gate"]["expected_covered"], 1)
+                with closing(load_workbook(path, read_only=True)) as wb:
+                    rows = list(wb["人工與公司規則"].values)
+                    self.assertIsNone(rows[1][6])
+                    self.assertEqual(rows[1][9], "人工輸入應標注音")
+                    self.assertEqual(rows[1][10], event["manual_expected_decision"]["decided_at"])
+                with closing(load_workbook(output / "注音校對_技術稽核.xlsx", read_only=True)) as wb:
+                    headers, values = list(wb["Occurrence Ledger"].values)
+                    record = json.loads(values[headers.index("本筆人工應標判定紀錄")])
+                    self.assertEqual(record, event["manual_expected_decision"])
+
+    def test_legacy_requires_evidence_and_malformed_new_record_never_upgrades(self):
+        row = make_entry()
+        legacy = {"action": "解決expected證據", "expected_set": ["ㄎㄢˋ"], "expected_evidence": "真實舊來源", "context_evidence": "看一看"}
+        self.assertEqual(sp._apply_review_event(row, legacy)["state"], "PASS")
+        for source in ("人工 GUI 現版 expected 證據", "external", ""):
+            with self.subTest(source=source), self.assertRaises(ol.InvalidTransitionError):
+                sp._apply_review_event(row, dict(legacy, expected_evidence="", source=source))
+        good = sp.build_manual_expected_event(row, operation="ENTER_EXPECTED", expected_set="ㄎㄢˋ")
+        corruptions = [lambda r: r.pop("decided_at"), lambda r: r.update(version=2),
+                       lambda r: r.update(version=True), lambda r: r.update(operation="EXTERNAL_IMPORT"),
+                       lambda r: r["target"].update(occurrence_id="foreign"),
+                       lambda r: r["target"].update(line="different context"),
+                       lambda r: r.update(expected_set=["ㄎㄢ"]),
+                       lambda r: r.update(context_evidence="another context"),
+                       lambda r: r.update(decided_at="2026-01-01"), lambda r: r.update(extra="unknown")]
+        for mutate in corruptions:
+            bad = copy.deepcopy(good)
+            mutate(bad["manual_expected_decision"])
+            bad["expected_evidence"] = "cannot disguise invalid record as legacy"
+            with self.subTest(record=bad), self.assertRaises(ol.InvalidTransitionError):
+                sp._apply_review_event(row, bad)
+
+    def test_illegal_expected_mixed_with_valid_is_rejected(self):
+        for reading in ("", "ㄎㄢˋ|invalid", ["ㄎㄢˋ", "bad"]):
+            with self.subTest(reading=reading), self.assertRaises(ol.InvalidTransitionError):
+                sp.build_manual_expected_event(make_entry(), operation="ENTER_EXPECTED", expected_set=reading)
+
+    def test_numeric_workbook_roundtrip_preserves_target_and_changed_position_rejects(self):
+        row = make_entry()
+        event = sp.build_manual_expected_event(row, operation="ENTER_EXPECTED", expected_set="ㄎㄢˋ")
+        with tempfile.TemporaryDirectory() as td:
+            path = Path(td) / "source.xlsx"
+            wb = Workbook()
+            wb.active.append(list(row["source_record"]))
+            wb.active.append(list(row["source_record"].values()))
+            wb.save(path)
+            with closing(load_workbook(path, read_only=True)) as loaded:
+                header, values = list(loaded.active.values)
+                source = dict(zip(header, values))
+            self.assertIsInstance(source["x0"], int)
+            source["pdf_sha256"] = row["pdf_sha256"]
+            ol.prepare_occurrence_rows(row["pdf_sha256"], [source])
+            self.assertEqual(source["occurrence_id"], row["occurrence_id"])
+            refreshed = copy.deepcopy(row)
+            refreshed.update({k: source[k] for k in ("x0", "y0", "x1", "y1")})
+            refreshed["source_record"] = source
+            manifest = make_manifest([refreshed])
+            sp.json_save(Path(td) / "manifest.json", manifest)
+            replay = sp.materialize_ledger(sp.json_load_strict(Path(td) / "manifest.json"), sp.normalize_db({**sp.normalize_db({}), "events": {row["review_id"]: event}}))
+            self.assertEqual(replay[0]["state"], "PASS")
+            with self.assertRaises(ol.InvalidTransitionError):
+                sp._apply_review_event(dict(refreshed, x0=73), event)
+
+    def test_confirmation_then_actual_refresh_preserves_expected_and_revokes_comparison(self):
+        row = make_entry()
+        event = sp.build_manual_expected_event(row, operation="ENTER_EXPECTED", expected_set="ㄎㄢ")
+        reviewed = sp._apply_review_event(row, event)
+        confirmed_event = {**event, "action": "確認現版差異", **{gate: True for gate in ol.CONFIRMATION_GATES},
+                           "confirmation_actual_snapshot": sp.actual_confirmation_snapshot(reviewed)}
+        self.assertEqual(sp._apply_review_event(row, confirmed_event)["state"], "TEXTBOOK_ERROR_CONFIRMED")
+        # Even another mismatching actual reading invalidates all old six gates.
+        drifted = dict(row, actual="ㄎㄢˊ", actual_evidence="new source")
+        reopened = sp._apply_review_event(drifted, confirmed_event)
+        self.assertEqual(reopened["state"], "DIFFERENCE_PENDING_CONFIRMATION")
+        self.assertEqual(reopened["review_event_replay_status"], "INVALIDATED_ACTUAL_DRIFT")
+        with tempfile.TemporaryDirectory() as td:
+            output = Path(td)
+            sp.json_save(output / "人工判定資料庫.json", sp.normalize_db({**sp.normalize_db({}), "events": {row["review_id"]: confirmed_event}}))
+            self.assertEqual(sp._clear_actual_dependent_events(output, [reviewed], {row["occurrence_id"]}), 1)
+            saved = sp.load_or_initialize_db(output)["events"][row["review_id"]]
+            self.assertEqual(saved["manual_expected_decision"], event["manual_expected_decision"])
+            self.assertEqual(saved["expected_evidence"], "")
+            self.assertNotIn("confirmation_actual_snapshot", saved)
+            updated = sp._apply_review_event(dict(row, actual="ㄎㄢ"), saved)
+            self.assertEqual(updated["state"], "PASS")
+
+    def test_blocks_exclusion_and_missing_evidence_remain_fail_closed(self):
+        event = sp.build_manual_expected_event(make_entry(), operation="ENTER_EXPECTED", expected_set="ㄎㄢˋ")
+        for state in ol.HARD_BLOCKING_STATES:
+            row = dict(make_entry(), state=state)
+            self.assertEqual(sp._apply_review_event(row, event)["state"], state)
+        excluded = dict(make_entry(), state="EXCLUDED_OUT_OF_SCOPE", exclusion_reason="fixture exclusion")
+        self.assertEqual(sp._apply_review_event(excluded, event)["state"], "EXCLUDED_OUT_OF_SCOPE")
+        invalid = dict(make_entry(), state="PASS", actual_status="RESOLVED", expected_status="RESOLVED", expected_set=["ㄎㄢˋ"])
+        with self.assertRaises(ol.LedgerError):
+            ol.validate_occurrence_ledger([invalid])
+        self.assertFalse(ol.completion_gate([invalid], {"ok": True}, REGRESSION)["hard_gates"]["expected_coverage_100"])
+
+
+class ManualReviewGuiTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # Finite state/event owner; no Tcl interpreter or native widgets.
+        cls.root = Surface()
+        pass
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.root.destroy()
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.output = Path(self.temp.name)
+        self.manifest = create_gui_fixture(self.output)
+        self.window = Surface(self.root)
+        for name in ("showinfo", "showwarning", "showerror"):
+            self.enterContext(patch.object(gui.messagebox, name))
+        self.app = HeadlessReviewApp(self.window, self.output)
+        self.window.update()
+
+    def tearDown(self):
+        self.window.destroy()
+        self.temp.cleanup()
+
+    def test_missing_printed_page_gui_save_reopen_and_report(self):
+        with tempfile.TemporaryDirectory() as td:
+            output = Path(td)
+            manifest = create_gui_fixture(output, missing_printed_page=True)
+            owner = Surface(self.root)
+            try:
+                app = HeadlessReviewApp(owner, output)
+                owner.update()
+                target = next(row for row in app.records if row["state"] == "DIFFERENCE_PENDING_CONFIRMATION"
+                              and row["printed_page"] == "")
+                self.assertEqual(target["physical_page"], 1)
+                self.assertEqual(target["source_record"]["課本頁"], "")
+                app.index = app.records.index(target)
+                app.show()
+                app.primary.invoke()
+                wait_for_save(app)
+                self.assertTrue(app._last_event_saved)
+                self.assertNotEqual(app.current()["review_id"], target["review_id"])
+            finally:
+                owner.destroy()
+
+            reopened = sp.load_or_initialize_db(output)
+            saved = reopened["events"][target["review_id"]]
+            self.assertEqual(saved["gui_confirmation"]["target"]["printed_page"], "")
+            self.assertEqual(saved["gui_confirmation"]["target"]["physical_page"], "1")
+            ledger = sp.materialize_ledger(sp.json_load_strict(output / "校對工作階段.json"), reopened)
+            row = next(item for item in ledger if item["review_id"] == target["review_id"])
+            self.assertEqual(row["state"], "TEXTBOOK_ERROR_CONFIRMED")
+            self.assertEqual(row["note"], saved["note"])
+            sp.generate_report(output, manifest, reopened)
+            with closing(load_workbook(output / "注音校對_最終報告.xlsx", read_only=True)) as wb:
+                headers, *values = list(wb["修正清單"].values)
+                self.assertEqual(len(values), 1)
+                self.assertIsNone(values[0][headers.index("課本頁")])
+                self.assertEqual(values[0][headers.index("確認紀錄")], saved["note"])
+            with closing(load_workbook(output / "注音校對_技術稽核.xlsx", read_only=True)) as wb:
+                headers, *values = list(wb["Occurrence Ledger"].values)
+                recorded = next(value for value in values if value[headers.index("review_id")] == target["review_id"])
+                self.assertEqual(json.loads(recorded[headers.index("本筆 GUI 教材錯誤確認紀錄")]), saved["gui_confirmation"])
+
+    def test_difference_button_saves_once_without_dialog_then_reopens_and_reports(self):
+        app = self.app
+        target = next(row for row in app.records if row["state"] == "DIFFERENCE_PENDING_CONFIRMATION")
+        app.index = app.records.index(target)
+        app.show()
+        self.assertEqual(app.primary.cget("text"), "確認教材錯誤")
+        before_windows = set(self.window.winfo_children())
+        entered, release = threading.Event(), threading.Event()
+        original_save = app._save_service.save_event
+
+        def held_save(*args, **kwargs):
+            entered.set()
+            self.assertTrue(release.wait(10))
+            return original_save(*args, **kwargs)
+
+        with patch.object(app._save_service, "save_event", side_effect=held_save) as saves, \
+                patch.object(gui.messagebox, "askyesno") as second_confirmation:
+            app.primary.invoke()
+            self.assertTrue(entered.wait(5))
+            self.assertEqual(set(self.window.winfo_children()), before_windows)
+            app.primary.invoke()
+            self.assertEqual(app.current()["review_id"], target["review_id"])
+            release.set()
+            wait_for_save(app)
+        saves.assert_called_once()
+        second_confirmation.assert_not_called()
+        self.assertTrue(app._last_event_saved)
+        self.assertNotEqual(app.current()["review_id"], target["review_id"])
+        saved = app.db["events"][target["review_id"]]
+        self.assertEqual(saved["gui_confirmation"]["method"], ol.GUI_CONFIRMATION_METHOD)
+        self.assertFalse(any(saved.get(gate) is True for gate in ol.CONFIRMATION_GATES))
+        self.assertIn(saved["gui_confirmation"]["confirmed_at"], saved["note"])
+        self.assertNotIn("六閘門", saved["note"])
+        reopened = sp.materialize_ledger(self.manifest, sp.load_or_initialize_db(self.output))
+        row = next(item for item in reopened if item["review_id"] == target["review_id"])
+        self.assertEqual(row["state"], "TEXTBOOK_ERROR_CONFIRMED")
+        self.assertEqual(row["note"], saved["note"])
+        sp.generate_report(self.output, self.manifest, sp.load_or_initialize_db(self.output))
+        with closing(load_workbook(self.output / "注音校對_最終報告.xlsx", read_only=True)) as wb:
+            headers, *values = list(wb["修正清單"].values)
+            recorded = next(value for value in values if value[headers.index("字")] == target["char"]
+                            and value[headers.index("課本頁")] == target["printed_page"])
+            self.assertEqual(recorded[headers.index("確認紀錄")], saved["note"])
+        with closing(load_workbook(self.output / "注音校對_技術稽核.xlsx", read_only=True)) as wb:
+            headers, *values = list(wb["Occurrence Ledger"].values)
+            recorded = next(value for value in values if value[headers.index("review_id")] == target["review_id"])
+            self.assertEqual(json.loads(recorded[headers.index("本筆 GUI 教材錯誤確認紀錄")]), saved["gui_confirmation"])
+
+
+    def test_one_real_button_invoke_saves_without_dialog_and_duplicate_cannot_apply_next(self):
+        app = self.app
+        first = app.current()
+        self.assertEqual(app.db["events"], {})
+        with patch.object(gui, "ExpectedDialog") as dialog, patch.object(gui.messagebox, "askyesno") as confirm, patch.object(gui, "save_reusable_expected_rule") as reusable:
+            app.primary.invoke()
+            self.window.update()
+            app.primary.invoke()
+            wait_for_save(app)
+            app.primary.invoke()
+            self.window.update()
+        self.assertEqual(len(app.db["events"]), 1)
+        self.assertIn(first["review_id"], app.db["events"])
+        self.assertNotEqual(app.current()["review_id"], first["review_id"])
+        self.assertEqual(gui.review_lane(app.current()), "expected")
+        dialog.assert_not_called()
+        confirm.assert_not_called()
+        reusable.assert_not_called()
+        # The save shares the actual transaction lock, but creates no actual truth.
+        actual_root = sp.project_actual_evidence_root(self.output)
+        self.assertEqual({p.name for p in actual_root.iterdir()}, {".global_exact_glyph_delivery.lock"})
+
+    def test_last_pending_confirmation_can_be_undone_after_it_leaves_queue(self):
+        app = self.app
+        first = app.current()
+        other = next(row for row in app.records if row["review_id"] != first["review_id"])
+        # Leave only this item in the visible queue; durable events still cover
+        # the full manifest and the other occurrence remains untouched.
+        app.deferred_items = {(gui.review_lane(row), row["occurrence_id"])
+                              for row in app.records if row["review_id"] != first["review_id"]}
+        app.reload_records()
+        self.assertEqual(len(app.records), 1)
+        app.primary.invoke()
+        wait_for_save(app)
+        self.assertEqual(app.records, [])
+        self.assertIn(first["review_id"], app.db["events"])
+        app._review_action_cooldown_until = 0
+        with patch.object(gui.messagebox, "askyesno", return_value=True):
+            app.undo_expected_button.invoke()
+            wait_for_save(app)
+        self.assertEqual(app.current()["review_id"], first["review_id"])
+        self.assertNotIn(first["review_id"], app.db["events"])
+        self.assertEqual(ol.infer_expected_status(app.current()), "UNRESOLVED")
+        self.assertNotIn("manual_expected_decision", app.current())
+        self.assertNotIn(other["review_id"], app.db["events"])
+        self.assertIn(first["review_id"], [row["review_id"] for row in app.records])
+
+    def test_undo_reenter_expected_continues_to_next_pending_item(self):
+        app = self.app
+        first = app.current()
+        app.primary.invoke()  # Save A, then show pending B.
+        wait_for_save(app)
+        second = app.current()
+        self.assertNotEqual(second["review_id"], first["review_id"])
+
+        app._review_action_cooldown_until = 0
+        with patch.object(gui.messagebox, "askyesno", return_value=True):
+            app.undo_last_expected()
+            wait_for_save(app)
+        self.assertEqual(app.current()["review_id"], first["review_id"])
+        self.assertEqual(app.focused_entry["review_id"], first["review_id"])
+
+        app._review_action_cooldown_until = 0
+        with patch.object(gui, "ExpectedDialog") as dialog, patch.object(gui.messagebox, "showwarning"):
+            dialog.return_value.result = {"expected_set": "ㄎㄢˋ", "expected_evidence": "", "resolution_reason": ""}
+            app.resolve_expected()  # Re-enter A through the real GUI action.
+            wait_for_save(app)
+        self.assertEqual(app.db["events"][first["review_id"]]["expected_set"], ["ㄎㄢˋ"])
+        self.assertIsNone(app.focused_entry)
+        self.assertEqual(app.current()["review_id"], second["review_id"])
+        self.assertEqual(app.last_expected_review_id, first["review_id"])
+
+    def test_undo_reenter_last_pending_item_shows_empty_state(self):
+        app = self.app
+        first = app.current()
+        app.deferred_items = {(gui.review_lane(row), row["occurrence_id"])
+                              for row in app.records if row["review_id"] != first["review_id"]}
+        app.reload_records()
+        app.primary.invoke()
+        wait_for_save(app)
+        self.assertEqual(app.records, [])
+
+        app._review_action_cooldown_until = 0
+        with patch.object(gui.messagebox, "askyesno", return_value=True):
+            app.undo_last_expected()
+            wait_for_save(app)
+        self.assertEqual(app.current()["review_id"], first["review_id"])
+
+        app._review_action_cooldown_until = 0
+        app._shortcut_cooldown_until = 0
+        app.primary.invoke()
+        wait_for_save(app)
+        self.assertIsNone(app.focused_entry)
+        self.assertIsNone(app.current())
+        self.assertEqual(app.records, [])
+        self.assertIn("稍後處理", app.status.cget("text"))
+        self.assertIsNone(app._rendered_review_id)
+
+    def test_failed_reentry_after_undo_keeps_item_and_undo_target(self):
+        app = self.app
+        first = app.current()
+        app.primary.invoke()
+        wait_for_save(app)
+        app._review_action_cooldown_until = 0
+        with patch.object(gui.messagebox, "askyesno", return_value=True):
+            app.undo_last_expected()
+            wait_for_save(app)
+        before = (self.output / "人工判定資料庫.json").read_bytes()
+        app._review_action_cooldown_until = 0
+        app._shortcut_cooldown_until = 0
+        with patch.object(sp, "json_save", side_effect=OSError("isolated re-entry failure")), \
+                patch.object(gui.messagebox, "showerror") as error:
+            app.primary.invoke()
+            wait_for_save(app)
+        error.assert_called_once()
+        self.assertEqual((self.output / "人工判定資料庫.json").read_bytes(), before)
+        self.assertEqual(app.current()["review_id"], first["review_id"])
+        self.assertEqual(app.focused_entry["review_id"], first["review_id"])
+        self.assertIsNone(app.last_expected_review_id)
+
+    def test_undo_reentry_keeps_difference_pending_in_queue(self):
+        app = self.app
+        first = app.current()
+        app.primary.invoke()
+        wait_for_save(app)
+        app._review_action_cooldown_until = 0
+        with patch.object(gui.messagebox, "askyesno", return_value=True):
+            app.undo_last_expected()
+            wait_for_save(app)
+        app._review_action_cooldown_until = 0
+        with patch.object(gui, "ExpectedDialog") as dialog, patch.object(gui.messagebox, "showwarning"):
+            dialog.return_value.result = {"expected_set": "ㄎㄢ", "expected_evidence": "", "resolution_reason": ""}
+            app.resolve_expected()
+            wait_for_save(app)
+        self.assertIsNone(app.focused_entry)
+        pending = next(row for row in app.records if row["review_id"] == first["review_id"])
+        self.assertEqual(pending["state"], "DIFFERENCE_PENDING_CONFIRMATION")
+        self.assertEqual(sp.load_or_initialize_db(self.output)["events"][first["review_id"]]["expected_set"], ["ㄎㄢ"])
+
+    def _assert_browsing_older_confirmation_keeps_last_undo_target(self, return_to_pending):
+        app = self.app
+        first = app.current()
+        app.primary.invoke()  # Save A.
+        wait_for_save(app)
+        first_event = copy.deepcopy(app.db["events"][first["review_id"]])
+        second = app.current()
+        self.assertNotEqual(second["review_id"], first["review_id"])
+        app._review_action_cooldown_until = 0
+        app._shortcut_cooldown_until = 0
+        app.primary.invoke()  # Save B.
+        wait_for_save(app)
+        self.assertEqual(app.last_expected_review_id, second["review_id"])
+        self.assertIsNone(app.db["events"][second["review_id"]]["undo_previous_event"])
+
+        with patch.object(gui, "ConfirmedItemsDialog") as choose:
+            choose.return_value.result = first["review_id"]
+            app.open_confirmed_items()
+        self.assertEqual(app.current()["review_id"], first["review_id"])
+        self.assertIn("已確認項目", app.status.cget("text"))
+        self.assertEqual(app.last_expected_review_id, second["review_id"])
+        self.assertEqual(app.undo_expected_button.cget("state"), "normal")
+        if return_to_pending:
+            app.return_to_pending()
+            self.assertIsNone(app.focused_entry)
+            self.assertEqual(app.last_expected_review_id, second["review_id"])
+
+        app._review_action_cooldown_until = 0
+        with patch.object(gui.messagebox, "askyesno", return_value=True):
+            app.undo_last_expected()
+            wait_for_save(app)
+        self.assertEqual(app.current()["review_id"], second["review_id"])
+        self.assertEqual(app.db["events"][first["review_id"]], first_event)
+        self.assertNotIn(second["review_id"], app.db["events"])
+        persisted = sp.load_or_initialize_db(self.output)["events"]
+        self.assertEqual(persisted[first["review_id"]], first_event)
+        self.assertNotIn(second["review_id"], persisted)
+        self.assertIsNone(app.last_expected_review_id)
+
+    def test_browsing_older_confirmation_keeps_last_undo_target(self):
+        self._assert_browsing_older_confirmation_keeps_last_undo_target(False)
+
+    def test_returning_from_older_confirmation_keeps_last_undo_target(self):
+        self._assert_browsing_older_confirmation_keeps_last_undo_target(True)
+
+    def test_correction_undo_restores_previous_manual_decision(self):
+        app = self.app
+        first = app.current()
+        with patch.object(gui, "ExpectedDialog") as dialog, patch.object(gui.messagebox, "showwarning"):
+            dialog.return_value.result = {"expected_set": "ㄎㄢ", "expected_evidence": "", "resolution_reason": ""}
+            app.resolve_expected()
+            wait_for_save(app)
+        prior = copy.deepcopy(app.db["events"][first["review_id"]])
+        prior.pop("undo_previous_event")
+        app._review_action_cooldown_until = 0
+        app._shortcut_cooldown_until = 0
+        app.focused_entry = next(row for row in app.records if row["review_id"] == first["review_id"])
+        app.show()
+        self.assertEqual(app.primary.cget("text"), "確認目前注音就是應標注音")
+        app.primary.invoke()
+        wait_for_save(app)
+        self.assertNotIn(first["review_id"], [row["review_id"] for row in app.records])
+        self.assertEqual(app.db["events"][first["review_id"]]["undo_previous_event"], prior)
+        app._review_action_cooldown_until = 0
+        with patch.object(gui.messagebox, "askyesno", return_value=True):
+            app.undo_last_expected()
+            wait_for_save(app)
+        self.assertEqual(app.current()["review_id"], first["review_id"])
+        self.assertEqual(app.current()["expected_set"], ["ㄎㄢ"])
+        self.assertEqual(app.current()["state"], "DIFFERENCE_PENDING_CONFIRMATION")
+        self.assertEqual(app.db["events"][first["review_id"]], prior)
+
+    def test_only_one_undo_snapshot_is_consumed_after_three_decisions(self):
+        app = self.app
+        first = app.current()
+        app.primary.invoke()  # A: current reading, now terminal and out of the queue.
+        wait_for_save(app)
+        with patch.object(gui, "ConfirmedItemsDialog") as choose:
+            choose.return_value.result = first["review_id"]
+            app.open_confirmed_items()
+        self.assertEqual(app.current()["review_id"], first["review_id"])
+
+        for reading in ("ㄎㄢ", "ㄎㄢˊ"):
+            app._review_action_cooldown_until = 0
+            with patch.object(gui, "ExpectedDialog") as dialog, patch.object(gui.messagebox, "showwarning"):
+                dialog.return_value.result = {"expected_set": reading, "expected_evidence": "", "resolution_reason": ""}
+                app.resolve_expected()
+                wait_for_save(app)
+        latest = app.db["events"][first["review_id"]]
+        self.assertEqual(latest["expected_set"], ["ㄎㄢˊ"])
+        self.assertEqual(latest["undo_previous_event"]["expected_set"], ["ㄎㄢ"])
+        self.assertNotIn("undo_previous_event", latest["undo_previous_event"])
+
+        app._review_action_cooldown_until = 0
+        with patch.object(gui.messagebox, "askyesno", return_value=True):
+            app.undo_last_expected()
+            wait_for_save(app)
+        restored = app.db["events"][first["review_id"]]
+        self.assertEqual(restored["expected_set"], ["ㄎㄢ"])
+        self.assertNotIn("undo_previous_event", restored)
+        self.assertEqual(app.current()["expected_set"], ["ㄎㄢ"])
+        self.assertEqual(app.undo_expected_button.cget("state"), "disabled")
+        before = (self.output / "人工判定資料庫.json").read_bytes()
+        app._review_action_cooldown_until = 0
+        with patch.object(gui.messagebox, "askyesno") as confirm:
+            app.undo_last_expected()
+            confirm.assert_not_called()
+        self.assertEqual((self.output / "人工判定資料庫.json").read_bytes(), before)
+        self.assertEqual(app.db["events"][first["review_id"]], restored)
+
+    def test_legacy_manual_event_without_snapshot_needs_explicit_revoke(self):
+        first = self.app.current()
+        legacy = sp.build_manual_expected_event(first, operation="ENTER_EXPECTED", expected_set="ㄎㄢˋ")
+        db = sp.load_or_initialize_db(self.output)
+        db["events"][first["review_id"]] = legacy
+        sp.json_save(self.output / "人工判定資料庫.json", db)
+        reopened_window = Surface(self.root)
+        try:
+            reopened = HeadlessReviewApp(reopened_window, self.output)
+            reopened_window.update()
+            with patch.object(gui, "ConfirmedItemsDialog") as choose:
+                choose.return_value.result = first["review_id"]
+                reopened.open_confirmed_items()
+            self.assertEqual(reopened.current()["review_id"], first["review_id"])
+            self.assertEqual(reopened.undo_expected_button.cget("state"), "disabled")
+            before = (self.output / "人工判定資料庫.json").read_bytes()
+            with patch.object(gui.messagebox, "askyesno") as confirm:
+                reopened.undo_last_expected()
+                confirm.assert_not_called()
+            self.assertEqual((self.output / "人工判定資料庫.json").read_bytes(), before)
+            with patch.object(gui.messagebox, "askyesno", return_value=True):
+                reopened.clear()  # Existing explicit per-item revoke remains available.
+                wait_for_save(reopened)
+            self.assertNotIn(first["review_id"], reopened.db["events"])
+        finally:
+            reopened_window.destroy()
+
+    def test_confirmed_lookup_reopens_with_filters_and_corrects_one_item(self):
+        app = self.app
+        first = app.current()
+        app.primary.invoke()
+        wait_for_save(app)
+        reopened_window = Surface(self.root)
+        try:
+            reopened = HeadlessReviewApp(reopened_window, self.output)
+            reopened_window.update()
+            ledger = sp.materialize_ledger(reopened.manifest, reopened.db)
+            confirmed = [row for row in ledger if row["review_id"] == first["review_id"]]
+            dialog = HeadlessConfirmedDialog(reopened_window, confirmed, wait=False)
+            dialog.pdf_filter.set("隔離操作樣本")
+            dialog.page_filter.set("1")
+            dialog.text_filter.set("窗外")
+            dialog.refresh()
+            self.assertEqual(dialog.table.get_children(), (first["review_id"],))
+            dialog.text_filter.set("不存在")
+            dialog.refresh()
+            self.assertEqual(dialog.table.get_children(), ())
+            dialog.destroy()
+            with patch.object(gui, "ConfirmedItemsDialog") as choose:
+                choose.return_value.result = first["review_id"]
+                reopened.open_confirmed_items()
+            self.assertEqual(reopened.current()["review_id"], first["review_id"])
+            self.assertEqual(reopened.primary.cget("text"), "確認目前注音就是應標注音")
+            with patch.object(gui, "ExpectedDialog") as correction, patch.object(gui.messagebox, "showwarning"):
+                correction.return_value.result = {"expected_set": "ㄎㄢ", "expected_evidence": "", "resolution_reason": ""}
+                reopened.resolve_expected()
+                wait_for_save(reopened)
+            self.assertEqual(reopened.current()["expected_set"], ["ㄎㄢ"])
+            self.assertIn(first["review_id"], [row["review_id"] for row in reopened.records])
+            self.assertEqual(sp.materialize_ledger(reopened.manifest, reopened.db)[1]["expected_status"], "UNRESOLVED")
+            persisted = sp.load_or_initialize_db(self.output)
+            self.assertEqual(persisted["events"][first["review_id"]]["expected_set"], ["ㄎㄢ"])
+            reopened._review_action_cooldown_until = 0
+            with patch.object(gui.messagebox, "askyesno", return_value=True):
+                reopened.undo_last_expected()
+                wait_for_save(reopened)
+            self.assertEqual(reopened.current()["review_id"], first["review_id"])
+            self.assertEqual(reopened.current()["expected_set"], ["ㄎㄢˋ"])
+            self.assertEqual(reopened.current()["state"], "PASS")
+            self.assertEqual(sp.load_or_initialize_db(self.output)["events"][first["review_id"]]["expected_set"], ["ㄎㄢˋ"])
+            reopened.more_menu.invoke(reopened.more_menu.index("返回待辦"))
+            self.assertIsNone(reopened.focused_entry)
+            self.assertNotEqual(reopened.current()["review_id"], first["review_id"])
+        finally:
+            reopened_window.destroy()
+
+    def test_failed_undo_keeps_saved_decision_and_does_not_show_success(self):
+        app = self.app
+        first = app.current()
+        app.primary.invoke()
+        wait_for_save(app)
+        before = (self.output / "人工判定資料庫.json").read_bytes()
+        old_current = app.current()
+        app._review_action_cooldown_until = 0
+        with patch.object(gui.messagebox, "askyesno", return_value=True), \
+                patch.object(sp, "json_save", side_effect=OSError("isolated undo failure")), \
+                patch.object(gui.messagebox, "showerror") as error, \
+                patch.object(gui.messagebox, "showinfo") as success:
+            app.undo_last_expected()
+            wait_for_save(app)
+        error.assert_called_once()
+        success.assert_not_called()
+        self.assertEqual(app.current(), old_current)
+        self.assertEqual((self.output / "人工判定資料庫.json").read_bytes(), before)
+        self.assertIn(first["review_id"], app.db["events"])
+
+    def test_optional_blank_dialog_actual_unresolved_then_actual_group(self):
+        app = self.app
+        both = next(e for e in app.records if not e["actual"] and ol.infer_expected_status(e) == "UNRESOLVED")
+        app.index = app.records.index(both)
+        app.show()
+        self.assertEqual(gui.review_lane(app.current()), "expected")
+        self.assertEqual(app.primary.cget("text"), "輸入其他應標注音")
+        dialog = HeadlessExpectedDialog(self.window, both, "輸入其他應標注音", wait=False)
+        dialog.expected.set("ㄎㄢˋ")
+        dialog.evidence.set(" \t ")
+        dialog.submit()
+        with patch.object(gui, "ExpectedDialog") as cls:
+            cls.return_value.result = dialog.result
+            app.resolve_expected()
+            wait_for_save(app)
+        self.assertEqual(gui.review_lane(app.current()), "expected")
+        new_both = next(e for e in app.records if e["review_id"] == both["review_id"])
+        self.assertEqual(gui.review_lane(new_both), "actual")
+        self.assertTrue(ol.valid_manual_expected_decision(new_both))
+        app.deferred_items = {(gui.review_lane(e), e["occurrence_id"]) for e in app.records if gui.review_lane(e) == "expected"}
+        app.reload_records()
+        self.assertEqual(gui.review_lane(app.current()), "actual")
+
+    def test_staged_actual_does_not_hide_expected_or_integrity_and_defer_is_finite(self):
+        app = self.app
+        both = next(e for e in app.records if not e["actual"] and ol.infer_expected_status(e) == "UNRESOLVED")
+        actual_only = next(e for e in app.records if gui.review_lane(e) == "actual")
+        sp.stage_manual_actual_correction(self.output, both["review_id"], "ㄎㄢˋ")
+        sp.stage_manual_actual_correction(self.output, actual_only["review_id"], "ㄎㄢˋ")
+        app.reload_records()
+        self.assertIn(both["review_id"], [e["review_id"] for e in app.records])
+        self.assertNotIn(actual_only["review_id"], [e["review_id"] for e in app.records])
+        self.assertIn("DIFFERENCE_PENDING_CONFIRMATION", [e["state"] for e in app.records])
+        self.assertIn("DATA_INTEGRITY_ERROR", [e["state"] for e in app.records])
+        self.assertNotIn("EXCLUDED_OUT_OF_SCOPE", [e["state"] for e in app.records])
+        app.reload_records()
+        pending = len(app.records)
+        for _ in range(pending):
+            app.defer_current()
+        self.assertEqual(app.records, [])
+        self.assertEqual(len(app.deferred_items), pending)
+        self.assertEqual(app.db["events"], {})
+        app.defer_current()
+        self.assertEqual(len(app.deferred_items), pending)
+        self.assertIn("未視為完成", app._empty_actionable_state()[1])
+        app.revisit_deferred()
+        self.assertEqual(len(app.records), pending)
+        self.assertEqual(gui.review_lane(app.current()), "expected")
+
+    def test_failed_save_has_no_db_or_navigation_change_and_no_success(self):
+        app = self.app
+        first = app.current()
+        before = (self.output / "人工判定資料庫.json").read_bytes()
+        for failing in ("prepare_review_ledger", "_capture", "json_save"):
+            # Resume now warms the service. Exercise a cold rebuild failure
+            # explicitly, plus dependency-read and write failures when warm.
+            app.reload_records()
+            app.show()
+            service = app._save_service
+            self.assertIsNotNone(service._ledger)
+            if failing == "prepare_review_ledger":
+                service.invalidate()
+            target = service if failing == "_capture" else sp
+            with self.subTest(failing=failing), patch.object(target, failing, side_effect=OSError("isolated save failure")) as injected, patch.object(gui.messagebox, "showerror") as error, patch.object(gui.messagebox, "showinfo") as success:
+                app.primary.invoke()
+                wait_for_save(app)
+                injected.assert_called_once()
+                error.assert_called_once()
+                success.assert_not_called()
+            self.assertEqual(app.current(), first)
+            self.assertEqual(app.db["events"], {})
+            self.assertEqual((self.output / "人工判定資料庫.json").read_bytes(), before)
+
+    def test_pdf_read_failure_disables_shortcut(self):
+        app = self.app
+        Path(app.current()["pdf"]).unlink()
+        app.show()
+        self.assertEqual(app.primary.cget("state"), "disabled")
+        app.confirm_current_expected(app.current()["review_id"])
+        self.assertEqual(app.db["events"], {})
+
+    def test_ctrl_enter_dialog_repetition_and_busy_action_save_only_one_item(self):
+        app = self.app
+        first_id = app.current()["review_id"]
+        original_dialog = HeadlessExpectedDialog
+
+        def keyboard_dialog(*args, **kwargs):
+            dialog = original_dialog(*args, **kwargs, wait=False)
+            dialog.expected.set("ㄎㄢˋ")
+            dialog.update()
+            dialog.focus_force()
+            # Queue genuine Tk key events. Destroying the submitted dialog must
+            # prevent the second event from becoming another item's decision.
+            dialog.event_generate("<Control-Return>", when="tail")
+            dialog.event_generate("<Control-Return>", when="tail")
+            dialog.wait_window()
+            return dialog
+
+        with patch.object(gui, "ExpectedDialog", side_effect=keyboard_dialog) as dialog:
+            app.resolve_expected()
+            app.resolve_expected()
+            wait_for_save(app)
+        dialog.assert_called_once()
+        self.assertEqual(set(app.db["events"]), {first_id})
+
+    def test_saved_event_survives_native_show_failure_and_reopens(self):
+        app = self.app
+        first_id = app.current()["review_id"]
+        with patch.object(app, "show", side_effect=RuntimeError("native publication failure")), \
+                patch.object(gui.messagebox, "showwarning") as warning:
+            app.primary.invoke()
+            wait_for_save(app)
+        warning.assert_called_once()
+        self.assertIn("已保存", warning.call_args.args[0])
+        self.assertTrue(app._last_event_saved)
+        self.assertFalse(app._last_event_refreshed)
+        self.assertEqual(app.primary.cget("state"), "disabled")
+        reopened_window = Surface(self.root)
+        try:
+            reopened = HeadlessReviewApp(reopened_window, self.output)
+            reopened_window.update()
+            self.assertIn(first_id, reopened.db["events"])
+            self.assertNotIn(first_id, [row["review_id"] for row in reopened.records])
+        finally:
+            reopened_window.destroy()
+
+    def test_next_preview_failure_after_save_does_not_enable_fast_confirmation(self):
+        app = self.app
+        first_id = app.current()["review_id"]
+        with patch.object(app.image, "load", return_value=False):
+            app.primary.invoke()
+            wait_for_save(app)
+        self.assertTrue(app._last_event_saved)
+        self.assertIsNone(app._rendered_review_id)
+        self.assertEqual(app.primary.cget("state"), "disabled")
+        app._shortcut_cooldown_until = app._review_action_cooldown_until = 0
+        app.confirm_current_expected(app.current()["review_id"])
+        self.assertEqual(set(app.db["events"]), {first_id})
+
+    def test_preview_failure_during_failed_save_stays_disabled(self):
+        app = self.app
+        first = app.current()
+        entered, release = threading.Event(), threading.Event()
+
+        def failed_save(*_args, **_kwargs):
+            entered.set()
+            if not release.wait(5):
+                raise RuntimeError("test did not release worker")
+            raise OSError("isolated failed write")
+
+        with patch.object(app._save_service, "save_event", side_effect=failed_save), \
+                patch.object(gui.messagebox, "showerror") as error:
+            app.primary.invoke()
+            self.assertTrue(entered.wait(5))
+            try:
+                app._preview_failed()
+            finally:
+                release.set()
+            wait_for_save(app)
+        error.assert_called_once()
+        self.assertEqual(app.current(), first)
+        self.assertEqual(app.db["events"], {})
+        self.assertIsNone(app._rendered_review_id)
+        self.assertEqual(app.primary.cget("state"), "disabled")
+
+    def cancelled_window_shortcut_full_label_and_staged_batch_footer_remain_visible(self):
+        app = self.app
+        self.window.update()
+        label_width = tkfont.Font(font=app.primary.cget("font")).measure(app.primary.cget("text"))
+        self.assertGreaterEqual(app.primary.winfo_width(), label_width + 4)
+        both = next(e for e in app.records if not e["actual"] and ol.infer_expected_status(e) == "UNRESOLVED")
+        sp.stage_manual_actual_correction(self.output, both["review_id"], "ㄎㄢˋ")
+        app.reload_records()
+        app.index = next(n for n, e in enumerate(app.records) if e["review_id"] == both["review_id"])
+        app.show()
+        self.window.update()
+        self.assertIn("已暫存", app.summary_text.cget("text"))
+        bottom = self.window.winfo_rooty() + self.window.winfo_height()
+        for button in (app.primary, app.later, app.apply_actual_button):
+            self.assertTrue(button.winfo_viewable())
+            self.assertGreater(button.winfo_height(), 1)
+            self.assertLessEqual(button.winfo_rooty() + button.winfo_height(), bottom)
+
+    def test_reusable_failure_after_saved_item_does_not_undo_judgment(self):
+        app = self.app
+        first_id = app.current()["review_id"]
+        app.primary.invoke()
+        wait_for_save(app)
+        before = (self.output / "人工判定資料庫.json").read_bytes()
+        with patch.object(gui.simpledialog, "askstring", side_effect=["看一看", ""]), patch.object(gui.messagebox, "showerror") as error, patch.object(gui, "save_reusable_expected_rule") as reusable:
+            app.create_reusable_expected_rule()
+            error.assert_called_once()
+            reusable.assert_not_called()
+        self.assertIn(first_id, app.db["events"])
+        self.assertEqual((self.output / "人工判定資料庫.json").read_bytes(), before)
+
+
+if __name__ == "__main__":
+    unittest.main()

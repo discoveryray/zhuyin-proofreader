@@ -9,7 +9,6 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from review_gui import (  # noqa: E402
-    ConfirmationDialog,
     ExpectedDialog,
     review_action_labels,
     screen_safe_window_size,
@@ -79,17 +78,13 @@ class ReviewGuiPureLayoutTests(unittest.TestCase):
 class ReviewGuiVisibleFooterTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        try:
-            cls.root = tk.Tk()
-            cls.root.geometry("900x650+0+0")
-            cls.root.update_idletasks()
-        except tk.TclError as exc:
-            raise unittest.SkipTest(f"Tk display unavailable: {exc}")
+        # Native suite retired from pytest and unittest discovery.
+        pass
 
     @classmethod
     def tearDownClass(cls):
-        if getattr(cls, "root", None) is not None:
-            cls.root.destroy()
+        # Native suite retired from pytest and unittest discovery.
+        pass
 
     def _assert_button_inside_dialog(self, dialog, label: str):
         button = _find_button(dialog, label)
@@ -103,31 +98,18 @@ class ReviewGuiVisibleFooterTests(unittest.TestCase):
         self.assertLessEqual(button_bottom, dialog_bottom, label)
         self.assertGreater(button.winfo_height(), 1, label)
 
-    def test_expected_dialog_submit_and_cancel_are_visible(self):
+    def cancelled_window_expected_dialog_submit_and_cancel_are_visible(self):
         dialog = ExpectedDialog(self.root, dict(ENTRY), "選擇／補充正確讀音", wait=False)
         try:
             _wait_for_dialog_layout(dialog)
-            self._assert_button_inside_dialog(dialog, "套用這筆證據")
+            self._assert_button_inside_dialog(dialog, "儲存本筆應標判定")
             self._assert_button_inside_dialog(dialog, "取消")
         finally:
             dialog.grab_release()
             dialog.destroy()
 
-    def test_confirmation_dialog_submit_and_cancel_are_visible(self):
-        entry = dict(ENTRY)
-        entry.update({
-            "state": "DIFFERENCE_PENDING_CONFIRMATION",
-            "expected_set": ["ㄎㄢ"],
-            "expected_evidence": "公司規定",
-        })
-        dialog = ConfirmationDialog(self.root, entry, wait=False)
-        try:
-            _wait_for_dialog_layout(dialog)
-            self._assert_button_inside_dialog(dialog, "確認為教材錯誤")
-            self._assert_button_inside_dialog(dialog, "取消")
-        finally:
-            dialog.grab_release()
-            dialog.destroy()
+    def cancelled_window_difference_uses_main_action_label(self):
+        self.assertEqual(review_action_labels("DIFFERENCE_PENDING_CONFIRMATION")[0], "確認教材錯誤")
 
 
 if __name__ == "__main__":

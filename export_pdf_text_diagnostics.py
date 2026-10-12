@@ -15,6 +15,8 @@ from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 from openpyxl.cell.cell import ILLEGAL_CHARACTERS_RE
 
+from exact_glyph_identity import classify_ttf_glyf_record
+
 PROGRAM = "PDF 文字層診斷匯出工具"
 VERSION = "0.4.1-poin-safeexcel"
 ZH_FONT_RE = re.compile(r"(zhuyin|zhuin|zuinn|poin|chuin|bpmf)", re.IGNORECASE)
@@ -130,7 +132,7 @@ class TrueTypeGlyphInspector:
         maxp_off, _ = self.tables["maxp"]
         self.index_to_loc_format = struct.unpack_from(">h", data, head_off + 50)[0]
         self.num_glyphs = struct.unpack_from(">H", data, maxp_off + 4)[0]
-        self.glyf_off, _ = self.tables["glyf"]
+        self.glyf_off, self.glyf_length = self.tables["glyf"]
         self.loca = self._read_loca()
 
     def _read_tables(self):
@@ -158,10 +160,10 @@ class TrueTypeGlyphInspector:
     def glyph_bytes(self, glyph_id: int) -> bytes:
         """Return the raw ``glyf`` record for one glyph.
 
-        This is deliberately a byte-level fingerprint source rather than a
-        semantic decoder.  Identical bytes across embedded font subsets are a
-        conservative proof that the referenced component outline did not
-        change.  An empty/invalid glyph returns ``b""``.
+        This remains the existing project-local byte-level fingerprint source.
+        It does not establish global eligibility: equal composite records may
+        reference the same GIDs whose component outlines differ between font
+        programs.  An empty/invalid glyph returns ``b""``.
         """
         try:
             gid = int(glyph_id)
@@ -178,6 +180,62 @@ class TrueTypeGlyphInspector:
     def glyph_sha256(self, glyph_id: int) -> str:
         raw = self.glyph_bytes(glyph_id)
         return hashlib.sha256(raw).hexdigest() if raw else ""
+
+    def global_exact_identity(self, glyph_id: int):
+        """Return the fail-closed simple-glyf identity admission result.
+
+        ``glyph_bytes()`` and ``glyph_sha256()`` intentionally retain their
+        existing project-local raw-record behavior.  This separate boundary
+        proves the current record range and complete simple-glyph structure
+        before declaring it eligible for any future cross-project reuse.
+        """
+
+        def invalid(reason):
+            result = classify_ttf_glyf_record(b"", record_range_valid=False)
+            result["reason"] = reason
+            return result
+        try:
+            gid = int(glyph_id)
+        except Exception:
+            return invalid("INVALID_GLYPH_ID")
+        if gid < 0 or gid >= self.num_glyphs or gid + 1 >= len(self.loca):
+            return invalid("GLYPH_ID_OUT_OF_RANGE")
+
+        head_off, head_length = self.tables["head"]
+        maxp_off, maxp_length = self.tables["maxp"]
+        loca_off, loca_length = self.tables["loca"]
+        loca_entry_size = 2 if self.index_to_loc_format == 0 else 4
+        required_loca_length = (self.num_glyphs + 1) * loca_entry_size
+        table_ranges_valid = (
+            self.index_to_loc_format in {0, 1}
+            and head_length >= 54
+            and maxp_length >= 6
+            and loca_length >= required_loca_length
+            and head_off >= 0
+            and maxp_off >= 0
+            and loca_off >= 0
+            and self.glyf_off >= 0
+            and self.glyf_length >= 0
+            and head_off + head_length <= len(self.data)
+            and maxp_off + maxp_length <= len(self.data)
+            and loca_off + loca_length <= len(self.data)
+            and self.glyf_off + self.glyf_length <= len(self.data)
+        )
+        relative_start = self.loca[gid]
+        relative_end = self.loca[gid + 1]
+        record_range_valid = (
+            table_ranges_valid
+            and 0 <= relative_start < relative_end <= self.glyf_length
+        )
+        if not record_range_valid:
+            return invalid("INVALID_GLYF_RECORD_RANGE")
+
+        start = self.glyf_off + relative_start
+        end = self.glyf_off + relative_end
+        raw = bytes(self.data[start:end])
+        if len(raw) != relative_end - relative_start:
+            return invalid("TRUNCATED_GLYF_RECORD_RANGE")
+        return classify_ttf_glyf_record(raw)
 
     def simple_contours(self, glyph_id: int):
         """Decode a simple TrueType glyph into point contours.

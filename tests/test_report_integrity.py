@@ -153,7 +153,7 @@ class ReportIntegrityTests(unittest.TestCase):
                 self.assertNotIn("occurrence_id", [str(v or "") for v in rows[0]])
                 rules_sheet = user_workbook["人工與公司規則"]
                 rule_headers = [str(v or "") for v in next(rules_sheet.iter_rows(values_only=True))]
-                self.assertEqual(rule_headers, ["來源類型", "PDF", "課本頁", "詞語／局部詞境", "字", "應標注音", "依據／來源", "適用範圍", "備註"])
+                self.assertEqual(rule_headers, ["來源類型", "PDF", "課本頁", "詞語／局部詞境", "字", "應標注音", "依據／來源（人工文字依據選填）", "適用範圍", "備註", "人工判定操作", "人工判定時間"])
                 self.assertNotIn("review_id", rule_headers)
                 rule_rows = list(rules_sheet.iter_rows(min_row=2, values_only=True))
                 self.assertTrue(any(row[0] == "可重用規則" and row[3] == "角色" and row[5] == "ㄐㄩㄝˊ" for row in rule_rows))

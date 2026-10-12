@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import csv
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -36,6 +37,10 @@ AUTHORITATIVE_FILES = (
     GLYPH_CONFLICT_FILE,
     GLYPH_PROVENANCE_FILE,
 )
+
+
+def oid(value):
+    return "occ_" + hashlib.sha256(value.encode()).hexdigest()
 
 
 def entry(
@@ -73,7 +78,7 @@ def entry(
 def group(prefix: str, glyph_sha256: str, *, count: int = 1, pdf_name: str | None = None) -> dict:
     members = [
         entry(
-            f"{prefix}-{index + 1}",
+            oid(f"{prefix}-{index + 1}"),
             glyph_sha256,
             pdf_name=pdf_name or f"{prefix}.pdf",
             x0=10.0 + index * 20.0,
@@ -177,7 +182,7 @@ class ManualActualBatchApplyV570Tests(unittest.TestCase):
             self.assertEqual(apply_mock.call_count, 2)
             self.assertEqual(result["applied_group_count"], 2)
             self.assertEqual([item["group_id"] for item in result["group_results"]], expected_order)
-            self.assertEqual(result["affected_occurrence_ids"], ["first-1", "first-2", "second-1"])
+            self.assertEqual(result["affected_occurrence_ids"], sorted([oid("first-1"), oid("first-2"), oid("second-1")]))
             self.assertEqual(result["affected_pdf_names"], ["a-book.pdf", "z-book.pdf"])
             self.assertEqual(result["staging_remaining_count"], 0)
             self.assertEqual(load_manual_actual_staging(root)["staged_groups"], [])
@@ -277,7 +282,7 @@ class ManualActualBatchApplyV570Tests(unittest.TestCase):
 
             self.assertEqual(result["applied_group_count"], 2)
             self.assertEqual(result["quarantined_group_ids"], [conflicting["group_id"]])
-            self.assertEqual(result["reopened_occurrence_ids"], ["conflict-3"])
+            self.assertEqual(result["reopened_occurrence_ids"], [oid("conflict-3")])
             conflict_result = next(
                 item for item in result["group_results"]
                 if item["group_id"] == conflicting["group_id"]

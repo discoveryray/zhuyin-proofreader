@@ -25,37 +25,25 @@ v5.6.0 以 v5.5.1 為基準，保留 occurrence-local actual、GLYPH_TRUTH_CONFL
 5. 「查看報告」開啟日常使用的「注音校對_最終報告.xlsx」；「更多…→開啟技術稽核報告」才會開啟完整治理資料。
 6. 主畫面的詳細「執行紀錄」預設隱藏；平常只顯示一行進度，需要除錯時再從「更多…」展開。
 
-二、人工確認畫面的按鈕
-程式依目前狀態，只顯示當下合法的主要操作，不再要求校對員理解內部 state machine。
-
-1. 發現差異，請確認
-   - 「確認教材錯誤」：課本現標與 expected 已明確不同時使用。六閘門仍完整保留，但集中在同一個確認視窗，不再連續跳六個對話框。
-   - 「課本其實正確」：只有在你有更高優先或更適用的 expected 來源時使用。必須重新輸入應標讀音、來源與詞境；程式重新比較 actual／expected，相同才會 PASS，不能直接人工覆寫為正確。
-
-2. 有兩種規則互相衝突
-   - 「選擇正確讀音」：輸入本句應採用的 expected、正式來源與完整詞境。程式會自行比較 actual；相同才 PASS，不同則轉成待確認差異。
-
-3. 正確讀音尚未確定／尚未找到正確讀音依據
-   - 「補充正確讀音」：有完整詞條、公司規定、手冊或其他現版獨立證據時使用；沒有足夠證據就按「稍後處理」。
-
-4. 「稍後處理」
-   - 不做任何正誤結論，保留未決並跳到下一筆。
-
-5. 「更多…」
-   - 此處不需校對：只有確實不屬注音校對母體時使用，例如插圖文字根本沒有可見注音。
-   - 實際注音辨識有誤：直接開啟原頁 visual actual 核對視窗；只核對 actual，不提供 expected／字典答案。按「暫存這筆 actual」只保存人工核對結果，不會立即寫入正式 evidence 或重新解碼。
-   - 撤銷本筆人工判定：取消本筆人工事件，回到自動證據狀態。
-   - 查看／隱藏技術資訊：顯示 occurrence_id、review_id、內部 state、證據來源等除錯資料。
-   - 更新 Excel 報告：重新依目前 ledger 與人工事件產生報告。
-
-6. 人工 actual 的暫存與批次套用
-   - Actual 核對視窗可顯示同一 exact glyph group 的位置；只有你勾選「我已直接核對這張 PDF 原頁」的 occurrence 才算直接人工 checked。未勾選的同 group peer 不會被假裝成已確認，也仍會留在「待人工處理」清單。
-   - 按「暫存這筆 actual」後，決定會 durable 保存；即使關閉並重開程式仍存在。這一步不是正式套用，不修改 authoritative actual evidence，也不觸發 PDF decode。
-   - 已直接 checked 並 staged 的 occurrence 會暫時從 GUI「待人工處理」清單隱藏，畫面自動前進下一個尚未 staged 的位置；authoritative ledger 在正式套用前仍維持 pending，這不代表 completion gate 已完成。
-   - 主畫面「套用 actual 修正（N）」中的 N 是等待套用的 staged exact group 數，不是 occurrence 數。同一 group 可直接核對一個或多個位置；queue denominator 只依真正 checked 的 occurrence 下降。
-   - 完成多筆核對後按「套用 actual 修正（N）」：程式才會一次 transaction 寫入正式 actual evidence、一次更新依賴舊 actual 的確認狀態，並一次執行完整 session 的 incremental refresh。
-   - Refresh 仍檢查整冊 PDF 清單；未受此次 actual evidence 影響的 PDF 會依 fingerprint/cache 直接沿用，真正受影響的 PDF 才重新解碼。
-   - Batch 完成後工作階段與候選狀態已更新；大型 Excel 最終報告仍可在完成一批操作後按「更新 Excel 報告」再產生。
+二、人工確認畫面的按鈕與處理順序
+1. 第一組「應標注音待確認」先處理，第二組「課本目前注音待辨識」接續；其他差異與完整性阻擋仍保留入口。畫面顯示目前組別與剩餘筆數，組內依教材、頁面、出現位置排列。
+   - 同筆兩邊都未決時，先輸入應標；保存後再進 actual 組，剛才的應標判定會保留。
+   - 保存後留在本組處理下一筆，組內完成才接續下一組。組別完成不代表全冊完成。
+2. 看過原文與語境，確認有效的目前注音就是本句應標時，按「確認目前注音就是應標注音」。
+   - 一次點擊就保存本筆人工判定並前進，不重輸、不必填依據、不再第二次確認。
+   - 目前注音尚未確定、無效或原頁讀取失敗時，快捷不可執行。沒按下按鈕就不會產生判定。
+   - 此判定只適用本位置，保存當次讀音、項目識別、語境、操作與時間。日後 actual 改變會重新比較，不改寫保存的 expected。
+3. 「輸入其他應標注音」：輸入合法注音後按「儲存本筆應標判定」。依據（選填）可以空白或只有空白字元；原文與位置由程式保留，不需填入代用或虛構來源。
+   - 文字依據與人工操作紀錄分開保存；重新開啟、重播、更新報表、actual refresh 與完成度計算均保留本筆判定。
+4. 「稍後處理」不作正誤結論，移至本輪稍後清單；按「重新查看稍後處理（N）」可再次處理。走完本輪不會自動循環或把稍後項目視為完成，重新開啟仍可看到未決項目。
+5. 兩邊都確定但不同時，保留「確認教材錯誤」六閘門與「課本其實正確」重新輸入應標的流程，不自動確認教材錯誤。
+6. 「更多…」保留此處不需校對、實際注音辨識有誤、撤銷本筆人工判定、技術資訊、更新 Excel 報告，並提供「另行建立上筆應標可重用規則…」。
+   - 排除仍必須有可稽核原頁或結構證據，完整性阻擋仍須修復。
+7. actual 暫存與批次套用維持原流程。
+   - 原頁 actual 視窗不提供 expected／字典答案。只有勾選直接核對的位置會 staged；未 checked 的同字形位置仍待處理。
+   - staged 只暫時隱藏第二組的該位置；若 expected 尚未確定，第一組仍會顯示。暫存不是正式套用或 completion。
+   - 按「套用 actual 修正（N）」才批次交易寫入正式 actual evidence、撤銷依賴舊 actual 的差異確認並增量更新完整 session。獨立 expected 判定持續保留。
+   - N 是 staged exact group 數。未受影響 PDF 依既有 fingerprint/cache 沿用；Excel 可在完成一批後再更新。
 
 三、六閘門仍然存在，但操作簡化
 確認教材錯誤時，同一個視窗會要求一次確認：
@@ -74,7 +62,7 @@ v5.6.0 以 v5.5.1 為基準，保留 occurrence-local actual、GLYPH_TRUTH_CONFL
 - 每筆 occurrence 分別保存 actual_status 與 expected_status；其中一邊未決，不得抹掉另一邊已建立的證據。
 - expected resolver 對每筆 occurrence 都執行，即使 actual 尚未解碼；actual 不得決定 expected 是否要解析，也不得決定 expected 要選哪個讀音。
 - 多讀音「允許集合」本身就是 expected_set；比較時只做 actual ∈ expected_set，不再因 actual 恰好落在集合外才反向建立 expected。
-- 不得用 actual 反推 expected，也不得為了讓兩者相等而改其中一方。
+- 自動流程不得用 actual 反推 expected，也不得為了讓兩者相等而改其中一方。使用者主動看過原文語境後按快捷，是另存本位置的人為判定，不是自動 resolver 推論；不改 actual、不建立 Global truth、quorum 或自動核准。
 - 歷史判定只供回歸與定位，不得代替現版證據。
 - RULE_CONFLICT、EXPECTED_AMBIGUOUS、未建立 expected、未解碼都不是「正確」。
 
@@ -90,7 +78,7 @@ v5.6.0 以 v5.5.1 為基準，保留 occurrence-local actual、GLYPH_TRUTH_CONFL
    - 一般校對不需要開啟；開發、驗收或除錯時才使用。
 
 六、可重用 expected 規則（可選）
-- 在「選擇／補充正確讀音」視窗，可勾選「將這個 expected 儲存為可重用規則」。
+- 先保存本筆應標，再由「更多…→另行建立上筆應標可重用規則…」明確操作；不自動啟用。規則所需完整詞與真實來源依據不得阻擋或撤銷本筆判定。
 - 規則只套用「相同完整詞＋相同目標位置」，不會擴張成單字通用音。
 - 規則必須有明確 expected 與獨立來源；actual 不參與規則內容。
 - 規則儲存在「可重用expected規則.json」。更新報告／建立新工作階段時，會把當下規則 snapshot 寫入工作階段，確保之後可重現。

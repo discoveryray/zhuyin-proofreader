@@ -39,6 +39,10 @@ from standalone_proofread import (  # noqa: E402
     validate_manifest_integrity,
     validate_output_artifact_hashes,
 )
+from global_exact_glyph_library import (  # noqa: E402
+    GlobalExactGlyphRepository,
+    global_exact_glyph_evidence_hashes,
+)
 
 
 ACTUAL_COLUMNS = [
@@ -47,6 +51,7 @@ ACTUAL_COLUMNS = [
     "glyph_id_字形索引", "x0", "y0", "x1", "y1",
     "occurrence_id", "review_id", "identity_confidence", "identity_row_fallback",
     "identity_collision_base", "source_row_number", "ledger_schema_version", "workbook_schema_version",
+    "字形架構", "TTF字形SHA256", "CFF樣式群組", "CFF整字字形SHA256",
 ]
 
 EXCLUDED_COLUMNS = [
@@ -71,6 +76,10 @@ class MandatoryResolverIntegrationTests(unittest.TestCase):
             document.save(pdf_path)
             document.close()
 
+            global_snapshot = GlobalExactGlyphRepository.resolved(
+                temp_root / "global-store"
+            ).load_snapshot()
+
             pdf_hash = hashlib.sha256(pdf_path.read_bytes()).hexdigest()
             fingerprint = compute_actual_asset_fingerprint(
                 ROOT,
@@ -78,6 +87,14 @@ class MandatoryResolverIntegrationTests(unittest.TestCase):
                 source_report,
                 decoder_version=DECODER_VERSION,
                 source_files=ACTUAL_DECODER_SOURCE_FILES,
+                global_exact_glyph_evidence_hashes=global_exact_glyph_evidence_hashes(
+                    global_snapshot,
+                    (),
+                ),
+                dynamic_dependencies={
+                    "ttf_glyph_sha256": [],
+                    "cff_glyph_keys": [],
+                },
             )
 
             source = {
@@ -101,6 +118,11 @@ class MandatoryResolverIntegrationTests(unittest.TestCase):
                 "source_row_number": 2,
                 "ledger_schema_version": LEDGER_SCHEMA_VERSION,
                 "workbook_schema_version": WORKBOOK_SCHEMA_VERSION,
+                # Synthetic actual row: use a complete unknown-style CFF
+                # recording identity so the Phase-3 dependency roster is
+                # explicitly complete without inventing TTF structure.
+                "字形架構": "CFF整字注音",
+                "CFF整字字形SHA256": "a" * 64,
             }
             prepare_occurrence_rows(pdf_hash, [source])
 
@@ -135,7 +157,14 @@ class MandatoryResolverIntegrationTests(unittest.TestCase):
             workbook.save(actual_path)
 
             output_path = candidate_workbook_path(candidate_dir, pdf_path)
-            result = analyze(actual_path, DEFAULT_DICT, DEFAULT_RULES, output_path, pdf_path=pdf_path)
+            result = analyze(
+                actual_path,
+                DEFAULT_DICT,
+                DEFAULT_RULES,
+                output_path,
+                pdf_path=pdf_path,
+                global_snapshot=global_snapshot,
+            )
             report = result["mandatory_regression"]
 
             self.assertGreater(report["required"], 0)
