@@ -1,5 +1,7 @@
 # zhuyin-proofreader v5.8 Master Development & Independent Review Plan
 
+2026-10-12 使用者永久採納 `validation-flow/current-evidence/1`：正常驗證/合併/發布不要求CI歷史自動重播、舊artifact可下載或封存新版閉包。當前完整非視窗pytest/verify-active、raw證據、兩輪完整適用PASS、actual merge及必要push驗證仍必要；旧原件/schema/判定、baseline/source_ref/計數及安全/授權/保護不變。下文原歷史前置說明不適用新執行，詳見[現行驗證政策](VALIDATION_POLICY.md)。
+
 文件版本：1.5（保留既有檔名以維持引用）
 
 修訂日期：2026-10-07

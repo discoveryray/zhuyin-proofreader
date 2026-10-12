@@ -402,7 +402,9 @@ class PR29GateTests(unittest.TestCase):
             self.assertIn("duplicate JSON key", process.stdout)
 
     def test_workflow_actual_condition_is_limited_to_adopted_pr_and_target(self):
-        text = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        # Exact old policy source is immutable; live executions now use current-evidence/1.
+        from tests.ci_workflow_history_fixture import E744_WORKFLOW
+        text = E744_WORKFLOW
         expression = re.search(r"- name: Run full unittest suite\s+if: \$\{\{ (.+?) \}\}", text)[1]
         matrix_choice = re.search(r"python-version: \$\{\{ fromJSON\((.+)\) \}\}", text)[1]
         self.assertIn(expression, matrix_choice)

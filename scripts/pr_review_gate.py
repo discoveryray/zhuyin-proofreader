@@ -17,6 +17,7 @@ import zipfile
 SCHEMA = "zhuyin-pr-review-gate/3"
 STAGED_SCHEMA = "zhuyin-pr-review-gate/4"
 NO_WINDOW_POLICY = "validation-flow/no-real-tk/1"
+CURRENT_POLICY = "validation-flow/current-evidence/1"
 REPOSITORY = "discoveryray/zhuyin-proofreader"
 WORKFLOW = ".github/workflows/ci.yml"
 PYTHONS = ("3.13",)
@@ -521,7 +522,8 @@ def _pr43_commit(record):
     return trees[0], parents
 
 
-def _pr43_history(state):
+def _pr43_history(state, *, _current_only=None):
+    current_only = state.get("validation_policy") == CURRENT_POLICY if _current_only is None else _current_only
     adapter = state.get("pr43_review_history_adapter")
     _fields(adapter, "contract sources", "PR43 history adapter")
     _require(adapter["contract"] == PR43_HISTORY_CONTRACT, "unknown PR43 history contract")
@@ -535,6 +537,9 @@ def _pr43_history(state):
     _fields(adapter["sources"], " ".join(PR43_SIXTH_SOURCES), "PR43 sixth original sources")
     saved = {}
     for name, digest in PR43_SIXTH_SOURCES.items():
+        if current_only and name in {"ci_manifest", "ci_raw", "ci_junit", "ci_events"}:
+            _text(adapter["sources"][name], "retained PR43 historical CI reference")
+            continue
         raw = _pr43_saved_bytes(adapter["sources"][name])
         _require(hashlib.sha256(raw).hexdigest() == digest, "PR43 sixth source hash differs: " + name)
         saved[name] = raw
@@ -575,13 +580,14 @@ def _pr43_history(state):
     # Forbid a third record at this old scope, even with different CI/coverage.
     _require([r for r in state["reviews"] if _review_scope(r) == _review_scope(code1)] == [code1, blocked1],
              "PR43 only the original R1 pair may coexist")
-    manifest = _pr43_json(saved["ci_manifest"])
-    _require(manifest["ci"]["run_id"] == 37789520018 and manifest["ci"]["attempt"] == 1
-             and manifest["ci"]["event"] == "pull_request" and manifest["outcome"] == "failed"
-             and manifest["exit_code"] == 1 and manifest["retry_eligible"] is False
-             and manifest["candidate"] == {"head": "ccb0f970ee3ab4fa707b75ad8c366848746f5a68",
-                 "tree": PR43_FIFTH_TREE, "parents": [PR43_FIFTH_BASE, PR43_FIFTH_HEAD]},
-             "PR43 original failed CI must remain failed")
+    if not current_only:
+        manifest = _pr43_json(saved["ci_manifest"])
+        _require(manifest["ci"]["run_id"] == 37789520018 and manifest["ci"]["attempt"] == 1
+                 and manifest["ci"]["event"] == "pull_request" and manifest["outcome"] == "failed"
+                 and manifest["exit_code"] == 1 and manifest["retry_eligible"] is False
+                 and manifest["candidate"] == {"head": "ccb0f970ee3ab4fa707b75ad8c366848746f5a68",
+                     "tree": PR43_FIFTH_TREE, "parents": [PR43_FIFTH_BASE, PR43_FIFTH_HEAD]},
+                 "PR43 original failed CI must remain failed")
     return original, {frozenset((code1["report_ref"], blocked1["report_ref"]))}
 
 
@@ -590,15 +596,16 @@ def _pr43_history_pairs(state):
         return set()
     if state.get("correction_exception", {}).get("schema") == PR43_POSTMERGE_SCHEMA:
         original = _pr43_postmerge_original(state)
-        return _pr43_history({**original, "reviews": state["reviews"]})[1]
+        return _pr43_history({**original, "reviews": state["reviews"]},
+                             _current_only=state.get("validation_policy") == CURRENT_POLICY)[1]
     return _pr43_history(state)[1]
 
 
-def _pr43_sixth_limit(state):
+def _pr43_sixth_limit(state, *, _current_only=None):
     ex = state["correction_exception"]
     _fields(ex, "schema limit sixth_corrective_head integration_commits candidate_tree", "PR43 sixth exception")
     _require(type(ex["limit"]) is int and ex["limit"] == 6, "PR43 sixth limit must be exactly six")
-    original, _ = _pr43_history(state)
+    original, _ = _pr43_history(state, _current_only=_current_only)
     corrections = state["corrections"]
     _require(len(corrections) == 6, "PR43 sixth candidate requires exactly six retained corrections")
     sixth = corrections[5]
@@ -672,11 +679,14 @@ def _pr43_postmerge_original(state):
     _fields(ex["sources"], " ".join(PR43_POSTMERGE_SOURCES), "PR43 postmerge sources")
     saved = {}
     for name, digest in PR43_POSTMERGE_SOURCES.items():
+        if state.get("validation_policy") == CURRENT_POLICY and name in {"short", "handoff"}:
+            _text(ex["sources"][name], "retained PR43 historical CI delivery reference")
+            continue
         raw = _pr43_saved_bytes(ex["sources"][name])
         _require(hashlib.sha256(raw).hexdigest() == digest, "PR43 postmerge source hash differs: " + name)
         saved[name] = raw
     original = _pr43_json(saved["snapshot"])
-    _require(_pr43_sixth_limit(original) == 6 and len(original["reviews"]) == 10
+    _require(_pr43_sixth_limit(original, _current_only=state.get("validation_policy") == CURRENT_POLICY) == 6 and len(original["reviews"]) == 10
              and original["pr"]["state"] == "merged"
              and original["pr"]["head_sha"] == PR43_INTEGRATION_HEAD
              and original["pr"]["base_sha"] == PR43_MERGE_BASE
@@ -686,11 +696,12 @@ def _pr43_postmerge_original(state):
     _require(_pr43_commit({"sha": PR43_ACTUAL_MERGE, "object_ref": ex["sources"]["merge_object"]})
              == (PR43_MERGE_TREE, [PR43_MERGE_BASE, PR43_INTEGRATION_HEAD]),
              "PR43 actual merge bridge tree/ordered parents differ")
-    short = _pr43_json(saved["short"])
-    _require(short["candidate"] == {"head": PR43_ACTUAL_MERGE, "tree": PR43_MERGE_TREE,
-                                   "parents": [PR43_MERGE_BASE, PR43_INTEGRATION_HEAD]}
-             and short["ci"] == {"run_id": 37881982664, "attempt": 1, "event": "push", "job": "short"}
-             and short["outcome"] == "success", "PR43 original actual merge short differs")
+    if state.get("validation_policy") != CURRENT_POLICY:
+        short = _pr43_json(saved["short"])
+        _require(short["candidate"] == {"head": PR43_ACTUAL_MERGE, "tree": PR43_MERGE_TREE,
+                                       "parents": [PR43_MERGE_BASE, PR43_INTEGRATION_HEAD]}
+                 and short["ci"] == {"run_id": 37881982664, "attempt": 1, "event": "push", "job": "short"}
+                 and short["outcome"] == "success", "PR43 original actual merge short differs")
     finding = _pr43_json(saved["finding"])
     _require(finding["task"] == PR43_TASK and finding["baseline"] == PR43_BASELINE
              and finding["reviewed_head"] == PR43_INTEGRATION_HEAD
@@ -859,7 +870,8 @@ def validate_state(state):
             + (" cff_review_history_adapter" if type(state) is dict and "cff_review_history_adapter" in state else "")
             + (" pr46_review_history_adapter" if type(state) is dict and "pr46_review_history_adapter" in state else ""), "state")
     if "validation_policy" in state:
-        _require(state["validation_policy"] == NO_WINDOW_POLICY, "unknown validation policy")
+        _require(state["validation_policy"] == NO_WINDOW_POLICY or
+                 (staged and state["validation_policy"] == CURRENT_POLICY), "unknown validation policy")
     _require(state["schema"] in (SCHEMA, STAGED_SCHEMA), "unsupported schema")
     if staged:
         _fields(state["execution"], "mode validation_authorization_ref", "execution")
@@ -1236,6 +1248,10 @@ def _pr46_history_pairs(state):
     payloads = {}
     for name, digest in PR46_HISTORY_DIGESTS.items():
         _text(sources[name], "PR46 original source")
+        if state.get("validation_policy") == CURRENT_POLICY and name in {
+                "manifest", "completed_metadata", "archive", "ci_inventory", "ci_started", "ci_history_context",
+                "ci_collection_log", "ci_raw_log", "ci_junit", "ci_events"}:
+            continue
         try:
             raw = Path(sources[name]).read_bytes()
         except OSError as exc:
@@ -1243,8 +1259,7 @@ def _pr46_history_pairs(state):
         _require(hashlib.sha256(raw).hexdigest() == digest, "PR46 original source hash differs: " + name)
         if name in ("snapshot", "code_projection", "blocked_projection", "manifest"):
             payloads[name] = json.loads(raw.decode("utf-8-sig"), object_pairs_hook=_unique_object)
-    original, code, blocked, manifest = (payloads[k] for k in
-                                        ("snapshot", "code_projection", "blocked_projection", "manifest"))
+    original, code, blocked = (payloads[k] for k in ("snapshot", "code_projection", "blocked_projection"))
     _require(original["task"] == PR46_HISTORY_TASK and original["corrections"] == []
              and len(original["reviews"]) == 5 and original["reviews"][2] == code
              and original["reviews"][4] == blocked,
@@ -1274,15 +1289,17 @@ def _pr46_history_pairs(state):
         _require(all(report[k] is None for k in ("ci", "coverage_sha256", "supersedes_report_ref",
                                                  "finalizes_report_ref", "resolution_evidence_ref")),
                  "PR46 original null relations/CI/coverage must remain unchanged")
-    _require(manifest["ci"] == {"run_id": 37804577686, "attempt": 1, "job": "grouped",
-                                "event": "pull_request"}
-             and manifest["candidate"] == {
-                 "head": "843621ba2c47e7cdeb19c46ad34746bf3fbb2e4d",
-                 "tree": "0e647bd2231517a85ada8352d3381b20f18fe6ab",
-                 "parents": [PR46_HISTORY_BASE, PR46_HISTORY_HEAD]}
-             and manifest["exit_code"] == 1 and manifest["outcome"] == "failed"
-             and manifest["retry_eligible"] is False,
-             "PR46 original failed CI identity/outcome differs")
+    if state.get("validation_policy") != CURRENT_POLICY:
+        manifest = payloads["manifest"]
+        _require(manifest["ci"] == {"run_id": 37804577686, "attempt": 1, "job": "grouped",
+                                    "event": "pull_request"}
+                 and manifest["candidate"] == {
+                     "head": "843621ba2c47e7cdeb19c46ad34746bf3fbb2e4d",
+                     "tree": "0e647bd2231517a85ada8352d3381b20f18fe6ab",
+                     "parents": [PR46_HISTORY_BASE, PR46_HISTORY_HEAD]}
+                 and manifest["exit_code"] == 1 and manifest["outcome"] == "failed"
+                 and manifest["retry_eligible"] is False,
+                 "PR46 original failed CI identity/outcome differs")
     return {frozenset((code["report_ref"], blocked["report_ref"]))}
 
 
@@ -1542,6 +1559,45 @@ def _staged_ci_problem(ci, event, branch, head, parents, *, no_window=False):
     return None
 
 
+def _current_ci_problem(ci, event, branch, head, parents):
+    """The new policy requires full current PR evidence, never history replay."""
+    if event == "push":
+        problem = _staged_ci_problem(ci, event, branch, head, parents, no_window=True)
+        if problem:
+            return problem
+        job = next(j for j in ci["jobs"] if j["name"] == "Merge short validation")
+        if any(job["steps"].get(step) != "success" for step in (
+                "Check out repository", "Set up Python", "Install locked validation dependencies",
+                "Verify merge and run short validation", "Upload validation evidence")):
+            return "current merge short step is missing or unsuccessful"
+        return None
+    if (ci["workflow"], ci["event"], ci["branch"], ci["head_sha"], ci["parents"]) != (WORKFLOW, event, branch, head, parents):
+        return "wrong current PR workflow/checkout/ordered parents"
+    if ci["tested_sha"] in parents or (ci["run_id"], ci["attempt"]) != (ci["latest_run_id"], ci["latest_attempt"]):
+        return "current PR tested SHA or latest attempt differs"
+    if ci["status"] != "completed" or ci["conclusion"] != "success":
+        return "current PR CI has not succeeded"
+    jobs = {j["name"]: j for j in ci["jobs"]}
+    summary = jobs.get("Python 3.13")
+    if summary is None or summary["runner"].startswith("windows-") is False or summary["python_version"] != "3.13.0":
+        return "missing supported Windows Python summary"
+    for job in jobs.values():
+        if job["name"] in {"Grouped validation", "Merge short validation"} and job["conclusion"] == "skipped":
+            continue
+        if job["name"] != "Python 3.13" or job["conclusion"] != "success" or (
+                job["run_id"], job["attempt"], job["tested_sha"]) != (ci["run_id"], ci["attempt"], ci["tested_sha"]):
+            return "current PR job is unsuccessful or from another execution"
+    required = ("Check out repository", "Set up Python", "Show Python version", "Upgrade pip",
+                "Install development dependencies", "Validate runtime asset integrity", "Audit test entrypoint coverage",
+                "Run full pytest suite", "Verify active test execution", "Compile Python sources",
+                "Check committed whitespace (pull request)", "Check repository working tree",
+                "Capture main full environment", "Produce current validation coverage", "Verify current validation coverage",
+                "Upload main full evidence", "Verify required validation results")
+    if any(summary["steps"].get(step) != "success" for step in required):
+        return "current full-validation step is missing/skipped/unsuccessful"
+    return None
+
+
 def _next_action_staged(state):
     if not state["authorization"]["active"] or not state["current"]["working_tree_clean"]:
         return _decision(state, "STOP", "active authorization and clean working tree required")
@@ -1588,19 +1644,26 @@ def _next_action_staged(state):
     ci = state["pr_ci"]
     if ci is None or ci["status"] in ("queued", "in_progress"):
         return _decision(state, "WAIT_PR_CI", "formal functional coverage is pending")
-    no_window = state.get("validation_policy") == NO_WINDOW_POLICY
-    problem = _staged_ci_problem(ci, "pull_request", state["task"]["head_branch"], head, [base, head], no_window=no_window)
+    current_only = state.get("validation_policy") == CURRENT_POLICY
+    no_window = state.get("validation_policy") in {NO_WINDOW_POLICY, CURRENT_POLICY}
+    problem = (_current_ci_problem(ci, "pull_request", state["task"]["head_branch"], head, [base, head]) if current_only else
+               _staged_ci_problem(ci, "pull_request", state["task"]["head_branch"], head, [base, head], no_window=no_window))
     if problem:
         return _decision(state, "STOP" if merged else "REFRESH_EVIDENCE", problem)
     try:
         try:
-            from scripts.validation_evidence import verify_coverage, verify_reuse, sha256_file
+            from scripts.validation_evidence import verify_coverage, verify_current_coverage, verify_reuse, sha256_file
         except ModuleNotFoundError:
-            from validation_evidence import verify_coverage, verify_reuse, sha256_file
+            from validation_evidence import verify_coverage, verify_current_coverage, verify_reuse, sha256_file
         if state["coverage"] is None:
             raise ValueError("missing PR coverage bundle")
-        coverage = verify_coverage(Path(state["coverage"]))
-        if no_window != (coverage.get("policy") == NO_WINDOW_POLICY):
+        coverage = verify_current_coverage(Path(state["coverage"])) if current_only else verify_coverage(Path(state["coverage"]))
+        if current_only:
+            if coverage.get("policy") != CURRENT_POLICY or coverage.get("schema") != "zhuyin-validation-coverage/3":
+                raise ValueError("current task requires current coverage/3")
+            if coverage["checkout"]["number"] != pr["number"] or coverage["checkout"]["head_ref"] != pr["head_branch"]:
+                raise ValueError("current coverage refers to another PR")
+        elif no_window != (coverage.get("policy") == NO_WINDOW_POLICY):
             raise ValueError("coverage policy differs from adopted task policy")
         if coverage["candidate"] != {"head": ci["tested_sha"], "tree": ci["tree"], "parents": [base, head]}:
             raise ValueError("coverage candidate differs from current PR integration")
@@ -1626,11 +1689,13 @@ def _next_action_staged(state):
         push = state["push_ci"]
         if push is None or push["status"] in ("queued", "in_progress"):
             return _decision(state, "WAIT_PUSH_CI", "actual merge requires its own short push validation")
-        problem = _staged_ci_problem(push, "push", "develop", merge["sha"], [base, head], no_window=no_window)
+        problem = (_current_ci_problem(push, "push", "develop", merge["sha"], [base, head]) if current_only else
+                   _staged_ci_problem(push, "push", "develop", merge["sha"], [base, head], no_window=no_window))
         if problem or push["tree"] != merge["tree"]:
             return _post_merge_blocked(state, problem or "push tree mismatch", code=False)
         try:
-            short = verify_reuse(Path(state["coverage"]), Path(state["short_validation"]))
+            short = (verify_reuse(Path(state["coverage"]), Path(state["short_validation"]), current_only=True)
+                     if current_only else verify_reuse(Path(state["coverage"]), Path(state["short_validation"])))
             if short["candidate"] != {"head": merge["sha"], "parents": [base, head], "tree": merge["tree"]}:
                 raise ValueError("short evidence is not for the actual merge")
             if any(short["ci"][key] != push[key] for key in ("run_id", "attempt")):

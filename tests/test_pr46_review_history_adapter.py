@@ -12,6 +12,35 @@ from test_pr_review_gate import evidence_state, review_evidence
 
 
 class PR46HistoryAdapterTests(unittest.TestCase):
+    def test_current_policy_retains_review_blocker_and_caps_without_old_ci_files(self):
+        ci_sources = {"manifest", "completed_metadata", "archive", "ci_inventory", "ci_started", "ci_history_context", "ci_collection_log", "ci_raw_log", "ci_junit", "ci_events"}
+        with patch.object(gate, "PR46_HISTORY_DIGESTS", self.digests):
+            for name in ci_sources:
+                Path(self.state["pr46_review_history_adapter"]["sources"][name]).unlink()
+            current = deepcopy(self.state);current["validation_policy"] = gate.CURRENT_POLICY
+            before = deepcopy(current)
+            gate.validate_state(current)
+            self.assertEqual(gate.next_action(current)["action"], "CORRECT_IMPLEMENTATION")
+            self.assertEqual(current, before)
+            self.assertEqual(gate._review(current, 1, gate.PR46_HISTORY_BASE, gate.PR46_HISTORY_HEAD)["verdict"], "BLOCKED")
+            with self.assertRaisesRegex(gate.EvidenceError, "unavailable"):
+                gate.validate_state(self.state)
+            for mutation in (lambda s:s["reviews"][4].update(findings=["changed"]), lambda s:s["reviews"].append(deepcopy(s["reviews"][2])),
+                             lambda s:s["pr46_review_history_adapter"].update(contract="future"), lambda s:s["task"].update(baseline="f"*40),
+                             lambda s:s["pr46_review_history_adapter"]["sources"].update(extra="unknown")):
+                changed=deepcopy(current);mutation(changed)
+                with self.subTest(mutation=mutation),self.assertRaises(gate.EvidenceError):gate.validate_state(changed)
+            fresh=deepcopy(current);previous=gate.PR46_HISTORY_HEAD
+            for number,head in enumerate(("f"*40,"9"*40,"8"*40),1):
+                fresh["corrections"].append({"number":number,"from_head":previous,"to_head":head,"evidence_ref":"fixture://current-correction"})
+                fresh["current"]["head"]=fresh["pr"]["head_sha"]=head;previous=head
+            self.assertEqual(gate.next_action(fresh)["action"],"REQUEST_REVIEW_1")
+            fresh["reviews"].append(dict(current["reviews"][4],head=previous,report_ref="fixture://current-third-blocked"))
+            self.assertEqual(gate.next_action(fresh)["action"],"STOP")
+            self.assertEqual(gate._correction_limit(fresh),3)
+            auth=Path(current["pr46_review_history_adapter"]["sources"]["authorization"]);auth.unlink()
+            with self.assertRaisesRegex(gate.EvidenceError,"unavailable"):gate.validate_state(current)
+
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)

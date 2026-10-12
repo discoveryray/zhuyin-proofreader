@@ -1,6 +1,6 @@
 # Testing
 
-現行驗證政策是 [`validation-flow/no-real-tk/1`](docs/VALIDATION_POLICY.md)。所有自動化入口均取消真 Tk 視窗，包括 hidden root、虛擬顯示器、fixture／import／子程序；不執行 Tcl/Tk configure、preflight、初始化能力門檻或 GUI retry／補驗。產品 GUI、Tk 依賴及正式 `.bat` 入口保留。有效非視窗 actual／expected、identity、fingerprint、資料、交易、保存與恢復測試仍須執行；取消視窗不能寫成 GUI PASS。
+現行驗證政策是 [`validation-flow/current-evidence/1`](docs/VALIDATION_POLICY.md)，永久取消 CI 歷史自動重播前置門檻，適用本次未結案任務及後續一般工作。舊原件/失敗/判定/計數保持，歷史工具退出正常自動路徑，不以舊成功代替當前測試。所有自動化入口繼續取消真 Tk，包括 hidden root、虛擬顯示器、fixture/import/子程序及 configure/preflight/retry；產品 GUI/Tk/正式 .bat 保留。當前 actual/expected、identity、封印、資料、交易、保存/恢復安全測試仍全部必要。
 
 ## 依賴與隔離環境
 
@@ -25,7 +25,7 @@ $env:PYTHONIOENCODING = "utf-8"
 $env:PYTEST_ADDOPTS = ""
 ```
 
-一般 PR／develop short 使用現有 lock 安裝路徑；main 完整 job 另固定 bootstrap pip24.2，再安裝同一 `requirements-ci-lock.txt`。精確 legacy 條件的原依賴／capture 行為依 workflow 保留，不能將本段命令覆寫到歷史原件。
+所有新正常 PR／develop short／main 完整 job 使用隔離 CI 環境、bootstrap pip24.2及同一 requirements-ci-lock.txt。精確legacy原依賴/capture/雙Python僅保留於舊快照、reader及明確歷史測試fixture，不是新live event的當次證據豁免；不能以新指令覆寫歷史原件。
 
 ## 開發模式
 
@@ -38,28 +38,29 @@ git diff --check
 git status --short
 ```
 
-## PR 的非視窗 core／coverage
+## PR 的當前完整非視窗驗證
 
-一般 PR 由 GitHub hosted Windows Python3.13.0 執行全部有效非視窗 core；保留原 task／baseline／source_ref、sealed handoff 與失敗 attempt。缺失或損毀 ledger／artifact 停止，不 bootstrap／unseal／換目錄重設歷史。以下是既有 CI context 內的入口，不可在本機自填 CI 身分冒稱正式證據：
+一般 PR→develop、PR→main 都由 GitHub hosted Windows Python3.13.0 與 requirements-ci-lock.txt 執行全部有效非視窗 pytest/verify-active。正常入口不呼叫 restore-history，不要求舊CI artifact或hand-off/ledger/continuation新版閉包；保留原 task/baseline/source_ref/封存/失敗，不bootstrap/unseal/換目錄歸零。以下為功能入口，不可本機自填 CI 身分或把短測稱正式CI：
 
 ```powershell
-python scripts/validation_runner.py restore-history --evidence-root tmp/validation-evidence
-python scripts/validation_runner.py run --group core --mode validation --evidence-root tmp/validation-evidence
-python scripts/validation_runner.py aggregate --evidence-root tmp/validation-evidence --output tmp/validation-evidence/coverage.json
-python scripts/validation_evidence.py verify-coverage tmp/validation-evidence/coverage.json
+python scripts/test_entrypoint_audit.py collect tmp/ci-test-inventory.json
+python -m pytest tests/ -q -rs --junitxml=tmp/ci-pytest.xml
+python scripts/test_entrypoint_audit.py verify-active tmp/ci-test-inventory.json --junit tmp/ci-pytest.xml
 ```
 
-PR 另核 runtime integrity、compile、PR diff 與 clean-tree；required summary 必須核對真實 step outcomes。新 `/2` run／coverage／inventory 明列政策及視窗取消；舊 `/1` logs、Tk 失敗與 retry 額度只讀保留。collection、artifact 上傳或 green CI 不能取代兩輪獨立審查，也不能解除 code blocker。
+CI依workflow保存當次環境與命令/退出碼，使用 `validation_evidence.py current-coverage --evidence-root tmp --output tmp/current-coverage.json` 及 `verify-coverage tmp/current-coverage.json` 產生/驗證真實 `/3` bundle；這不是本機冒用CI身分的入口。正常PR/main完整驗證與develop短驗證使用同一隔離CI lock解析。
+
+PR 另核 runtime、compile、PR diff、clean、repo/base/head/tested SHA/parents/tree、當次環境/命令/退出碼/raw hashes與有限附件。新版 coverage `/3` 明列current政策；required summary核全部必要真實outcomes。當次失敗/漏跑/skip/錯SHA/缺附件仍失敗，不能造空coverage。舊 `/1`、`/2` 原義只讀保持；collection、upload 或green CI都不能取代兩輪完整獨立PASS或解除產品安全blocker。
 
 ## develop 實際 merge 的短驗證
 
 一般 develop push 執行 actual merge SHA 的短驗證，核對 ordered parents／tree、PR coverage 原件、Python／依賴／capture／scope 等價性，再做 runtime、非視窗 import／CLI、compile、push diff 與 clean-tree；不例行再跑 full pytest。PR tested SHA 保持原義，不能改稱在 merge SHA 重跑。入口需要真實 develop push context：
 
 ```powershell
-python scripts/validation_evidence.py post-merge --evidence-root tmp/post-merge-evidence
+python scripts/validation_evidence.py post-merge --current-only --evidence-root tmp/post-merge-evidence
 ```
 
-PR CI 不能代替此 actual merge push 證據。原件缺失、等價性不足或任何失敗均停止沿用。
+PR CI不能代替actual merge push。只讀對應PR的必要當次artifact，不能遞迴全部歷史；當次原件缺失、等價性不足、wrong ordered parents/tree 或短驗證失敗仍停止沿用。新版short為 `/3`，舊 `/1`、`/2` 保留原義。
 
 ## main 完整非視窗驗證
 
@@ -79,7 +80,7 @@ main CI 同時核對 committed push diff 與 clean-tree，限定保存 inventory
 
 ## 歷史契約與人工驗收
 
-原 `codex/simplify-validation` 的 fixed-baseline transition、Python3.12／3.13、full unittest／pytest、gate v2 及 Tcl/Tk 操作是 **historical** 契約與證據。其後採納 no-real-tk/1，取消全部真視窗、Tcl/Tk 修補與 GUI retry 義務；其他凍結 baseline、exact legacy 條件、capture、修正計數、失敗與 blocker 保留。PR29 等精確 legacy adapter 仍依現行 [驗證政策](docs/VALIDATION_POLICY.md) 與 workflow 判斷，不能把舊 Tk 指令當作新任務要求，或追認舊失敗為 PASS。
+原 simplify fixed-baseline transition、雙Python、full unittest、gate v2/Tcl-Tk操作及PR29精確legacy條件都是 historical 契約與證據。原schema/readers與明確歷史fixture保留其原判斷；新live event均採current-evidence/1，不能以legacy身份略過當次lock、原件或驗證。原baseline/capture/修正計數/失敗不改寫，不把舊Tk指令作新要求或追認舊PASS。
 
 v5.8.0 人工操作只依已採納的 [六項有限驗收](docs/RELEASE_ACCEPTANCE_V580.md)。本發布任務的 `USER_REPORTED_PASS` 是使用者回報，並非代理執行、自動化 GUI PASS 或其他教材完成證據；原件與適用候選由發布 task evidence 記錄。涉及寫入只使用副本與隔離 Global，備份／回復見 [升級說明](docs/UPGRADE_V580.md)。整份教材校對完成不是軟體發布門檻，教材自己的 completion gate 與待辦仍保留。
 

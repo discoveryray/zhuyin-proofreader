@@ -15,7 +15,16 @@ import zipfile
 
 from scripts import build_release_package as package
 from scripts import release_ci_evidence as evidence
-from tests.test_ci_validation_workflow import action, job, step
+from tests.test_ci_validation_workflow import action, step, current_job, current_python_transport_driver
+from tests.ci_workflow_history_fixture import E744_WORKFLOW
+
+
+def job(name):
+    """Read only the original e744 package-test workflow; never a live obligation."""
+    match = re.search(r'^  ' + re.escape(name) + r':\n(.*?)(?=^  [a-z][a-z_]*:|\Z)', E744_WORKFLOW, re.M | re.S)
+    if match is None:
+        raise AssertionError('historical package workflow job missing: ' + name)
+    return match.group(1)
 
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE = "151b90f6f5f2a352e828fa6f73402dfb8c4f5617"
@@ -171,6 +180,83 @@ class ReleaseEvidenceTests(unittest.TestCase):
             self.assertIn("original child output", output.read_text())
             self.assertIn("exit_code=13", output.read_text())
 
+    def test_bare_python_cli_uses_real_venv_despite_conflicting_path(self):
+        with tempfile.TemporaryDirectory(prefix="python binding ") as temp:
+            root = Path(temp)
+            venv = root / "isolated python with spaces"
+            subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(venv)], check=True, capture_output=True, timeout=30)
+            python = venv / "Scripts/python.exe"
+            base = Path(sys._base_executable)
+            env = {**os.environ, "PATH": str(base.parent) + os.pathsep + os.environ["PATH"]}
+            probe = "import sys,json;print(json.dumps({'executable':sys.executable,'prefix':sys.prefix,'argv':sys.argv}));print('retained stderr',file=sys.stderr);sys.exit(int(sys.argv[1]))"
+            conflicting = subprocess.run(["python", "-c", "import sys;print(sys.prefix)"], env=env, capture_output=True, text=True, timeout=30)
+            self.assertEqual(conflicting.returncode, 0, conflicting.stderr)
+            self.assertNotEqual(Path(conflicting.stdout.strip()).resolve(), venv.resolve())
+            helper = ROOT / "scripts/release_ci_evidence.py"
+            for spelling in ("python", "python.exe"):
+                for exit_code in (0, 17):
+                    log = root / (spelling + str(exit_code) + ".log")
+                    command = [str(python), str(helper), "run", "--output", str(log), "--", spelling, "-c", probe, str(exit_code), "argument with spaces"]
+                    child = subprocess.run(command, env=env, capture_output=True, timeout=30)
+                    raw = log.read_text(encoding="utf-8").splitlines()
+                    actual = next(json.loads(line) for line in raw[1:] if line.startswith('{"executable"'))
+                    with self.subTest(spelling=spelling, exit_code=exit_code):
+                        self.assertEqual(child.returncode, exit_code, child.stderr)
+                        self.assertEqual(Path(actual["executable"]).resolve(), python.resolve())
+                        self.assertEqual(Path(actual["prefix"]).resolve(), venv.resolve())
+                        self.assertEqual(actual["argv"], ["-c", str(exit_code), "argument with spaces"])
+                        self.assertEqual(json.loads(raw[0])["argv"], [str(python), "-c", probe, str(exit_code), "argument with spaces"])
+                        self.assertIn("retained stderr", raw)
+                        self.assertEqual(raw[-1], "exit_code=" + str(exit_code))
+                    print(json.dumps({"requested": command, "actual_child": actual, "retained_argv": json.loads(raw[0])["argv"], "exit_code": child.returncode}, ensure_ascii=False))
+            for name, command in (("explicit-base", [str(base), "-c", "import sys;print(sys.prefix);sys.exit(19)"]), ("non-python", ["git", "--version"])):
+                log = root / (name + ".log")
+                child = subprocess.run([str(python), str(helper), "run", "--output", str(log), "--", *command], env=env, capture_output=True, timeout=30)
+                self.assertEqual(json.loads(log.read_text().splitlines()[0])["argv"], command)
+                self.assertEqual(child.returncode, 19 if name == "explicit-base" else 0)
+                self.assertIn(str(base.parent.parent) if name == "explicit-base" else "git version", log.read_text())
+
+    def test_python_environment_preflight_uses_existing_exact_guard(self):
+        with tempfile.TemporaryDirectory(prefix="locked environment ") as temp:
+            root = Path(temp)
+            env = {**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8", "PYTEST_ADDOPTS": "", "TCL_LIBRARY": "", "TK_LIBRARY": ""}
+            helper = ROOT / "scripts/release_ci_evidence.py"
+            output = root / "locked.json"
+            child = subprocess.run([sys.executable, str(helper), "verify-environment", "--output", str(output)], env=env, capture_output=True, timeout=30)
+            self.assertEqual(child.returncode, 0, child.stderr)
+            record = json.loads(output.read_text())
+            self.assertEqual(record["status"], "success")
+            self.assertEqual(record["executable"], sys.executable)
+            self.assertEqual(record["prefix"], sys.prefix)
+            self.assertEqual(len(record["environment"]["dependencies"]), 14)
+            self.assertEqual(record["environment"]["dependencies"]["pip"], "24.2")
+            from scripts import validation_evidence
+            validation_evidence._locked_environment(record["environment"], ROOT / "requirements-ci-lock.txt")
+            print(json.dumps({"preflight_command": [sys.executable, str(helper), "verify-environment", "--output", str(output)], "original": record, "exit_code": child.returncode}))
+            # Synthetic event carrier only; real capture/guard read the actual
+            # nominated interpreter and actual local checkout, never a mock PASS.
+            event = root / "event.json"
+            event.write_text(json.dumps({"pull_request": {"number": 54, "base": {"repo": {"full_name": "discoveryray/zhuyin-proofreader"}, "ref": "develop", "sha": "a" * 40}, "head": {"repo": {"full_name": "discoveryray/zhuyin-proofreader"}, "ref": "synthetic-test", "sha": "b" * 40}}}))
+            env.update(GITHUB_EVENT_PATH=str(event), GITHUB_SHA=subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(), GITHUB_RUN_ID="123", GITHUB_RUN_ATTEMPT="1", GITHUB_JOB="test", GITHUB_EVENT_NAME="pull_request", GITHUB_REPOSITORY="discoveryray/zhuyin-proofreader")
+            capture = root / "current-environment.json"
+            child = subprocess.run([sys.executable, str(helper), "environment", "--current-only", "--output", str(capture)], env=env, capture_output=True, timeout=30)
+            self.assertEqual(child.returncode, 0, child.stderr)
+            self.assertEqual(json.loads(capture.read_text())["environment"], record["environment"])
+            venv = root / "missing dependencies"
+            subprocess.run([sys.executable, "-m", "venv", "--without-pip", str(venv)], check=True, capture_output=True, timeout=30)
+            output = root / "failed.json"
+            child = subprocess.run([str(venv / "Scripts/python.exe"), str(helper), "verify-environment", "--output", str(output)], env=env, capture_output=True, timeout=30)
+            self.assertNotEqual(child.returncode, 0)
+            record = json.loads(output.read_text())
+            self.assertEqual(record["status"], "failed")
+            self.assertEqual(record["environment"]["dependencies"], {})
+            self.assertIn("exact Windows Python/dependency/capture", child.stderr.decode())
+            print(json.dumps({"wrong_dependencies_original": record, "exit_code": child.returncode, "stderr": child.stderr.decode()}))
+            failed_capture = root / "failed-current-environment.json"
+            child = subprocess.run([str(venv / "Scripts/python.exe"), str(helper), "environment", "--current-only", "--output", str(failed_capture)], env=env, capture_output=True, timeout=30)
+            self.assertNotEqual(child.returncode, 0)
+            self.assertEqual(json.loads(failed_capture.read_text())["environment"]["dependencies"], {})
+
     def test_main_installer_actual_powershell_branch_and_failure_propagation(self):
         shell = shutil.which("pwsh") or shutil.which("powershell")
         for name, expected_main, expected_legacy in [
@@ -189,6 +275,23 @@ class ReleaseEvidenceTests(unittest.TestCase):
                         if not is_main:
                             self.assertNotIn("release_ci_evidence.py", result.stdout.decode())
 
+        # Historical installer expectations above remain unchanged. New executions
+        # additionally require the actual live current-only installer on every route.
+        for name, expected in [('Upgrade pip', 'pip==24.2'), ('Install development dependencies', 'requirements-ci-lock.txt'), ('Run full pytest suite', '-m pytest tests/ -q -rs --junitxml=tmp/ci-pytest.xml')]:
+            body = action(step(current_job('test'), name))[1]
+            for event, ref in [('push', 'refs/heads/main'), ('pull_request', 'refs/pull/29/merge'), ('pull_request', 'refs/pull/52/merge')]:
+                for code in (0, 17):
+                    with tempfile.TemporaryDirectory() as folder:
+                        driver = current_python_transport_driver(body)
+                        result = subprocess.run([shell, '-NoProfile', '-NonInteractive', '-Command', driver], cwd=folder, capture_output=True,
+                            env={**os.environ, 'GITHUB_EVENT_NAME': event, 'GITHUB_REF': ref, 'FIXTURE_EXIT': str(code), 'GITHUB_PATH': str(Path(folder)/'github-path.log'), 'GITHUB_ENV': str(Path(folder)/'github-env.log')}, timeout=30)
+                    with self.subTest(current_step=name, current_event=event, ref=ref, exit=code):
+                        self.assertEqual(result.returncode, code, result.stderr)
+                        self.assertIn(expected, result.stdout.decode())
+                        self.assertIn('scripts/release_ci_evidence.py', result.stdout.decode())
+                        self.assertNotIn('requirements-ci.txt', result.stdout.decode())
+                        self.assertNotIn('--upgrade', result.stdout.decode())
+
     def test_main_upload_has_finite_failure_time_originals(self):
         upload = step(job("test"), "Upload main full evidence")
         self.assertIn("always() && github.event_name == 'push' && github.ref == 'refs/heads/main'", upload)
@@ -198,6 +301,19 @@ class ReleaseEvidenceTests(unittest.TestCase):
         self.assertNotIn("continue-on-error", upload)
         self.assertIn("overwrite: false", upload)
         self.assertIn("include-hidden-files: false", upload)
+
+        # The old source fixture is immutable; live current output must independently
+        # retain every required raw attachment and fail closed on capture/upload failure.
+        current = step(current_job('test'), 'Upload main full evidence')
+        self.assertIn("always() && env.FULL_CURRENT_VALIDATION == 'true'", current)
+        for path in ('tmp/current-coverage.json', 'tmp/ci-test-inventory.json', 'tmp/ci-pytest.xml', 'tmp/main-full/environment.json', 'tmp/main-full/event.json', 'tmp/main-full/lock.txt', 'tmp/main-full/registry.json', 'tmp/main-full/assets.json', 'tmp/main-full/pip.log', 'tmp/main-full/dependencies.log', 'tmp/main-full/runtime.log', 'tmp/main-full/pytest.log', 'tmp/main-full/inventory.log', 'tmp/main-full/active.log', 'tmp/main-full/compile.log', 'tmp/main-full/diff.log', 'tmp/main-full/clean.log'):
+            self.assertIn(path, current)
+        self.assertIn('current-validation-evidence-${{ github.run_id }}-${{ github.run_attempt }}', current)
+        self.assertIn('if-no-files-found: error', current)
+        self.assertNotIn('**', current)
+        self.assertNotIn('continue-on-error', current)
+        self.assertIn('overwrite: false', current)
+        self.assertIn('include-hidden-files: false', current)
 
 
 if __name__ == "__main__":
