@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 import fitz
+from excel_text import append_text_row
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
@@ -1455,15 +1456,15 @@ def _write_actual_sample_profile(workbook, profile):
     chunks = [text[i:i + 30000] for i in range(0, len(text), 30000)]
     digest = hashlib.sha256(raw).hexdigest()
     sheet = workbook.create_sheet(ACTUAL_SAMPLE_PROFILE_SHEET)
-    sheet.append(["schema", ACTUAL_SAMPLE_PROFILE_SCHEMA])
-    sheet.append(["sha256", digest])
-    sheet.append(["chunk_count", len(chunks)])
+    append_text_row(sheet, ["schema", ACTUAL_SAMPLE_PROFILE_SCHEMA])
+    append_text_row(sheet, ["sha256", digest])
+    append_text_row(sheet, ["chunk_count", len(chunks)])
     for index, chunk in enumerate(chunks, 1):
-        sheet.append([index, chunk])
+        append_text_row(sheet, [index, chunk])
     sheet.sheet_state = "veryHidden"
     for key, value in zip(ACTUAL_SAMPLE_PROFILE_META,
                           (ACTUAL_SAMPLE_PROFILE_SCHEMA, digest, ACTUAL_SAMPLE_PROFILE_SHEET)):
-        workbook["匯入中繼資料"].append([key, value])
+        append_text_row(workbook["匯入中繼資料"], [key, value])
 
 
 def _actual_profile_metadata(workbook):
@@ -1798,12 +1799,12 @@ def _write_actual_review_package(
         ("待判定 unique groups", len(groups)),
         ("待判定 occurrences", sum(g["occurrence_count"] for g in groups)),
     ]
-    guide.append(["項目", "說明"])
+    append_text_row(guide, ["項目", "說明"])
     for row in instructions:
-        guide.append(row)
+        append_text_row(guide, row)
 
     meta = wb.create_sheet("匯入中繼資料")
-    meta.append(["項目", "內容"])
+    append_text_row(meta, ["項目", "內容"])
     for row in [
         ("version", version),
         ("session_id", session_id),
@@ -1815,7 +1816,7 @@ def _write_actual_review_package(
         ("readable_sample_count", readable_count),
         ("blocked_sample_count", blocked_count),
     ]:
-        meta.append(row)
+        append_text_row(meta, row)
     _write_actual_sample_profile(wb, profile)
 
     ws = wb.create_sheet("actual待判定")
@@ -1827,7 +1828,7 @@ def _write_actual_review_package(
         "sample_a_checked", "sample_b_checked", "note",
         "sample_a_availability", "sample_b_availability", "source_availability_reason",
     ]
-    ws.append(headers)
+    append_text_row(ws, headers)
 
     for index, (group, selected) in enumerate(zip(groups, plan), 1):
         members = group["members"]
@@ -1842,7 +1843,7 @@ def _write_actual_review_package(
             render_annotation_only_png(entry, annotation, output_dir=source_output_dir, _location=location)
             render_occurrence_png(entry, tight, context=False, output_dir=source_output_dir, _location=location)
             image_names[sample_index] = f"images/{annotation.name} | images/{tight.name}"
-        ws.append([
+        append_text_row(ws, [
             index, group["group_id"], group["group_snapshot"], group["kind"], group["exact_key"], group["occurrence_count"],
             image_names[0], image_names[1], a.get("occurrence_id", ""), b.get("occurrence_id", "") if b else "",
             a.get("pdf_name", ""), a.get("printed_page", ""),

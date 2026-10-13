@@ -11,6 +11,7 @@ from contextlib import contextmanager, ExitStack
 import base64
 import binascii
 import functools
+from excel_text import append_text_row
 import hashlib
 import json
 import math
@@ -943,11 +944,11 @@ def write_excel_content_proof(workbook, output_dir: Path, manifest, db, *, kind:
     encoded = base64.b64encode(zlib.compress(raw, level=9)).decode("ascii")
     chunks = [encoded[index:index + 30000] for index in range(0, len(encoded), 30000)]
     sheet = workbook.create_sheet(EXCEL_PROOF_SHEET)
-    sheet.append(["version", EXCEL_PROOF_VERSION])
-    sheet.append(["sha256", hashlib.sha256(raw).hexdigest()])
-    sheet.append(["chunk_count", len(chunks)])
+    append_text_row(sheet, ["version", EXCEL_PROOF_VERSION])
+    append_text_row(sheet, ["sha256", hashlib.sha256(raw).hexdigest()])
+    append_text_row(sheet, ["chunk_count", len(chunks)])
     for index, chunk in enumerate(chunks, 1):
-        sheet.append([index, chunk])
+        append_text_row(sheet, [index, chunk])
     sheet.sheet_state = "veryHidden"
 
 

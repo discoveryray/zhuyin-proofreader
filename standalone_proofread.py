@@ -21,6 +21,7 @@ from typing import Any, Mapping
 from uuid import uuid4
 from sealed_workbook_paths import binding_scope, bind_workbooks, workbook_path, owned_path, descriptor, bound_operation, trusted_root
 
+from excel_text import append_text_row
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
@@ -1172,7 +1173,7 @@ def export_pending_for_gpt(output_dir: Path, *, _allow_unpublished_pipeline: boo
     wb = Workbook()
     guide = wb.active
     guide.title = "使用說明"
-    guide.append(["項目", "說明"])
+    append_text_row(guide, ["項目", "說明"])
     instructions = [
         ("用途", "本表用來補充應標讀音證據、解決規則衝突或完成教材錯誤確認；程式仍會自行做 actual／expected 比較。"),
         ("actual 修正", "不得在本表直接改 actual。請用『輸出 actual 待判定給 GPT』產生 actual 視覺判定包，再以『匯入 GPT 判定檔（自動辨識）』匯入；程式會自行維護 occurrence override 並增量重解碼，不需要手動編輯 CSV。"),
@@ -1183,10 +1184,10 @@ def export_pending_for_gpt(output_dir: Path, *, _allow_unpublished_pipeline: boo
         ("expected／差異待處理數", len(pending)),
     ]
     for item in instructions:
-        guide.append(item)
+        append_text_row(guide, item)
 
     meta = wb.create_sheet("匯入中繼資料")
-    meta.append(["項目", "內容"])
+    append_text_row(meta, ["項目", "內容"])
     for item in [
         ("version", VERSION),
         ("session_id", manifest.get("session_id", "")),
@@ -1196,7 +1197,7 @@ def export_pending_for_gpt(output_dir: Path, *, _allow_unpublished_pipeline: boo
         ("expected_asset_fingerprint", manifest.get("expected_asset_fingerprint", "")),
         ("exported_review_count", len(pending)),
     ]:
-        meta.append(item)
+        append_text_row(meta, item)
 
     ws = wb.create_sheet("待判定候選")
     headers = [
@@ -1205,7 +1206,7 @@ def export_pending_for_gpt(output_dir: Path, *, _allow_unpublished_pipeline: boo
         "source_view", "action", "proposed_expected_set", "proposed_expected_evidence", "proposed_context_evidence",
         "exclusion_reason", "exclusion_evidence", *CONFIRMATION_GATES, "note",
     ]
-    ws.append(headers)
+    append_text_row(ws, headers)
     for index, entry in enumerate(pending, 1):
         source = entry.get("source_record") or {}
         row = {
@@ -1232,7 +1233,7 @@ def export_pending_for_gpt(output_dir: Path, *, _allow_unpublished_pipeline: boo
             "context_evidence": entry.get("context_evidence"),
             "source_view": entry.get("source_view"),
         }
-        ws.append([row.get(header, "") for header in headers])
+        append_text_row(ws, [row.get(header, "") for header in headers])
     action_column = headers.index("action") + 1
     dv = DataValidation(type="list", formula1='"補建expected證據,解決expected證據,確認現版差異,確認非校對範圍,保留待人工"', allow_blank=True)
     ws.add_data_validation(dv)
