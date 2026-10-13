@@ -4,18 +4,23 @@ import copy
 import hashlib
 import tempfile
 import tkinter as tk
-from tests.no_window_review_support import Surface, ActualDialog as HeadlessActualDialog, Preview, Value
+from tests.no_window_review_support import (
+    Surface, ActualDialog as HeadlessActualDialog, Preview, Value,
+    InlineReviewService, ImmediateOperations,
+)
 import time
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from types import SimpleNamespace, MethodType
+from unittest.mock import MagicMock, patch, call
 
 import fitz
 import actual_review
 import global_exact_glyph_library as global_library
 import review_gui
+import review_save_service
 import standalone_proofread as sp
+from pdf_portability import _VerifiedExpectedConflicts
 from tests.review_save_test_support import QueuedRoot
 from actual_review import (
     GLYPH_CONFLICT_FILE,
@@ -799,12 +804,38 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
         for name in ("showinfo", "showwarning", "showerror"):
             self.enterContext(patch.object(review_gui.messagebox, name))
 
+    def handler_app(self, output_dir=None):
+        """Retire native controls/scheduling, keep owned GUI polling unchanged."""
+        app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
+        app.root = Surface()
+        app.output_dir = output_dir or self.output_dir
+        app.manifest, app.db, app.records, app.index = {}, {}, [], 0
+        app.status = Surface(app.root)
+        app.apply_actual_button = DummyButton()
+        app._project_generation = 0
+        app._async_disposed = app._save_in_progress = app._save_recovery_required = False
+        app._async_after_ids, app._saved_control_states = set(), []
+        app._operation_in_progress = app._apply_in_progress = False
+        app._save_service = InlineReviewService(app.output_dir)
+        app._start_owned_operation = MethodType(ImmediateOperations._start_owned_operation, app)
+        return app
+
     def resume_service(self, ledger, summary):
         """Queue-only tests substitute verified inputs, not queue behavior."""
-        snapshot = SimpleNamespace(ledger=ledger, timings={})
-        service = MagicMock(spec=review_gui.ReviewSaveService)
-        service.load_resume_snapshot.return_value = snapshot
-        service.validate_resume_staging.return_value = summary
+        snapshot = SimpleNamespace(ledger=ledger, timings={}, manifest={}, db={}, hashes={})
+        service = InlineReviewService(self.output_dir)
+        # Retain the existing verified-read fixture boundary. invoke is real:
+        # prepare/stage/apply/reload dispatch and conflict views are not stubs.
+        def load(*, expected_manifest=None, expected_db=None):
+            if expected_manifest is not None:
+                snapshot.manifest = expected_manifest
+            if expected_db is not None:
+                snapshot.db = expected_db
+            return snapshot
+        service.load_resume_snapshot = MagicMock(side_effect=load)
+        service.validate_resume_staging = MagicMock(return_value=summary)
+        service.with_invalidated_cache = MagicMock(return_value=service)
+        service._conflicts = _VerifiedExpectedConflicts(None, {"records": ledger})
         return service, snapshot
 
     def assert_resume_loaded(self, app, service, snapshot):
@@ -832,9 +863,9 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
         self.assertEqual(len({row["occurrence_id"] for row in selected}), 80)
 
     def test_unvalidated_staging_does_not_hide_sample_b(self):
-        app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
+        app = self.handler_app()
         ledger = [entry(name, "f" * 64) for name in "abc"]
-        app.root = object()
+        app.root = Surface()
         app.output_dir = self.output_dir
         app.manifest = {}
         app.db = {}
@@ -843,23 +874,22 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
         app.apply_actual_button = DummyButton()
         app.show = MagicMock()
         group = group_for(ledger, 2)
+        service, snapshot = self.resume_service(ledger, {
+            "staging_error": "stale evidence", "staged_checked_occurrence_ids": ["a", "b"],
+        })
+        app._save_service = service
         with (
-            patch.object(review_gui, "materialize_ledger", return_value=ledger),
-            patch.object(review_gui, "build_actual_group_for_entry", return_value=group),
-            patch.object(review_gui, "manual_actual_staging_summary", return_value={
-                "staging_error": "stale evidence",
-                "staged_checked_occurrence_ids": ["a", "b"],
-            }),
             patch.object(review_gui, "ActualReadingDialog", return_value=SimpleNamespace(result=None)) as dialog,
         ):
             app.correct_actual()
+        self.assert_resume_loaded(app, service, snapshot)
         self.assertEqual(dialog.call_args.kwargs["verified_checked_occurrence_ids"], ())
         self.assertEqual([row["occurrence_id"] for row in review_gui.actual_review_samples(ledger[2], group)], ["c", "a", "b"])
 
     def test_invalidated_staging_restores_hidden_record_even_when_dialog_is_cancelled(self):
         ledger = [entry(name, "f" * 64) for name in "abc"]
-        app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
-        app.root = object()
+        app = self.handler_app()
+        app.root = Surface()
         app.output_dir = self.output_dir
         app.manifest = {}
         app.db = {}
@@ -874,19 +904,17 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
         app.tech_text = MagicMock()
         app.configure_actions = MagicMock()
         app.render = MagicMock()
+        service, snapshot = self.resume_service(ledger, {
+            "staging_error": "stale evidence", "staged_group_count": 1,
+            "staged_member_occurrence_ids": ["b"], "staged_checked_occurrence_ids": ["b"],
+        })
+        app._save_service = service
         with (
-            patch.object(review_gui, "materialize_ledger", return_value=ledger) as materialize,
-            patch.object(review_gui, "manual_actual_staging_summary", return_value={
-                "staging_error": "stale evidence",
-                "staged_group_count": 1,
-                "staged_member_occurrence_ids": ["b"],
-                "staged_checked_occurrence_ids": ["b"],
-            }),
             patch.object(review_gui, "ActualReadingDialog", return_value=SimpleNamespace(result=None)) as dialog,
-            patch.object(review_gui, "stage_manual_actual_correction") as stage,
+            patch.object(sp, "stage_manual_actual_correction") as stage,
         ):
             app.correct_actual()
-        materialize.assert_called_once_with(app.manifest, app.db)
+        self.assert_resume_loaded(app, service, snapshot)
         dialog.assert_called_once()
         stage.assert_not_called()
         self.assertEqual(dialog.call_args.kwargs["verified_checked_occurrence_ids"], ())
@@ -901,7 +929,7 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
 
     def test_reload_records_excludes_checked_occurrences_and_reduces_denominator(self):
         ledger = [entry(name, str(index) * 64) for index, name in enumerate("abcde", start=1)]
-        app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
+        app = self.handler_app()
         app.output_dir = self.output_dir
         app.manifest = {}
         app.db = {}
@@ -914,8 +942,8 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
             "staged_member_occurrence_ids": ["b", "c"],
             "staged_checked_occurrence_ids": ["b", "c"],
         })
-        with patch.object(review_gui, "ReviewSaveService", return_value=service):
-            app.reload_records()
+        app._save_service = service
+        app.reload_records()
 
         self.assert_resume_loaded(app, service, snapshot)
         self.assertEqual([item["occurrence_id"] for item in app.records], ["a", "d", "e"])
@@ -943,7 +971,7 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
             self.assertEqual(set(summary["staged_member_occurrence_ids"]), {"checked-a", "unchecked-b"})
             self.assertEqual(summary["staged_checked_occurrence_ids"], ["checked-a"])
 
-            app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
+            app = self.handler_app(output_dir)
             app.output_dir = output_dir
             app.apply_actual_button = DummyButton()
             app.manifest = manifest
@@ -972,7 +1000,7 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
             app.configure_actions.assert_called_with(unchecked)
 
     def test_count_zero_disables_and_positive_count_enables_button(self):
-        app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
+        app = self.handler_app()
         app.output_dir = self.output_dir
         app.apply_actual_button = DummyButton()
         app.manifest = {}
@@ -1011,7 +1039,7 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
                     output_dir, "review-durable", "ㄉㄨˊ", ["durable"],
                 )
             for _restart in range(2):
-                app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
+                app = self.handler_app(output_dir)
                 app.output_dir = output_dir
                 app.manifest = sp.json_load_strict(output_dir / "校對工作階段.json")
                 app.db = sp.load_or_initialize_db(output_dir)
@@ -1029,7 +1057,7 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
             self.assertEqual(sp.json_load_strict(output_dir / "人工判定資料庫.json").get("events"), {})
 
     def test_correct_actual_removes_all_checked_and_advances_from_b_to_d(self):
-        app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
+        app = self.handler_app()
         ledger = [
             entry("a", "a" * 64),
             entry("b", "f" * 64, x0=10.0),
@@ -1039,7 +1067,7 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
         ]
         current = ledger[1]
         group = group_for(ledger, 1)
-        app.root = object()
+        app.root = Surface()
         app.output_dir = self.output_dir
         app.manifest = {"manifest": "current"}
         app.db = {"events": {}}
@@ -1062,15 +1090,17 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
             "staged_member_occurrence_ids": ["b", "c"],
             "staged_checked_occurrence_ids": ["b", "c"],
         })
+        app._save_service = service
+        saved_summary = service.validate_resume_staging.return_value
+        service.validate_resume_staging.side_effect = [
+            {"staged_group_count": 0, "staged_checked_occurrence_ids": []}, saved_summary,
+        ]
         with (
-            patch.object(review_gui, "materialize_ledger", return_value=ledger),
-            patch.object(review_gui, "manual_actual_staging_summary", return_value={
-                "staged_group_count": 0, "staged_checked_occurrence_ids": []}),
-            patch.object(review_gui, "ReviewSaveService", return_value=service),
-            patch.object(review_gui, "build_actual_group_for_entry", return_value=group),
             patch.object(review_gui, "ActualReadingDialog", return_value=dialog),
-            patch.object(review_gui, "stage_manual_actual_correction", return_value=stage_result) as stage,
-            patch.object(review_gui, "apply_staged_manual_actual_corrections") as batch,
+            # Original backend outcome fixture: this case tests GUI controller,
+            # dispatch, queue and prompt behavior, not domain write acceptance.
+            patch.object(sp, "stage_manual_actual_correction", return_value=stage_result) as stage,
+            patch.object(sp, "apply_staged_manual_actual_corrections") as batch,
             patch.object(review_gui.threading, "Thread") as thread,
             patch.object(review_gui, "json_load_strict") as manifest_reload,
             patch.object(review_gui, "load_or_initialize_db") as db_reload,
@@ -1079,8 +1109,14 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
             patch.object(review_gui.messagebox, "showerror") as error,
         ):
             app.correct_actual()
-        self.assert_resume_loaded(app, service, snapshot)
-        info.assert_called_once()
+        self.assertEqual(service.load_resume_snapshot.call_args_list, [
+            call(expected_manifest=app.manifest, expected_db=app.db),
+            call(expected_manifest=app.manifest, expected_db=app.db), call(),
+        ])
+        self.assertEqual(service.validate_resume_staging.call_args_list, [call(snapshot), call(snapshot)])
+        info.assert_not_called()
+        self.assertIn("actual 已暫存", app.status.cget("text"))
+        self.assertIn("尚未正式套用", app.status.cget("text"))
         warning.assert_not_called()
         error.assert_not_called()
         stage.assert_called_once_with(
@@ -1102,7 +1138,7 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
 
     def test_filtering_staged_last_item_clamps_to_new_last_item(self):
         ledger = [entry(name, str(index) * 64) for index, name in enumerate("abcde", start=1)]
-        app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
+        app = self.handler_app()
         app.output_dir = self.output_dir
         app.manifest = {}
         app.db = {}
@@ -1112,8 +1148,8 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
         service, snapshot = self.resume_service(ledger, {
             "staged_group_count": 1, "staged_checked_occurrence_ids": ["e"],
         })
-        with patch.object(review_gui, "ReviewSaveService", return_value=service):
-            app.reload_records()
+        app._save_service = service
+        app.reload_records()
         self.assert_resume_loaded(app, service, snapshot)
         self.assertEqual(app.index, 3)
         self.assertEqual(app.current()["occurrence_id"], "d")
@@ -1125,7 +1161,7 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
         resolved = copy.deepcopy(current)
         resolved["state"] = "PASS"
         staged_ledger = [resolved, staged_actual, next_entry]
-        app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
+        app = self.handler_app()
         app.root = QueuedRoot()
         app.output_dir = self.output_dir
         app.manifest = {}
@@ -1139,15 +1175,17 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
             db={"events": {current["review_id"]: {"action": "確認 expected"}}},
             ledger=staged_ledger, resolved_entry=resolved, timings={}, version_token="fixture-version",
             staging_summary={"staged_group_count": 1, "staged_checked_occurrence_ids": ["staged-b"]})
+        service = InlineReviewService(self.output_dir)
+        # Existing durable save outcome input; queue/poll/ownership remain real.
+        service.save_event = MagicMock(return_value=result)
+        app._save_service = service
         with (
-            patch.object(review_gui, "ReviewSaveService") as service,
             patch.object(review_gui.threading, "Thread", ImmediateThread),
         ):
-            service.return_value.save_event.return_value = result
             started = app.save_event(current, {"action": "確認 expected"})
             app.root.update()
         self.assertTrue(started)
-        service.return_value.save_event.assert_called_once()
+        service.save_event.assert_called_once()
         self.assertTrue(app._last_event_saved)
         self.assertEqual([item["occurrence_id"] for item in app.records], ["next-c"])
         self.assertNotIn("staged-b", [item["occurrence_id"] for item in app.records])
@@ -1155,7 +1193,7 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
 
     def test_all_actionable_staged_keeps_batch_enabled_and_explains_next_step(self):
         pending = entry("only", "a" * 64)
-        app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
+        app = self.handler_app()
         app.output_dir = self.output_dir
         app.manifest = {}
         app.db = {}
@@ -1172,8 +1210,8 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
         service, snapshot = self.resume_service([pending], {
             "staged_group_count": 2, "staged_checked_occurrence_ids": ["only"],
         })
-        with patch.object(review_gui, "ReviewSaveService", return_value=service):
-            app.reload_records()
+        app._save_service = service
+        app.reload_records()
         app.show()
 
         self.assert_resume_loaded(app, service, snapshot)
@@ -1185,22 +1223,23 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
         self.assertNotIn("全冊完成", app.summary_text.options["text"])
 
     def test_final_button_asks_confirmation_before_starting_worker(self):
-        app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
-        app.root = object()
+        app = self.handler_app()
         app.reload_staging_summary = MagicMock(return_value={"staged_group_count": 2})
+        service, _snapshot = self.resume_service([], {"staged_group_count": 2})
+        app._save_service = service
         with (
             patch.object(review_gui.messagebox, "askyesno", return_value=False) as ask,
-            patch.object(review_gui, "apply_staged_manual_actual_corrections") as service,
+            patch.object(sp, "apply_staged_manual_actual_corrections") as apply,
             patch.object(review_gui.threading, "Thread") as thread,
         ):
             app.apply_staged_actuals()
         ask.assert_called_once()
-        service.assert_not_called()
+        apply.assert_not_called()
         thread.assert_not_called()
 
     def test_final_worker_is_one_thread_and_success_reloads_current_state(self):
         ImmediateThread.instances = []
-        app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
+        app = self.handler_app()
         app.root = ImmediateRoot()
         app.output_dir = self.output_dir
         app.index = 4
@@ -1214,25 +1253,35 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
             "quarantined_group_ids": ["conflict-group"],
             "cleared_actual_dependent_event_count": 2,
         }
+        before_service, before_snapshot = self.resume_service([], {"staged_group_count": 10})
+        refreshed_service, refreshed_snapshot = self.resume_service([], {"staged_group_count": 0})
+        refreshed_snapshot.manifest = {"manifest": "refreshed"}
+        refreshed_snapshot.db = {"events": {}}
+        app._save_service = before_service
         with (
             patch.object(review_gui.messagebox, "askyesno", return_value=True),
             patch.object(review_gui.messagebox, "showinfo") as showinfo,
             patch.object(review_gui.messagebox, "showerror"),
-            patch.object(review_gui, "apply_staged_manual_actual_corrections", return_value=result) as service,
+            # Preserve the original backend outcome fixture, reached through
+            # the real closed dispatcher. This is controller/queue coverage;
+            # real child PID and domain transaction coverage is separate.
+            patch.object(sp, "apply_staged_manual_actual_corrections", return_value=result) as apply,
+            patch.object(review_save_service, "ReviewSaveService", return_value=refreshed_service),
             patch.object(review_gui.threading, "Thread", ImmediateThread),
             patch.object(review_gui.tk, "Toplevel", FakeProgressWidget),
             patch.object(review_gui, "WrappedLabel", FakeProgressWidget),
             patch.object(review_gui.ttk, "Progressbar", FakeProgressWidget),
             patch.object(review_gui, "apply_screen_safe_geometry"),
-            patch.object(review_gui, "json_load_strict", return_value={"manifest": "refreshed"}),
-            patch.object(review_gui, "validate_manifest_integrity"),
-            patch.object(review_gui, "validate_output_artifact_hashes"),
-            patch.object(review_gui, "load_or_initialize_db", return_value={"events": {}}),
         ):
             app.apply_staged_actuals()
         self.assertEqual(len(ImmediateThread.instances), 1)
-        service.assert_called_once_with(app.output_dir)
-        app.reload_records.assert_called_once()
+        apply.assert_called_once_with(app.output_dir)
+        self.assertEqual(before_service.load_resume_snapshot.call_count, 2)
+        before_service.validate_resume_staging.assert_called_once_with(before_snapshot)
+        refreshed_service.load_resume_snapshot.assert_called_once_with()
+        refreshed_service.validate_resume_staging.assert_called_once_with(refreshed_snapshot)
+        # Fresh result snapshot replaces a second main-thread disk reload.
+        app.reload_records.assert_not_called()
         app.show.assert_called_once()
         self.assertEqual(app.manifest, {"manifest": "refreshed"})
         success_text = showinfo.call_args.args[1]
@@ -1242,7 +1291,7 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
         self.assertIn("進入隔離", success_text)
 
     def test_reload_records_also_reloads_durable_staging_count(self):
-        app = review_gui.ReviewApp.__new__(review_gui.ReviewApp)
+        app = self.handler_app()
         app.output_dir = self.output_dir
         app.records = []
         app.staged_checked_occurrence_ids = set()
@@ -1253,8 +1302,8 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
         service, snapshot = self.resume_service([], {
             "staged_group_count": 2, "staged_checked_occurrence_ids": ["saved"],
         })
-        with patch.object(review_gui, "ReviewSaveService", return_value=service):
-            app.reload_records()
+        app._save_service = service
+        app.reload_records()
         self.assert_resume_loaded(app, service, snapshot)
         self.assertEqual(app.staging_summary["staged_group_count"], 2)
         self.assertEqual(app.staged_checked_occurrence_ids, {"saved"})

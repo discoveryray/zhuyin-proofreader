@@ -46,6 +46,7 @@ from standalone_proofread import (
 from actual_review import build_actual_group_for_entry
 from review_display import ActionRows, OccurrencePreview, WrappedLabel, scroll_canvas, scrollable_entry, wrap_checkbutton
 from review_save_service import ReviewSaveService
+from review_operation_worker import ReviewProcessService, ReviewOperationError
 
 
 STATE_HELP = {
@@ -794,23 +795,20 @@ class ActualReadingDialog(_ReviewDialog):
             self.preview_buttons[index].configure(text="原頁無法顯示，請重新載入")
 
         preview.on_failure = unavailable
+        preview.on_invalidated = unavailable
+        def ready(current):
+            if not self._destroying and self.previews[index] is current:
+                self.preview_buttons[index].configure(text="重新載入原頁")
+                self._schedule_visibility_check()
+        preview.on_ready = ready
         self.sample_available[index] = False
         self._viewed_target[index] = False
         self.checked_vars[index].set(False)
         check = self.check_buttons[index]
         if check is not None:
             check.configure(state="disabled")
-        available = preview.load(self.samples[index], padding=(95, 60), output_dir=self.output_dir)
-        if not available:
-            self.checked_vars[index].set(False)
-        elif not self.previously_checked[index]:
-            # load() only proves that a target was found in the PDF. The image
-            # may still be waiting for the canvas's first usable width.
-            self._preview_ready_after[index] = self.after_idle(
-                lambda: self._check_preview_ready(index, preview, self._PREVIEW_READY_RETRIES),
-            )
-        if available:
-            self.preview_buttons[index].configure(text="重新載入原頁")
+        preview.load(self.samples[index], padding=(95, 60), output_dir=self.output_dir)
+        self.preview_buttons[index].configure(text="正在載入原頁…")
 
     def submit(self):
         reading = canonical_bopomofo(self.reading.get())
@@ -895,10 +893,18 @@ class ConfirmedItemsDialog(_ReviewDialog):
             self.destroy()
 
 
-def load_review_project(output_dir, progress):
+def load_review_project(output_dir, progress, *, service=None):
     """Prepare the verified queue once; actual staging remains background work."""
+    if service is None:
+        service = ReviewProcessService(output_dir)
+        try:
+            result = service.invoke("startup", {}, progress=progress)
+        except Exception:
+            service.close()
+            raise
+        result["service"] = service
+        return result
     progress("讀取校對工作階段")
-    service = ReviewSaveService(output_dir)
     progress("驗證工作階段、來源與輸出資產完整性")
     snapshot = service.load_resume_snapshot()
     manifest, db = copy.deepcopy(snapshot.manifest), copy.deepcopy(snapshot.db)
@@ -939,6 +945,8 @@ def review_startup_worker(output_dir, messages, cancelled):
     else:
         if not cancelled.is_set():
             messages.put(("result", result))
+        elif isinstance(result.get("service"), ReviewProcessService):
+            result["service"].close()
 
 
 def _review_log(text, *, error=False):
@@ -972,7 +980,7 @@ class ReviewApp:
         self.deferred_items = set()
         self._save_in_progress = False
         self._project_generation = 0
-        self._save_service = ReviewSaveService(output_dir)
+        self._save_service = ReviewProcessService(output_dir)
         self._save_recovery_required = False
         self.last_save_timings = {}
         self.waiting_actual_occurrence_ids = set()
@@ -1006,7 +1014,8 @@ class ReviewApp:
 
         self.image = OccurrencePreview(body, on_locate=self.body_canvas.reveal, on_failure=self._preview_failed,
                                        on_layout=self.body_canvas.request_layout,
-                                       before_locate=self.body_canvas.flush_layout)
+                                       before_locate=self.body_canvas.flush_layout,
+                                       on_ready=self._preview_ready, on_invalidated=self._preview_failed)
         self.image.pack(fill="both", expand=True, padx=12, pady=6)
 
         self.tech_frame = tk.LabelFrame(body, text="技術資訊")
@@ -1147,6 +1156,9 @@ class ReviewApp:
 
     def reload_records(self, *, advance_from=None, defer_staging=None):
         if getattr(self, "_save_in_progress", False):
+            return
+        if isinstance(getattr(self, "_save_service", None), ReviewProcessService):
+            self._start_record_reload(advance_from=advance_from)
             return
         if defer_staging is None:
             defer_staging = getattr(self, "staging_summary", {}).get("staging_validation_pending", False)
@@ -1441,6 +1453,7 @@ class ReviewApp:
 
     def _save_busy(self):
         return (getattr(self, "_save_in_progress", False)
+                or getattr(self, "_operation_in_progress", False)
                 or getattr(self, "_startup_in_progress", False)
                 or getattr(self, "_startup_failed", False)
                 or getattr(self, "_save_recovery_required", False)
@@ -1471,6 +1484,9 @@ class ReviewApp:
         # The worker may still finish its durable write. It never touches Tk;
         # reopening reads the saved result instead of publishing to this owner.
         self._save_in_progress = False
+        service = getattr(self, "_save_service", None)
+        if isinstance(service, ReviewProcessService):
+            threading.Thread(target=service.close, daemon=False).start()
 
     def _schedule_async_poll(self, callback, *args):
         self._ensure_async_lifecycle()
@@ -1494,15 +1510,95 @@ class ReviewApp:
         # across retry, queue reload and defer/revisit of the same session.
         service = getattr(self, "_save_service", None)
         self._save_service = (service.with_invalidated_cache() if service is not None
-                              else ReviewSaveService(self.output_dir))
+                              else ReviewProcessService(self.output_dir))
 
     def close(self):
-        if getattr(self, "_save_in_progress", False) or getattr(self, "_apply_in_progress", False):
+        if (getattr(self, "_save_in_progress", False) or getattr(self, "_apply_in_progress", False)
+                or getattr(self, "_operation_in_progress", False)):
             self.status.config(text="人工判定儲存中，完成後即可關閉。")
             return
         self._cancel_staging_validation()
         self._project_generation = getattr(self, "_project_generation", 0) + 1
         self.root.destroy()
+
+    def _invoke_operation(self, operation, payload, progress=None):
+        return self._save_service.invoke(operation, payload, progress=progress)
+
+    def _start_record_reload(self, *, advance_from=None):
+        service, manifest, db = self._save_service, self.manifest, self.db
+        def publish(value):
+            self.manifest, self.db = value["snapshot"].manifest, value["snapshot"].db
+            self._publish_staging_summary(value["summary"])
+            self._set_actionable_records_from_ledger(value["review_view"], advance_from=advance_from)
+            self.show()
+        def work(progress):
+            progress("正在重新核對校對清單")
+            return service.invoke("reload", dict(expected_manifest=manifest, expected_db=db), progress=progress)
+        self._start_owned_operation("重新載入校對清單", work, publish)
+
+    def _start_owned_operation(self, title, work, publish, *, committed=False):
+        """One UI owner, one operation; all work receives plain request data."""
+        if getattr(self, "_operation_in_progress", False) or getattr(self, "_async_disposed", False):
+            return False
+        self._cancel_staging_validation()
+        self._operation_in_progress = True
+        request = dict(project=self.output_dir, generation=getattr(self, "_project_generation", 0),
+                       manifest=self.manifest, db=self.db, title=title)
+        self._operation_request = request
+        completed, progress = queue.Queue(maxsize=1), queue.Queue()
+        self._disable_save_controls()
+        def worker():
+            try:
+                completed.put((work(progress.put), None))
+            except Exception as exc:
+                completed.put((None, exc))
+        self._operation_worker = threading.Thread(target=worker, daemon=False)
+        self._operation_worker.start()
+        self._schedule_async_poll(self._poll_owned_operation, request, completed, progress, publish, committed)
+        return True
+
+    def _poll_owned_operation(self, request, completed, progress, publish, committed):
+        if getattr(self, "_operation_request", None) is not request or getattr(self, "_async_disposed", False):
+            return
+        try:
+            while True:
+                self.status.config(text=progress.get_nowait())
+        except queue.Empty:
+            pass
+        try:
+            value, error = completed.get_nowait()
+        except queue.Empty:
+            self._schedule_async_poll(self._poll_owned_operation, request, completed, progress, publish, committed)
+            return
+        self._operation_request = None
+        self._operation_in_progress = False
+        owns = (request["project"] == self.output_dir and request["generation"] == getattr(self, "_project_generation", 0)
+                and request["manifest"] is self.manifest and request["db"] is self.db)
+        if not owns:
+            self._save_recovery_required = True
+            self.status.config(text="背景操作結果屬於原專案；請重新開啟校對畫面確認磁碟狀態。")
+            return
+        if error is not None:
+            state = getattr(error, "commit_state", "")
+            committed = committed or state in {"COMMITTED_REFRESH_PENDING", "STAGED_REFRESH_PENDING", "REPORT_SAVED_REFRESH_PENDING"}
+            self._restore_save_controls()
+            if committed:
+                self._save_recovery_required = True
+                self._disable_save_controls()
+            label = {"STAGED_REFRESH_PENDING": "actual 已暫存，但清單更新未完成",
+                     "REPORT_SAVED_REFRESH_PENDING": "報告已保存，但清單更新未完成"}.get(state,
+                     "已保存，但後續更新未完成" if committed else
+                     "操作尚未寫入" if state == "NOT_WRITTEN" else request["title"] + "失敗")
+            messagebox.showerror(label,
+                                 str(error), parent=self.root)
+            return
+        try:
+            self._restore_save_controls()
+            publish(value)
+        except Exception as exc:
+            self._save_recovery_required = True
+            self._disable_save_controls()
+            messagebox.showwarning("操作已完成，但畫面更新失敗", str(exc), parent=self.root)
 
     def _disable_save_controls(self):
         widgets = [getattr(self, name, None) for name in
@@ -1555,7 +1651,7 @@ class ReviewApp:
         self._save_in_progress = True
         self._last_event_saved = self._last_event_refreshed = False
         if not hasattr(self, "_save_service"):
-            self._save_service = ReviewSaveService(self.output_dir)
+            self._save_service = ReviewProcessService(self.output_dir)
         started = time.perf_counter()
         request = {"generation": getattr(self, "_project_generation", 0),
                    "review_id": entry["review_id"], "manifest": self.manifest,
@@ -1915,124 +2011,71 @@ class ReviewApp:
         entry = self.current()
         if not entry:
             return
-        try:
-            full_ledger = materialize_ledger(self.manifest, self.db)
-            group = build_actual_group_for_entry(full_ledger, entry)
-            # Revalidate durable checks against this live ledger. On an invalid
-            # summary, no occurrence is treated as already checked.
-            self.reload_staging_summary(full_ledger)
-            # The checked roster also controls the actionable queue. Refresh it
-            # before the dialog, since cancelling must not leave positions hidden
-            # by checks that the revalidation just rejected.
-            self._set_actionable_records_from_ledger(full_ledger)
+        service = self._save_service
+        payload = dict(expected_manifest=self.manifest, expected_db=self.db, review_id=entry["review_id"])
+        def work(progress):
+            progress("正在準備原頁 actual 核對群組")
+            return service.invoke("prepare_actual", payload, progress=progress)
+        def prepared(value):
+            if not self.current() or self.current().get("review_id") != entry.get("review_id"):
+                return
+            self._publish_staging_summary(value["summary"])
+            self._set_actionable_records_from_ledger(value["ledger"])
             self.show()
-        except Exception as exc:
-            messagebox.showerror("無法建立 actual 核對群組", str(exc), parent=self.root)
-            return
-        if not self.current() or self.current().get("review_id") != entry.get("review_id"):
-            return
-        verified_checked = (
-            self.staged_checked_occurrence_ids
-            if not self.staging_summary.get("staging_error") else ()
-        )
-        dialog = ActualReadingDialog(
-            self.root, entry, group, self.output_dir,
-            verified_checked_occurrence_ids=verified_checked,
-        )
-        if not dialog.result:
-            return
-        try:
-            stage_manual_actual_correction(
-                self.output_dir,
-                str(entry.get("review_id") or ""),
-                dialog.result["reading"],
-                list(dialog.result.get("checked_occurrence_ids") or []),
-                dialog.result.get("note", ""),
-            )
-        except Exception as exc:
-            messagebox.showerror("actual 暫存失敗", str(exc), parent=self.root)
-            return
-        self._last_actual_staged = True
-        try:
-            self.reload_records(advance_from=entry.get("review_id"))
-            self.show()
-        except Exception as exc:
-            messagebox.showwarning(
-                "actual 已暫存，但待人工清單更新失敗",
-                f"人工核對結果已寫入 durable staging；重新開啟畫面仍可恢復。\n{exc}",
-                parent=self.root,
-            )
-            return
-        fresh_summary = self.staging_summary
-        if fresh_summary.get("staging_error"):
-            messagebox.showwarning("actual 已暫存，但尚未通過驗證", f"暫存仍保留，未移除待辦；請處理來源／暫存阻擋。\n{fresh_summary['staging_error']}", parent=self.root)
-            return
-        count = int(fresh_summary.get("staged_group_count") or 0)
-        messagebox.showinfo(
-            "actual 已暫存",
-            "這筆已暫存，尚未正式寫入 actual evidence，也尚未重新解碼 PDF。\n"
-            f"目前共有 {count} 組等待套用；你可以繼續確認下一筆，最後按「套用 actual 修正」。",
-            parent=self.root,
-        )
+            if not self.current() or self.current().get("review_id") != entry.get("review_id"):
+                return
+            self._review_action_in_progress = True
+            try:
+                dialog = ActualReadingDialog(self.root, entry, value["group"], self.output_dir,
+                    verified_checked_occurrence_ids=self.staged_checked_occurrence_ids
+                    if not value["summary"].get("staging_error") else ())
+            finally:
+                self._review_action_in_progress = False
+            if not dialog.result:
+                return
+            request = dict(payload, **dialog.result)
+            def stage(progress):
+                return service.invoke("stage_actual", request, progress=progress)
+            def staged(result):
+                self._last_actual_staged = True
+                self.manifest, self.db = result["snapshot"].manifest, result["snapshot"].db
+                self._publish_staging_summary(result["summary"])
+                self._set_actionable_records_from_ledger(result["review_view"], advance_from=entry["review_id"])
+                self.show()
+                if result["summary"].get("staging_error"):
+                    messagebox.showwarning("actual 已暫存，但尚未通過驗證", result["summary"]["staging_error"], parent=self.root)
+                else:
+                    count = int(result["summary"].get("staged_group_count") or 0)
+                    self.status.config(text=f"actual 已暫存，尚未正式套用；目前 {count} 組等待套用，可繼續下一筆。")
+            self._start_owned_operation("actual 暫存", stage, staged)
+        self._start_owned_operation("準備 actual 核對", work, prepared)
 
     def apply_staged_actuals(self):
         if getattr(self, "staging_summary", {}).get("staging_validation_pending"):
             return
-        # A failed startup may still expose independently verified committed
-        # recovery. It never enables a fresh actual decision or an expected save.
-        startup_recovery = (getattr(self, "_startup_failed", False)
-                            and getattr(self, "staging_summary", {}).get("actual_recovery_pending"))
-        busy = (any(getattr(self, name, False) for name in
-                    ("_save_in_progress", "_save_recovery_required", "_async_disposed", "_startup_in_progress"))
-                if startup_recovery else self._save_busy())
-        if busy or getattr(self, "_apply_in_progress", False) or getattr(self, "_review_action_in_progress", False):
-            return
-        self._apply_in_progress = True
         recovery_only = bool(getattr(self, "_resume_source_error", None))
-        try:
-            summary = (self._publish_staging_summary(self._source_error_staging_summary(self._resume_source_error))
-                       if recovery_only else self.reload_staging_summary())
-        except Exception as exc:
-            self._apply_in_progress = False
-            messagebox.showerror("無法讀取 actual 暫存清單", str(exc), parent=self.root)
+        if ((self._save_busy() and not recovery_only) or getattr(self, "_apply_in_progress", False)
+                or getattr(self, "_operation_in_progress", False)):
             return
-        if summary.get("staging_error") and not summary.get("actual_recovery_pending"):
-            self._apply_in_progress = False
-            self.reload_records()
-            self.show()
-            messagebox.showerror("actual 暫存尚未通過驗證", summary["staging_error"], parent=self.root)
-            return
-        count = int(summary.get("staged_group_count") or 0)
-        if count <= 0 and not summary.get("actual_recovery_pending"):
-            self._apply_in_progress = False
-            if summary.get("staging_error"):
-                messagebox.showerror("無法讀取 actual 暫存清單", summary["staging_error"], parent=self.root)
-            return
-        if not messagebox.askyesno(
-            "套用 actual 修正",
-            ("actual 已提交，將依既有交易紀錄繼續未完成的更新。\n" if summary.get("actual_recovery_pending")
-             else f"目前有 {count} 組 actual 人工確認等待套用。\n") +
-            "套用後會正式寫入 actual 證據，並一次增量重新處理受影響 PDF。\n"
-            "是否繼續？",
-            parent=self.root,
-        ):
-            self._apply_in_progress = False
-            return
-
-        try:
-            if recovery_only:
-                self._start_staged_actual_apply(count, recovery_only=True)
-            else:
-                self._start_staged_actual_apply(count)
-        except Exception as exc:
-            self._apply_in_progress = False
-            progress = getattr(self, "_actual_progress_window", None)
-            if progress is not None:
-                try:
-                    progress.destroy()
-                except tk.TclError:
-                    pass
-            messagebox.showerror("無法開始套用 actual 修正", str(exc), parent=self.root)
+        service = self._save_service
+        payload = dict(expected_manifest=self.manifest, expected_db=self.db, recovery_only=recovery_only)
+        def work(progress):
+            return service.invoke("actual_summary", payload, progress=progress)
+        def prepared(summary):
+            self._publish_staging_summary(summary)
+            if summary.get("staging_error") and not summary.get("actual_recovery_pending"):
+                messagebox.showerror("actual 暫存尚未通過驗證", summary["staging_error"], parent=self.root)
+                return
+            count = int(summary.get("staged_group_count") or 0)
+            if count <= 0 and not summary.get("actual_recovery_pending"):
+                return
+            if not messagebox.askyesno("套用 actual 修正",
+                ("actual 已提交，將接續未完成更新。\n" if summary.get("actual_recovery_pending") else f"目前有 {count} 組等待套用。\n")
+                + "正式寫入 actual 證據並增量更新受影響 PDF，是否繼續？", parent=self.root):
+                return
+            self._apply_in_progress = True
+            self._start_staged_actual_apply(count, recovery_only=recovery_only)
+        self._start_owned_operation("核對 actual 暫存", work, prepared)
 
     def _start_staged_actual_apply(self, count, *, recovery_only=False):
         progress = tk.Toplevel(self.root)
@@ -2059,17 +2102,11 @@ class ReviewApp:
         completed = queue.Queue(maxsize=1)
         output_dir = self.output_dir
 
+        service = self._save_service
+        payload = dict(recovery_only=recovery_only, expected_manifest=self.manifest, expected_db=self.db)
         def worker():
             try:
-                if recovery_only:
-                    # Re-read the strict durable plan at the recovery boundary.
-                    # A removed plan must not fall through to applying staging.
-                    result = recover_committed_actual_project(output_dir)
-                    if result is None:
-                        raise ValueError("已提交 actual 復原紀錄已變更；未套用任何新暫存，請重新載入")
-                else:
-                    result = apply_staged_manual_actual_corrections(output_dir)
-                completed.put((result, None))
+                completed.put((service.invoke("apply_actual", payload), None))
             except Exception as exc:
                 completed.put((None, exc))
 
@@ -2082,43 +2119,27 @@ class ReviewApp:
             except Exception:
                 pass
             if error:
-                try:
-                    self.manifest = json_load_strict(self.output_dir / "校對工作階段.json")
-                    validate_manifest_integrity(self.manifest)
-                    validate_output_artifact_hashes(self.manifest, output_dir=self.output_dir)
-                    self.db = load_or_initialize_db(self.output_dir)
-                    self.reload_records()
-                    self.show()
-                except Exception as reload_error:
-                    self.staged_checked_occurrence_ids = set()
-                    self.staging_summary = {"staging_error": str(reload_error)}
-                    self._show_staging_status()
-                if isinstance(error, ManualActualPostApplyError):
-                    title = "actual evidence 已套用，但後續未完成"
-                else:
-                    title = "套用 actual 修正失敗"
-                messagebox.showerror(title, str(error), parent=self.root)
+                self._save_recovery_required = True
+                self._disable_save_controls()
+                committed = getattr(error, "commit_state", "") == "COMMITTED_REFRESH_PENDING"
+                messagebox.showerror("actual evidence 已套用，但後續未完成" if committed else "actual 操作失敗；請重新載入核對磁碟狀態",
+                                     str(error), parent=self.root)
                 return
             try:
-                self.manifest = json_load_strict(self.output_dir / "校對工作階段.json")
-                validate_manifest_integrity(self.manifest)
-                validate_output_artifact_hashes(self.manifest, output_dir=self.output_dir)
-                self.db = load_or_initialize_db(self.output_dir)
+                value = result
+                self.manifest, self.db = value["snapshot"].manifest, value["snapshot"].db
                 self.index = old_index
-                self.reload_records()
-                if not getattr(self, "_resume_source_error", None):
-                    self._startup_failed = False
-                    self.exit_code = 0
-                    if hasattr(self, "retry_startup_button"):
-                        self.retry_startup_button.pack_forget()
-                    self._restore_save_controls()
+                self._publish_staging_summary(value["summary"])
+                self._set_actionable_records_from_ledger(value["review_view"])
+                self._startup_failed = False
+                self.exit_code = 0
+                self._restore_save_controls()
                 self.show()
+                result = value["result"]
             except Exception as exc:
-                messagebox.showerror(
-                    "actual 已套用，但畫面重新載入失敗",
-                    f"batch、refresh 與 postcondition 已完成；請重新開啟人工校對畫面。\n{exc}",
-                    parent=self.root,
-                )
+                self._save_recovery_required = True
+                self._disable_save_controls()
+                messagebox.showerror("actual 已套用，但畫面重新載入失敗", str(exc), parent=self.root)
                 return
 
             result = dict(result or {})
@@ -2149,7 +2170,7 @@ class ReviewApp:
             )
             messagebox.showinfo("actual 批次套用完成", "\n".join(lines), parent=self.root)
 
-        threading.Thread(target=worker, daemon=True).start()
+        threading.Thread(target=worker, daemon=False).start()
         self._schedule_async_poll(self._poll_actual_apply, completed, done)
 
     def _poll_actual_apply(self, completed, done):
@@ -2177,20 +2198,20 @@ class ReviewApp:
         self.save_event(entry, None)
 
     def report(self):
-        if getattr(self, "staging_summary", {}).get("staging_validation_pending"):
+        if (getattr(self, "staging_summary", {}).get("staging_validation_pending")
+                or self._save_busy() or getattr(self, "_apply_in_progress", False)):
             return
-        if self._save_busy() or getattr(self, "_apply_in_progress", False):
-            return
-        try:
-            path = regenerate_report(self.output_dir)
-            status = json_load(self.output_dir / "pipeline_status.json", {}).get("status", "")
-            messagebox.showinfo("報告已更新", f"{friendly_state(status) if status else '報告已更新'}\n{path}")
-            self.manifest = json_load_strict(self.output_dir / "校對工作階段.json")
-            self.db = load_or_initialize_db(self.output_dir)
-            self.reload_records()
+        service = self._save_service
+        payload = dict(expected_manifest=self.manifest, expected_db=self.db)
+        def work(progress):
+            return service.invoke("report", payload, progress=progress)
+        def publish(value):
+            self.manifest, self.db = value["snapshot"].manifest, value["snapshot"].db
+            self._publish_staging_summary(value["summary"])
+            self._set_actionable_records_from_ledger(value["review_view"])
             self.show()
-        except Exception as exc:
-            messagebox.showerror("無法更新報告", str(exc))
+            self.status.config(text=f"Excel 報告已更新：{value['result']}")
+        self._start_owned_operation("更新 Excel 報告", work, publish)
 
     def toggle_tech(self):
         self.tech_visible = not self.tech_visible
@@ -2325,6 +2346,8 @@ class ReviewApp:
         started = time.perf_counter()
         self._rendered_review_id = None
         try:
+            if can_confirm_current_expected(entry):
+                getattr(self, "_confirm_current_expected_button", self.primary).config(state="disabled")
             if self.image.load(entry):
                 self._rendered_review_id = entry.get("review_id")
             elif can_confirm_current_expected(entry):
@@ -2332,6 +2355,14 @@ class ReviewApp:
         finally:
             if getattr(self, "_save_in_progress", False):
                 self.last_save_timings["preview_render"] = time.perf_counter() - started
+
+    def _preview_ready(self, preview):
+        entry = self.current()
+        if (entry and preview is self.image and preview._entry == entry and preview.photo is not None
+                and preview.target is not None and not self._save_busy()):
+            self._rendered_review_id = entry.get("review_id")
+            if can_confirm_current_expected(entry):
+                getattr(self, "_confirm_current_expected_button", self.primary).config(state="normal")
 
     def _preview_failed(self):
         self._rendered_review_id = None

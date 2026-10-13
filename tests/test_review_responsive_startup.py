@@ -27,6 +27,10 @@ class ResponsiveReviewTests(unittest.TestCase):
         self.manifest = create_staged_navigation_fixture(self.output)
         self.stack = contextlib.ExitStack()
         self.addCleanup(self.stack.close)
+        from tests.no_window_review_support import InlineReviewService
+        loader = gui.load_review_project
+        self.stack.enter_context(patch.object(gui, "load_review_project",
+            side_effect=lambda output, progress: loader(output, progress, service=InlineReviewService(output))))
         # Any accidental native entry in this test is an error, not a skip.
         self.stack.enter_context(patch.object(gui.tk, "Tk", side_effect=AssertionError("real Tk forbidden")))
         self.stack.enter_context(patch.object(gui.tk, "Toplevel", side_effect=AssertionError("real Tk forbidden")))
@@ -188,9 +192,14 @@ class ResponsiveReviewTests(unittest.TestCase):
             self.assertTrue(app._save_busy())
             self.assertEqual(app.records, [])
             self.assertTrue(app.staging_summary["actual_recovery_pending"])
+            from tests.no_window_review_support import InlineReviewService
+            app._save_service = InlineReviewService(self.output)
             with patch.object(gui.messagebox, "askyesno", return_value=True), \
+                    patch("global_glyph_promotion.committed_project_recovery", return_value=("existing-token", {})), \
                     patch.object(app, "_start_staged_actual_apply") as start:
                 app.apply_staged_actuals()
+                app._operation_worker.join(10)
+                app.root.update()
                 start.assert_called_once_with(0, recovery_only=True)
                 app._start_review_loading()
                 self.assertFalse(app._startup_in_progress)
@@ -293,6 +302,7 @@ class ResponsiveReviewTests(unittest.TestCase):
         app = launcher.App.__new__(launcher.App)
         app.output = Mock()
         app.output.get.return_value = str(self.output)
+        app._review_project = str(self.output.resolve())
         app.root = Mock()
         app.q = queue.Queue()
         app.review_button = Mock()

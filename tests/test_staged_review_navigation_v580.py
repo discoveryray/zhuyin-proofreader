@@ -58,7 +58,8 @@ def create_staged_navigation_fixture(output, *, same_exact_peers=False):
 
 
 def headless_app(output):
-    app = gui.ReviewApp.__new__(gui.ReviewApp)
+    from tests.no_window_review_support import ReviewApp, InlineReviewService, Surface
+    app = ReviewApp.__new__(ReviewApp)
     app.root = QueuedRoot()
     app.output_dir = output
     app.manifest = sp.json_load_strict(output / "校對工作階段.json")
@@ -66,7 +67,9 @@ def headless_app(output):
     app.records, app.index = [], 0
     app.apply_actual_button = DummyButton()
     app.staging_status = DummyButton()
+    app.status = Surface()
     app.show = MagicMock()
+    app._save_service = InlineReviewService(output)
     app.reload_records()
     return app
 
@@ -338,7 +341,7 @@ class StagedNavigationTests(unittest.TestCase):
         row = self.app.current()
         with patch.object(gui, "ActualReadingDialog", return_value=SimpleNamespace(result={
                 "reading": "ㄎㄢ", "checked_occurrence_ids": [row["occurrence_id"]]})), \
-                patch.object(gui, "stage_manual_actual_correction", side_effect=OSError("isolated failure")), \
+                patch.object(sp, "stage_manual_actual_correction", side_effect=OSError("isolated failure")), \
                 patch.object(gui.messagebox, "showerror") as error, patch.object(gui.messagebox, "showinfo") as success:
             self.app.correct_actual()
         error.assert_called_once()
@@ -436,7 +439,7 @@ class StagedNavigationTests(unittest.TestCase):
             self.app.apply_staged_actuals()
         launch.assert_called_once()
         self.app._apply_in_progress = False
-        with patch.object(gui, "manual_actual_staging_summary", side_effect=OSError("unreadable")), \
+        with patch("review_save_service.ReviewSaveService.validate_resume_staging", side_effect=OSError("unreadable")), \
                 patch.object(gui.messagebox, "showerror") as error, \
                 patch.object(self.app, "_start_staged_actual_apply") as launch:
             self.app.apply_staged_actuals()
@@ -510,7 +513,8 @@ class SameExactStagedNavigationTests(unittest.TestCase):
     def test_individual_a_b_c_accumulate_only_checked_then_reopen_and_apply_once(self):
         for index in range(3):
             success, warning, error = self.stage_gui(index)
-            success.assert_called_once()
+            success.assert_not_called()
+            self.assertIn("actual 已暫存", self.app.status.options.get("text", ""))
             warning.assert_not_called()
             error.assert_not_called()
             wanted = set(self.ids[:index + 1])

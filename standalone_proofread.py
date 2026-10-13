@@ -5755,6 +5755,17 @@ def resolve_existing_project_dir(path: Path) -> Path:
     return unique[0] if len(unique) == 1 else path
 
 
+def _cli_operation_event(output_dir, phase, *, completed_files=0, total_files=1, commit_state="UNKNOWN"):
+    """Advisory presentation only; it creates no receipt or completion proof."""
+    operation_id = os.environ.get("ZHUYIN_OPERATION_ID", "")
+    project = str(Path(output_dir).resolve())
+    if not operation_id or os.environ.get("ZHUYIN_OPERATION_PROJECT") != project:
+        return
+    print("[ZHUYIN_OPERATION] " + json.dumps(dict(schema="zhuyin-operation/1", operation_id=operation_id,
+        project=project, phase=phase, completed_files=completed_files, total_files=total_files,
+        commit_state=commit_state), ensure_ascii=False), flush=True)
+
+
 def main():
     ap=argparse.ArgumentParser(description=f"{PROGRAM} v{VERSION}")
     ap.add_argument("input",nargs="?",help="PDF 或含 PDF 的資料夾")
@@ -5811,57 +5822,85 @@ def main():
                 raise ValueError("沒有可匯入的 GPT 判定檔")
             if len(planned) > 1:
                 print("[GPT 批次匯入] 已自動排序：判定包／actual -> expected；不需手動決定先後。", flush=True)
+            completed_files = 0
             for import_path, kind in planned:
-                if kind == "bundle":
-                    actual_n, removed, expected_n, skipped, report = import_gpt_decision_bundle(outdir, import_path)
-                    print(
-                        f"自動辨識：{import_path.name} = GPT 單檔判定包。"
-                        f"匯入 actual occurrence {actual_n} 筆；撤銷 {removed} 筆依賴舊 actual 的最終確認；"
-                        f"匯入 expected／差異 {expected_n} 筆；略過 {skipped} 筆未操作列。\n{report}",
-                        flush=True,
-                    )
-                elif kind == "actual":
-                    n, removed, report = import_actual_gpt_decisions(outdir, import_path)
-                    print(
-                        f"自動辨識：{import_path.name} = actual GPT 判定檔。"
-                        f"匯入 actual {n} 組；撤銷 {removed} 筆依賴舊 actual 的最終確認。\n{report}",
-                        flush=True,
-                    )
-                else:
-                    expected_result = import_gpt_decisions(outdir, import_path)
-                    n, skipped, report = expected_result
-                    business = getattr(expected_result, "status", {})
-                    business_text = (f"本次已保存：新增 {business['imported']} 筆；"
-                                     f"一致保留／補充 {business['consistent_supplements']} 筆；"
-                                     f"已處理重複 {business['duplicates']} 筆（未新增判定）；"
-                                     f"新增衝突 {business['new_conflicts']} 筆；"
-                                     f"待本地裁決 {business['pending_conflicts']} 筆。\n"
-                                     f"原待辦保留：保留待人工 {business['retained_manual']} 筆；"
-                                     f"未操作列 {business['skipped_unoperated']} 筆。\n"
-                                     + (f"依賴變動待重核 {business['dependency_rechecks']} 筆；"
-                                        f"有效本地完成判定保留 {business['preserved_local_decisions']} 筆（只保存來源稽核）。\n"
-                                        if 'dependency_rechecks' in business else "")
-                                     + ("請按「繼續校對」，查看雙方證據後用「輸入其他應標注音」裁決。\n"
-                                        if business['pending_conflicts'] else "")
-                                     + ("非校對範圍提案請重核原頁後使用既有排除入口；不會自動沿用舊排除。\n"
-                                        if business.get('dependency_rechecks') else "")
-                                     if business else "")
-                    print(
-                        f"自動辨識：{import_path.name} = expected／差異 GPT 證據檔。"
-                        f"{business_text if business else f'匯入 {n} 筆，略過 {skipped} 筆。'}\n{report}\n"
-                        "完成狀態請以本次產生的報告／pipeline_status.json 為準；"
-                        "若剛升級規則，請按「修復／更新報告」。",
-                        flush=True,
-                    )
+                _cli_operation_event(outdir, f"正在匯入 {import_path.name}", completed_files=completed_files, total_files=len(planned))
+                try:
+                    if kind == "bundle":
+                        actual_n, removed, expected_n, skipped, report = import_gpt_decision_bundle(outdir, import_path)
+                        print(
+                            f"自動辨識：{import_path.name} = GPT 單檔判定包。"
+                            f"匯入 actual occurrence {actual_n} 筆；撤銷 {removed} 筆依賴舊 actual 的最終確認；"
+                            f"匯入 expected／差異 {expected_n} 筆；略過 {skipped} 筆未操作列。\n{report}",
+                            flush=True,
+                        )
+                    elif kind == "actual":
+                        n, removed, report = import_actual_gpt_decisions(outdir, import_path)
+                        print(
+                            f"自動辨識：{import_path.name} = actual GPT 判定檔。"
+                            f"匯入 actual {n} 組；撤銷 {removed} 筆依賴舊 actual 的最終確認。\n{report}",
+                            flush=True,
+                        )
+                    else:
+                        expected_result = import_gpt_decisions(outdir, import_path)
+                        n, skipped, report = expected_result
+                        business = getattr(expected_result, "status", {})
+                        business_text = (f"本次已保存：新增 {business['imported']} 筆；"
+                                         f"一致保留／補充 {business['consistent_supplements']} 筆；"
+                                         f"已處理重複 {business['duplicates']} 筆（未新增判定）；"
+                                         f"新增衝突 {business['new_conflicts']} 筆；"
+                                         f"待本地裁決 {business['pending_conflicts']} 筆。\n"
+                                         f"原待辦保留：保留待人工 {business['retained_manual']} 筆；"
+                                         f"未操作列 {business['skipped_unoperated']} 筆。\n"
+                                         + (f"依賴變動待重核 {business['dependency_rechecks']} 筆；"
+                                            f"有效本地完成判定保留 {business['preserved_local_decisions']} 筆（只保存來源稽核）。\n"
+                                            if 'dependency_rechecks' in business else "")
+                                         + ("請按「繼續校對」，查看雙方證據後用「輸入其他應標注音」裁決。\n"
+                                            if business['pending_conflicts'] else "")
+                                         + ("非校對範圍提案請重核原頁後使用既有排除入口；不會自動沿用舊排除。\n"
+                                            if business.get('dependency_rechecks') else "")
+                                         if business else "")
+                        print(
+                            f"自動辨識：{import_path.name} = expected／差異 GPT 證據檔。"
+                            f"{business_text if business else f'匯入 {n} 筆，略過 {skipped} 筆。'}\n{report}\n"
+                            "完成狀態請以本次產生的報告／pipeline_status.json 為準；"
+                            "若剛升級規則，請按「修復／更新報告」。",
+                            flush=True,
+                        )
+                except Exception as exc:
+                    state = "COMMITTED_REFRESH_PENDING" if isinstance(exc, ManualActualPostApplyError) else "UNKNOWN"
+                    print(f"本次多檔匯入已完成 {completed_files}/{len(planned)} 檔；目前檔案未完整完成，狀態 {state}。"
+                          "先前完成檔案保留，請依交易／恢復紀錄核對。", flush=True)
+                    _cli_operation_event(outdir, "本檔未完整完成；先前完成檔案保留", completed_files=completed_files, total_files=len(planned), commit_state=state)
+                    raise
+                completed_files += 1
+                _cli_operation_event(outdir, "本檔處理完成", completed_files=completed_files, total_files=len(planned), commit_state="FILE_COMPLETED")
             return 0
         if args.import_actual_gpt:
-            n,removed,report=import_actual_gpt_decisions(outdir,Path(args.import_actual_gpt)); print(f"匯入 actual {n} 組；撤銷 {removed} 筆依賴舊 actual 的人工事件。\n{report}"); return 0
+            _cli_operation_event(outdir, "正在匯入 actual 判定")
+            try:
+                n, removed, report = import_actual_gpt_decisions(outdir, Path(args.import_actual_gpt))
+            except Exception as exc:
+                _cli_operation_event(outdir, "actual 匯入未完整完成", commit_state=
+                    "COMMITTED_REFRESH_PENDING" if isinstance(exc, ManualActualPostApplyError) else "UNKNOWN")
+                raise
+            _cli_operation_event(outdir, "actual 判定處理完成", completed_files=1, commit_state="FILE_COMPLETED")
+            print(f"匯入 actual {n} 組；撤銷 {removed} 筆依賴舊 actual 的人工事件。\n{report}")
+            return 0
         if args.refresh_actual:
             print(refresh_actual_with_recovery(outdir)); return 0
         if args.export_gpt:
             print(export_pending_for_gpt(outdir)); return 0
         if args.import_gpt:
-            n,skipped,report=import_gpt_decisions(outdir,Path(args.import_gpt)); print(f"匯入 {n} 筆，略過 {skipped} 筆。\n{report}"); return 0
+            _cli_operation_event(outdir, "正在匯入 expected 判定")
+            try:
+                n, skipped, report = import_gpt_decisions(outdir, Path(args.import_gpt))
+            except Exception:
+                _cli_operation_event(outdir, "expected 匯入未完整完成", commit_state="UNKNOWN")
+                raise
+            _cli_operation_event(outdir, "expected 判定處理完成", completed_files=1, commit_state="FILE_COMPLETED")
+            print(f"匯入 {n} 筆，略過 {skipped} 筆。\n{report}")
+            return 0
         print(regenerate_report(outdir)); return 0
     if not args.input: raise SystemExit("請指定 PDF 或 PDF 資料夾。")
     inp=Path(args.input)

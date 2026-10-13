@@ -6,6 +6,8 @@ import queue
 import subprocess
 import sys
 import threading
+import uuid
+from review_operation_worker import ReviewProcessService
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
@@ -249,6 +251,10 @@ class App:
         root.geometry("1080x560")
         self.q = queue.Queue()
         self.proc = None
+        self._project_operations = {}
+        self._status_request = None
+        self._status_service = None
+        root.protocol("WM_DELETE_WINDOW", self.close)
 
         self.global_library_window = None
         self.delivery_recovery_window = None
@@ -291,6 +297,15 @@ class App:
             self.global_library_window.lift()
             return
         self.global_library_window = GlobalLibraryInspector(self.root)
+
+    def close(self):
+        if getattr(self, "_project_operations", {}):
+            self.run_status.config(text="專案操作仍在執行，完成安全收尾後即可關閉。")
+            return
+        service = getattr(self, "_status_service", None)
+        if service is not None:
+            threading.Thread(target=service.close, daemon=False).start()
+        self.root.destroy()
 
     def open_delivery_recovery(self):
         from delivery_recovery_inspector import DeliveryRecoveryInspector
@@ -456,21 +471,46 @@ class App:
         out = self.output.get().strip()
         if not out:
             self.project_diagnostics = "尚未選擇校對專案資料夾"
-            self.project_status.config(text="尚未選擇校對專案資料夾。請先選擇專案或教材。")
+            self.project_status.config(text="尚未選擇校對專案資料夾。")
             return
-        requested = Path(out)
-        try:
-            normalized = normalize_existing_project_folder(requested)
-        except Exception as exc:
-            self.project_status.config(text=_UNKNOWN_PROGRESS)
-            self.project_diagnostics = f"{requested}\n{exc}"
-            return
-        if normalized != requested:
+        normalized = normalize_existing_project_folder(Path(out))
+        if normalized != Path(out):
             self.output.set(str(normalized))
-            out = str(normalized)
-            self.run_status.config(text=f"已自動修正校對專案資料夾：{normalized}")
-        summary, self.project_diagnostics = project_status_details(Path(out))
-        self.project_status.config(text=summary)
+        project = str(normalized.resolve())
+        if getattr(self, "_status_request", None) is not None:
+            if self._status_request != project:
+                self.project_status.config(text="正在驗證目前專案狀態…")
+            return
+        self._status_request = project
+        self.project_status.config(text="正在驗證目前專案狀態…")
+        messages = self.q
+        previous = getattr(self, "_status_service", None)
+        service = previous if previous is not None and str(previous.output_dir) == project else ReviewProcessService(project)
+        self._status_service = service
+        def worker():
+            if previous is not None and previous is not service:
+                previous.close()
+            try:
+                summary, details = service.invoke("project_status", {})
+            except Exception as exc:
+                summary, details = _UNKNOWN_PROGRESS, str(exc)
+            messages.put(("__STATUS__", project, summary, details))
+        threading.Thread(target=worker, daemon=False).start()
+
+    def _project_key(self, project):
+        return os.path.normcase(str(normalize_existing_project_folder(Path(project)).resolve()))
+
+    def _reserve_operation(self, project, kind, button=None):
+        operations = getattr(self, "_project_operations", None)
+        if operations is None:
+            self._project_operations = operations = {}
+        key = self._project_key(project)
+        if key in operations:
+            self.run_status.config(text="此專案已有操作進行中，請等候原操作結束。")
+            return None
+        token = uuid.uuid4().hex
+        operations[key] = dict(token=token, project=str(Path(project).resolve()), kind=kind, button=button)
+        return token
 
     def poll_project_status(self):
         # Keep 「目前專案」 synchronized with pipeline_status.json while the
@@ -633,6 +673,11 @@ class App:
         env["PYTHONUTF8"] = "1"
         env["PYTHONIOENCODING"] = "utf-8"
         token = object()
+        reserved = self._reserve_operation(out, "review")
+        if reserved is None:
+            return
+        self._review_project = str(Path(out).resolve())
+        self._review_reservation = reserved
         self._review_child_token = token
         self.review_button.config(state="disabled")
         self.run_status.config(text="正在啟動人工校對…工作階段核對進度將顯示在校對視窗。")
@@ -641,6 +686,7 @@ class App:
             threading.Thread(target=review_child_worker, args=(cmd, env, self.q, token), daemon=True).start()
         except Exception as exc:
             self._review_child_token = None
+            getattr(self, "_project_operations", {}).pop(self._project_key(out), None)
             self.review_button.config(state="normal")
             self.run_status.config(text="無法啟動人工校對；可再次嘗試。")
             messagebox.showerror("無法啟動人工校對", str(exc), parent=self.root)
@@ -652,14 +698,19 @@ class App:
             line = message[2]
             self.log.insert("end", line)
             self.log.see("end")
+            if self._project_key(self.output.get().strip() or ".") != self._project_key(self._review_project):
+                return
             if line.startswith("[人工校對]") or line.startswith("[人工校對載入失敗]"):
                 self.run_status.config(text=line.strip())
             return
         self._review_child_token = None
+        getattr(self, "_project_operations", {}).pop(self._project_key(self._review_project), None)
         self.review_button.config(state="normal")
         code, detail = message[2], message[3]
         self.log.insert("end", f"\n[人工校對結束，代碼 {code}]\n")
         self.log.see("end")
+        if self._project_key(self.output.get().strip() or ".") != self._project_key(self._review_project):
+            return
         if code:
             self.run_status.config(text=f"人工校對未正常結束（代碼 {code}）；請查看原因後重新開啟。")
             messagebox.showerror("人工校對未正常結束",
@@ -741,43 +792,44 @@ class App:
             messagebox.showerror("開啟失敗", str(exc))
 
     def start(self, cmd, button=None, extra_env=None, export_kind=None):
+        project = str(normalize_existing_project_folder(Path(self.output.get().strip() or ".")).resolve())
+        token = self._reserve_operation(project, export_kind or "operation", button)
+        if token is None:
+            return False
         if button is not None:
             button.config(state="disabled")
-        self.run_status.config(text=("正在匯出 GPT 檔案…詳細紀錄可從『更多…』開啟。" if export_kind else
-                                     "處理中…詳細紀錄可從『更多…』開啟。"))
-
+        self.run_status.config(text="正在匯出 GPT 檔案…" if export_kind else "操作準備中…詳細紀錄可從『更多…』開啟。")
+        messages = self.q
+        env = os.environ.copy()
+        env.update(PYTHONUTF8="1", PYTHONIOENCODING="utf-8", ZHUYIN_OPERATION_ID=token, ZHUYIN_OPERATION_PROJECT=project)
+        if extra_env:
+            env.update({str(k): str(v) for k, v in extra_env.items()})
         def worker():
+            code, last_output, outcome = -1, "", None
             try:
-                env = os.environ.copy()
-                env["PYTHONUTF8"] = "1"
-                env["PYTHONIOENCODING"] = "utf-8"
-                if extra_env:
-                    env.update({str(k): str(v) for k, v in extra_env.items()})
-                with subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                    env=env,
-                ) as p:
-                    self.proc = p
-                    last_output = ""
-                    for line in p.stdout:
-                        self.q.put(line)
-                        if line.strip():
+                with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                    text=True, encoding="utf-8", errors="replace", env=env) as child:
+                    for line in child.stdout:
+                        messages.put(("__OP_LOG__", token, project, line))
+                        if line.startswith("[ZHUYIN_OPERATION] "):
+                            try:
+                                value = json.loads(line[len("[ZHUYIN_OPERATION] "):])
+                                if (value.get("schema") == "zhuyin-operation/1" and value.get("operation_id") == token
+                                        and value.get("project") == project):
+                                    outcome = value
+                                    messages.put(("__OP_PROGRESS__", token, project, value))
+                            except (ValueError, TypeError):
+                                pass
+                        elif line.strip():
                             last_output = line.strip()
-                    code = p.wait()
-                self.q.put(f"\n[程式結束，代碼 {code}]\n")
-                result = gpt_export_result(export_kind, code, last_output) if export_kind else None
-                self.q.put(("__DONE__", button, code, result) if export_kind else ("__DONE__", button, code))
+                    code = child.wait()
             except Exception as exc:
-                self.q.put(f"\n執行失敗：{exc}\n")
-                result = gpt_export_result(export_kind, -1, str(exc)) if export_kind else None
-                self.q.put(("__DONE__", button, -1, result) if export_kind else ("__DONE__", button, -1))
-
-        threading.Thread(target=worker, daemon=True).start()
+                last_output = str(exc)
+                messages.put(("__OP_LOG__", token, project, "執行失敗：" + last_output + "\n"))
+            result = gpt_export_result(export_kind, code, last_output) if export_kind else None
+            messages.put(("__OP_DONE__", token, project, code, result, outcome))
+        threading.Thread(target=worker, daemon=False).start()
+        return True
 
     def _show_export_result(self, result):
         title, detail, failed = result
@@ -790,18 +842,39 @@ class App:
                 x = self.q.get_nowait()
                 if isinstance(x, tuple) and x and x[0] in {"__REVIEW_LOG__", "__REVIEW_DONE__"}:
                     self._review_child_message(x)
-                elif isinstance(x, tuple) and x and x[0] == "__DONE__":
-                    if x[1] is not None:
-                        x[1].config(state="normal")
-                    self.refresh_project_status()
-                    code = int(x[2]) if len(x) >= 3 else 0
-                    result = x[3] if len(x) >= 4 else None
-                    if result is not None:
-                        self._show_export_result(result)
-                    elif code == 0:
-                        self.run_status.config(text="處理已結束；『目前專案』已重新讀取最新狀態。")
-                    else:
-                        self.run_status.config(text=f"操作失敗（代碼 {code}）；專案資料未因失敗匯入而更新。請開啟執行紀錄查看原因。")
+                elif isinstance(x, tuple) and x and x[0] == "__STATUS__":
+                    if x[1] == getattr(self, "_status_request", None):
+                        self._status_request = None
+                    if self._project_key(self.output.get().strip() or ".") == self._project_key(x[1]):
+                        self.project_status.config(text=x[2])
+                        self.project_diagnostics = x[3]
+                elif isinstance(x, tuple) and x and x[0].startswith("__OP_"):
+                    key = self._project_key(x[2])
+                    operation = getattr(self, "_project_operations", {}).get(key)
+                    if operation is None or operation["token"] != x[1]:
+                        continue
+                    current = key == self._project_key(self.output.get().strip() or ".")
+                    if x[0] == "__OP_LOG__":
+                        self.log.insert("end", x[3]); self.log.see("end")
+                    elif x[0] == "__OP_PROGRESS__" and current:
+                        value = x[3]
+                        self.run_status.config(text=f"{value.get('phase', '處理中')}；已完成 {value.get('completed_files', 0)} 檔")
+                    elif x[0] == "__OP_DONE__":
+                        getattr(self, "_project_operations", {}).pop(key)
+                        if operation["button"] is not None:
+                            operation["button"].config(state="normal")
+                        if not current:
+                            continue
+                        self.refresh_project_status()
+                        code, result, outcome = x[3:]
+                        if result is not None:
+                            self._show_export_result(result)
+                        elif code == 0:
+                            self.run_status.config(text="操作已結束，正在重新驗證專案狀態。")
+                        else:
+                            count = outcome.get("completed_files", 0) if outcome else 0
+                            state = outcome.get("commit_state", "UNKNOWN") if outcome else "UNKNOWN"
+                            self.run_status.config(text=f"操作未完整完成（代碼 {code}）；已完成 {count} 檔；{state}。請查看紀錄及恢復狀態。")
                 else:
                     self.log.insert("end", x)
                     self.log.see("end")

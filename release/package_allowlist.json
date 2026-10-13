@@ -112,6 +112,10 @@
       "role": "runtime_module"
     },
     {
+      "path": "review_operation_worker.py",
+      "role": "runtime_module"
+    },
+    {
       "path": "review_save_service.py",
       "role": "runtime_module"
     },
