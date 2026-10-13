@@ -48,6 +48,10 @@
       "role": "runtime_module"
     },
     {
+      "path": "excel_text.py",
+      "role": "runtime_module"
+    },
+    {
       "path": "export_pdf_text_diagnostics.py",
       "role": "runtime_module"
     },
