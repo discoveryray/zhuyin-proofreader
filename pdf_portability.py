@@ -1129,17 +1129,23 @@ def load_excel_content_proof(xlsx: Path, target_dir: Path, target_manifest, *,
             or [(item.get("pdf_sha256"), item.get("pdf_name")) for item in proof.get("pdfs", [])]
             != [(item.get("pdf_sha256"), item.get("pdf_name")) for item in source_manifest.get("pdfs", [])]):
         raise ValueError("Excel 來源全頁內容證據與封印不符")
+    canonical_reviews = None
     if kind == "expected" and source_manifest["session_id"] == target_manifest["session_id"]:
         _verify_available_session_pdfs(Path(target_dir), target_manifest)
         pdf_map = {item["pdf_sha256"]: item["pdf_sha256"] for item in proof["pdfs"]}
         geometry = _SealedSessionGeometry(
             {item["pdf_sha256"]: (item["pages"], item["pages"]) for item in proof["pdfs"]},
             source_manifest, target_manifest, pdf_map)
-        if _canonical_roster_mapping(source_manifest, target_manifest, pdf_map, geometry) is None:
+        canonical_reviews = _canonical_roster_mapping(source_manifest, target_manifest, pdf_map, geometry)
+        if canonical_reviews is None:
             raise ValueError("同 session expected 離線匯入缺少完整 sealed canonical roster")
     else:
         pdf_map, geometry = _match_pdfs(proof, source_manifest, target_manifest, Path(target_dir))
-    reviews = _map_reviews(source_manifest, target_manifest, pdf_map, geometry)
+    # The same-session admission immediately above already validated the full
+    # source and target rosters against this exact geometry; reuse that map only
+    # within this call. Other mapping routes retain their independent validator.
+    reviews = (canonical_reviews if canonical_reviews is not None else
+               _map_reviews(source_manifest, target_manifest, pdf_map, geometry))
     if kind == "actual":
         _guard_actual_excel_sources(xlsx, source_ledger, target_dir, target_manifest, pdf_map)
     return (source_manifest, source_db, source_ledger, reviews, pdf_map,
@@ -1800,6 +1806,63 @@ def _historical_import_replay(conflicts, identity, source_event, target_event, *
     return False
 
 
+
+class _ExpectedExcelHistory:
+    """One validated receipt snapshot, indexed without changing exact equality.
+
+    The finite locator only narrows candidates. Complete source identity and the
+    original decision projection still must compare equal before any replay.
+    Local adjudication remains in the live target DB, never in this index.
+    """
+    def __init__(self, conflicts, supplements):
+        self.historical = {}
+        self.receipts = {}
+        for conflict in conflicts:
+            for side in ("source", "target"):
+                saved = conflict.get(f"{side}_event")
+                if side == "target" and saved is None and conflict.get("contract") in {
+                        EXPECTED_BUSINESS_CONTRACT, DEPENDENCY_RECHECK_CONTRACT}:
+                    saved = conflict["target_basis"]["event"]
+                if not isinstance(saved, dict):
+                    continue
+                payload = _excel_expected_decision(saved)
+                known = [conflict.get(f"{side}_identity"), saved.get("portability_source"),
+                         *saved.get("portability_duplicate_sources", [])]
+                for identity in known:
+                    if isinstance(identity, dict):
+                        self.historical.setdefault(self._key(identity), []).append(
+                            (copy.deepcopy(identity), copy.deepcopy(payload), side,
+                             conflict.get("target_review_id")))
+        for record in [*supplements, *conflicts]:
+            identity = record.get("source_identity")
+            if isinstance(identity, dict):
+                self.receipts.setdefault(self._key(identity), []).append(
+                    (copy.deepcopy(identity), copy.deepcopy(_excel_expected_decision(record.get("source_event", {})))))
+
+    @staticmethod
+    def _key(identity):
+        return (identity.get("target_review_id"), identity.get("source_excel_sha256"),
+                identity.get("source_excel_row"))
+
+    def historical_replay(self, identity, source_event, target_event):
+        candidates = self.historical.get(self._key(identity), ())
+        if not candidates:
+            return False
+        source_payload = _excel_expected_decision(source_event)
+        payloads = {"source": source_payload,
+                    "target": (source_payload if target_event is source_event else
+                               _excel_expected_decision(target_event))}
+        return any(target_id == identity["target_review_id"] and saved == identity
+                   and payload == payloads[side]
+                   for saved, payload, side, target_id in candidates)
+
+    def receipt_replay(self, identity, event):
+        candidates = self.receipts.get(self._key(identity), ())
+        if not candidates:
+            return False
+        incoming = _excel_expected_decision(event)
+        return any(saved == identity and payload == incoming for saved, payload in candidates)
+
 def _restore_exact_file(path: Path, original: bytes | None) -> None:
     if original is None:
         path.unlink(missing_ok=True)
@@ -2173,17 +2236,15 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
             prior_conflicts = copy.deepcopy(receipt_snapshots[CONFLICT_FILE][1]["conflicts"])
         prior_supplements = copy.deepcopy((receipt_snapshots[CONFLICT_FILE][1] or {}).get("supplements", []))
         prior_pending_ids = set(validate_conflict_state(target_dir, live_manifest, target_db))
+        history = _ExpectedExcelHistory(prior_conflicts, prior_supplements)
         candidate = copy.deepcopy(target_db)
         imported, duplicates, conflicts, supplements = 0, 0, [], []
         for target, event, identity, same_conditions, recheck in actions:
             review_id = target["review_id"]
-            if _historical_import_replay(prior_conflicts, identity, event, event,
-                                         decision_payload=_excel_expected_decision):
+            if history.historical_replay(identity, event, event):
                 duplicates += 1
                 continue
-            if any(item.get("source_identity") == identity
-                   and _excel_expected_decision(item.get("source_event", {})) == _excel_expected_decision(event)
-                   for item in [*prior_supplements, *prior_conflicts]):
+            if history.receipt_replay(identity, event):
                 duplicates += 1
                 continue
             current = candidate["events"].get(review_id)
@@ -2236,7 +2297,13 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
         ledger = sp.materialize_ledger(target_manifest, candidate)
         if any(row.get("review_event_replay_status") for row in ledger):
             raise ValueError("Excel 匯入後判定無法在目標安全重播")
-        if imported or duplicates or conflicts or supplements:
+        db_changed = candidate != target_db
+        # A new same-answer source can change DB provenance without importing a
+        # new reading. Receipt-only supplements/conflicts also remain mutations.
+        # A report has no binding proving it reusable here: keep the existing
+        # durable marker/resume publication even for an exact duplicate replay.
+        publish_required = bool(actions or db_changed or conflicts or supplements)
+        if publish_required:
             receipt_path = target_dir / CONFLICT_FILE
             presentation_paths = [target_dir / name for name in
                                   ("待人工確認.json", "注音校對_最終報告.xlsx", "pipeline_status.json")]
@@ -2271,7 +2338,8 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
                 if sp.json_load_strict(marker_path) != owned_marker:
                     raise ValueError("Excel expected 匯入標記已由其他交易變動；未寫入判定")
                 validate_write()
-                sp.json_save(db_path, candidate, expected_sha256=before)
+                if db_changed:
+                    sp.json_save(db_path, candidate, expected_sha256=before)
                 db_committed = True
                 written_candidate_sha = _sha(db_path)
             except Exception as exc:
@@ -2282,7 +2350,7 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
                     _restore_exact_file(receipt_path, receipt_before)
                     _restore_exact_file(marker_path, marker_before)
                 raise
-    if imported or duplicates or conflicts or supplements:
+    if publish_required:
         try:
             resume_portable_project(target_dir, _expected_marker_sha=marker_sha)
         except Exception:
