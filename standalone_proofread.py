@@ -1492,6 +1492,9 @@ def import_actual_occurrence_decisions(output_dir: Path, csv_path: Path, *, pack
         prewrite_guard()
         return 0, 0, generate_report(output_dir, manifest, db)
 
+    from actual_review import index_actual_group_members, actual_group_identity, actual_group_match_key
+    member_index = index_actual_group_members(ledger)
+    group_memo = {}
     staged_by_group: dict[str, dict[str, Any]] = {}
     errors: list[str] = []
     seen_occ: set[str] = set()
@@ -1550,7 +1553,10 @@ def import_actual_occurrence_decisions(output_dir: Path, csv_path: Path, *, pack
         if str(row.get("exported_actual_evidence_sha256") or "").strip() != _sha_text(entry.get("actual_evidence")):
             errors.append(f"row {row_no}: actual evidence 已改變，請重新覆核")
             continue
-        group = build_actual_group_for_entry(ledger, entry)
+        key = actual_group_match_key(actual_group_identity(entry))
+        if key not in group_memo:
+            group_memo[key] = build_actual_group_for_entry(ledger, entry, member_index=member_index)
+        group = group_memo[key]
         slot = staged_by_group.setdefault(group["group_id"], {"group": group, "reading": verified, "ids": [], "notes": []})
         if slot["reading"] != verified:
             errors.append(f"row {row_no}: 同一 exact glyph group 出現互斥 actual")

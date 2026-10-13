@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import csv
+import copy
+import io
+from contextvars import ContextVar
 import hashlib
 import json
 import math
@@ -158,6 +161,123 @@ def _write_csv(path: Path, headers: Sequence[str], rows: Iterable[Mapping[str, A
         for row in rows:
             writer.writerow({h: row.get(h, "") for h in headers})
     tmp.replace(path)
+
+
+# Finite candidate state for the five existing project-local actual CSVs only.
+# The owner remains direct_visual_project_transaction; this is never a cache
+# of live project truth and never substitutes source/target prewrite guards.
+_prepared_actual_csv = ContextVar("prepared_actual_csv", default=None)
+
+
+class _PreparedActualCSV:
+    def __init__(self, root):
+        self.root = Path(root).resolve()
+        self.specs = {
+            USER_GLYF_FILE: tuple(USER_GLYF_HEADERS), USER_CFF_FILE: tuple(USER_CFF_HEADERS),
+            OCCURRENCE_OVERRIDE_FILE: tuple(OVERRIDE_HEADERS),
+            GLYPH_CONFLICT_FILE: tuple(GLYPH_CONFLICT_HEADERS),
+            GLYPH_PROVENANCE_FILE: tuple(GLYPH_PROVENANCE_HEADERS),
+        }
+        self.original = {}
+        self.rows = {}
+        self.dirty = set()
+        self.initialized = False
+        for name, headers in self.specs.items():
+            path = self.root / name
+            self._owned_name(path, headers)
+            raw = path.read_bytes() if path.exists() else None
+            self.original[name] = raw
+            if raw is None:
+                self.rows[name] = []
+                continue
+            reader = csv.DictReader(io.StringIO(raw.decode("utf-8-sig"), newline=""))
+            if [str(value or "") for value in (reader.fieldnames or [])] != list(headers):
+                raise ValueError(f"{name} 欄位格式不符，禁止自動覆寫")
+            self.rows[name] = [{field: _text(row.get(field)) for field in headers} for row in reader]
+
+    def _owned_name(self, path, headers=None):
+        path = Path(path)
+        name = path.name
+        if (path.parent.resolve() != self.root or name not in self.specs
+                or path.resolve() != self.root / name
+                or (headers is not None and tuple(headers) != self.specs[name])):
+            raise ValueError("actual batch CSV candidate root／file／header 不符")
+        return name
+
+    def read(self, path, headers):
+        # Preserve the prior write-then-read CSV contract between groups:
+        # csv.writer uses str(value), None is empty, then _read_csv strips text.
+        rows = self.rows[self._owned_name(path, headers)]
+        return [{field: _text(str(row.get(field)) if row.get(field) is not None else "")
+                 for field in headers} for row in rows]
+
+    def write(self, path, headers, rows):
+        name = self._owned_name(path, headers)
+        candidate = [{field: row.get(field, "") for field in headers} for row in rows]
+        self.rows[name] = copy.deepcopy(candidate)
+        self.dirty.add(name)
+
+    def exists(self, path):
+        name = self._owned_name(path)
+        return self.original[name] is not None or name in self.dirty
+
+    def verify_current(self):
+        # All source files, including unchanged/absent ones, remain byte-bound.
+        for name, original in self.original.items():
+            path = self.root / name
+            self._owned_name(path, self.specs[name])
+            if (path.read_bytes() if path.exists() else None) != original:
+                raise ValueError("actual batch 準備期間來源 CSV 已變動；未寫入候選")
+
+    def flush(self):
+        self.verify_current()
+        self.published = dict(self.original)
+        for name, headers in self.specs.items():
+            if name not in self.dirty:
+                continue
+            text = io.StringIO(newline="")
+            writer = csv.DictWriter(text, fieldnames=list(headers))
+            writer.writeheader()
+            for row in self.rows[name]:
+                writer.writerow({field: row.get(field, "") for field in headers})
+            expected = text.getvalue().encode("utf-8-sig")
+            _write_csv(self.root / name, headers, self.rows[name])
+            self.published[name] = expected
+            self.verify_published()
+
+    def verify_published(self):
+        for name, expected in self.published.items():
+            path = self.root / name
+            self._owned_name(path, self.specs[name])
+            if (path.read_bytes() if path.exists() else None) != expected:
+                raise ValueError("actual batch 提交期間 CSV 不符合準備結果；拒絕 acknowledgement")
+
+
+def _actual_csv_candidate(path):
+    state = _prepared_actual_csv.get()
+    if state is None:
+        return None
+    if Path(path).parent.resolve() != state.root:
+        raise ValueError("actual batch CSV candidate foreign root 不允許寫入")
+    return state
+
+
+def _read_actual_evidence_csv(path, headers):
+    state = _actual_csv_candidate(path)
+    return state.read(path, headers) if state is not None else _read_csv(path, headers)
+
+
+def _write_actual_evidence_csv(path, headers, rows):
+    state = _actual_csv_candidate(path)
+    if state is not None:
+        state.write(path, headers, rows)
+    else:
+        _write_csv(path, headers, rows)
+
+
+def _actual_evidence_exists(path):
+    state = _actual_csv_candidate(path)
+    return state.exists(path) if state is not None else Path(path).exists()
 
 
 def manual_actual_staging_path(root: Path) -> Path:
@@ -679,9 +799,9 @@ def _migrate_v540_known_bad_override(root: Path) -> bool:
     independently reconstructs the printed reading from the PDF.
     """
     path = Path(root) / OCCURRENCE_OVERRIDE_FILE
-    if not path.exists():
+    if not _actual_evidence_exists(path):
         return False
-    rows = _read_csv(path, OVERRIDE_HEADERS)
+    rows = _read_actual_evidence_csv(path, OVERRIDE_HEADERS)
     kept = []
     removed = False
     for row in rows:
@@ -694,11 +814,14 @@ def _migrate_v540_known_bad_override(root: Path) -> bool:
             continue
         kept.append(row)
     if removed:
-        _write_csv(path, OVERRIDE_HEADERS, kept)
+        _write_actual_evidence_csv(path, OVERRIDE_HEADERS, kept)
     return removed
 
 def ensure_user_evidence_files(root: Path) -> None:
     root = Path(root)
+    state = _actual_csv_candidate(root / USER_GLYF_FILE)
+    if state is not None and state.initialized:
+        return
     _migrate_v540_known_bad_override(root)
     for name, headers in (
         (USER_GLYF_FILE, USER_GLYF_HEADERS),
@@ -707,8 +830,11 @@ def ensure_user_evidence_files(root: Path) -> None:
         (GLYPH_PROVENANCE_FILE, GLYPH_PROVENANCE_HEADERS),
     ):
         path = root / name
-        if not path.exists():
-            _write_csv(path, headers, [])
+        if not _actual_evidence_exists(path):
+            _write_actual_evidence_csv(path, headers, [])
+
+    if state is not None:
+        state.initialized = True
 
 
 def _snapshot_dynamic_actual_evidence(root: Path) -> dict[Path, bytes | None]:
@@ -1921,7 +2047,7 @@ def load_glyph_truth_quarantine(root: Path) -> dict[str, set[Any]]:
     """
     root = Path(root)
     ensure_user_evidence_files(root)
-    rows = _read_csv(root / GLYPH_CONFLICT_FILE, GLYPH_CONFLICT_HEADERS)
+    rows = _read_actual_evidence_csv(root / GLYPH_CONFLICT_FILE, GLYPH_CONFLICT_HEADERS)
     ttf: set[str] = set()
     cff: set[tuple[str, str]] = set()
     for row in rows:
@@ -1991,7 +2117,7 @@ def _append_provenance_event(
     note: str = "",
 ) -> None:
     path = Path(root) / GLYPH_PROVENANCE_FILE
-    rows = _read_csv(path, GLYPH_PROVENANCE_HEADERS)
+    rows = _read_actual_evidence_csv(path, GLYPH_PROVENANCE_HEADERS)
     ids = sorted({_text(x) for x in occurrence_ids if _text(x)})
     payload = {
         "kind": _text(group.get("kind")),
@@ -2012,7 +2138,7 @@ def _append_provenance_event(
         "created_at": datetime.now().isoformat(timespec="seconds"),
     })
     rows.sort(key=lambda r: (_text(r.get("created_at")), _text(r.get("event_id"))))
-    _write_csv(path, GLYPH_PROVENANCE_HEADERS, rows)
+    _write_actual_evidence_csv(path, GLYPH_PROVENANCE_HEADERS, rows)
 
 
 def _upsert_conflict(
@@ -2024,7 +2150,7 @@ def _upsert_conflict(
     note: str = "",
 ) -> None:
     path = Path(root) / GLYPH_CONFLICT_FILE
-    rows = _read_csv(path, GLYPH_CONFLICT_HEADERS)
+    rows = _read_actual_evidence_csv(path, GLYPH_CONFLICT_HEADERS)
     kind = _text(group.get("kind"))
     style = _text(group.get("style_group"))
     sha = _text(group.get("exact_key")).lower()
@@ -2056,7 +2182,7 @@ def _upsert_conflict(
     else:
         rows.append(new_row)
     rows.sort(key=lambda r: (_text(r.get("kind")), _text(r.get("style_group")), _text(r.get("glyph_sha256"))))
-    _write_csv(path, GLYPH_CONFLICT_HEADERS, rows)
+    _write_actual_evidence_csv(path, GLYPH_CONFLICT_HEADERS, rows)
 
 
 def _demote_learning_record_to_conflict(root: Path, group: Mapping[str, Any], conflict_note: str) -> None:
@@ -2064,7 +2190,7 @@ def _demote_learning_record_to_conflict(root: Path, group: Mapping[str, Any], co
     if not info:
         return
     path, headers, key_fields, base = info
-    rows = _read_csv(path, headers)
+    rows = _read_actual_evidence_csv(path, headers)
     key = tuple(base.get(k, "") for k in key_fields)
     changed = False
     for row in rows:
@@ -2076,7 +2202,7 @@ def _demote_learning_record_to_conflict(root: Path, group: Mapping[str, Any], co
             row["notes"] = (_text(row.get("notes")) + "；" + _text(conflict_note)).strip("；")
             changed = True
     if changed:
-        _write_csv(path, headers, rows)
+        _write_actual_evidence_csv(path, headers, rows)
 
 
 def _override_key_from_entry(entry: Mapping[str, Any]) -> tuple[str, ...]:
@@ -2103,9 +2229,9 @@ def _remove_unverified_group_overrides(
     peer occurrence pinned to the contaminated reading.
     """
     path = Path(root) / OCCURRENCE_OVERRIDE_FILE
-    if not path.exists():
+    if not _actual_evidence_exists(path):
         return []
-    rows = _read_csv(path, OVERRIDE_HEADERS)
+    rows = _read_actual_evidence_csv(path, OVERRIDE_HEADERS)
     member_by_key = {_override_key_from_entry(entry): _text(entry.get("occurrence_id")) for entry in members}
     kept = []
     removed_ids = []
@@ -2117,13 +2243,13 @@ def _remove_unverified_group_overrides(
             continue
         kept.append(row)
     if len(kept) != len(rows):
-        _write_csv(path, OVERRIDE_HEADERS, kept)
+        _write_actual_evidence_csv(path, OVERRIDE_HEADERS, kept)
     return sorted(set(removed_ids))
 
 
 def _append_or_update_overrides(root: Path, entries: Sequence[Mapping[str, Any]], reading: str, *, source: str, note: str) -> None:
     path = Path(root) / OCCURRENCE_OVERRIDE_FILE
-    rows = _read_csv(path, OVERRIDE_HEADERS)
+    rows = _read_actual_evidence_csv(path, OVERRIDE_HEADERS)
     by_key = {
         tuple(row[h] for h in ("pdf_contains", "pdf_excludes", "page", "target_char", "stable_key", "x0", "y0")): row
         for row in rows
@@ -2152,7 +2278,7 @@ def _append_or_update_overrides(root: Path, entries: Sequence[Mapping[str, Any]]
             new_row["note"] = (note + "；" + audit).strip("；")
         by_key[key] = new_row
     ordered = sorted(by_key.values(), key=lambda r: (r["pdf_contains"], r["page"], r["target_char"], r["stable_key"], r["y0"], r["x0"]))
-    _write_csv(path, OVERRIDE_HEADERS, ordered)
+    _write_actual_evidence_csv(path, OVERRIDE_HEADERS, ordered)
 
 
 def _update_learning_file(root: Path, group: Mapping[str, Any], reading: str, verified_entries: Sequence[Mapping[str, Any]], note: str) -> dict[str, Any]:
@@ -2162,7 +2288,7 @@ def _update_learning_file(root: Path, group: Mapping[str, Any], reading: str, ve
     if not info or not exact_key:
         return {"learning_level": "OCCURRENCE_ONLY", "conflict": False, "old_verified_ids": set(), "known_readings": set()}
     path, headers, key_fields, base = info
-    rows = _read_csv(path, headers)
+    rows = _read_actual_evidence_csv(path, headers)
     key = tuple(base.get(k, "") for k in key_fields)
     existing = next((row for row in rows if tuple(row.get(k, "") for k in key_fields) == key), None)
     examples = {_text(x.get("occurrence_id")) for x in verified_entries if _text(x.get("occurrence_id"))}
@@ -2186,7 +2312,7 @@ def _update_learning_file(root: Path, group: Mapping[str, Any], reading: str, ve
         all_readings = set(known_readings) | {reading}
         # If the row was already quarantined, the registry itself may contain
         # the second reading even when the demoted learning row carries only one.
-        conflict_rows = _read_csv(Path(root) / GLYPH_CONFLICT_FILE, GLYPH_CONFLICT_HEADERS)
+        conflict_rows = _read_actual_evidence_csv(Path(root) / GLYPH_CONFLICT_FILE, GLYPH_CONFLICT_HEADERS)
         for crow in conflict_rows:
             same = _text(crow.get("kind")) == kind and _text(crow.get("glyph_sha256")).lower() == exact_key
             if kind == "CFF_GLYPH_SHA256":
@@ -2225,7 +2351,7 @@ def _update_learning_file(root: Path, group: Mapping[str, Any], reading: str, ve
     else:
         rows.append(new_row)
     rows.sort(key=lambda r: tuple(r.get(k, "") for k in key_fields))
-    _write_csv(path, headers, rows)
+    _write_actual_evidence_csv(path, headers, rows)
     _append_provenance_event(root, group, reading, "PROMOTED" if level == "VERIFIED_EXACT_GLYPH" else "SINGLE_VISUAL_EVIDENCE", sorted(examples), source="visual actual review", note=note)
     return {"learning_level": level, "conflict": False, "old_verified_ids": old_verified_ids, "known_readings": {reading}}
 
@@ -2422,6 +2548,8 @@ def apply_direct_visual_actual_batch(
     Low-level callers without a sealed session remain project-local and receive
     explicit NON_GLOBAL_ELIGIBLE admissions. They cannot synthesize provenance.
     """
+    if _prepared_actual_csv.get() is not None:
+        raise ValueError("nested actual batch candidate 不允許重入交易")
     if prewrite_guard is not None:
         prewrite_guard()
     if not decisions:
@@ -2449,28 +2577,36 @@ def apply_direct_visual_actual_batch(
             prewrite_guard()
         if initialize_evidence is not None:
             initialize_evidence()
-        for decision, reading, checked, admissions in prepared:
-            if prewrite_guard is not None:
-                prewrite_guard()
-            group = decision["group"]
-            applied = apply_function(
-                root, group, reading, checked_occurrence_ids=checked,
-                source=decision["source"], note=decision.get("note", ""),
-            )
-            if not isinstance(applied, Mapping):
-                raise ValueError("invalid project actual apply result")
-            results.append({
-                **dict(applied), "group_id": group["group_id"],
-                "group_snapshot": group.get("group_snapshot", ""),
-                "global_admissions": admissions,
-            })
+        state = _PreparedActualCSV(root)
+        token = _prepared_actual_csv.set(state)
+        try:
+            for decision, reading, checked, admissions in prepared:
+                group = decision["group"]
+                applied = apply_function(
+                    root, group, reading, checked_occurrence_ids=checked,
+                    source=decision["source"], note=decision.get("note", ""),
+                )
+                if not isinstance(applied, Mapping):
+                    raise ValueError("invalid project actual apply result")
+                results.append({
+                    **dict(applied), "group_id": group["group_id"],
+                    "group_snapshot": group.get("group_snapshot", ""),
+                    "global_admissions": admissions,
+                })
+        finally:
+            _prepared_actual_csv.reset(token)
         if prewrite_guard is not None:
             prewrite_guard()
+        state.flush()
         bind_recovery_plan(post_commit_recovery_plan_from_results(results))
         enqueue_promotion_intents(root, all_intents)
+        if prewrite_guard is not None:
+            prewrite_guard()
+        state.verify_published()
         acknowledgement = acknowledge() if acknowledge else {}
         if prewrite_guard is not None:
             prewrite_guard()
+        state.verify_published()
     return {
         "group_results": results, "acknowledgement": acknowledgement,
         "project_actual_commit": "COMMITTED",
