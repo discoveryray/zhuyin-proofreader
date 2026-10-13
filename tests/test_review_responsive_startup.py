@@ -184,7 +184,13 @@ class ResponsiveReviewTests(unittest.TestCase):
     def test_startup_source_error_retains_only_committed_recovery_entry(self):
         artifact = Path(self.manifest["pdfs"][0]["actual_workbook"])
         artifact.write_bytes(b"synthetic corrupted actual")
-        with patch.object(gui, "committed_project_recovery", return_value=("existing-token", {})):
+        occurrence_id = self.manifest["records"][0]["occurrence_id"]
+        confirmed_recovery = ("a" * 64, {
+            "schema_version": "1.0", "affected_occurrence_ids": [occurrence_id],
+            "checked_postconditions": [{"group_id": "agr_" + "b" * 24,
+                                        "occurrence_id": occurrence_id, "reading": "ㄎㄢ"}],
+        })
+        with patch.object(gui, "committed_project_recovery", return_value=confirmed_recovery):
             app = gui.ReviewApp(self.fake_shell(), self.output)
             app.show = Mock()
             self.pump_loading(app)
@@ -195,12 +201,12 @@ class ResponsiveReviewTests(unittest.TestCase):
             from tests.no_window_review_support import InlineReviewService
             app._save_service = InlineReviewService(self.output)
             with patch.object(gui.messagebox, "askyesno", return_value=True), \
-                    patch("global_glyph_promotion.committed_project_recovery", return_value=("existing-token", {})), \
+                    patch("global_glyph_promotion.committed_project_recovery", return_value=confirmed_recovery), \
                     patch.object(app, "_start_staged_actual_apply") as start:
                 app.apply_staged_actuals()
                 app._operation_worker.join(10)
                 app.root.update()
-                start.assert_called_once_with(0, recovery_only=True)
+                start.assert_called_once_with(0, recovery_only=True, expected_recovery=confirmed_recovery)
                 app._start_review_loading()
                 self.assertFalse(app._startup_in_progress)
             app._apply_in_progress = False
