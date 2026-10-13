@@ -83,7 +83,7 @@
       "tests/test_legacy_migration_inspector_v580.py": "259078513f199bc6a4da24f3ab29b4f317220062e28d051542f85319244ca99d",
       "tests/test_mandatory_resolver_integration.py": "e40ab925e2a12bf05b6901cde09972b5aa4c06f2547b414f4e0c9678649d5ea7",
       "tests/test_manual_actual_batch_apply_v570.py": "d3a9ed5a5e5c08adeef7bb721ba2b38f481c06239fe4a6d4c4ed41ddf30d859f",
-      "tests/test_manual_actual_gui_batch_v570.py": "e68af98c20714a2b885b3697f1ace2612000035f7bb63f57ce7a014f8e411642",
+      "tests/test_manual_actual_gui_batch_v570.py": "57616f9234c9cbd2ab4fe0bb94c4847776fc5f433a531f142473fd3e38ed3cb0",
       "tests/test_manual_actual_staging_v570.py": "14f3ccc744c4e1b5dfd327b07ec6165781414a5e1fac921a5b95b0542e2b4155",
       "tests/test_manual_review_usability_v580.py": "c8af4c372f6b19ea0c4baf90a2dcc5b8cbd73173219e118b2dea1c697bba103b",
       "tests/test_pdf_portability.py": "d9df975e717c0bfdd65666d5e60c2651d3e0a99286dfed4b0c3830051515fffd",

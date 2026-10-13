@@ -12,7 +12,7 @@ import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace, MethodType
-from unittest.mock import MagicMock, patch, call
+from unittest.mock import MagicMock, patch
 
 import fitz
 import actual_review
@@ -1110,10 +1110,10 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
         ):
             app.correct_actual()
         self.assertEqual(service.load_resume_snapshot.call_args_list, [
-            call(expected_manifest=app.manifest, expected_db=app.db),
-            call(expected_manifest=app.manifest, expected_db=app.db), call(),
+            ((), {"expected_manifest": app.manifest, "expected_db": app.db}),
+            ((), {"expected_manifest": app.manifest, "expected_db": app.db}), ((), {}),
         ])
-        self.assertEqual(service.validate_resume_staging.call_args_list, [call(snapshot), call(snapshot)])
+        self.assertEqual(service.validate_resume_staging.call_args_list, [((snapshot,), {}), ((snapshot,), {})])
         info.assert_not_called()
         self.assertIn("actual 已暫存", app.status.cget("text"))
         self.assertIn("尚未正式套用", app.status.cget("text"))
