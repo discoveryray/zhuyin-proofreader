@@ -1258,10 +1258,16 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
         refreshed_snapshot.manifest = {"manifest": "refreshed"}
         refreshed_snapshot.db = {"events": {}}
         app._save_service = before_service
+        def confirm_final_admission(*args, **kwargs):
+            # Preparation keeps its finite inline boundary. Confirmation hands
+            # the final supervisor to the production admission/poll lifecycle.
+            self.assertFalse(app._operation_in_progress)
+            app._start_owned_operation = MethodType(review_gui.ReviewApp._start_owned_operation, app)
+            return True
         with (
-            patch.object(review_gui.messagebox, "askyesno", return_value=True),
+            patch.object(review_gui.messagebox, "askyesno", side_effect=confirm_final_admission) as confirmation,
             patch.object(review_gui.messagebox, "showinfo") as showinfo,
-            patch.object(review_gui.messagebox, "showerror"),
+            patch.object(review_gui.messagebox, "showerror") as error,
             # Preserve the original backend outcome fixture, reached through
             # the real closed dispatcher. This is controller/queue coverage;
             # real child PID and domain transaction coverage is separate.
@@ -1274,7 +1280,13 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
             patch.object(review_gui, "apply_screen_safe_geometry"),
         ):
             app.apply_staged_actuals()
+        confirmation.assert_called_once()
         self.assertEqual(len(ImmediateThread.instances), 1)
+        self.assertIs(app._operation_worker, ImmediateThread.instances[0])
+        self.assertFalse(app._operation_worker.daemon)
+        self.assertFalse(app._operation_in_progress)
+        self.assertFalse(app._apply_in_progress)
+        error.assert_not_called()
         apply.assert_called_once_with(app.output_dir)
         self.assertEqual(before_service.load_resume_snapshot.call_count, 2)
         before_service.validate_resume_staging.assert_called_once_with(before_snapshot)
@@ -1284,6 +1296,7 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
         app.reload_records.assert_not_called()
         app.show.assert_called_once()
         self.assertEqual(app.manifest, {"manifest": "refreshed"})
+        showinfo.assert_called_once()
         success_text = showinfo.call_args.args[1]
         self.assertIn("已一次套用 10 組", success_text)
         self.assertIn("工作階段與候選狀態已更新", success_text)
