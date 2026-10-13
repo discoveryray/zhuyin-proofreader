@@ -23,6 +23,7 @@ from sealed_workbook_paths import binding_scope, bind_workbooks, workbook_path, 
 
 from excel_text import append_text_row
 from openpyxl import Workbook, load_workbook
+from pdf_portability import _memoized_excel_read, _read_excel_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
@@ -807,9 +808,9 @@ def candidate_workbook_path(cand_dir: Path, pdf: Path) -> Path:
     return cand_dir / f"{pdf.stem}_注音校對候選.xlsx"
 
 
+@_memoized_excel_read
 def workbook_metadata(path: Path, sheet: str = "v5.2中繼資料") -> dict[str, Any]:
-    wb = load_workbook(path, read_only=True, data_only=True)
-    try:
+    with _read_excel_workbook(path, data_only=True) as wb:
         if sheet not in wb.sheetnames:
             raise ValueError(f"缺少必要工作表：{sheet}")
         ws = wb[sheet]
@@ -822,8 +823,6 @@ def workbook_metadata(path: Path, sheet: str = "v5.2中繼資料") -> dict[str, 
                 raise ValueError(f"{path.name}/{sheet} metadata key 重複：{key} (row {row_number})")
             out[key] = row[1] if len(row) > 1 else None
         return out
-    finally:
-        wb.close()
 
 
 @bound_operation(project_parameter="output_dir")
@@ -1709,11 +1708,33 @@ def _snapshot_gpt_decisions_entry(operation):
     return snapshotted
 
 
+def _screen_expected_import_rows(xlsx):
+    """Reject cheap input errors before source mapping or target materialization."""
+    required = ["occurrence_id", "review_id", "review_snapshot", "state", "action",
+                "proposed_expected_set", "proposed_expected_evidence", "proposed_context_evidence",
+                "exclusion_reason", "exclusion_evidence", *CONFIRMATION_GATES, "note"]
+    rows = workbook_rows(xlsx, "待判定候選", required)
+    errors = []
+    for number, row in enumerate(rows, 2):
+        action = str(row.get("action") or "").strip()
+        if not action or action == "保留待人工":
+            continue
+        if action not in DECISIONS:
+            errors.append(f"row {number}: 禁止的直接結論或未知 action {action}")
+        for gate in CONFIRMATION_GATES:
+            if str(row.get(gate) or "").strip().upper() not in {"", "Y", "N"}:
+                errors.append(f"row {number}: gate {gate} 必須是 Y/N")
+    if errors:
+        raise ValueError("GPT／人工匯入整批拒絕；未寫入任何一列：\n" + "\n".join(errors[:100]))
+    return rows
+
+
 @_serialized_user_project_entry
 @_snapshot_gpt_decisions_entry
 @bound_operation(project_parameter="output_dir")
 def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False,
                          _original_xlsx: Path, _snapshot_sha: str) -> tuple[int, int, Path]:
+    rows = _screen_expected_import_rows(xlsx)
     _reject_incomplete_portable_project(output_dir)
     manifest, manifest_before_sha = json_load_snapshot(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
@@ -1735,11 +1756,8 @@ def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False,
     if mismatched:
         raise ValueError(f"匯入 workbook session/evidence 不相容：{mismatched}")
     from pdf_portability import import_expected_excel, EXCEL_PROOF_SHEET
-    workbook = load_workbook(xlsx, read_only=True, data_only=True)
-    try:
+    with _read_excel_workbook(xlsx, data_only=True) as workbook:
         portable_expected = EXCEL_PROOF_SHEET in workbook.sheetnames
-    finally:
-        workbook.close()
     if portable_expected or str(metadata.get("session_id") or "") != str(manifest.get("session_id") or ""):
         return import_expected_excel.__wrapped__(output_dir, xlsx, dry_run=dry_run,
             _original_xlsx=_original_xlsx, _snapshot_sha=_snapshot_sha,
@@ -1758,12 +1776,6 @@ def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False,
     if mismatched:
         raise ValueError(f"匯入 workbook session/evidence 不相容：{mismatched}")
 
-    required_columns = [
-        "occurrence_id", "review_id", "review_snapshot", "state", "action", "proposed_expected_set",
-        "proposed_expected_evidence", "proposed_context_evidence", "exclusion_reason", "exclusion_evidence",
-        *CONFIRMATION_GATES, "note",
-    ]
-    rows = workbook_rows(xlsx, "待判定候選", required_columns)
     assert_unique_ids(rows, "occurrence_id")
     assert_unique_ids(rows, "review_id")
 
@@ -2070,9 +2082,9 @@ def _summary_int(summary: Mapping[str, Any], key: str, *, missing: int = -1) -> 
     return int(value)
 
 
+@_memoized_excel_read
 def workbook_rows(path: Path, sheet: str, required_columns: list[str] | None = None) -> list[dict[str, Any]]:
-    wb = load_workbook(path, read_only=True, data_only=True)
-    try:
+    with _read_excel_workbook(path, data_only=True) as wb:
         if sheet not in wb.sheetnames:
             raise ValueError(f"{path.name} 缺少必要工作表：{sheet}")
         ws = wb[sheet]
@@ -2095,8 +2107,6 @@ def workbook_rows(path: Path, sheet: str, required_columns: list[str] | None = N
                 continue
             out.append({headers[i]: vals[i] for i in range(min(len(headers), len(vals)))})
         return out
-    finally:
-        wb.close()
 
 
 def make_review_id(pdf_hash: str, category: str, row: dict[str, Any]) -> str:
@@ -4797,6 +4807,8 @@ def import_actual_gpt_decisions(output_dir: Path, xlsx: Path) -> tuple[int, int,
 @bound_operation(project_parameter="output_dir")
 def _import_actual_gpt_decisions_snapshot(output_dir: Path, xlsx: Path, *,
                                          _original_xlsx: Path, _snapshot_sha: str):
+    from actual_review import _screen_actual_import_rows
+    _screen_actual_import_rows(xlsx)
     output_dir = Path(output_dir)
     from pdf_portability import INCOMPLETE_FILE
     if (output_dir / INCOMPLETE_FILE).exists():

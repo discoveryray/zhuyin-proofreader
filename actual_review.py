@@ -15,6 +15,7 @@ from typing import Any, Iterable, Mapping, Sequence
 import fitz
 from excel_text import append_text_row
 from openpyxl import Workbook, load_workbook
+from pdf_portability import _memoized_excel_read, _read_excel_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
@@ -1543,17 +1544,15 @@ def _load_actual_sample_profile(workbook):
     return profile
 
 
+@_memoized_excel_read
 def load_actual_sample_profile(xlsx: Path):
     """Read and structurally verify the carried profile; source guard is separate.
 
     Returns a profile dict for 1.2, None for the explicitly named 1.1 adapter.
     A self-sealed digest alone does not authenticate current source evidence.
     """
-    workbook = load_workbook(xlsx, read_only=True, data_only=True)
-    try:
+    with _read_excel_workbook(xlsx, data_only=True) as workbook:
         return _load_actual_sample_profile(workbook)
-    finally:
-        workbook.close()
 
 
 def validate_actual_sample_profile(xlsx: Path, groups, output_dir=None, *, pdf_resolver=None,
@@ -1561,15 +1560,12 @@ def validate_actual_sample_profile(xlsx: Path, groups, output_dir=None, *, pdf_r
     """Recompute the selected source contract before any visual import effects."""
     carried = load_actual_sample_profile(xlsx)
     from pdf_portability import EXCEL_PROOF_SHEET, validate_actual_profile_content_proof
-    workbook = load_workbook(xlsx, read_only=True)
-    try:
+    with _read_excel_workbook(xlsx, data_only=False) as workbook:
         if EXCEL_PROOF_SHEET not in workbook.sheetnames:
             if carried is not None and require_content_proof:
                 raise ValueError("actual GPT 1.2 source content proof deleted／missing")
         else:
             validate_actual_profile_content_proof(workbook, source_manifest=source_manifest)
-    finally:
-        workbook.close()
     _, rows = _load_sheet_rows(xlsx, "actual待判定")
     by_id = {group["group_id"]: group for group in groups}
     selected = []
@@ -1891,9 +1887,9 @@ def _write_actual_review_package(
     return zip_path
 
 
-def _load_sheet_rows(path: Path, sheet: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    wb = load_workbook(path, read_only=True, data_only=True)
-    try:
+@_memoized_excel_read
+def _load_sheet_rows(path: Path, sheet: str, required_columns=()) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    with _read_excel_workbook(path, data_only=True) as wb:
         if "匯入中繼資料" not in wb.sheetnames or sheet not in wb.sheetnames:
             raise ValueError("actual GPT 報表缺少必要工作表")
         meta_ws = wb["匯入中繼資料"]
@@ -1909,10 +1905,11 @@ def _load_sheet_rows(path: Path, sheet: str) -> tuple[dict[str, Any], list[dict[
             headers = []
         if len(headers) != len(set(headers)) or any(not h for h in headers):
             raise ValueError("actual GPT 報表 header 無效或重複")
+        missing = sorted(set(required_columns) - set(headers))
+        if missing:
+            raise ValueError(f"actual GPT workbook 缺少欄位：{missing}")
         rows = [{headers[i]: row[i] if i < len(row) else None for i in range(len(headers))} for row in iterator]
         return meta, rows
-    finally:
-        wb.close()
 
 
 def load_glyph_truth_quarantine(root: Path) -> dict[str, set[Any]]:
@@ -2579,6 +2576,30 @@ def _actual_workbook_schema_mismatches(
     return mismatched
 
 
+def _screen_actual_import_rows(xlsx):
+    """Only input shape/enums here; all source identity and quorum guards remain."""
+    required = ("group_id", "group_snapshot", "decision", "actual_reading", "confidence",
+                "sample_a_checked", "sample_b_checked", "note")
+    meta, rows = _load_sheet_rows(Path(xlsx), "actual待判定", required)
+    errors = []
+    for number, row in enumerate(rows, 2):
+        decision = _text(row.get("decision")).upper()
+        if decision not in {"", "VERIFIED", "UNRESOLVED"}:
+            errors.append(f"row {number}: decision 必須是 VERIFIED/UNRESOLVED")
+        if decision != "VERIFIED":
+            continue
+        if not _canon(row.get("actual_reading")):
+            errors.append(f"row {number}: VERIFIED 缺少合法 actual_reading")
+        if _text(row.get("confidence")) not in {"高", "中"}:
+            errors.append(f"row {number}: VERIFIED confidence 只能是高/中")
+        for label in ("a", "b"):
+            if _text(row.get(f"sample_{label}_checked")).upper() not in {"", "Y", "N"}:
+                errors.append(f"row {number}: sample_{label}_checked 必須是 Y/N")
+    if errors:
+        raise ValueError("actual GPT 匯入整批拒絕；未寫入任何一列：\n" + "\n".join(errors[:100]))
+    return meta, rows
+
+
 def import_actual_review_workbook(
     root: Path,
     xlsx: Path,
@@ -2588,7 +2609,7 @@ def import_actual_review_workbook(
     source_context: Mapping[str, Any] | None = None,
     initialize_evidence=None, prewrite_guard=None, source_output_dir: Path | None = None,
 ) -> dict[str, Any]:
-    meta, rows = _load_sheet_rows(Path(xlsx), "actual待判定")
+    meta, rows = _screen_actual_import_rows(xlsx)
     required_meta = dict(expected_metadata)
     required_meta["actual_review_schema_version"] = meta.get("actual_review_schema_version")
     validate_actual_sample_profile(xlsx, groups, source_output_dir)
