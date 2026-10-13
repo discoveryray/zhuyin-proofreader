@@ -253,6 +253,9 @@ class App:
         self.proc = None
         self._project_operations = {}
         self._status_request = None
+        self._status_reader_request = None
+        self._status_generation = 0
+        self._status_selection_text = ""
         self._status_service = None
         root.protocol("WM_DELETE_WINDOW", self.close)
 
@@ -353,6 +356,7 @@ class App:
         status_box.pack(fill="x", padx=12, pady=(2, 8))
         self.project_status = WrappedLabel(status_box, text="尚未選擇校對專案資料夾", justify="left", anchor="w")
         self.project_status.pack(fill="x", padx=10, pady=8)
+        self.output.trace_add("write", self._status_selection_changed)
 
         buttons = ActionRows(self.tab_proof)
         buttons.pack(fill="x", padx=12, pady=(2, 10))
@@ -467,8 +471,25 @@ class App:
             self.output.set(p)
             self.refresh_project_status()
 
-    def refresh_project_status(self):
+    def _invalidate_project_status(self):
+        self._status_generation = getattr(self, "_status_generation", 0) + 1
+        self._status_request = None
+        self.project_diagnostics = "正在驗證目前專案狀態；先前狀態已過期。"
+        if hasattr(self, "project_status"):
+            self.project_status.config(text="正在驗證目前專案狀態…")
+
+    def _status_selection_changed(self, *_args):
+        # A write trace also retires A -> B -> A and same-value reselection,
+        # even when no periodic poll ran between the selection changes.
+        self._status_selection_text = self.output.get().strip()
+        self._invalidate_project_status()
+
+    def refresh_project_status(self, *, new_request=True):
         out = self.output.get().strip()
+        if out != getattr(self, "_status_selection_text", None):
+            self._status_selection_changed()
+        if new_request:
+            self._invalidate_project_status()
         if not out:
             self.project_diagnostics = "尚未選擇校對專案資料夾"
             self.project_status.config(text="尚未選擇校對專案資料夾。")
@@ -477,25 +498,39 @@ class App:
         if normalized != Path(out):
             self.output.set(str(normalized))
         project = str(normalized.resolve())
-        if getattr(self, "_status_request", None) is not None:
-            if self._status_request != project:
-                self.project_status.config(text="正在驗證目前專案狀態…")
+        if getattr(self, "_status_request", None) is None:
+            self._status_request = (uuid.uuid4().hex,
+                                    getattr(self, "_status_generation", 0), project)
+            self.project_status.config(text="正在驗證目前專案狀態…")
+        self._start_status_reader()
+
+    def _start_status_reader(self):
+        request = getattr(self, "_status_request", None)
+        if request is None or getattr(self, "_status_reader_request", None) is not None:
             return
-        self._status_request = project
-        self.project_status.config(text="正在驗證目前專案狀態…")
+        project = request[2]
+        # The operation's own phase remains visible in run_status. Completion
+        # evidence cannot be published until this selected writer safely ends.
+        if self._project_key(project) in getattr(self, "_project_operations", {}):
+            return
         messages = self.q
         previous = getattr(self, "_status_service", None)
         service = previous if previous is not None and str(previous.output_dir) == project else ReviewProcessService(project)
         self._status_service = service
+        self._status_reader_request = request
         def worker():
-            if previous is not None and previous is not service:
-                previous.close()
             try:
+                if previous is not None and previous is not service:
+                    previous.close()
                 summary, details = service.invoke("project_status", {})
             except Exception as exc:
                 summary, details = _UNKNOWN_PROGRESS, str(exc)
-            messages.put(("__STATUS__", project, summary, details))
-        threading.Thread(target=worker, daemon=False).start()
+            messages.put(("__STATUS__", request, summary, details))
+        try:
+            threading.Thread(target=worker, daemon=False).start()
+        except Exception:
+            self._status_reader_request = None
+            raise
 
     def _project_key(self, project):
         return os.path.normcase(str(normalize_existing_project_folder(Path(project)).resolve()))
@@ -510,13 +545,14 @@ class App:
             return None
         token = uuid.uuid4().hex
         operations[key] = dict(token=token, project=str(Path(project).resolve()), kind=kind, button=button)
+        self._invalidate_project_status()
         return token
 
     def poll_project_status(self):
-        # Keep 「目前專案」 synchronized with pipeline_status.json while the
-        # subprocess is running, not only after it exits.
+        # Ensure one latest selected request; active project reservations wait
+        # for their safe terminal result before completion can be published.
         try:
-            self.refresh_project_status()
+            self.refresh_project_status(new_request=False)
         except Exception as exc:
             self.project_status.config(text=_UNKNOWN_PROGRESS)
             self.project_diagnostics = str(exc)
@@ -687,6 +723,7 @@ class App:
         except Exception as exc:
             self._review_child_token = None
             getattr(self, "_project_operations", {}).pop(self._project_key(out), None)
+            self._invalidate_project_status()
             self.review_button.config(state="normal")
             self.run_status.config(text="無法啟動人工校對；可再次嘗試。")
             messagebox.showerror("無法啟動人工校對", str(exc), parent=self.root)
@@ -705,6 +742,7 @@ class App:
             return
         self._review_child_token = None
         getattr(self, "_project_operations", {}).pop(self._project_key(self._review_project), None)
+        self._invalidate_project_status()
         self.review_button.config(state="normal")
         code, detail = message[2], message[3]
         self.log.insert("end", f"\n[人工校對結束，代碼 {code}]\n")
@@ -828,7 +866,14 @@ class App:
                 messages.put(("__OP_LOG__", token, project, "執行失敗：" + last_output + "\n"))
             result = gpt_export_result(export_kind, code, last_output) if export_kind else None
             messages.put(("__OP_DONE__", token, project, code, result, outcome))
-        threading.Thread(target=worker, daemon=False).start()
+        try:
+            threading.Thread(target=worker, daemon=False).start()
+        except Exception:
+            getattr(self, "_project_operations", {}).pop(self._project_key(project), None)
+            if button is not None:
+                button.config(state="normal")
+            self._invalidate_project_status()
+            raise
         return True
 
     def _show_export_result(self, result):
@@ -843,11 +888,19 @@ class App:
                 if isinstance(x, tuple) and x and x[0] in {"__REVIEW_LOG__", "__REVIEW_DONE__"}:
                     self._review_child_message(x)
                 elif isinstance(x, tuple) and x and x[0] == "__STATUS__":
-                    if x[1] == getattr(self, "_status_request", None):
+                    request = x[1]
+                    owned_reader = request is not None and request == getattr(self, "_status_reader_request", None)
+                    if owned_reader:
+                        self._status_reader_request = None
+                    if (owned_reader and request == getattr(self, "_status_request", None)
+                            and request[1] == getattr(self, "_status_generation", 0)
+                            and self._project_key(self.output.get().strip() or ".") == self._project_key(request[2])
+                            and self._project_key(request[2]) not in getattr(self, "_project_operations", {})):
                         self._status_request = None
-                    if self._project_key(self.output.get().strip() or ".") == self._project_key(x[1]):
                         self.project_status.config(text=x[2])
                         self.project_diagnostics = x[3]
+                    if owned_reader:
+                        self._start_status_reader()
                 elif isinstance(x, tuple) and x and x[0].startswith("__OP_"):
                     key = self._project_key(x[2])
                     operation = getattr(self, "_project_operations", {}).get(key)
@@ -861,6 +914,7 @@ class App:
                         self.run_status.config(text=f"{value.get('phase', '處理中')}；已完成 {value.get('completed_files', 0)} 檔")
                     elif x[0] == "__OP_DONE__":
                         getattr(self, "_project_operations", {}).pop(key)
+                        self._invalidate_project_status()
                         if operation["button"] is not None:
                             operation["button"].config(state="normal")
                         if not current:

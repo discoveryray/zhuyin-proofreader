@@ -320,3 +320,129 @@ def test_post_success_refresh_boundaries_preserve_known_operation_state(tmp_path
                 with pytest.raises(ReviewOperationError, match="post-success") as error:
                     state.dispatch(operation, payload, lambda phase: None, lambda: False)
                 assert error.value.commit_state == status
+
+
+def _status_controller(tmp_path, monkeypatch):
+    """Finite read-only transport/scheduler; real controller and JSON parser.
+
+    This controls reply arrival without a Tk interpreter or domain writes. The
+    separate real-spawn status case proves isolated reader execution.
+    """
+    import queue
+    from pathlib import Path
+    import standalone_gui as launcher
+    from tests.no_window_review_support import Value
+    from unittest.mock import Mock
+    app = launcher.App.__new__(launcher.App)
+    app.output = Value(value=str(tmp_path))
+    app.root, app.project_status, app.run_status = Surface(), Surface(), Surface()
+    app.log, app.q, app._project_operations = Mock(), queue.Queue(), {}
+    app.output.trace_add("write", app._status_selection_changed)
+    jobs = []
+    class DeferredThread:
+        def __init__(self, *, target, daemon):
+            assert daemon is False
+            self.target = target
+        def start(self):
+            jobs.append(self)
+        def run(self):
+            self.target()
+    class ReadStatusService:
+        def __init__(self, project):
+            self.output_dir = Path(project)
+        def invoke(self, operation, payload):
+            assert operation == "project_status" and payload == {}
+            return launcher.project_status_details(self.output_dir)
+        def close(self):
+            pass
+    monkeypatch.setattr(launcher.threading, "Thread", DeferredThread)
+    monkeypatch.setattr(launcher, "ReviewProcessService", ReadStatusService)
+    tmp_path.mkdir(exist_ok=True)
+    sp.json_save(tmp_path / "校對工作階段.json", {})
+    sp.json_save(tmp_path / "pipeline_status.json", dict(status="PROOFREAD_COMPLETE", completion_gate=dict(
+        status="PROOFREAD_COMPLETE", complete=True, failed_gates=[],
+        hard_gates={key: True for key in launcher._KNOWN_GATES},
+        state_counts={"PASS": 1}, in_scope_total=1, actual_covered=1, expected_covered=1)))
+    assert "全冊校對完成" in launcher.project_status_details(tmp_path)[0]
+    return app, jobs
+
+
+def test_status_old_complete_cannot_publish_during_same_project_operation(tmp_path, monkeypatch):
+    app, jobs = _status_controller(tmp_path, monkeypatch)
+    app.refresh_project_status()
+    old = app._status_request
+    jobs.pop(0).run()  # Valid completion is computed, but not yet polled.
+    assert app._reserve_operation(tmp_path, "import")
+    sp.json_save(tmp_path / "pipeline_status.json", {"status": "PROCESSING", "phase": "2/3"})
+    app.refresh_project_status(new_request=False)
+    latest = app._status_request
+    assert latest != old
+    app.poll()
+    assert app._status_request == latest
+    assert app._status_reader_request is None
+    assert jobs == []  # Active mutation cannot start another status reader.
+    assert app.project_status.cget("text") == "正在驗證目前專案狀態…"
+    assert "PROOFREAD_COMPLETE" not in app.project_diagnostics
+    assert len(app._project_operations) == 1
+
+
+def test_status_late_reply_after_completion_cannot_clear_new_request(tmp_path, monkeypatch):
+    app, jobs = _status_controller(tmp_path, monkeypatch)
+    app.refresh_project_status()
+    jobs.pop(0).run()
+    old_reply = app.q.get_nowait()
+    token = app._reserve_operation(tmp_path, "import")
+    sp.json_save(tmp_path / "pipeline_status.json", {"status": "PROCESSING", "phase": "2/3"})
+    app.q.put(("__OP_DONE__", token, str(tmp_path), 0, None, None))
+    app.poll()
+    latest = app._status_request
+    assert latest != old_reply[1] and not app._project_operations
+    app.q.put(old_reply)
+    app.poll()
+    assert app._status_request == app._status_reader_request == latest
+    assert len(jobs) == 1 and "全冊校對完成" not in app.project_status.cget("text")
+    app.q.put(old_reply)  # A duplicate old reply cannot retire the new reader.
+    app.poll()
+    assert app._status_reader_request == latest and len(jobs) == 1
+    app.poll_project_status()  # Ensure does not invalidate a slow latest reader.
+    assert app._status_request == app._status_reader_request == latest and len(jobs) == 1
+    jobs.pop(0).run()
+    app.poll()
+    assert app._status_request is None and app._status_reader_request is None
+    assert "核對語境與應標注音" in app.project_status.cget("text")
+    assert '"phase": "2/3"' in app.project_diagnostics
+
+
+def test_status_selection_roundtrip_reselection_and_latest_request_are_owned(tmp_path, monkeypatch):
+    app, jobs = _status_controller(tmp_path, monkeypatch)
+    app.refresh_project_status()
+    old = app._status_request
+    jobs.pop(0).run()
+    other = tmp_path / "other"
+    app.output.set(str(other))
+    app.refresh_project_status(new_request=False)
+    app.output.set(str(tmp_path))
+    before_reselection = app._status_generation
+    app.output.set(str(tmp_path))  # Same-value selection still retires old work.
+    assert app._status_generation > before_reselection
+    app.refresh_project_status(new_request=False)
+    latest = app._status_request
+    assert latest[0] != old[0] and latest[1] > old[1]
+    app.poll()
+    assert app._status_request == app._status_reader_request == latest and len(jobs) == 1
+    sp.json_save(tmp_path / "pipeline_status.json", {"status": "PROCESSING", "phase": "1/3"})
+    jobs.pop(0).run()
+    earlier = app.q.get_nowait()
+    app.refresh_project_status()  # A newer explicit same-project request.
+    newest = app._status_request
+    assert newest[0] != latest[0] and newest[1] > latest[1]
+    app.q.put(earlier)
+    app.poll()
+    assert app._status_request == app._status_reader_request == newest and len(jobs) == 1
+    assert "全冊校對完成" not in app.project_status.cget("text")
+    sp.json_save(tmp_path / "pipeline_status.json", {"status": "PROCESSING", "phase": "2/3"})
+    jobs.pop(0).run()
+    app.poll()
+    assert app._status_request is None and app._status_reader_request is None
+    assert "核對語境與應標注音" in app.project_status.cget("text")
+    assert '"phase": "2/3"' in app.project_diagnostics
