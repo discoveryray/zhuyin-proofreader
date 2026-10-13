@@ -1044,6 +1044,189 @@ class MigrationArchitectureTests(unittest.TestCase):
             if isinstance(node, ast.Constant) and isinstance(node.value, str):
                 self.assertNotIn(node.value, {"expected_set", "expected_evidence", "reusable_expected_rules", "dictionary"})
 
+    def _project_authorized_actual_snapshot_seam(self, raw):
+        # Only the separately tested typed actual snapshot interface is removed.
+        # Every other producer byte still reaches the original Phase 5 oracle.
+        raw = raw.replace(b"\r\n", b"\n")
+        edits = (
+            (b"from actual_review import dynamic_actual_hashes, ValidatedDynamicActualSnapshot\n",
+             b"from actual_review import dynamic_actual_hashes\n"),
+            (b"    dynamic_evidence_root: Path | None = None,\n"
+             b"    dynamic_snapshot: ValidatedDynamicActualSnapshot | None = None,\n"
+             b") -> dict[str, Any]:\n",
+             b"    dynamic_evidence_root: Path | None = None,\n"
+             b") -> dict[str, Any]:\n"),
+            (b"            dependencies=dynamic_dependencies,\n"
+             b"            snapshot=dynamic_snapshot,\n"
+             b"        )\n",
+             b"            dependencies=dynamic_dependencies,\n"
+             b"        )\n"),
+        )
+        for admitted, original in edits:
+            self.assertEqual(raw.count(admitted), 1, "Unknown or ambiguous actual snapshot seam")
+            raw = raw.replace(admitted, original, 1)
+        return raw
+
+    def test_authorized_actual_snapshot_projection_rejects_unknown_producer_changes(self):
+        current, historical, assets = self._legal_release_fixture()
+        name = "runtime_source_validation.py"
+        # Independent fixture construction spells out the three authorized edits.
+        admitted = current[name].replace(b"\r\n", b"\n")
+        admitted = admitted.replace(
+            b"from actual_review import dynamic_actual_hashes\n",
+            b"from actual_review import dynamic_actual_hashes, ValidatedDynamicActualSnapshot\n", 1)
+        admitted = admitted.replace(
+            b"    dynamic_evidence_root: Path | None = None,\n",
+            b"    dynamic_evidence_root: Path | None = None,\n"
+            b"    dynamic_snapshot: ValidatedDynamicActualSnapshot | None = None,\n", 1)
+        admitted = admitted.replace(
+            b"            dependencies=dynamic_dependencies,\n",
+            b"            dependencies=dynamic_dependencies,\n"
+            b"            snapshot=dynamic_snapshot,\n", 1)
+        projected = dict(current)
+        projected[name] = self._project_authorized_actual_snapshot_seam(admitted)
+        self._assert_phase5_release_boundaries(projected, historical, assets, assets)
+        mutations = (
+            ("untyped_parameter", b"dynamic_snapshot: ValidatedDynamicActualSnapshot | None", b"dynamic_snapshot: Any"),
+            ("changed_forwarding", b"snapshot=dynamic_snapshot,", b"snapshot=None,"),
+            ("unknown_import", b"dynamic_actual_hashes, ValidatedDynamicActualSnapshot", b"dynamic_actual_hashes, UnknownSnapshot"),
+            ("unrelated_schema", b'ACTUAL_FINGERPRINT_SCHEMA_VERSION = "3.0.0"', b'ACTUAL_FINGERPRINT_SCHEMA_VERSION = "future"'),
+            ("duplicate_forwarding", b"            snapshot=dynamic_snapshot,", b"            snapshot=dynamic_snapshot,\n            snapshot=dynamic_snapshot,"),
+        )
+        for label, old, new in mutations:
+            self.assertEqual(admitted.count(old), 1, label)
+            changed = dict(current)
+            with self.subTest(mutation=label), self.assertRaises(AssertionError):
+                changed[name] = self._project_authorized_actual_snapshot_seam(admitted.replace(old, new, 1))
+                self._assert_phase5_release_boundaries(changed, historical, assets, assets)
+        changed = dict(current)
+        changed[name] = self._project_authorized_actual_snapshot_seam(admitted + b"\n# unknown producer edit\n")
+        with self.assertRaises(AssertionError):
+            self._assert_phase5_release_boundaries(changed, historical, assets, assets)
+
+    def test_actual_fingerprint_typed_snapshot_matches_fresh_and_rejects_unvalidated_or_stale(self):
+        import runtime_source_validation as runtime
+        validation = runtime.validate_asset_manifest(ROOT)
+        self.assertTrue(validation["ok"], validation["errors"])
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = Path(directory)
+            actual_root = fixture / "actual"
+            review.ensure_user_evidence_files(actual_root)
+            pdf = fixture / "book.pdf"
+            with fitz.open() as document:
+                document.new_page()
+                document.save(pdf)
+            global_hashes = lib.global_exact_glyph_evidence_hashes(
+                lib.GlobalExactGlyphRepository.resolved(fixture / "global").load_snapshot(), [])
+            arguments = dict(
+                decoder_version="typed-snapshot-contract-test", source_files=["actual_review.py"],
+                global_exact_glyph_evidence_hashes=global_hashes,
+                dynamic_dependencies={"ttf_glyph_sha256": [], "cff_glyph_keys": []},
+                dynamic_evidence_root=actual_root)
+            snapshot = review.load_dynamic_actual_snapshot(actual_root, read_only=True)
+            fresh = runtime.compute_actual_asset_fingerprint(ROOT, pdf, validation, **arguments)
+            shared = runtime.compute_actual_asset_fingerprint(
+                ROOT, pdf, validation, dynamic_snapshot=snapshot, **arguments)
+            self.assertEqual(shared, fresh)
+            with self.assertRaises(runtime.SourceValidationError):
+                runtime.compute_actual_asset_fingerprint(
+                    ROOT, pdf, validation, dynamic_snapshot={"hashes": dict(snapshot.hashes)}, **arguments)
+            foreign_root = fixture / "foreign"
+            review.ensure_user_evidence_files(foreign_root)
+            foreign = review.load_dynamic_actual_snapshot(foreign_root, read_only=True)
+            with self.assertRaises(runtime.SourceValidationError):
+                runtime.compute_actual_asset_fingerprint(
+                    ROOT, pdf, validation, dynamic_snapshot=foreign, **arguments)
+            path = actual_root / review.USER_GLYF_FILE
+            path.write_bytes(path.read_bytes() + b"\n")
+            with self.assertRaises(runtime.SourceValidationError):
+                runtime.compute_actual_asset_fingerprint(
+                    ROOT, pdf, validation, dynamic_snapshot=snapshot, **arguments)
+
+    def _project_authorized_standalone_actual_snapshot_calls(self, tree):
+        tree = copy.deepcopy(tree)
+        roster = {"run_pipeline_pdfs": 2, "regenerate_report": 1}
+        definitions = {}
+        for name in roster:
+            matches = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name]
+            self.assertEqual(len(matches), 1, "Ambiguous actual snapshot function")
+            definitions[name] = matches[0]
+            captures = [node for node in ast.walk(matches[0]) if isinstance(node, ast.Assign)
+                        and any(isinstance(target, ast.Name) and target.id == "dynamic_snapshot"
+                                for target in node.targets)]
+            expected = ast.parse(
+                "dynamic_snapshot = load_dynamic_actual_snapshot(dynamic_actual_root, read_only="
+                + ("_source_project_dir is not None" if name == "run_pipeline_pdfs" else "True") + ")"
+            ).body[0]
+            self.assertEqual([ast.dump(node) for node in captures], [ast.dump(expected)],
+                             "Unexpected validated actual snapshot capture")
+        counts = dict.fromkeys(roster, 0)
+        for _, owners, call in self._protected_call_records(tree):
+            if getattr(call.func, "id", getattr(call.func, "attr", "")) != "compute_actual_asset_fingerprint":
+                continue
+            self.assertIsInstance(call.func, ast.Name)
+            self.assertEqual(len(owners), 1, "Unknown actual fingerprint call scope")
+            owner = owners[0]
+            self.assertIn(owner.name, roster, "Unknown actual fingerprint caller")
+            self.assertIs(owner, definitions[owner.name])
+            snapshots = [kw for kw in call.keywords if kw.arg == "dynamic_snapshot"]
+            self.assertEqual(len(snapshots), 1, "Missing or duplicate typed snapshot forwarding")
+            self.assertEqual(ast.dump(snapshots[0].value),
+                             ast.dump(ast.Name(id="dynamic_snapshot", ctx=ast.Load())))
+            # Preserve all original arguments/dependencies; only this exact
+            # independently verified typed transport keyword is projected.
+            call.keywords.remove(snapshots[0])
+            counts[owner.name] += 1
+        self.assertEqual(counts, roster, "Actual fingerprint call roster changed")
+        return tree
+
+    def test_standalone_actual_snapshot_projection_rejects_unknown_or_changed_wiring(self):
+        admitted = self._historical_with_authorized_adapter()
+        for function in admitted.body:
+            if isinstance(function, ast.FunctionDef) and function.name in {"run_pipeline_pdfs", "regenerate_report"}:
+                # Fixture edits are independently spelled out; all protected
+                # original call arguments remain the historical oracle.
+                function.body.insert(0, ast.parse(
+                    "dynamic_snapshot = load_dynamic_actual_snapshot(dynamic_actual_root, read_only="
+                    + ("_source_project_dir is not None" if function.name == "run_pipeline_pdfs" else "True") + ")"
+                ).body[0])
+                for call in ast.walk(function):
+                    if isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id == "compute_actual_asset_fingerprint":
+                        call.keywords.append(ast.keyword(arg="dynamic_snapshot", value=ast.Name(id="dynamic_snapshot", ctx=ast.Load())))
+        historical = self._standalone_fingerprint_contract(self._historical_standalone())
+        self.assertEqual(self._standalone_fingerprint_contract(
+            self._project_authorized_standalone_actual_snapshot_calls(admitted)), historical)
+        for mutation in ("duplicate", "foreign_forward", "default_forward", "missing", "unknown_keyword",
+                         "changed_dependency", "unknown_caller", "unvalidated_capture", "expected_chain"):
+            changed = copy.deepcopy(admitted)
+            function = next(node for node in changed.body if isinstance(node, ast.FunctionDef) and node.name == "run_pipeline_pdfs")
+            call = next(node for node in ast.walk(function) if isinstance(node, ast.Call)
+                        and isinstance(node.func, ast.Name) and node.func.id == "compute_actual_asset_fingerprint")
+            snapshot = next(kw for kw in call.keywords if kw.arg == "dynamic_snapshot")
+            if mutation == "duplicate":
+                call.keywords.append(copy.deepcopy(snapshot))
+            elif mutation == "foreign_forward":
+                snapshot.value = ast.Name(id="foreign_snapshot", ctx=ast.Load())
+            elif mutation == "default_forward":
+                snapshot.value = ast.Constant(value=None)
+            elif mutation == "missing":
+                call.keywords.remove(snapshot)
+            elif mutation == "unknown_keyword":
+                call.keywords.append(ast.keyword(arg="future_snapshot", value=ast.Constant(value=None)))
+            elif mutation == "changed_dependency":
+                next(kw for kw in call.keywords if kw.arg == "dynamic_dependencies").value = ast.Constant(value=None)
+            elif mutation == "unknown_caller":
+                changed.body.extend(ast.parse("def future_actual_caller():\n    compute_actual_asset_fingerprint(dynamic_snapshot=dynamic_snapshot)\n").body)
+            elif mutation == "unvalidated_capture":
+                function.body[0].value = ast.Dict(keys=[], values=[])
+            else:
+                expected = next(node for node in ast.walk(function) if isinstance(node, ast.Call)
+                                and isinstance(node.func, ast.Name) and node.func.id == "compute_expected_asset_fingerprint")
+                expected.keywords.append(copy.deepcopy(snapshot))
+            with self.subTest(mutation=mutation), self.assertRaises(AssertionError):
+                projected = self._project_authorized_standalone_actual_snapshot_calls(changed)
+                self.assertEqual(self._standalone_fingerprint_contract(projected), historical)
+
     def test_schema_and_fingerprint_boundaries_unchanged(self):
         import runtime_source_validation as runtime
         self._assert_contract_versions()
@@ -1052,9 +1235,12 @@ class MigrationArchitectureTests(unittest.TestCase):
         historical_assets = self._phase5_asset_bytes(json.loads(historical["runtime_asset_manifest.json"]))
         current = {name: (ROOT / name).read_bytes() for name in self._PROTECTED_RELEASE_FILES}
         assets = {path: (ROOT / path).read_bytes() for path in historical_assets}
+        current["runtime_source_validation.py"] = self._project_authorized_actual_snapshot_seam(
+            current["runtime_source_validation.py"])
         self._assert_phase5_release_boundaries(current, historical, assets, historical_assets)
         current = ast.parse((ROOT / "standalone_proofread.py").read_text(encoding="utf-8"))
         self._assert_legacy_expected_adapter_contract(current)
+        current = self._project_authorized_standalone_actual_snapshot_calls(current)
         self.assertEqual(self._standalone_fingerprint_contract(current),
                          self._standalone_fingerprint_contract(self._historical_standalone()))
         for mutation in ("wrong_locator", "duplicate_locator", "different_decorator"):

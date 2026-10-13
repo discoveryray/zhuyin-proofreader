@@ -1344,6 +1344,29 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
         if getattr(cls, "root", None) is not None:
             cls.root.destroy()
 
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.output = Path(self.temp.name)
+        # Only the pixel renderer is substituted below. Source admission still
+        # reads a real isolated PDF and verifies its sealed bytes first.
+        with fitz.open() as document:
+            document.new_page()
+            self.source_bytes = document.tobytes()
+        errors = patch.object(review_gui.messagebox, "showerror")
+        self.unexpected_error = errors.start()
+        self.addCleanup(errors.stop)
+
+    def tearDown(self):
+        self.unexpected_error.assert_not_called()
+
+    def sealed_preview_entries(self, rows):
+        for row in rows:
+            path = self.output / row["pdf_name"]
+            path.write_bytes(self.source_bytes)
+            row.update(pdf=str(path), pdf_sha256=hashlib.sha256(self.source_bytes).hexdigest())
+        return rows
+
     def wait_for_gui(self, predicate, *, timeout=3.0):
         deadline = time.monotonic() + timeout
         while not predicate() and time.monotonic() < deadline:
@@ -1457,9 +1480,9 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
             dialog.destroy()
 
     def test_lazy_preview_requires_successful_image_and_explicit_check(self):
-        ledger = [entry(name, 'f' * 64) for name in 'abc']
+        ledger = self.sealed_preview_entries([entry(name, 'f' * 64) for name in 'abc'])
         with patch('review_display.occurrence_preview', side_effect=self.preview_pixels), patch.object(review_gui, 'OccurrencePreview', Preview):
-            dialog = HeadlessActualDialog(self.root, ledger[0], group_for(ledger), Path('unused'), wait=False)
+            dialog = HeadlessActualDialog(self.root, ledger[0], group_for(ledger), self.output, wait=False)
             self.addCleanup(dialog.destroy)
             self.assertEqual(sum(p is not None for p in dialog.previews), 1)
             self.assertFalse(any(v.get() for v in dialog.checked_vars))
@@ -1489,9 +1512,9 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
 
     def test_real_tk_check_waits_for_drawn_page_and_target(self):
         # Historical identity retained; actual drawing/layout is no longer executed.
-        ledger = [entry(name, 'f' * 64) for name in 'abc']
+        ledger = self.sealed_preview_entries([entry(name, 'f' * 64) for name in 'abc'])
         with patch('review_display.occurrence_preview', side_effect=self.tall_preview_pixels), patch.object(review_gui, 'OccurrencePreview', Preview):
-            dialog = HeadlessActualDialog(self.root, ledger[0], group_for(ledger), Path('unused'), wait=False)
+            dialog = HeadlessActualDialog(self.root, ledger[0], group_for(ledger), self.output, wait=False)
             self.addCleanup(dialog.destroy)
             self.assertFalse(dialog.sample_available[0])
             self.assertEqual(dialog.check_buttons[0].cget('state'), 'disabled')
@@ -1518,9 +1541,9 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
             self.assertFalse(any(value.get() for value in dialog.checked_vars))
 
     def test_two_member_dialog_preloads_b_without_accepting_an_implicit_check(self):
-        ledger = [entry(name, 'f' * 64) for name in 'ab']
+        ledger = self.sealed_preview_entries([entry(name, 'f' * 64) for name in 'ab'])
         with patch('review_display.occurrence_preview', side_effect=self.tall_preview_pixels), patch.object(review_gui, 'OccurrencePreview', Preview):
-            dialog = HeadlessActualDialog(self.root, ledger[0], group_for(ledger), Path('unused'), wait=False)
+            dialog = HeadlessActualDialog(self.root, ledger[0], group_for(ledger), self.output, wait=False)
             self.addCleanup(dialog.destroy)
             self.assertTrue(all(p is not None for p in dialog.previews))
             self.assertFalse(any(v.get() for v in dialog.checked_vars))
@@ -1540,9 +1563,9 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
             self.assertEqual(dialog.check_buttons[1].cget('state'), 'disabled')
 
     def test_unseen_b_cannot_be_submitted_by_setting_checkbox_variable(self):
-        ledger = [entry(name, 'f' * 64) for name in 'ab']
+        ledger = self.sealed_preview_entries([entry(name, 'f' * 64) for name in 'ab'])
         with patch('review_display.occurrence_preview', side_effect=self.tall_preview_pixels):
-            dialog = HeadlessActualDialog(self.root, ledger[0], group_for(ledger), Path('unused'), wait=False)
+            dialog = HeadlessActualDialog(self.root, ledger[0], group_for(ledger), self.output, wait=False)
             self.addCleanup(dialog.destroy)
             dialog.update()
             dialog.update()  # Deliver the subsequently queued visibility check.
@@ -1555,9 +1578,9 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
             self.assertEqual(dialog.result['checked_occurrence_ids'], ['a'])
 
     def test_previously_staged_peer_does_not_require_a_new_view_or_checkbox(self):
-        ledger = [entry(name, 'f' * 64) for name in 'ab']
+        ledger = self.sealed_preview_entries([entry(name, 'f' * 64) for name in 'ab'])
         with patch('review_display.occurrence_preview', side_effect=self.tall_preview_pixels):
-            dialog = HeadlessActualDialog(self.root, ledger[0], group_for(ledger), Path('unused'), verified_checked_occurrence_ids={'b'}, wait=False)
+            dialog = HeadlessActualDialog(self.root, ledger[0], group_for(ledger), self.output, verified_checked_occurrence_ids={'b'}, wait=False)
             self.addCleanup(dialog.destroy)
             dialog.update()
             dialog.update()  # Deliver the subsequently queued visibility check.
@@ -1593,9 +1616,9 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
                     dialog.destroy()
 
     def test_target_without_drawn_photo_times_out_and_cannot_be_checked(self):
-        current = entry('only', 'f' * 64)
+        current = self.sealed_preview_entries([entry('only', 'f' * 64)])[0]
         with patch('review_display.occurrence_preview', side_effect=self.preview_pixels):
-            dialog = HeadlessActualDialog(self.root, current, group_for([current]), Path('unused'), wait=False)
+            dialog = HeadlessActualDialog(self.root, current, group_for([current]), self.output, wait=False)
             self.addCleanup(dialog.destroy)
             preview = dialog.previews[0]
             self.assertIsNotNone(preview.target)

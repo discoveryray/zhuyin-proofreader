@@ -39,7 +39,7 @@ _PAYLOAD_FIELDS = {
     "stage_actual": ({"review_id", "reading", "checked_occurrence_ids", "expected_manifest", "expected_db"},
                      {"review_id", "reading", "checked_occurrence_ids", "note", "expected_manifest", "expected_db"}),
     "actual_summary": (set(), {"expected_manifest", "expected_db", "recovery_only"}),
-    "apply_actual": (set(), {"expected_manifest", "expected_db", "recovery_only"}),
+    "apply_actual": (set(), {"expected_manifest", "expected_db", "recovery_only", "expected_recovery"}),
     "report": ({"expected_manifest", "expected_db"}, {"expected_manifest", "expected_db"}),
     "reload": ({"expected_manifest", "expected_db"}, {"expected_manifest", "expected_db"}),
     "preview": ({"entry", "padding", "output_dir", "display_width"}, {"entry", "padding", "output_dir", "display_width"}),
@@ -74,6 +74,21 @@ def validate_payload(operation, payload):
     for key in ("recovery_only", "defer_staging_validation"):
         if key in payload and type(payload[key]) is not bool:
             raise ValueError("review payload boolean field invalid")
+    if operation == "apply_actual":
+        identity = payload.get("expected_recovery")
+        if payload.get("recovery_only"):
+            if (type(identity) not in (tuple, list) or len(identity) != 2
+                    or type(identity[0]) is not str or type(identity[1]) is not dict):
+                raise ValueError("actual recovery requires the confirmed durable identity")
+            from global_glyph_promotion import validate_post_commit_recovery_plan
+            from global_exact_glyph_library import _sha256_text, GlobalLibraryValidationError
+            try:
+                _sha256_text(identity[0], "project transaction ID")
+                validate_post_commit_recovery_plan(identity[1])
+            except (ValueError, GlobalLibraryValidationError) as exc:
+                raise ValueError("actual recovery requires the confirmed durable identity") from exc
+        elif "expected_recovery" in payload:
+            raise ValueError("recovery identity is only valid for recovery-only apply")
     if "checked_occurrence_ids" in payload and (type(payload["checked_occurrence_ids"]) is not list
             or any(type(value) is not str for value in payload["checked_occurrence_ids"])):
         raise ValueError("checked occurrence payload invalid")
@@ -139,8 +154,12 @@ class ReviewOperationState:
             if operation == "actual_summary":
                 if payload.get("recovery_only"):
                     from global_glyph_promotion import committed_project_recovery
-                    return dict(actual_recovery_pending=committed_project_recovery(
-                        sp.project_actual_evidence_root(self.output_dir)) is not None)
+                    try:
+                        identity = committed_project_recovery(sp.project_actual_evidence_root(self.output_dir))
+                    except Exception as exc:
+                        return dict(actual_recovery_pending=False, staging_error=f"actual 復原紀錄無法驗證：{exc}")
+                    return dict(actual_recovery_pending=identity is not None,
+                                actual_recovery_identity=identity)
                 return self.service.validate_resume_staging(snapshot)
             if operation == "prepare_actual":
                 from actual_review import build_actual_group_for_entry
@@ -160,7 +179,8 @@ class ReviewOperationState:
             else:
                 progress("正在套用 actual 與更新受影響 PDF")
                 if payload.get("recovery_only"):
-                    result = sp.recover_committed_actual_project(self.output_dir)
+                    result = sp.recover_committed_actual_project(self.output_dir,
+                        expected_recovery=payload["expected_recovery"])
                     if result is None:
                         raise ValueError("已提交 actual 復原紀錄已變更；未套用新暫存")
                 else:
@@ -169,7 +189,7 @@ class ReviewOperationState:
             # session. No pre-mutation actual snapshot is used for the result.
             try:
                 if operation != "stage_actual":
-                    self.service = ReviewSaveService(self.output_dir)
+                    self.service = ReviewSaveService(self.output_dir, evidence_anchor=self.service.evidence_anchor)
                 else:
                     self.service = self.service.with_invalidated_cache()
                 self.snapshots.clear()

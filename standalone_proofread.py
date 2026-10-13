@@ -250,7 +250,7 @@ def _publish_local_actual_conflict_resolution(output_dir: Path, report: Path) ->
 
 
 @bound_operation(project_parameter="output_dir")
-def recover_committed_actual_project(output_dir: Path, *, acknowledge: bool = True):
+def recover_committed_actual_project(output_dir: Path, *, acknowledge: bool = True, expected_recovery=None):
     """Explicit restart recovery; staging is never reapplied here.
 
     The single-correction caller defers acknowledgement until its additional
@@ -265,9 +265,23 @@ def recover_committed_actual_project(output_dir: Path, *, acknowledge: bool = Tr
         raise ValueError("專案未完成標記仍存在；請先使用所屬交易的恢復入口，未 acknowledgement")
     root = project_actual_evidence_root(output_dir)
     from global_glyph_promotion import PROJECT_TRANSACTION_FILE
-    if not (root / PROJECT_TRANSACTION_FILE).exists() and not (output_dir / ACTUAL_REFRESH_PUBLICATION).exists():
+    if expected_recovery is None and not (root / PROJECT_TRANSACTION_FILE).exists() and not (output_dir / ACTUAL_REFRESH_PUBLICATION).exists():
         return None
     with project_delivery_lock(root):
+        if expected_recovery is not None:
+            # The confirmation belongs to this complete durable plan, not just
+            # to a project path. Check before recovery can write or acknowledge.
+            from global_glyph_promotion import validate_post_commit_recovery_plan
+            try:
+                if (type(expected_recovery) not in (tuple, list) or len(expected_recovery) != 2
+                        or type(expected_recovery[0]) is not str):
+                    raise ValueError("invalid recovery identity")
+                token, plan = expected_recovery
+                validate_post_commit_recovery_plan(plan)
+                if committed_project_recovery(root) != (token, plan):
+                    raise ValueError("recovery owner or plan changed")
+            except Exception as exc:
+                raise ValueError("已提交 actual 復原紀錄已變更；未套用新暫存") from exc
         if acknowledge and (output_dir / INCOMPLETE_FILE).exists():
             raise ValueError("專案未完成標記仍存在；請先使用所屬交易的恢復入口，未 acknowledgement")
         recover_pending_project_actual_write(root)

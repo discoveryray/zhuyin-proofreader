@@ -251,12 +251,14 @@ class InlineReviewService(ReviewSaveService):
 
 class ImmediateOperations:
     """Legacy handler fixtures retire scheduling, while running actual work."""
-    def _start_owned_operation(self, title, work, publish, *, committed=False):
+    def _start_owned_operation(self, title, work, publish, *, committed=False, on_terminal=None):
         if getattr(self, "_operation_in_progress", False):
             return False
         self._operation_in_progress = True
         request = dict(project=self.output_dir, generation=getattr(self, "_project_generation", 0),
                        manifest=self.manifest, db=self.db, title=title)
+        if on_terminal is not None:
+            request["on_terminal"] = on_terminal
         self._operation_request = request
         completed = queue.Queue(maxsize=1)
         try:
@@ -272,7 +274,8 @@ class ImmediateOperations:
 class Preview(Surface, display.OccurrencePreview):
     """Real load/render/failure logic; only native canvas/image drawing retires."""
     def __init__(self, parent=None, *, on_failure=None, expand_content=False,
-                 on_locate=None, on_layout=None, before_locate=None, **_options):
+                 on_locate=None, on_layout=None, before_locate=None,
+                 on_ready=None, on_invalidated=None, **_options):
         Surface.__init__(self, parent)
         self.canvas = Surface(self, height=120)
         self.notice = Surface(self)
@@ -283,7 +286,7 @@ class Preview(Surface, display.OccurrencePreview):
         self._draw_pending = self._render_pending = self._locate_pending = None
         self._render_width = self._entry = None
         self._disposed, self._needs_locate = False, False
-        self.on_ready = self.on_invalidated = None
+        self.on_ready, self.on_invalidated = on_ready, on_invalidated
         self._preview_generation = 0
         self._preview_job = self._preview_pending = self._preview_poll = None
         self.canvas.find_withtag = lambda tag: (1,) if (
@@ -316,7 +319,22 @@ class Preview(Surface, display.OccurrencePreview):
             return
         self.photo = self.pixmap
         if self.target is not None and self.on_ready is not None:
-            self.on_ready(self)
+            owner = getattr(self.on_ready, "__self__", None)
+            if owner is not None and owner._save_busy():
+                # Pixel decoding is synchronous here; the real raster child
+                # delivers readiness after the controller's current callback.
+                # Preserve that ordering when a save publishes its next view.
+                generation, photo, target, ready = (self._preview_generation,
+                    self.photo, self.target, self.on_ready)
+                def deliver_ready():
+                    self._draw_pending = None
+                    if (not self._disposed and generation == self._preview_generation
+                            and self.photo is photo and self.target == target
+                            and self.on_ready is ready):
+                        ready(self)
+                self._draw_pending = self.after_idle(deliver_ready)
+            else:
+                self.on_ready(self)
 
     def destroy(self):
         self._dispose(SimpleNamespace(widget=self.canvas))
@@ -362,7 +380,8 @@ class ReviewApp(ImmediateOperations, gui.ReviewApp):
         self.tech_text = Text(root)
         self.more_menu = Menu()
         self.more_menu.commands["返回待辦"] = self.return_to_pending
-        self.image = Preview(root, on_failure=self._preview_failed)
+        self.image = Preview(root, on_failure=self._preview_failed,
+                             on_ready=self._preview_ready, on_invalidated=self._preview_failed)
         self.reload_records()
         self.show()
 

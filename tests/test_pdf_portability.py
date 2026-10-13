@@ -264,8 +264,17 @@ def test_expected_excel_precommit_rollback_preserves_foreign_marker_and_receipt(
     foreign_receipt = {"version": 1, "conflicts": [], "source": "other transaction"}
     original_save = sp.json_save
     injected = {}
+    receipt_write_attempts = []
+    db_write_attempts = []
     def fail_after_handoff(path, value, **kwargs):
         if Path(path) == db_path:
+            db_write_attempts.append(value)
+        if Path(path) == receipt:
+            receipt_write_attempts.append(value)
+            owned_marker = sp.json_load_strict(marker)
+            assert owned_marker["status"] == "PRESENTATION_PENDING"
+            assert owned_marker["phase"] == "CROSS_SESSION_EXPECTED"
+            assert db_path.read_bytes() == before_db
             original_save(marker, foreign_marker)
             original_save(receipt, foreign_receipt)
             injected["marker"] = marker.read_bytes()
@@ -275,6 +284,9 @@ def test_expected_excel_precommit_rollback_preserves_foreign_marker_and_receipt(
     with patch.object(sp, "json_save", side_effect=fail_after_handoff):
         with pytest.raises(ValueError, match="標記|其他交易"):
             sp.import_gpt_decisions(b, second)
+    assert len(receipt_write_attempts) == 1
+    assert not db_write_attempts
+    assert set(injected) == {"marker", "receipt"}
     assert db_path.read_bytes() == before_db
     assert marker.read_bytes() == injected["marker"]
     assert receipt.read_bytes() == injected["receipt"]

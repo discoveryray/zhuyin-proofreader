@@ -290,12 +290,15 @@ def test_post_success_refresh_boundaries_preserve_known_operation_state(tmp_path
     monkeypatch.setattr(sp, "regenerate_report", lambda *a, **k: "saved.xlsx")
     monkeypatch.setattr(sp, "apply_staged_manual_actual_corrections", lambda *a, **k: {})
     real_factory = services.ReviewSaveService
+    fault_calls = []
     def fail(*a, **k):
+        fault_calls.append((a, k))
         raise OSError("post-success preparation failure")
     for operation, status in (("stage_actual", "STAGED_REFRESH_PENDING"),
                               ("report", "REPORT_SAVED_REFRESH_PENDING"),
                               ("apply_actual", "COMMITTED_REFRESH_PENDING")):
         for boundary in ("service", "view"):
+            fault_calls.clear()
             service = real_factory(tmp_path)
             snapshot = service.load_resume_snapshot()
             payload = dict(expected_manifest=manifest, expected_db=snapshot.db)
@@ -310,15 +313,21 @@ def test_post_success_refresh_boundaries_preserve_known_operation_state(tmp_path
                     else:
                         faults.setattr(services, "ReviewSaveService", fail)
                 else:
-                    replacement = real_factory(tmp_path)
-                    replacement.load_resume_snapshot()
-                    faults.setattr(replacement._conflicts, "review_view", fail)
+                    def replacement_factory(*args, **kwargs):
+                        # Preserve the real service's source anchor and all caller
+                        # arguments; inject only the post-success view fault.
+                        replacement = real_factory(*args, **kwargs)
+                        replacement.load_resume_snapshot()
+                        faults.setattr(replacement._conflicts, "review_view", fail)
+                        return replacement
                     if operation == "stage_actual":
-                        faults.setattr(service, "with_invalidated_cache", lambda: replacement)
+                        faults.setattr(service, "with_invalidated_cache", lambda: replacement_factory(
+                            tmp_path, evidence_anchor=service.evidence_anchor))
                     else:
-                        faults.setattr(services, "ReviewSaveService", lambda *a: replacement)
+                        faults.setattr(services, "ReviewSaveService", replacement_factory)
                 with pytest.raises(ReviewOperationError, match="post-success") as error:
                     state.dispatch(operation, payload, lambda phase: None, lambda: False)
+                assert len(fault_calls) == 1
                 assert error.value.commit_state == status
 
 

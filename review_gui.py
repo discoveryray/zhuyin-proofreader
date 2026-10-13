@@ -1195,8 +1195,9 @@ class ReviewApp:
         """Recovery availability is independent of accepting a resume snapshot."""
         summary = {"staging_error": str(error)}
         try:
-            summary["actual_recovery_pending"] = committed_project_recovery(
-                project_actual_evidence_root(self.output_dir)) is not None
+            identity = committed_project_recovery(project_actual_evidence_root(self.output_dir))
+            summary["actual_recovery_pending"] = identity is not None
+            summary["actual_recovery_identity"] = identity
         except Exception as recovery_error:
             summary["staging_error"] += f"；actual 復原紀錄無法驗證：{recovery_error}"
         return summary
@@ -1527,16 +1528,39 @@ class ReviewApp:
     def _start_record_reload(self, *, advance_from=None):
         service, manifest, db = self._save_service, self.manifest, self.db
         def publish(value):
+            if "source_error" in value:
+                self._publish_actual_recovery_failure(value["source_error"], value["summary"])
+                return
+            self._resume_source_error = None
+            self._save_recovery_required = False
             self.manifest, self.db = value["snapshot"].manifest, value["snapshot"].db
             self._publish_staging_summary(value["summary"])
             self._set_actionable_records_from_ledger(value["review_view"], advance_from=advance_from)
             self.show()
         def work(progress):
             progress("正在重新核對校對清單")
-            return service.invoke("reload", dict(expected_manifest=manifest, expected_db=db), progress=progress)
+            try:
+                return service.invoke("reload", dict(expected_manifest=manifest, expected_db=db), progress=progress)
+            except Exception as exc:
+                try:
+                    summary = service.invoke("actual_summary", dict(recovery_only=True))
+                except Exception as recovery_error:
+                    summary = {"staging_error": str(recovery_error)}
+                return dict(source_error=str(exc), summary=summary)
         self._start_owned_operation("重新載入校對清單", work, publish)
 
-    def _start_owned_operation(self, title, work, publish, *, committed=False):
+    def _publish_actual_recovery_failure(self, error, summary):
+        # Readonly recovery availability never authorizes the rejected resume
+        # snapshot or its old checked occurrences.
+        self._resume_source_error = str(error)
+        self._save_recovery_required = True
+        self._disable_save_controls()
+        summary = dict(summary or {})
+        summary["staging_error"] = str(error) + ("；" + summary["staging_error"] if summary.get("staging_error") else "")
+        self._publish_staging_summary(summary)
+        self.status.config(text="actual 操作待核對；僅可接續已驗證的已提交復原紀錄。")
+
+    def _start_owned_operation(self, title, work, publish, *, committed=False, on_terminal=None):
         """One UI owner, one operation; all work receives plain request data."""
         if getattr(self, "_operation_in_progress", False) or getattr(self, "_async_disposed", False):
             return False
@@ -1544,21 +1568,73 @@ class ReviewApp:
         self._operation_in_progress = True
         request = dict(project=self.output_dir, generation=getattr(self, "_project_generation", 0),
                        manifest=self.manifest, db=self.db, title=title)
+        if on_terminal is not None:
+            request["on_terminal"] = on_terminal
         self._operation_request = request
         completed, progress = queue.Queue(maxsize=1), queue.Queue()
         self._disable_save_controls()
+        entered, abandoned = threading.Event(), threading.Event()
+        admission_error = [None]
         def worker():
+            entered.set()
+            if abandoned.is_set():
+                completed.put((None, admission_error[0]))
+                return
             try:
                 completed.put((work(progress.put), None))
             except Exception as exc:
                 completed.put((None, exc))
-        self._operation_worker = threading.Thread(target=worker, daemon=False)
-        self._operation_worker.start()
+        thread = None
+        def started():
+            return (entered.is_set() or thread is not None and (
+                thread.ident is not None or getattr(thread, "_started", None) is not None
+                and thread._started.is_set()))
+        try:
+            thread = threading.Thread(target=worker, daemon=False)
+            self._operation_worker = thread
+            thread.start()
+        except Exception as exc:
+            admission_error[0] = exc
+            if not started():
+                # Retire a late bootstrap before it can enter work, then check
+                # again: a writer that already passed this gate keeps its owner.
+                abandoned.set()
+                if not started():
+                    owns_request = getattr(self, "_operation_request", None) is request
+                    self._finish_owned_operation(request)
+                    if owns_request:
+                        if getattr(self, "_operation_worker", None) is thread:
+                            self._operation_worker = None
+                        self._restore_save_controls()
+                        self.status.config(text=f"{title}尚未啟動；可重試或關閉。")
+                        messagebox.showerror("操作尚未啟動；可重試", str(exc), parent=self.root)
+                    return False
+            # A started worker may have written already. Drain its terminal
+            # result under the original request; never early-reset or kill it.
+            self.status.config(text=f"{title}啟動回報異常；原操作正在安全收尾。")
+            messagebox.showwarning("操作已開始；等待安全收尾", str(exc), parent=self.root)
         self._schedule_async_poll(self._poll_owned_operation, request, completed, progress, publish, committed)
         return True
 
+    def _finish_owned_operation(self, request):
+        cleanup = request.pop("on_terminal", None)
+        if cleanup is not None:
+            cleanup()
+        if getattr(self, "_operation_request", None) is request:
+            self._operation_request = None
+            self._operation_in_progress = False
+
     def _poll_owned_operation(self, request, completed, progress, publish, committed):
-        if getattr(self, "_operation_request", None) is not request or getattr(self, "_async_disposed", False):
+        if getattr(self, "_async_disposed", False):
+            self._finish_owned_operation(request)
+            return
+        if getattr(self, "_operation_request", None) is not request:
+            try:
+                completed.get_nowait()
+            except queue.Empty:
+                self._schedule_async_poll(self._poll_owned_operation, request, completed, progress, publish, committed)
+            else:
+                self._finish_owned_operation(request)
             return
         try:
             while True:
@@ -1570,13 +1646,16 @@ class ReviewApp:
         except queue.Empty:
             self._schedule_async_poll(self._poll_owned_operation, request, completed, progress, publish, committed)
             return
-        self._operation_request = None
-        self._operation_in_progress = False
+        self._finish_owned_operation(request)
         owns = (request["project"] == self.output_dir and request["generation"] == getattr(self, "_project_generation", 0)
                 and request["manifest"] is self.manifest and request["db"] is self.db)
         if not owns:
-            self._save_recovery_required = True
-            self.status.config(text="背景操作結果屬於原專案；請重新開啟校對畫面確認磁碟狀態。")
+            if (request["manifest"] is self.manifest and request["db"] is self.db
+                    and getattr(self, "_operation_request", None) is None
+                    and getattr(self, "_actual_apply_task", None) is None):
+                # The old displayed evidence still needs a fresh reload after
+                # its project/generation changed. Never invalidate a new view.
+                self._save_recovery_required = True
             return
         if error is not None:
             state = getattr(error, "commit_state", "")
@@ -2053,7 +2132,8 @@ class ReviewApp:
     def apply_staged_actuals(self):
         if getattr(self, "staging_summary", {}).get("staging_validation_pending"):
             return
-        recovery_only = bool(getattr(self, "_resume_source_error", None))
+        recovery_only = bool(getattr(self, "_resume_source_error", None)
+                             or getattr(self, "staging_summary", {}).get("actual_recovery_pending"))
         if ((self._save_busy() and not recovery_only) or getattr(self, "_apply_in_progress", False)
                 or getattr(self, "_operation_in_progress", False)):
             return
@@ -2074,10 +2154,11 @@ class ReviewApp:
                 + "正式寫入 actual 證據並增量更新受影響 PDF，是否繼續？", parent=self.root):
                 return
             self._apply_in_progress = True
-            self._start_staged_actual_apply(count, recovery_only=recovery_only)
+            self._start_staged_actual_apply(count, recovery_only=recovery_only,
+                expected_recovery=summary.get("actual_recovery_identity") if recovery_only else None)
         self._start_owned_operation("核對 actual 暫存", work, prepared)
 
-    def _start_staged_actual_apply(self, count, *, recovery_only=False):
+    def _start_staged_actual_apply(self, count, *, recovery_only=False, expected_recovery=None):
         progress = tk.Toplevel(self.root)
         self._actual_progress_window = progress
         progress.title("批次套用 actual")
@@ -2099,29 +2180,55 @@ class ReviewApp:
         ).pack(fill="x", padx=18, pady=4)
         bar.start(12)
         old_index = self.index
-        completed = queue.Queue(maxsize=1)
         output_dir = self.output_dir
-
-        service = self._save_service
-        payload = dict(recovery_only=recovery_only, expected_manifest=self.manifest, expected_db=self.db)
-        def worker():
-            try:
-                completed.put((service.invoke("apply_actual", payload), None))
-            except Exception as exc:
-                completed.put((None, exc))
-
-        def done(result, error):
-            self._apply_in_progress = False
+        owner = (output_dir, getattr(self, "_project_generation", 0), self.manifest, self.db)
+        task = object()
+        self._actual_apply_task = task
+        cleaned = False
+        def cleanup():
+            nonlocal cleaned
+            if cleaned:
+                return
+            cleaned = True
             try:
                 bar.stop()
                 progress.grab_release()
                 progress.destroy()
             except Exception:
                 pass
-            if error:
+            if getattr(self, "_actual_apply_task", None) is task:
+                self._actual_apply_task = None
+                self._apply_in_progress = False
+
+        service = self._save_service
+        payload = dict(recovery_only=recovery_only, expected_manifest=self.manifest, expected_db=self.db)
+        if recovery_only:
+            payload["expected_recovery"] = expected_recovery
+        def work(progress_update):
+            try:
+                return service.invoke("apply_actual", payload, progress=progress_update), None
+            except Exception as exc:
+                summary = None
+                if recovery_only or isinstance(exc, ManualActualPostApplyError) or getattr(exc, "commit_state", "") == "COMMITTED_REFRESH_PENDING":
+                    try:
+                        summary = service.invoke("actual_summary", dict(recovery_only=True))
+                    except Exception as recovery_error:
+                        summary = {"staging_error": str(recovery_error)}
+                return summary, exc
+
+        def done(result, error):
+            if (owner[0] != self.output_dir or owner[1] != getattr(self, "_project_generation", 0)
+                    or owner[2] is not self.manifest or owner[3] is not self.db
+                    or getattr(self, "_async_disposed", False)):
                 self._save_recovery_required = True
-                self._disable_save_controls()
-                committed = getattr(error, "commit_state", "") == "COMMITTED_REFRESH_PENDING"
+                return
+            if error:
+                if result is not None:
+                    self._publish_actual_recovery_failure(error, result)
+                else:
+                    self._save_recovery_required = True
+                    self._disable_save_controls()
+                committed = isinstance(error, ManualActualPostApplyError) or getattr(error, "commit_state", "") == "COMMITTED_REFRESH_PENDING"
                 messagebox.showerror("actual evidence 已套用，但後續未完成" if committed else "actual 操作失敗；請重新載入核對磁碟狀態",
                                      str(error), parent=self.root)
                 return
@@ -2129,11 +2236,13 @@ class ReviewApp:
                 value = result
                 self.manifest, self.db = value["snapshot"].manifest, value["snapshot"].db
                 self.index = old_index
+                self._resume_source_error = None
+                self._save_recovery_required = False
+                self._restore_save_controls()
                 self._publish_staging_summary(value["summary"])
                 self._set_actionable_records_from_ledger(value["review_view"])
                 self._startup_failed = False
                 self.exit_code = 0
-                self._restore_save_controls()
                 self.show()
                 result = value["result"]
             except Exception as exc:
@@ -2170,8 +2279,10 @@ class ReviewApp:
             )
             messagebox.showinfo("actual 批次套用完成", "\n".join(lines), parent=self.root)
 
-        threading.Thread(target=worker, daemon=False).start()
-        self._schedule_async_poll(self._poll_actual_apply, completed, done)
+        if not self._start_owned_operation("actual 套用", work, lambda value: done(*value), on_terminal=cleanup):
+            # Admission cleanup proved that this request did not enter work.
+            # Its progress window must not keep a grab or a false busy state.
+            cleanup()
 
     def _poll_actual_apply(self, completed, done):
         try:

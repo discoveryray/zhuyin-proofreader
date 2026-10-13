@@ -732,9 +732,11 @@ def test_cross_session_excel_edit_after_rows_read_preserves_target(tmp_path, mon
         watched.append(actual_csv)
         before = {path: path.read_bytes() if path.exists() else None for path in watched}
         changed = False
+        source_edit_count = 0
+        before_excel = filled.read_bytes()
 
         def edit_visible_answer():
-            nonlocal changed
+            nonlocal changed, source_edit_count
             if changed:
                 return
             changed = True
@@ -744,6 +746,7 @@ def test_cross_session_excel_edit_after_rows_read_preserves_target(tmp_path, mon
             visible.cell(answer_row, headers.index(answer_column) + 1, changed_answer)
             updated.save(filled)
             updated.close()
+            source_edit_count += 1
 
         if kind == "expected":
             original = sp.workbook_rows
@@ -759,8 +762,8 @@ def test_cross_session_excel_edit_after_rows_read_preserves_target(tmp_path, mon
         else:
             original = ar._load_sheet_rows
 
-            def read_then_edit(path, sheet):
-                metadata, rows = original(path, sheet)
+            def read_then_edit(path, sheet, *args, **kwargs):
+                metadata, rows = original(path, sheet, *args, **kwargs)
                 if sheet == sheet_name:
                     edit_visible_answer()
                 return metadata, rows
@@ -771,6 +774,8 @@ def test_cross_session_excel_edit_after_rows_read_preserves_target(tmp_path, mon
             with pytest.raises(ValueError, match="Excel.*變動"):
                 import_decisions()
         assert changed
+        assert source_edit_count == 1
+        assert filled.read_bytes() != before_excel
         assert {path: path.read_bytes() if path.exists() else None for path in watched} == before
     assert not list((tmp_path / "isolated-localappdata").rglob("*.sqlite*"))
 

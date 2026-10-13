@@ -12,6 +12,7 @@ import tkinter as tk
 import unittest
 import weakref
 from pathlib import Path
+from types import MethodType
 from unittest.mock import Mock, patch
 
 import review_gui as gui
@@ -523,10 +524,16 @@ class AsyncOwnerTkTests(unittest.TestCase):
 
     def test_actual_poll_owner_disposal_cancels_pending_timer(self):
         app = self.app
+        app._start_owned_operation = MethodType(gui.ReviewApp._start_owned_operation, app)
         # A held worker exercises native owner destruction without altering
         # transaction truth. The existing transaction suite covers persistence.
-        with patch.object(gui.threading, "Thread"):
+        with patch.object(gui.threading, "Thread") as thread, \
+                patch.object(gui.messagebox, "showinfo") as info, \
+                patch.object(gui.messagebox, "showerror") as error:
             app._start_staged_actual_apply(1)
+            thread.return_value.start.assert_called_once()
+            info.assert_not_called()
+            error.assert_not_called()
         timers = set(app._async_after_ids)
         self.assertTrue(timers)
         self.window.destroy()
@@ -535,10 +542,12 @@ class AsyncOwnerTkTests(unittest.TestCase):
 
     def test_actual_success_and_failure_release_owned_poll(self):
         app = self.app
+        app._start_owned_operation = MethodType(gui.ReviewApp._start_owned_operation, app)
+        apply_actual = sp.apply_staged_manual_actual_corrections
         for failure in (False, True):
             with self.subTest(failure=failure), \
-                    patch.object(gui, "apply_staged_manual_actual_corrections", return_value={},
-                                 side_effect=OSError("isolated actual failure") if failure else None), \
+                    patch.object(sp, "apply_staged_manual_actual_corrections", wraps=apply_actual,
+                                 side_effect=OSError("isolated actual failure") if failure else None) as apply, \
                     patch.object(gui.messagebox, "showerror") as error, \
                     patch.object(gui.messagebox, "showinfo") as info:
                 app._apply_in_progress = True
@@ -549,6 +558,7 @@ class AsyncOwnerTkTests(unittest.TestCase):
                     self.root.update()
                     time.sleep(.001)
                 self.assertFalse(app._async_after_ids)
+                apply.assert_called_once_with(app.output_dir)
                 self.assertEqual(error.call_count, int(failure))
                 self.assertEqual(info.call_count, int(not failure))
 
