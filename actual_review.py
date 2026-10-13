@@ -12,6 +12,7 @@ import shutil
 import tempfile
 import zipfile
 from datetime import datetime, timedelta
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
@@ -51,6 +52,7 @@ from global_glyph_promotion import (
     direct_visual_project_transaction,
     post_commit_recovery_plan_from_results,
     direct_visual_intents,
+    _DirectVisualPDFSnapshot,
     enqueue_promotion_intents,
     project_delivery_lock,
 )
@@ -144,12 +146,15 @@ def _style_sheet(ws) -> None:
 def _read_csv(path: Path, headers: Sequence[str]) -> list[dict[str, str]]:
     if not path.exists():
         return []
-    with path.open("r", encoding="utf-8-sig", newline="") as f:
-        reader = csv.DictReader(f)
-        actual_headers = [str(x or "") for x in (reader.fieldnames or [])]
-        if actual_headers != list(headers):
-            raise ValueError(f"{path.name} 欄位格式不符，禁止自動覆寫")
-        return [{h: _text(row.get(h)) for h in headers} for row in reader]
+    return _read_csv_bytes(path.read_bytes(), path.name, headers)
+
+
+def _read_csv_bytes(raw: bytes, name: str, headers: Sequence[str]) -> list[dict[str, str]]:
+    reader = csv.DictReader(io.StringIO(raw.decode("utf-8-sig"), newline=""))
+    actual_headers = [str(x or "") for x in (reader.fieldnames or [])]
+    if actual_headers != list(headers):
+        raise ValueError(f"{name} 欄位格式不符，禁止自動覆寫")
+    return [{h: _text(row.get(h)) for h in headers} for row in reader]
 
 
 def _write_csv(path: Path, headers: Sequence[str], rows: Iterable[Mapping[str, Any]]) -> None:
@@ -856,7 +861,7 @@ def _restore_dynamic_actual_evidence(backups: Mapping[Path, bytes | None]) -> No
             path.write_bytes(data)
 
 
-def validate_dynamic_actual_evidence(root: Path, *, read_only: bool = False) -> dict[str, Any]:
+def _capture_dynamic_actual_evidence(root: Path, *, read_only: bool = False) -> tuple:
     assert_project_actual_readable(root)
     root = Path(root)
     if read_only:
@@ -867,6 +872,7 @@ def validate_dynamic_actual_evidence(root: Path, *, read_only: bool = False) -> 
     else:
         ensure_user_evidence_files(root)
     result = {"ok": True, "errors": [], "hashes": {}}
+    raw_files, parsed_rows = {}, {}
     specs = [
         (OCCURRENCE_OVERRIDE_FILE, OVERRIDE_HEADERS),
         (USER_GLYF_FILE, USER_GLYF_HEADERS),
@@ -880,9 +886,13 @@ def validate_dynamic_actual_evidence(root: Path, *, read_only: bool = False) -> 
                 # A fresh installation may legitimately have no occurrence
                 # overrides yet.  Absence is a stable empty dynamic evidence
                 # state and is still fingerprinted distinctly from a real file.
+                raw_files[name], parsed_rows[name] = None, []
                 result["hashes"][name] = "ABSENT"
                 continue
-            rows = _read_csv(path, headers)
+            raw = path.read_bytes() if path.exists() else None
+            raw_files[name] = raw
+            rows = _read_csv_bytes(raw, name, headers) if raw is not None else []
+            parsed_rows[name] = rows
             for idx, row in enumerate(rows, 2):
                 reading_col = "actual_reading" if name == OCCURRENCE_OVERRIDE_FILE else "bopomofo"
                 reading = _canon(row.get(reading_col))
@@ -907,11 +917,64 @@ def validate_dynamic_actual_evidence(root: Path, *, read_only: bool = False) -> 
                     readings = [_canon(x) for x in _text(row.get("readings")).split("|") if _text(x)]
                     if len(set(filter(None, readings))) < 2:
                         raise ValueError(f"row {idx} conflict 至少需要兩個互斥讀音")
-            result["hashes"][name] = _sha256_file(path)
+            if raw is None:
+                raise FileNotFoundError(path)
+            result["hashes"][name] = hashlib.sha256(raw).hexdigest()
         except Exception as exc:
             result["ok"] = False
             result["errors"].append(f"{name}：{exc}")
-    return result
+    return result, raw_files, parsed_rows
+
+
+def validate_dynamic_actual_evidence(root: Path, *, read_only: bool = False) -> dict[str, Any]:
+    return _capture_dynamic_actual_evidence(root, read_only=read_only)[0]
+
+
+_DYNAMIC_SNAPSHOT_TOKEN = object()
+
+
+@dataclass(frozen=True, init=False)
+class ValidatedDynamicActualSnapshot:
+    """Immutable, finite actual rows and hashes from the same validated bytes."""
+    root: Path
+    raw_files: tuple
+    parsed_rows: tuple
+    hashes: tuple
+
+    def __init__(self, root, raw_files, parsed_rows, hashes, *, _token=None):
+        if _token is not _DYNAMIC_SNAPSHOT_TOKEN:
+            raise ValueError("dynamic actual snapshot requires validated capture")
+        object.__setattr__(self, "root", Path(root).resolve())
+        object.__setattr__(self, "raw_files", tuple(sorted(raw_files.items())))
+        object.__setattr__(self, "parsed_rows", tuple((name, tuple(tuple(row.items()) for row in rows))
+            for name, rows in sorted(parsed_rows.items())))
+        object.__setattr__(self, "hashes", tuple(sorted(hashes.items())))
+
+    def assert_current(self, root):
+        if Path(root).resolve() != self.root:
+            raise ValueError("foreign dynamic actual snapshot root")
+        assert_project_actual_readable(self.root)
+        for name, raw in self.raw_files:
+            path = self.root / name
+            current = path.read_bytes() if path.exists() else None
+            if current != raw:
+                raise ValueError(f"dynamic actual snapshot source changed: {name}")
+
+    def rows(self, name):
+        return [dict(row) for row in dict(self.parsed_rows)[name]]
+
+
+def load_dynamic_actual_snapshot(root: Path, *, read_only: bool = False) -> ValidatedDynamicActualSnapshot:
+    # Initialization and the finite legacy cleanup occur before capturing bytes.
+    # This view cannot certify a caller-supplied mapping as validated evidence.
+    root = Path(root).resolve()
+    report, raw_files, parsed_rows = _capture_dynamic_actual_evidence(root, read_only=read_only)
+    if not report.get("ok"):
+        raise ValueError("動態 actual 證據檔驗證失敗：" + "；".join(report.get("errors") or []))
+    snapshot = ValidatedDynamicActualSnapshot(root, raw_files, parsed_rows, report["hashes"],
+        _token=_DYNAMIC_SNAPSHOT_TOKEN)
+    snapshot.assert_current(root)
+    return snapshot
 
 
 def _subset_sha256(rows: Sequence[Mapping[str, Any]], headers: Sequence[str]) -> str:
@@ -1164,6 +1227,7 @@ def dynamic_actual_hashes(
     pdf_path: Path | None = None,
     dependencies: Mapping[str, Any] | None = None,
     read_only: bool = False,
+    snapshot: ValidatedDynamicActualSnapshot | None = None,
 ) -> dict[str, str]:
     """Hash dynamic actual evidence, optionally scoped to one PDF's dependencies.
 
@@ -1173,20 +1237,20 @@ def dynamic_actual_hashes(
     preserves fail-closed fingerprints while avoiding whole-project cache
     invalidation after an unrelated correction.
     """
-    report = validate_dynamic_actual_evidence(root, read_only=read_only)
-    if not report.get("ok"):
-        raise ValueError("動態 actual 證據檔驗證失敗：" + "；".join(report.get("errors") or []))
+    if snapshot is None:
+        snapshot = load_dynamic_actual_snapshot(root, read_only=read_only)
+    elif type(snapshot) is not ValidatedDynamicActualSnapshot:
+        raise ValueError("dynamic actual snapshot must be a validated typed capture")
+    snapshot.assert_current(root)
     if pdf_path is None:
-        return dict(sorted((report.get("hashes") or {}).items()))
+        return dict(snapshot.hashes)
 
-    root = Path(root)
     pdf_path = Path(pdf_path)
-    override_rows = _read_csv(root / OCCURRENCE_OVERRIDE_FILE, OVERRIDE_HEADERS) if (root / OCCURRENCE_OVERRIDE_FILE).exists() else []
-    override_rows = [row for row in override_rows if _override_applies_to_pdf(row, pdf_path)]
-
-    glyf_rows = _read_csv(root / USER_GLYF_FILE, USER_GLYF_HEADERS)
-    cff_rows = _read_csv(root / USER_CFF_FILE, USER_CFF_HEADERS)
-    conflict_rows = _read_csv(root / GLYPH_CONFLICT_FILE, GLYPH_CONFLICT_HEADERS)
+    override_rows = [row for row in snapshot.rows(OCCURRENCE_OVERRIDE_FILE)
+                     if _override_applies_to_pdf(row, pdf_path)]
+    glyf_rows = snapshot.rows(USER_GLYF_FILE)
+    cff_rows = snapshot.rows(USER_CFF_FILE)
+    conflict_rows = snapshot.rows(GLYPH_CONFLICT_FILE)
     mode = "global_fallback"
     if dependencies is not None:
         mode = "per_pdf_exact_dependency_v1"
@@ -1505,19 +1569,20 @@ def render_annotation_only_png(entry: Mapping[str, Any], output_path: Path, *, o
     return output_path
 
 
-def actual_sample_availability(entry: Mapping[str, Any], output_dir: Path | None = None,
-                               *, pdf_resolver=None) -> str:
+def _actual_sample_location(entry: Mapping[str, Any], output_dir: Path | None = None,
+                               *, pdf_resolver=None) -> tuple:
     """Classify source drawings, never editable workbook declarations.
 
     Only the two audited clipped bindings may be unavailable. Ordinary source
     boxes must still be finite and have area; zero-width CFF draws use their
     existing exact geometry proof. PDF relocation is always SHA verified.
     """
+    location = None
     from actual_render_geometry import source_clipped_candidate, source_drawing_clipped
     if source_clipped_candidate(entry) is not None:
         pdf = pdf_resolver(entry) if pdf_resolver else _resolve_pdf_path(entry, output_dir)
         source_drawing_clipped(pdf, entry)
-        return "SOURCE_DRAWING_CLIPPED"
+        return "SOURCE_DRAWING_CLIPPED", None
     bounds = tuple(float(entry[k]) for k in ("x0", "y0", "x1", "y1"))
     if not all(math.isfinite(v) for v in bounds) or min(bounds) < 0:
         raise ValueError("未知來源 drawing 定位不足；不能宣告 READABLE")
@@ -1527,7 +1592,7 @@ def actual_sample_availability(entry: Mapping[str, Any], output_dir: Path | None
             pdf = pdf_resolver(entry)
             exact_vertical_cff_location(pdf, entry, digest=_sha256_file(pdf))
         else:
-            _confirmed_render_location(entry, output_dir)
+            location = _confirmed_render_location(entry, output_dir)
     elif pdf_resolver:
         # The portable caller's resolver verifies actual mapped target bytes.
         # A different SHA is legal only after its existing full-page mapping;
@@ -1535,10 +1600,15 @@ def actual_sample_availability(entry: Mapping[str, Any], output_dir: Path | None
         pdf = pdf_resolver(entry)
         if _sha256_file(pdf) == entry.get("pdf_sha256"):
             relocated = dict(entry, pdf=str(pdf))
-            _confirmed_render_location(relocated)
+            location = _confirmed_render_location(relocated)
     else:
-        _confirmed_render_location(entry, output_dir)
-    return "READABLE"
+        location = _confirmed_render_location(entry, output_dir)
+    return "READABLE", location
+
+
+def actual_sample_availability(entry: Mapping[str, Any], output_dir: Path | None = None,
+                               *, pdf_resolver=None) -> str:
+    return _actual_sample_location(entry, output_dir, pdf_resolver=pdf_resolver)[0]
 
 
 def _sample_source_profile(entry, availability):
@@ -1756,9 +1826,7 @@ def export_actual_review_package(
         selected = []
         for label, entry in zip(("A", "B"), group["members"][:2]):
             try:
-                availability = actual_sample_availability(entry, output_dir)
-                location = (None if availability == "SOURCE_DRAWING_CLIPPED" else
-                            _confirmed_render_location(entry, output_dir))
+                availability, location = _actual_sample_location(entry, output_dir)
                 selected.append((label.lower(), entry, location))
             except Exception as exc:
                 errors.append(json.dumps({
@@ -2562,15 +2630,16 @@ def apply_direct_visual_actual_batch(
     apply_function = apply_function or apply_verified_actual_group
     prepared = []
     all_intents = []
-    for decision in decisions:
-        group = decision["group"]
-        reading = _canon(decision["reading"])
-        if not reading:
-            raise ValueError("invalid direct actual reading")
-        checked = list(decision["checked_occurrence_ids"])
-        intents, admissions = direct_visual_intents(group, reading, checked, source_context)
-        all_intents.extend(intents)
-        prepared.append((decision, reading, checked, admissions))
+    with _DirectVisualPDFSnapshot(source_context) as pdf_snapshot:
+        for decision in decisions:
+            group = decision["group"]
+            reading = _canon(decision["reading"])
+            if not reading:
+                raise ValueError("invalid direct actual reading")
+            checked = list(decision["checked_occurrence_ids"])
+            intents, admissions = direct_visual_intents(group, reading, checked, source_context, _snapshot=pdf_snapshot)
+            all_intents.extend(intents)
+            prepared.append((decision, reading, checked, admissions))
     results = []
     with direct_visual_project_transaction(root) as bind_recovery_plan:
         if prewrite_guard is not None:

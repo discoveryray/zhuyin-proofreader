@@ -104,6 +104,7 @@ from runtime_regression_gate import load_mandatory_cases, validate_regression_ex
 from actual_review import (
     ACTUAL_REVIEW_SCHEMA_VERSION,
     OCCURRENCE_OVERRIDE_FILE, USER_GLYF_FILE, USER_CFF_FILE, GLYPH_CONFLICT_FILE, GLYPH_PROVENANCE_FILE,
+    load_dynamic_actual_snapshot,
     apply_staged_manual_actual_batch,
     build_actual_review_groups,
     build_actual_group_for_entry,
@@ -5266,9 +5267,7 @@ def run_pipeline_pdfs(
     actual_dir=output_dir/"01_實際注音"; cand_dir=output_dir/"02_候選報告"
     actual_dir.mkdir(exist_ok=True); cand_dir.mkdir(exist_ok=True)
     if _source_project_dir is not None:
-        from actual_review import dynamic_actual_hashes
         dynamic_actual_root = project_actual_evidence_root(Path(_source_project_dir).resolve())
-        dynamic_actual_hashes(dynamic_actual_root, read_only=True)
     else:
         dynamic_actual_root = initialize_project_actual_evidence(output_dir, root)
     # Freeze the previous session before any output file is touched.  Reuse
@@ -5276,6 +5275,7 @@ def run_pipeline_pdfs(
     # otherwise one changed file would invalidate the old manifest and make all
     # later PDFs look stale.
     try:
+        dynamic_snapshot = load_dynamic_actual_snapshot(dynamic_actual_root, read_only=_source_project_dir is not None)
         baseline_manifest = load_reuse_baseline_manifest(output_dir)
         expected_chain_fingerprint = compute_expected_asset_fingerprint(
             root,
@@ -5300,6 +5300,7 @@ def run_pipeline_pdfs(
                 ),
                 dynamic_dependencies=dependencies,
                 dynamic_evidence_root=dynamic_actual_root,
+                dynamic_snapshot=dynamic_snapshot,
             )
     except Exception as exc:
         blocked_report = {
@@ -5368,6 +5369,7 @@ def run_pipeline_pdfs(
                 # global-fallback fingerprint before its exact glyph dependencies
                 # were known.  Re-seal only the metadata with the final per-PDF
                 # dependency fingerprint; pronunciation cells are untouched.
+                dynamic_snapshot.assert_current(dynamic_actual_root)
                 final_dependencies = actual_workbook_dynamic_dependencies(actual)
                 final_global_dependencies = actual_workbook_global_exact_dependencies(actual, pdf)
                 if final_global_dependencies is None:
@@ -5386,6 +5388,7 @@ def run_pipeline_pdfs(
                     ),
                     dynamic_dependencies=final_dependencies,
                     dynamic_evidence_root=dynamic_actual_root,
+                    dynamic_snapshot=dynamic_snapshot,
                 )
                 if final_fingerprint.get("fingerprint") != fingerprint.get("fingerprint"):
                     rewrite_actual_workbook_fingerprint(actual, final_fingerprint)
@@ -5452,16 +5455,20 @@ def run_pipeline_pdfs(
         if session_id_override:
             manifest["session_id"] = str(session_id_override)
             seal_manifest(manifest)
+        dynamic_snapshot.assert_current(dynamic_actual_root)
         with project_delivery_lock(project_actual_evidence_root(output_dir)):
             if _prewrite_guard is not None:
                 _prewrite_guard()
+            dynamic_snapshot.assert_current(dynamic_actual_root)
             json_save(output_dir/"校對工作階段.json",manifest)
             db=load_or_initialize_db(output_dir)
             if _prewrite_guard is not None:
                 _prewrite_guard()
+            dynamic_snapshot.assert_current(dynamic_actual_root)
             json_save(output_dir/"人工判定資料庫.json",db)
             if _prewrite_guard is not None:
                 _prewrite_guard()
+            dynamic_snapshot.assert_current(dynamic_actual_root)
             pending=save_pending_json(output_dir,manifest,db)
             ledger = materialize_ledger(manifest, db)
             reconciliation = reconcile_ledger(ledger, manifest.get("actual_source_ids") or [])
@@ -5471,6 +5478,7 @@ def run_pipeline_pdfs(
             gate = hold_expected_conflict_completion(_source_project_dir or output_dir, manifest, db, gate)
             if _prewrite_guard is not None:
                 _prewrite_guard()
+            dynamic_snapshot.assert_current(dynamic_actual_root)
             if defer_excel_reports:
                 # Interactive actual correction should refresh the authoritative
                 # ledger quickly. The large reports can be regenerated on demand.
@@ -5599,6 +5607,7 @@ def regenerate_report(output_dir: Path) -> Path:
         )
         raise SourceValidationError("global exact glyph 資料來源驗證失敗；未覆寫最終報告") from exc
     dynamic_actual_root = initialize_project_actual_evidence(output_dir, root)
+    dynamic_snapshot = load_dynamic_actual_snapshot(dynamic_actual_root, read_only=True)
     pdfs = _resolve_session_pdfs(output_dir, old_manifest)
     fingerprints = {}
     sealed_locations = {(index, kind): relative for index, kind, relative, sha in bind_workbooks(output_dir, old_manifest)}
@@ -5622,6 +5631,7 @@ def regenerate_report(output_dir: Path) -> Path:
                 actual_path
             ),
             dynamic_evidence_root=dynamic_actual_root,
+            dynamic_snapshot=dynamic_snapshot,
         )
     manifest = collect_manifest(
         pdfs,
@@ -5639,6 +5649,8 @@ def regenerate_report(output_dir: Path) -> Path:
     if validate_conflict_state(output_dir, old_manifest, db):
         raise ValueError("專案出現未裁決衝突；未重新發布")
     validate_output_artifact_hashes(old_manifest, output_dir=output_dir)
+    # _serialized_user_project_entry already owns the dynamic project lock.
+    dynamic_snapshot.assert_current(dynamic_actual_root)
     json_save(output_dir/"校對工作階段.json",manifest)
     save_pending_json(output_dir,manifest,db)
     return generate_report(output_dir,manifest,db)

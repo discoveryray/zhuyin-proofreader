@@ -13,7 +13,7 @@ from unicodedata import normalize
 from openpyxl import load_workbook
 
 from occurrence_ledger import LEDGER_SCHEMA_VERSION, canonical_bopomofo
-from actual_review import dynamic_actual_hashes
+from actual_review import dynamic_actual_hashes, ValidatedDynamicActualSnapshot
 from cross_version_compat import (
     ACTUAL_DECODER_SEMANTICS_EPOCH,
     EXPECTED_RESOLVER_SEMANTICS_EPOCH,
@@ -464,6 +464,7 @@ def compute_actual_asset_fingerprint(
     global_exact_glyph_evidence_hashes: Mapping[str, Any],
     dynamic_dependencies: Mapping[str, Any] | None = None,
     dynamic_evidence_root: Path | None = None,
+    dynamic_snapshot: ValidatedDynamicActualSnapshot | None = None,
 ) -> dict[str, Any]:
     if not source_chain_ok(validation_report, "actual"):
         raise SourceValidationError("actual 核心資產尚未通過 fail-closed 驗證，不得建立 actual fingerprint")
@@ -489,6 +490,7 @@ def compute_actual_asset_fingerprint(
             dynamic_root,
             pdf_path=pdf_path,
             dependencies=dynamic_dependencies,
+            snapshot=dynamic_snapshot,
         )
     except Exception as exc:
         raise SourceValidationError(f"動態 actual 證據驗證失敗：{exc}") from exc
