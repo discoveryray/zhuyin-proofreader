@@ -228,3 +228,54 @@ def test_clipped_source_is_refused_by_preview_writers_and_retained_delivery(tmp_
     assert result["status"] == "PENDING_RETRY"
     assert not repo.path.exists() and outbox.read_bytes() == pending_before
     assert not (root/actual.OCCURRENCE_OVERRIDE_FILE).exists()
+
+
+def test_erased_outside_tone_never_learns_or_delivers_raw_identity(tmp_path):
+    import hashlib
+    import global_exact_glyph_library as library
+    from tests.test_actual_source_visual_safety import later_ink_visual_source
+    for painting in ("path", "image", "text"):
+        row = later_ink_visual_source(tmp_path / painting, painting)
+        row.update(expected_set=["ㄆ"],expected_evidence="independent expected")
+        before = copy.deepcopy(row)
+        group = actual.build_actual_group_for_entry([row],row)
+        root = tmp_path / painting / "actual"
+        assert display.occurrence_preview(row,display_width=200)[1] is None
+        for write in (actual.stage_manual_actual_group,actual.apply_verified_actual_group):
+            with pytest.raises(ValueError):
+                write(root,group,"ㄅ",checked_occurrence_ids=[row["occurrence_id"]],source="visual")
+            assert not root.exists()
+        with pytest.raises(ValueError):
+            actual.apply_direct_visual_actual_batch(root,[{"group":group,"reading":"ㄅ",
+                "checked_occurrence_ids":[row["occurrence_id"]],"source":"visual"}],source_context=context_for([row]))
+        assert not root.exists()  # no override, learning, provenance or project transaction
+        intents,admissions=promotion.direct_visual_intents(group,"ㄅ",[row["occurrence_id"]],context_for([row]))
+        assert not intents and admissions[0]["status"] == "NON_GLOBAL_ELIGIBLE"
+        assert row == before
+        normal = copy.deepcopy(row)
+        normal_pdf = tmp_path / painting / "normal/book.pdf"
+        normal.update(pdf=str(normal_pdf),pdf_name=normal_pdf.name,
+            pdf_sha256=hashlib.sha256(normal_pdf.read_bytes()).hexdigest())
+        normal_group = actual.build_actual_group_for_entry([normal],normal)
+        genuine,_=promotion.direct_visual_intents(normal_group,"ㄅ",[normal["occurrence_id"]],context_for([normal]))
+        assert len(genuine)==1
+        identity=genuine[0]["payload"]["identity"]
+        evidence=genuine[0]["payload"]["evidence"]
+        frozen={"session_id":evidence["source_project_id"],"pdf_sha256":row["pdf_sha256"],
+            "font_program_sha256":evidence["source_font_program_sha256"],"occurrence_id":row["occurrence_id"],
+            "review_id":row["review_id"],"identity":identity,"reading":"ㄅ","confirmation_channel":library.PDF_PAGE_VISUAL}
+        # A real canonical retained legacy envelope is not current-source proof.
+        retained=library.make_direct_evidence_intent(identity,reading="ㄅ",
+            source_project_id=evidence["source_project_id"],source_pdf_sha256=row["pdf_sha256"],
+            source_font_program_sha256=evidence["source_font_program_sha256"],
+            source_occurrence_id=row["occurrence_id"],source_review_id=row["review_id"],
+            decision_snapshot_sha256=library._canonical_sha256(frozen))
+        promotion.enqueue_promotion_intents(root,[retained])
+        outbox=root/promotion.GLOBAL_PROMOTION_OUTBOX_FILE
+        original=outbox.read_bytes()
+        repo=library.GlobalExactGlyphRepository.resolved(tmp_path/painting/"global")
+        result=promotion.deliver_pending_promotion_outbox(root,repository=repo,
+            source_context=context_for([row]),source_entries=[row])
+        assert result["status"]=="PENDING_RETRY"
+        assert outbox.read_bytes()==original and not repo.path.exists()
+        assert not (root/actual.USER_GLYF_FILE).exists()

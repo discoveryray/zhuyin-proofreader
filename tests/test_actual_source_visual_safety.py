@@ -104,6 +104,43 @@ def clipped_visual_source(root, prefix, *, suffix=b"\nQ\n", outside_tone=False, 
     return row
 
 
+def later_ink_visual_source(root, painting):
+    """Fixed independent tone erasure outside layout/advance, genuine draws."""
+    row = make_visual_source(root / "normal", count=1, outside_tone=True)[0]
+    original = root / "normal/book.pdf"
+    changed = root / "overpaint.pdf"
+    with fitz.open(original) as document:
+        page = document[0]
+        if painting == "path":
+            page.draw_rect(fitz.Rect(53, 40, 56, 44), fill=(1, 1, 1), color=None)
+        elif painting == "image":
+            image = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 2, 2), False)
+            image.clear_with(255)
+            page.insert_image(fitz.Rect(53, 40, 56, 44), stream=image.tobytes("png"))
+        elif painting == "text":
+            # Later layout starts x57, while its true left-bearing ink reaches
+            # x52..55. Thus neither glyph's layout bbox proves final painting.
+            builder = FontBuilder(1000, isTTF=True)
+            names = [".notdef", "cover"]
+            builder.setupGlyphOrder(names); builder.setupCharacterMap({66: "cover"})
+            pen = TTGlyphPen(None); pen.moveTo((-250, 300)); pen.lineTo((-100, 300))
+            pen.lineTo((-100, 600)); pen.lineTo((-250, 600)); pen.closePath()
+            builder.setupGlyf({".notdef": TTGlyphPen(None).glyph(), "cover": pen.glyph()})
+            builder.setupHorizontalMetrics({".notdef": (600, 0), "cover": (600, -250)})
+            builder.setupHorizontalHeader(ascent=800, descent=-200)
+            builder.setupNameTable({"familyName":"LaterWhiteInk", "styleName":"Regular"})
+            builder.setupOS2(sTypoAscender=800, sTypoDescender=-200, usWinAscent=800, usWinDescent=200)
+            builder.setupPost(); data = io.BytesIO(); builder.save(data)
+            page.insert_font(fontname="LaterWhiteInk", fontbuffer=data.getvalue())
+            page.insert_text((57, 50), "B", fontname="LaterWhiteInk", fontsize=20, color=(1, 1, 1))
+        else:
+            raise ValueError(painting)
+        document.save(changed)
+    row.update(pdf=str(changed), pdf_name=changed.name,
+        pdf_sha256=hashlib.sha256(changed.read_bytes()).hexdigest())
+    return row
+
+
 def test_real_source_retains_exact_donor_and_sealed_snapshot(tmp_path):
     rows = make_visual_source(tmp_path / "source", painting="unrelated")
     for row in rows:
@@ -252,3 +289,79 @@ def test_clip_scope_restore_and_complete_rectangles_preserve_normal_source(tmp_p
     assert not source_visual_safety(active)["location_readable"]
     restored = clipped_visual_source(tmp_path / "text-clip-restored", text_clip + b"Q\n", suffix=b"")
     assert source_visual_safety(restored)["donor_eligible"]
+
+
+def test_final_paint_preserves_complete_tone_ink_outside_both_layout_boxes(tmp_path):
+    normal = make_visual_source(tmp_path / "normal", count=1, outside_tone=True)[0]
+    assert source_visual_safety(normal)["donor_eligible"]
+    for painting in ("path", "image", "text"):
+        row = later_ink_visual_source(tmp_path / painting, painting)
+        assert row["x1"] == 52
+        with fitz.open(tmp_path / painting / "normal/book.pdf") as document:
+            tone = document[0].get_pixmap(matrix=fitz.Matrix(4,4),clip=fitz.Rect(54,41,55,42),alpha=False)
+            assert min(tone.samples) < 255
+        with fitz.open(row["pdf"]) as document:
+            tone = document[0].get_pixmap(matrix=fitz.Matrix(4,4),clip=fitz.Rect(54,41,55,42),alpha=False)
+            assert all(value == 255 for value in tone.samples)
+            assert min(document[0].get_pixmap(alpha=False).samples) < 255  # base remains
+            if painting == "text":
+                later = document[0].get_texttrace()[-1]["chars"][0][3]
+                assert later[0] == 57 and not fitz.Rect(later).intersects(fitz.Rect(40,34,52,54))
+        proof = source_visual_safety(row)
+        assert not proof["location_readable"] and not proof["donor_eligible"]
+        assert "PAINT" in proof["reason"]
+
+
+def test_same_operation_neighbor_paint_does_not_become_source_ink(tmp_path):
+    root = tmp_path / "source"
+    first = make_visual_source(root, count=1)[0]
+    pdf = root / "same-operation.pdf"
+    with fitz.open(first["pdf"]) as document:
+        page = document[0]
+        xref = page.get_contents()[0]
+        original = document.xref_stream(xref)
+        assert b"[<0001>]TJ" in original
+        document.update_stream(xref, original.replace(b"[<0001>]TJ", b"[<0001> -2400 <0001>]TJ"))
+        page.draw_rect(fitz.Rect(99,39,106,51),fill=(1,1,1),color=None)
+        document.save(pdf)
+    first.update(pdf=str(pdf),pdf_name=pdf.name,pdf_sha256=hashlib.sha256(pdf.read_bytes()).hexdigest())
+    with fitz.open(pdf) as document:
+        characters = document[0].get_texttrace()[0]["chars"]
+        assert len(characters) == 2 and characters[1][2][0] == 100
+        first_ink = document[0].get_pixmap(matrix=fitz.Matrix(4,4),clip=fitz.Rect(40,40,45,50),alpha=False)
+        second_ink = document[0].get_pixmap(matrix=fitz.Matrix(4,4),clip=fitz.Rect(100,40,105,50),alpha=False)
+        assert min(first_ink.samples) < 255 and all(value == 255 for value in second_ink.samples)
+    assert source_visual_safety(first)["donor_eligible"]
+    second = copy.deepcopy(first)
+    second.update(occurrence_id="occ_"+"1"*64,review_id="rev_"+"1"*64,
+        **dict(zip(("x0","y0","x1","y1"),characters[1][3])))
+    assert not source_visual_safety(second)["location_readable"]
+
+
+def test_native_outline_keeps_actual_stroke_outside_fill_contour(tmp_path):
+    row = make_visual_source(tmp_path / "source", count=1)[0]
+    stroke_pdf = tmp_path / "stroke.pdf"
+    with fitz.open(row["pdf"]) as document:
+        xref = document[0].get_contents()[0]
+        stream = document.xref_stream(xref)
+        assert b"BT" in stream
+        document.update_stream(xref, stream.replace(b"BT", b"4 w\n1 M\nBT\n1 Tr", 1))
+        document.save(stroke_pdf)
+    row.update(pdf=str(stroke_pdf), pdf_name=stroke_pdf.name,
+        pdf_sha256=hashlib.sha256(stroke_pdf.read_bytes()).hexdigest())
+    # The printed stroke extends beyond the x=45 filled contour. Native path
+    # bounds must use the actual stroke state rather than fill-only geometry.
+    region = fitz.Rect(46, 42, 46.5, 45)
+    with fitz.open(stroke_pdf) as document:
+        assert document[0].get_texttrace()[0]["type"] == 1
+        assert min(document[0].get_pixmap(matrix=fitz.Matrix(4,4),clip=region,alpha=False).samples) < 255
+    assert source_visual_safety(row)["donor_eligible"]
+    covered_pdf = tmp_path / "covered-stroke.pdf"
+    with fitz.open(stroke_pdf) as document:
+        document[0].draw_rect(fitz.Rect(46,41,47,46),fill=(1,1,1),color=None)
+        document.save(covered_pdf)
+    row.update(pdf=str(covered_pdf),pdf_name=covered_pdf.name,
+        pdf_sha256=hashlib.sha256(covered_pdf.read_bytes()).hexdigest())
+    with fitz.open(covered_pdf) as document:
+        assert all(value == 255 for value in document[0].get_pixmap(matrix=fitz.Matrix(4,4),clip=region,alpha=False).samples)
+    assert not source_visual_safety(row)["location_readable"]

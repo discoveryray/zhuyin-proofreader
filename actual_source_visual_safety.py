@@ -164,14 +164,72 @@ class _CurrentClipTrace(_native_pdf.JM_new_texttrace_device):
 
     def _capture_text(self, text, ctm, stroke, alpha, callback, args):
         before, seqno = len(self.out), self.seqno
+        native = _native_pdf.mupdf
+        glyph_spans = []
+        raw_span = text.head
+        while raw_span:
+            span = native.FzTextSpan(raw_span)
+            glyphs = []
+            for index in range(span.m_internal.len):
+                item = span.items(index)
+                # Copy the actual native matrix, including positioned glyph
+                # origin. The item/font references live only in this callback.
+                trm = native.FzMatrix(span.trm().internal())
+                trm.e, trm.f = item.x, item.y
+                origin = native.fz_transform_point(
+                    native.fz_make_point(item.x, item.y), native.FzMatrix(ctm))
+                # A native bound_glyph/text bound can use the font's maximum
+                # box (not this glyph's outline), notably for substitute CJK.
+                # Use the native complete positioned outline instead. Its
+                # actual font is the same one used by this paint callback;
+                # substitute status does not invent a different font mapping.
+                font = span.font()
+                flags = native.ll_fz_font_flags(font.m_internal)
+                if not native.ll_fz_font_ft_face(font.m_internal) or flags is None:
+                    raise ValueError("SOURCE_NATIVE_FONT_OUTLINE_UNPROVABLE")
+                for name in ("ft_stretch", "fake_bold", "fake_italic"):
+                    flag = getattr(flags, name)
+                    if type(flag) is not int or flag != 0:
+                        raise ValueError("SOURCE_NATIVE_FONT_TRANSFORM_UNPROVABLE:" + name)
+                if type(flags.ft_substitute) is not int or flags.ft_substitute not in (0, 1):
+                    raise ValueError("SOURCE_NATIVE_FONT_SUBSTITUTE_FLAG_INVALID")
+                if type(item.gid) is not int or item.gid < 0:
+                    raise ValueError("SOURCE_NATIVE_GLYPH_OUTLINE_UNPROVABLE")
+                # Class-aware outline_glyph owns/releases its returned path.
+                # NULL is unknown (e.g. Type3/bitmap), never empty paint.
+                # A genuine non-NULL empty path is independently empty native
+                # ink, including spaces; Unicode semantics are not consulted.
+                outline = font.fz_outline_glyph(item.gid, trm)
+                if not outline:
+                    raise ValueError("SOURCE_NATIVE_GLYPH_OUTLINE_UNPROVABLE")
+                bound = _native_rect(native.ll_fz_bound_path(
+                    outline.m_internal, stroke, ctm), allow_empty=True)
+                glyphs.append({"binding": (item.ucs, item.gid, (origin.x, origin.y)),
+                               "ink": bound})
+            glyph_spans.append({"font": _native_pdf.JM_EscapeStrFromStr(
+                _native_pdf.JM_font_name(span.font())), "glyphs": glyphs})
+            raw_span = raw_span.next
         # A separate space-only text operation may have legitimate empty ink.
         # Still run the vendor callback and retain its exact paint sequence;
         # an empty target operation itself can never certify visibility.
         ink = _native_rect(_native_pdf.mupdf.ll_fz_bound_text(text, stroke, ctm), allow_empty=True)
         callback(self, *args)
+        operation = self.out[before:]
+        if len(glyph_spans) != len(operation):
+            raise ValueError("SOURCE_NATIVE_GLYPH_SPAN_BINDING_MISMATCH")
+        glyph_records = []
+        for captured_span, traced_span in zip(glyph_spans, operation):
+            glyphs, chars = captured_span["glyphs"], traced_span["chars"]
+            if captured_span["font"] != traced_span["font"] or len(glyphs) != len(chars):
+                raise ValueError("SOURCE_NATIVE_GLYPH_SPAN_BINDING_MISMATCH")
+            for glyph, char in zip(glyphs, chars):
+                if glyph["binding"] != char[:3]:
+                    raise ValueError("SOURCE_NATIVE_GLYPH_ITEM_BINDING_MISMATCH")
+                glyph_records.append({"span": traced_span, "char": char, "ink": glyph["ink"]})
         # Plain values only. Native glyph ink includes annotation/tone contours
         # beyond layout metrics/advance; stroke uses its actual stroke state.
-        self.draws.append({"seqno": seqno, "trace": self.out[before:], "ink": ink,
+        self.draws.append({"seqno": seqno, "trace": operation, "ink": ink,
+                           "glyphs": glyph_records,
                            "clips": tuple(dict(item) for item in self.active_clips),
                            "groups": tuple(dict(item) for item in self.groups),
                            "mask_definitions": tuple(self.mask_definitions), "alpha": alpha})
@@ -187,7 +245,7 @@ class _CurrentClipTrace(_native_pdf.JM_new_texttrace_device):
         self._capture_text(text, ctm, stroke, alpha, _native_pdf.JM_new_texttrace_device.stroke_text, args)
 
 
-def _native_clip_proof(page, traces, seqno):
+def _native_clip_proof(page, traces, seqno, source_span, source_char):
     """Finite complete-ink proof for this exact native source paint operation."""
     native = _native_pdf.mupdf
     canonical_page = page.rect * page.derotation_matrix
@@ -247,7 +305,23 @@ def _native_clip_proof(page, traces, seqno):
                     or type(draw["alpha"]) not in (int, float) or draw["alpha"] != 1
                     or not fitz.Rect(group["bounds"]).contains(ink)):
                 raise ValueError("SOURCE_ACTIVE_GROUP_UNPROVABLE")
-        return draw["ink"]
+        sources = [(index, glyph) for index, glyph in enumerate(draw["glyphs"])
+                   if glyph["span"] == source_span and glyph["char"] == source_char]
+        if len(sources) != 1 or sources[0][1]["ink"] is None:
+            raise ValueError("SOURCE_NATIVE_OCCURRENCE_INK_UNPROVABLE")
+        source_index, source = sources[0]
+        later_text = []
+        for later in device.draws:
+            if later["seqno"] < seqno:
+                continue
+            for index, glyph in enumerate(later["glyphs"]):
+                # A following glyph in this same native paint operation can
+                # also cover the occurrence. Never assign its ink to source.
+                if later["seqno"] == seqno and index <= source_index:
+                    continue
+                if glyph["ink"] is not None:
+                    later_text.append((later["seqno"], glyph["ink"]))
+        return source["ink"], later_text
     except Exception as exc:
         raise ValueError("SOURCE_NATIVE_CLIP_PROOF_FAILED: " + (str(exc) or type(exc).__name__)) from exc
     finally:
@@ -481,21 +555,19 @@ def source_visual_safety(entry, *, pdf=None, document=None, page=None):
                         and (char[0] != ord(values["char"]) or char[1] != values["glyph_id"]
                              or xref != values["font_xref"])):
                     raise ValueError("SOURCE_SLOT_CONTRADICTION")
-        _native_clip_proof(page, traces, seqno)
+        source_ink, later_text = _native_clip_proof(page, traces, seqno, span, _char)
+        paint_target = fitz.Rect(source_ink)
         exact = _exact_donor(document, values, source, entry)
         intersections = []
-        # Text bboxlog entries span whole lines; test individual characters to
-        # avoid treating unrelated later text on the same line as an occluder.
-        for later in traces:
-            if later.get("seqno", -1) <= seqno or later.get("type") == 3:
-                continue
-            for char in later.get("chars", ()):
-                if target.intersects(fitz.Rect(char[3])):
-                    intersections.append((later["seqno"], "text"))
+        # Both sides use complete native glyph ink. Layout metrics cannot
+        # prove that an out-of-advance tone survives later text/path/image.
+        for later_seqno, ink in later_text:
+            if paint_target.intersects(fitz.Rect(ink)):
+                intersections.append((later_seqno, "text"))
         bboxlog = page.get_bboxlog()
         for index, (kind, bounds, *_rest) in enumerate(bboxlog):
             if index > seqno and kind not in ("fill-text", "stroke-text", "ignore-text"):
-                if target.intersects(fitz.Rect(bounds)):
+                if paint_target.intersects(fitz.Rect(bounds)):
                     intersections.append((index, kind))
         if intersections:
             if exact and _finite_local_adapter(values, source, entry, seqno, intersections, page.get_drawings(), bboxlog):
