@@ -12,6 +12,7 @@ import re
 from pathlib import Path
 
 import fitz
+import pymupdf as _native_pdf
 
 from export_pdf_text_diagnostics import (
     TrueTypeGlyphInspector, build_font_lookup, normalize_basefont, resolve_font,
@@ -34,6 +35,228 @@ _LOCAL_STROKE_BOX = (38.264503479003906, 22.673498153686523,
                      299.0585021972656, 113.38949584960938)
 _LOCAL_ROUND_RECT = (66.614501953125, 51.02349853515625,
                      270.70849609375, 85.03949737548828)
+
+
+def _native_rect(value, *, allow_empty=False):
+    bounds = (value.x0, value.y0, value.x1, value.y1)
+    if not all(type(item) in (int, float) and math.isfinite(item) for item in bounds):
+        raise ValueError("SOURCE_NATIVE_BOUNDS_INVALID")
+    result = fitz.Rect(bounds)
+    if result.is_empty and allow_empty:
+        return None
+    if result.is_empty or result.is_infinite:
+        raise ValueError("SOURCE_NATIVE_BOUNDS_EMPTY")
+    return tuple(result)
+
+
+def _captured_native_callback(callback):
+    """SWIG/native processing may catch callback exceptions: retain refusal."""
+    def captured(self, *args):
+        try:
+            return callback(self, *args)
+        except BaseException as exc:
+            self.capture_failure = type(exc).__name__ + ": " + str(exc)
+            self.active_clips.append({"kind": "capture-failed"})
+            # A native tile callback requires an integer return even on error.
+            return 0 if callback.__name__ == "begin_tile" else None
+    return captured
+
+
+class _CurrentClipTrace(_native_pdf.JM_new_texttrace_device):
+    """Native ordered clip state at text paint, not a PDF content interpreter.
+
+    The installed vendor texttrace device already counts fill/stroke paths,
+    fill/stroke/ignored text, shades, images and image masks. Clip transitions
+    do not increment that paint sequence. No native pointer escapes a callback.
+    """
+    def __init__(self):
+        super().__init__([])
+        self.active_clips, self.groups, self.mask_definitions, self.draws = [], [], [], []
+        self.capture_failure = None
+        for name in ("clip_path", "clip_stroke_path", "clip_text", "clip_stroke_text",
+                     "clip_image_mask", "pop_clip", "begin_group", "end_group",
+                     "begin_mask", "end_mask", "begin_tile", "end_tile"):
+            getattr(self, "use_virtual_" + name)()
+
+    # Inherited vendor callbacks participate in the same failure contract.
+    fill_path = _captured_native_callback(_native_pdf.JM_new_texttrace_device.fill_path)
+    stroke_path = _captured_native_callback(_native_pdf.JM_new_texttrace_device.stroke_path)
+    ignore_text = _captured_native_callback(_native_pdf.JM_new_texttrace_device.ignore_text)
+    fill_shade = _captured_native_callback(_native_pdf.JM_new_texttrace_device.fill_shade)
+    fill_image = _captured_native_callback(_native_pdf.JM_new_texttrace_device.fill_image)
+    fill_image_mask = _captured_native_callback(_native_pdf.JM_new_texttrace_device.fill_image_mask)
+    begin_layer = _captured_native_callback(_native_pdf.JM_new_texttrace_device.begin_layer)
+    end_layer = _captured_native_callback(_native_pdf.JM_new_texttrace_device.end_layer)
+
+    @_captured_native_callback
+    def clip_path(self, ctx, path, even_odd, ctm, scissor):
+        native = _native_pdf.mupdf
+        # keep_path follows the vendor's own walker lifetime pattern; this
+        # temporary wrapper releases its reference at callback exit.
+        kept = native.FzPath(native.ll_fz_keep_path(path))
+        is_rectangle = kept.fz_path_is_rect(native.FzMatrix(ctm))
+        if type(is_rectangle) is not int or is_rectangle not in (0, 1):
+            raise ValueError("SOURCE_NATIVE_CLIP_RECT_PREDICATE_INVALID")
+        if is_rectangle:
+            bound = native.ll_fz_bound_path(path, None, ctm)
+            raw_bounds = (bound.x0, bound.y0, bound.x1, bound.y1)
+            if not all(type(item) in (int, float) and math.isfinite(item) for item in raw_bounds):
+                raise ValueError("SOURCE_NATIVE_CLIP_BOUNDS_INVALID")
+            if fitz.Rect(raw_bounds).is_empty:
+                # Native rectangles may be degenerate. No paint is certified
+                # while this clip is active; a genuine later pop can restore it.
+                self.active_clips.append({"kind": "empty-rectangle"})
+            else:
+                bounds = _native_rect(bound)
+                self.active_clips.append({"kind": "rectangle", "bounds": bounds})
+        else:
+            # Nonrectangular paths, multiple subpaths/holes and skewed quads
+            # cannot become a visible-source proof from a bounding rectangle.
+            self.active_clips.append({"kind": "unknown-path"})
+
+    @_captured_native_callback
+    def clip_stroke_path(self, *args): self.active_clips.append({"kind": "stroke-path"})
+    @_captured_native_callback
+    def clip_text(self, *args): self.active_clips.append({"kind": "text"})
+    @_captured_native_callback
+    def clip_stroke_text(self, *args): self.active_clips.append({"kind": "stroke-text"})
+    @_captured_native_callback
+    def clip_image_mask(self, *args): self.active_clips.append({"kind": "image-mask"})
+
+    @_captured_native_callback
+    def pop_clip(self, *args):
+        if not self.active_clips:
+            raise ValueError("SOURCE_NATIVE_CLIP_STACK_UNBALANCED")
+        self.active_clips.pop()
+
+    @_captured_native_callback
+    def begin_group(self, ctx, area, colorspace, isolated, knockout, blendmode, alpha):
+        self.groups.append({"kind": "group", "bounds": _native_rect(area),
+                            "colorspace_null": colorspace is None, "isolated": isolated,
+                            "knockout": knockout, "blendmode": blendmode, "alpha": alpha})
+
+    @_captured_native_callback
+    def end_group(self, *args):
+        if not self.groups or self.groups[-1]["kind"] != "group":
+            raise ValueError("SOURCE_NATIVE_GROUP_STACK_UNBALANCED")
+        self.groups.pop()
+
+    @_captured_native_callback
+    def begin_tile(self, *args):
+        self.groups.append({"kind": "tile"})
+        return 0  # run content; never manufacture a cached native proof
+
+    @_captured_native_callback
+    def end_tile(self, *args):
+        if not self.groups or self.groups[-1]["kind"] != "tile":
+            raise ValueError("SOURCE_NATIVE_TILE_STACK_UNBALANCED")
+        self.groups.pop()
+
+    @_captured_native_callback
+    def begin_mask(self, *args): self.mask_definitions.append("mask-definition")
+
+    @_captured_native_callback
+    def end_mask(self, *args):
+        if not self.mask_definitions:
+            raise ValueError("SOURCE_NATIVE_MASK_STACK_UNBALANCED")
+        self.mask_definitions.pop()
+        self.active_clips.append({"kind": "soft-mask"})
+
+    def _capture_text(self, text, ctm, stroke, alpha, callback, args):
+        before, seqno = len(self.out), self.seqno
+        # A separate space-only text operation may have legitimate empty ink.
+        # Still run the vendor callback and retain its exact paint sequence;
+        # an empty target operation itself can never certify visibility.
+        ink = _native_rect(_native_pdf.mupdf.ll_fz_bound_text(text, stroke, ctm), allow_empty=True)
+        callback(self, *args)
+        # Plain values only. Native glyph ink includes annotation/tone contours
+        # beyond layout metrics/advance; stroke uses its actual stroke state.
+        self.draws.append({"seqno": seqno, "trace": self.out[before:], "ink": ink,
+                           "clips": tuple(dict(item) for item in self.active_clips),
+                           "groups": tuple(dict(item) for item in self.groups),
+                           "mask_definitions": tuple(self.mask_definitions), "alpha": alpha})
+
+    @_captured_native_callback
+    def fill_text(self, ctx, text, ctm, colorspace, color, alpha, color_params):
+        args = (ctx, text, ctm, colorspace, color, alpha, color_params)
+        self._capture_text(text, ctm, None, alpha, _native_pdf.JM_new_texttrace_device.fill_text, args)
+
+    @_captured_native_callback
+    def stroke_text(self, ctx, text, stroke, ctm, colorspace, color, alpha, color_params):
+        args = (ctx, text, stroke, ctm, colorspace, color, alpha, color_params)
+        self._capture_text(text, ctm, stroke, alpha, _native_pdf.JM_new_texttrace_device.stroke_text, args)
+
+
+def _native_clip_proof(page, traces, seqno):
+    """Finite complete-ink proof for this exact native source paint operation."""
+    native = _native_pdf.mupdf
+    canonical_page = page.rect * page.derotation_matrix
+    old_rotation = page.rotation
+    device = None
+    closed = False
+    try:
+        if old_rotation:
+            page.set_rotation(0)
+        device = _CurrentClipTrace()
+        native_page = native.FzPage(page.this) if isinstance(page.this, native.PdfPage) else page.this
+        if not isinstance(native_page, native.FzPage):
+            raise ValueError("SOURCE_NATIVE_PAGE_UNSUPPORTED")
+        area = native.fz_bound_page(native_page)
+        device.ptm = native.FzMatrix(1, 0, 0, -1, 0, area.y1)
+        native.fz_run_page(native_page, device, native.FzMatrix(), native.FzCookie())
+        native.fz_close_device(device)
+        closed = True
+        if device.capture_failure is not None:
+            raise ValueError("SOURCE_NATIVE_CAPTURE_FAILED: " + device.capture_failure)
+        # These are exact binding/proof fields. Unrelated size/spacewidth audit
+        # scalars differ in vendor float32 vs Python-double calculations; they
+        # cannot authorize sequence, glyph identity, clip or ink containment.
+        fields = ("seqno", "type", "font", "chars")
+        expected = [tuple(span[key] for key in fields) for span in traces]
+        captured = [tuple(span[key] for key in fields) for span in device.out]
+        if expected != captured:
+            raise ValueError("SOURCE_NATIVE_TRACE_BINDING_MISMATCH")
+        draws = [draw for draw in device.draws if draw["seqno"] == seqno]
+        operation = [span for span in traces if span["seqno"] == seqno]
+        if len(draws) != 1 or not operation or draws[0]["trace"] != operation:
+            raise ValueError("SOURCE_NATIVE_PAINT_OPERATION_UNPROVABLE")
+        draw = draws[0]
+        if draw["ink"] is None:
+            raise ValueError("SOURCE_NATIVE_TARGET_INK_EMPTY")
+        ink = fitz.Rect(draw["ink"])
+        if not canonical_page.contains(ink):
+            raise ValueError("SOURCE_PAINT_CLIPPED_BY_PAGE")
+        if draw["mask_definitions"]:
+            raise ValueError("SOURCE_ACTIVE_MASK_UNPROVABLE")
+        for clip in draw["clips"]:
+            if clip["kind"] != "rectangle":
+                raise ValueError("SOURCE_ACTIVE_CLIP_UNPROVABLE")
+            if not fitz.Rect(clip["bounds"]).contains(ink):
+                raise ValueError("SOURCE_PAINT_CLIPPED")
+        for group in draw["groups"]:
+            # Explicit, finite opaque isolated Normal-group proof: null group
+            # colorspace, no knockout, alpha 1, opaque source and full ink in
+            # its area. Other/missing/unknown group attributes never default
+            # compatible. Form BBox clips use the same native rectangle proof.
+            if (group["kind"] != "group" or not group["colorspace_null"]
+                    or type(group["isolated"]) is not int or group["isolated"] != 1
+                    or type(group["knockout"]) is not int or group["knockout"] != 0
+                    or type(group["blendmode"]) is not int
+                    or group["blendmode"] != native.FZ_BLEND_NORMAL
+                    or type(group["alpha"]) not in (int, float) or group["alpha"] != 1
+                    or type(draw["alpha"]) not in (int, float) or draw["alpha"] != 1
+                    or not fitz.Rect(group["bounds"]).contains(ink)):
+                raise ValueError("SOURCE_ACTIVE_GROUP_UNPROVABLE")
+        return draw["ink"]
+    except Exception as exc:
+        raise ValueError("SOURCE_NATIVE_CLIP_PROOF_FAILED: " + (str(exc) or type(exc).__name__)) from exc
+    finally:
+        try:
+            if device is not None and not closed:
+                native.fz_close_device(device)
+        finally:
+            if old_rotation:
+                page.set_rotation(old_rotation)
 
 
 def _result(readable=False, donor=False, reason="SOURCE_UNPROVABLE", **metadata):
@@ -258,6 +481,7 @@ def source_visual_safety(entry, *, pdf=None, document=None, page=None):
                         and (char[0] != ord(values["char"]) or char[1] != values["glyph_id"]
                              or xref != values["font_xref"])):
                     raise ValueError("SOURCE_SLOT_CONTRADICTION")
+        _native_clip_proof(page, traces, seqno)
         exact = _exact_donor(document, values, source, entry)
         intersections = []
         # Text bboxlog entries span whole lines; test individual characters to

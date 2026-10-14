@@ -11,7 +11,7 @@ from actual_source_visual_safety import source_visual_safety
 from export_pdf_text_diagnostics import TrueTypeGlyphInspector
 
 
-def make_visual_source(root, *, painting=None, count=2, rotation=0):
+def make_visual_source(root, *, painting=None, count=2, rotation=0, outside_tone=False):
     """Reusable real PDF entries for source and guarded writer regressions."""
     root.mkdir(parents=True, exist_ok=True)
     builder = FontBuilder(1000, isTTF=True)
@@ -24,6 +24,11 @@ def make_visual_source(root, *, painting=None, count=2, rotation=0):
         if index:
             pen.moveTo((0, 0)); pen.lineTo((250, 0))
             pen.lineTo((250, 500)); pen.lineTo((0, 500)); pen.closePath()
+            if outside_tone:
+                # A separate tiny printed tone lies beyond the font's 600-unit
+                # advance. A layout bbox cannot certify this complete ink.
+                pen.moveTo((700, 400)); pen.lineTo((750, 400))
+                pen.lineTo((750, 450)); pen.lineTo((700, 450)); pen.closePath()
         glyphs[name] = pen.glyph()
     builder.setupGlyf(glyphs)
     builder.setupHorizontalMetrics({name: (600, 0) for name in names})
@@ -75,6 +80,28 @@ def make_visual_source(root, *, painting=None, count=2, rotation=0):
                    **dict(zip(("x0", "y0", "x1", "y1"), bounds))}
             rows.append(row)
     return rows
+
+
+def clipped_visual_source(root, prefix, *, suffix=b"\nQ\n", outside_tone=False, page_group=None):
+    """Handwritten PDF clipping operators; real bytes/seal/font/trace remain."""
+    row = make_visual_source(root / "normal", count=1, outside_tone=outside_tone)[0]
+    original = root / "normal/book.pdf"
+    clipped = root / "clipped.pdf"
+    with fitz.open(original) as document:
+        if page_group is not None:
+            fields = "/S /Transparency /I true /K false"
+            if page_group == "rgb":
+                fields += " /CS /DeviceRGB"
+            else:
+                assert page_group == "neutral"
+            document.xref_set_key(document[0].xref, "Group", "<< " + fields + " >>")
+        for xref in document[0].get_contents():
+            content = document.xref_stream(xref)
+            document.update_stream(xref, prefix + content + suffix)
+        document.save(clipped)
+    row["pdf"], row["pdf_name"] = str(clipped), clipped.name
+    row["pdf_sha256"] = hashlib.sha256(clipped.read_bytes()).hexdigest()
+    return row
 
 
 def test_real_source_retains_exact_donor_and_sealed_snapshot(tmp_path):
@@ -172,3 +199,56 @@ def test_missing_ambiguous_or_moved_source_never_confirms_neighbor(tmp_path):
     changed = copy.deepcopy(row); changed["pdf"] = str(duplicated)
     changed["pdf_sha256"] = hashlib.sha256(duplicated.read_bytes()).hexdigest()
     assert source_visual_safety(changed)["reason"] == "SOURCE_DRAW_NOT_UNIQUE"
+
+
+def test_active_clip_cannot_certify_blank_or_partial_annotation(tmp_path):
+    for name, bounds, operator in (("w", b"0 0 1 1", b"W"),
+            ("wstar", b"0 0 1 1", b"W*"), ("empty", b"0 0 0 0", b"W")):
+        row = clipped_visual_source(tmp_path / name,
+            b"q\n" + bounds + b" re " + operator + b" n\n")
+        with fitz.open(row["pdf"]) as document:
+            # Independent whole-page oracle: no glyph ink at all remains.
+            assert all(value == 255 for value in document[0].get_pixmap(alpha=False).samples)
+        proof = source_visual_safety(row)
+        assert not proof["location_readable"] and not proof["donor_eligible"]
+        assert "CLIP" in proof["reason"]
+    partial = clipped_visual_source(tmp_path / "partial-tone",
+        b"q\n0 0 53 240 re W n\n", outside_tone=True)
+    assert partial["x1"] < 53  # the full layout bbox fits; printed tone does not
+    with fitz.open(tmp_path / "partial-tone/normal/book.pdf") as document:
+        original_tone = document[0].get_pixmap(matrix=fitz.Matrix(4, 4),
+            clip=fitz.Rect(54, 41, 55, 42), alpha=False)
+        assert min(original_tone.samples) < 255
+    with fitz.open(partial["pdf"]) as document:
+        pix = document[0].get_pixmap(alpha=False)
+        assert min(pix.samples) < 255  # left base remains, never a success proof
+        tone = document[0].get_pixmap(matrix=fitz.Matrix(4, 4),
+            clip=fitz.Rect(54, 41, 55, 42), alpha=False)
+        assert all(value == 255 for value in tone.samples)
+    assert not source_visual_safety(partial)["location_readable"]
+
+
+def test_clip_scope_restore_and_complete_rectangles_preserve_normal_source(tmp_path):
+    for name, prefix, suffix in (
+            ("complete", b"q\n0 0 220 240 re W n\n", b"\nQ\n"),
+            ("complete-even-odd", b"q\n0 0 220 240 re W* n\n", b"\nQ\n"),
+            ("restored", b"q\n0 0 1 1 re W n\nQ\n", b""),
+            ("nested-restored", b"q\n0 0 220 240 re W n\nq\n0 0 1 1 re W* n\nQ\n", b"\nQ\n")):
+        row = clipped_visual_source(tmp_path / name, prefix, suffix=suffix)
+        assert source_visual_safety(row)["donor_eligible"]
+    # An even-odd hole and a non-rectangular active clip cannot be certified
+    # from their outer bounding rectangles, even if those contain layout bbox.
+    for name, prefix in (("hole", b"q\n0 0 220 240 re 39 185 14 24 re W* n\n"),
+                         ("triangle", b"q\n30 180 m 60 180 l 30 220 l h W n\n")):
+        row = clipped_visual_source(tmp_path / name, prefix)
+        assert not source_visual_safety(row)["donor_eligible"]
+    neutral = clipped_visual_source(tmp_path / "neutral-group", b"", suffix=b"", page_group="neutral")
+    assert source_visual_safety(neutral)["donor_eligible"]
+    unknown = clipped_visual_source(tmp_path / "unknown-group", b"", suffix=b"", page_group="rgb")
+    proof = source_visual_safety(unknown)
+    assert not proof["location_readable"] and "GROUP" in proof["reason"]
+    text_clip = b"q\nBT /ActualVisual 20 Tf 7 Tr 1 0 0 1 100 190 Tm <0001> Tj ET\n"
+    active = clipped_visual_source(tmp_path / "text-clip", text_clip + b"BT 0 Tr ET\n")
+    assert not source_visual_safety(active)["location_readable"]
+    restored = clipped_visual_source(tmp_path / "text-clip-restored", text_clip + b"Q\n", suffix=b"")
+    assert source_visual_safety(restored)["donor_eligible"]

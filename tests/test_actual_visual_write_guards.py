@@ -166,3 +166,65 @@ def test_portable_actual_mapping_cannot_authorize_later_paint_target(tmp_path):
     with pytest.raises(ValueError):
         _require_portable_actual_visual_pair(source, target, tmp_path, directly_checked=True)
     assert not pipeline.project_actual_evidence_root(tmp_path).exists()
+
+
+def test_clipped_source_is_refused_by_preview_writers_and_retained_delivery(tmp_path):
+    import hashlib
+    import global_exact_glyph_library as library
+    from tests.test_actual_source_visual_safety import clipped_visual_source
+    row = clipped_visual_source(tmp_path / "source", b"q\n0 0 1 1 re W n\n")
+    row.update(actual="ㄅ", actual_status="RESOLVED", actual_evidence="independent raw fixture",
+        expected_set=["ㄆ"], expected_status="RESOLVED", expected_evidence="independent expected",
+        context_evidence="fixture original context", line="fixture original context")
+    before = copy.deepcopy(row)
+    group = actual.build_actual_group_for_entry([row], row)
+    root = tmp_path / "actual"
+    assert display.occurrence_preview(row, display_width=200)[1] is None
+    with pytest.raises(ValueError):
+        actual.actual_sample_availability(row)
+    for write in (actual.stage_manual_actual_group, actual.apply_verified_actual_group):
+        with pytest.raises(ValueError):
+            write(root, group, "ㄅ", checked_occurrence_ids=[row["occurrence_id"]], source="visual")
+        assert not root.exists()
+    with pytest.raises(ValueError):
+        actual.apply_direct_visual_actual_batch(root, [{"group":group,"reading":"ㄅ",
+            "checked_occurrence_ids":[row["occurrence_id"]],"source":"visual"}],source_context=context_for([row]))
+    assert not root.exists()
+    intents, admissions = promotion.direct_visual_intents(group,"ㄅ",[row["occurrence_id"]],context_for([row]))
+    assert intents == [] and admissions[0]["status"] == "NON_GLOBAL_ELIGIBLE"
+    with pytest.raises(ValueError):
+        pipeline.require_current_actual_visual_source(row, tmp_path)
+    event = pipeline.build_manual_expected_event(row, operation="ENTER_EXPECTED", expected_set="ㄆ")
+    assert event["manual_expected_decision"]["operation"] == "ENTER_EXPECTED"
+    assert row == before
+
+    # A correctly shaped legacy pending intent may predate the new clip gate.
+    # Canonical library fixtures do not prove its source. Delivery must reprove
+    # the *same clipped source seal*, not just notice an unrelated SHA change.
+    normal = copy.deepcopy(row)
+    normal_pdf = tmp_path / "source/normal/book.pdf"
+    normal.update(pdf=str(normal_pdf),pdf_name=normal_pdf.name,
+        pdf_sha256=hashlib.sha256(normal_pdf.read_bytes()).hexdigest())
+    normal_group = actual.build_actual_group_for_entry([normal],normal)
+    genuine,_ = promotion.direct_visual_intents(normal_group,"ㄅ",[normal["occurrence_id"]],context_for([normal]))
+    assert len(genuine) == 1
+    identity = genuine[0]["payload"]["identity"]
+    evidence = genuine[0]["payload"]["evidence"]
+    frozen = {"session_id":evidence["source_project_id"],"pdf_sha256":row["pdf_sha256"],
+        "font_program_sha256":evidence["source_font_program_sha256"],"occurrence_id":row["occurrence_id"],
+        "review_id":row["review_id"],"identity":identity,"reading":"ㄅ",
+        "confirmation_channel":library.PDF_PAGE_VISUAL}
+    retained = library.make_direct_evidence_intent(identity,reading="ㄅ",
+        source_project_id=evidence["source_project_id"],source_pdf_sha256=row["pdf_sha256"],
+        source_font_program_sha256=evidence["source_font_program_sha256"],
+        source_occurrence_id=row["occurrence_id"],source_review_id=row["review_id"],
+        decision_snapshot_sha256=library._canonical_sha256(frozen))
+    promotion.enqueue_promotion_intents(root,[retained])
+    outbox = root / promotion.GLOBAL_PROMOTION_OUTBOX_FILE
+    pending_before = outbox.read_bytes()
+    repo = library.GlobalExactGlyphRepository.resolved(tmp_path / "global")
+    result = promotion.deliver_pending_promotion_outbox(root,repository=repo,
+        source_context=context_for([row]),source_entries=[row])
+    assert result["status"] == "PENDING_RETRY"
+    assert not repo.path.exists() and outbox.read_bytes() == pending_before
+    assert not (root/actual.OCCURRENCE_OVERRIDE_FILE).exists()

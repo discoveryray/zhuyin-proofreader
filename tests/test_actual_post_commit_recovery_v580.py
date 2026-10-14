@@ -29,8 +29,8 @@ def fixture_group(output=None):
     digest = register_fixture_glyph('durable-recovery')
     members = [{
         'occurrence_id': oid(i), 'review_id': 'rev_' + hashlib.sha256(str(i).encode()).hexdigest(),
-        'pdf_name': 'book.pdf', 'physical_page': 1, 'char': '字', 'x0': i * 20, 'y0': 10,
-        'x1': i * 20 + 10, 'y1': 30, 'actual': '', 'state': 'ACTUAL_DECODE_ERROR',
+        'pdf_name': 'book.pdf', 'physical_page': 1, 'char': '字', 'x0': 10 + i * 20, 'y0': 10,
+        'x1': 20 + i * 20, 'y1': 30, 'actual': '', 'state': 'ACTUAL_DECODE_ERROR',
         'source_record': {'TTF字形SHA256': digest},
     } for i in range(3)]
     if output is None:
