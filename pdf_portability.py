@@ -68,10 +68,10 @@ def _active_excel_snapshot(path):
 @contextmanager
 def _read_excel_workbook(path, *, data_only=True):
     """Finite read-only handles owned by _workbook_snapshot, never writers."""
-    from openpyxl import load_workbook
+    from excel_text import load_text_workbook
     state = _active_excel_snapshot(path)
     if state is None:
-        workbook = load_workbook(path, read_only=True, data_only=data_only)
+        workbook = load_text_workbook(path, data_only=data_only)
         try:
             yield workbook
         finally:
@@ -79,7 +79,7 @@ def _read_excel_workbook(path, *, data_only=True):
         return
     mode = bool(data_only)
     if mode not in state["workbooks"]:
-        state["workbooks"][mode] = load_workbook(path, read_only=True, data_only=mode)
+        state["workbooks"][mode] = load_text_workbook(path, data_only=mode)
     yield state["workbooks"][mode]
 
 

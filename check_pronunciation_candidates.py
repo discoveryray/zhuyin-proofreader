@@ -13,7 +13,7 @@ from typing import Any, Iterable, Mapping
 from unicodedata import normalize
 
 import fitz
-from excel_text import append_text_row
+from excel_text import append_text_row, load_text_workbook
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
@@ -1749,7 +1749,7 @@ def analyze(
     context_overrides_path = context_overrides_path or runtime_context_overrides
     context_overrides = load_context_overrides(context_overrides_path, pdf_path)
 
-    wb_in = load_workbook(actual_xlsx, data_only=True, read_only=True)
+    wb_in = load_text_workbook(actual_xlsx, data_only=True)
 
     def actual_workbook_error(message: str):
         wb_in.close()

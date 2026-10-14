@@ -38,10 +38,11 @@ def workbook(path, *, note='=literal', profile=False):
 
 def test_snapshot_reuses_finite_modes_and_isolates_parsed_views(tmp_path, monkeypatch):
     path = workbook(tmp_path / 'source.xlsx', profile=True)
-    opened = []; native = openpyxl.load_workbook
+    import excel_text
+    opened = []; native = excel_text.load_text_workbook
     def load(*args, **kwargs):
         value = native(*args, **kwargs); opened.append(value); return value
-    monkeypatch.setattr(openpyxl, 'load_workbook', load)
+    monkeypatch.setattr(excel_text, 'load_text_workbook', load)
     with pp._workbook_snapshot(path) as (snapshot, digest):
         for _ in range(3):
             meta = sp.workbook_metadata(snapshot, '匯入中繼資料'); meta['session_id'] = 'caller mutation'
