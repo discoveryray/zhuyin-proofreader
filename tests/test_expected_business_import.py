@@ -23,8 +23,8 @@ def batch(tmp_path, monkeypatch, request):
     pdf(right, title="B")
     source, target = tmp_path / "source", tmp_path / "target"
     boxes = [(10 + i * 30, 20, 25 + i * 30, 45) for i in range(6)]
-    sm, sd = project(source, left, session="source-session", boxes=boxes)
-    tm, td = project(target, right, session="target-session", boxes=boxes)
+    sm, sd = project(source, left, session="source-session", boxes=boxes, genuine_source=True)
+    tm, td = project(target, right, session="target-session", boxes=boxes, genuine_source=True)
     assets = sp.validate_asset_manifest(Path(sp.__file__).parent)
     assert assets["ok"]
     fp = sp.compute_expected_asset_fingerprint(Path(sp.__file__).parent, assets,

@@ -20,6 +20,7 @@ import global_exact_glyph_library as global_library
 import review_gui
 import review_save_service
 import standalone_proofread as sp
+from review_display import occurrence_preview as native_source_preview
 from pdf_portability import _VerifiedExpectedConflicts
 from tests.review_save_test_support import QueuedRoot
 from tests.actual_source_test_support import source_entry, write_fixture_pdf, bind_source_from_pdf
@@ -1398,16 +1399,28 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
         self.assertTrue(predicate())
 
     @staticmethod
-    def preview_pixels(*_args, **_kwargs):
-        pixmap = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 120, 80), False)
-        pixmap.clear_with(255)
-        return pixmap, (10.0, 10.0, 30.0, 30.0), "合成預覽"
+    def preview_pixels(*args, **kwargs):
+        return ManualActualGuiVisibleLayoutTests._pixel_view_fixture(80, *args, **kwargs)
 
     @staticmethod
-    def tall_preview_pixels(*_args, **_kwargs):
-        pixmap = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 120, 160), False)
+    def tall_preview_pixels(*args, **kwargs):
+        return ManualActualGuiVisibleLayoutTests._pixel_view_fixture(160, *args, **kwargs)
+
+    @staticmethod
+    def _pixel_view_fixture(height, *args, **kwargs):
+        # Retire only the native view's pixels/viewport geometry. The current
+        # sealed PDF, actual glyph source proof and diagnostic are real. Keep
+        # this unpatched function reference to avoid replacing qualification.
+        details = native_source_preview(*args, **{**kwargs, "return_details": True})
+        pixmap = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 120, height), False)
         pixmap.clear_with(255)
-        return pixmap, (10.0, 10.0, 30.0, 30.0), "合成原頁"
+        fixture_rect = (10.0, 10.0, 30.0, 30.0)
+        details = {**details, "pixmap": pixmap,
+                   "target": fixture_rect if details["target"] is not None else None,
+                   "warning_target": fixture_rect if details["warning_target"] is not None else None}
+        if kwargs.get("return_details", False):
+            return details
+        return details["pixmap"], details["target"], details["notice"]
 
     def reveal_sample_target(self, dialog, index):
         preview = dialog.previews[index]

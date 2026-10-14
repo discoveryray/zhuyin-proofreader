@@ -16,6 +16,34 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 import standalone_proofread as sp  # noqa: E402
+from export_pdf_text_diagnostics import TrueTypeGlyphInspector, normalize_basefont  # noqa: E402
+
+
+def _page_two_egg_source(pdf: Path) -> dict:
+    """Give this controller fixture a genuine, sealed native source on page 2."""
+    from tests.actual_source_test_support import register_fixture_glyph, _font, _GLYPHS
+
+    digest = register_fixture_glyph("single-bundle-egg")
+    with fitz.open() as document:
+        document.new_page(width=200, height=200)
+        page = document.new_page(width=200, height=200)
+        page.insert_font(fontname="BundleEggFixture", fontbuffer=_font(_GLYPHS[digest], "蛋"))
+        page.insert_text((20, 36), "蛋", fontname="BundleEggFixture", fontsize=20)
+        document.save(pdf)
+    with fitz.open(pdf) as document:
+        page = document[1]
+        [(span, char)] = [(span, char) for span in page.get_texttrace() for char in span["chars"]]
+        [(xref, *_rest)] = [font for font in page.get_fonts(full=True)
+                           if normalize_basefont(font[3]) == normalize_basefont(span["font"])]
+        raw_sha = TrueTypeGlyphInspector(document.extract_font(xref)[3]).glyph_sha256(char[1])
+        assert chr(char[0]) == "蛋" and raw_sha == digest
+        bounds = dict(zip(("x0", "y0", "x1", "y1"), char[3]))
+        return {"font_xref": xref, "glyph_id": char[1], "zhuyin_component_id": char[1],
+                **bounds, "source_record": {
+                    "pdf": str(pdf), "pdf_name": pdf.name, "pdf_sha256": sp.sha256_file(pdf),
+                    "實體頁碼": 2, "字元": "蛋", "font_xref": xref,
+                    "glyph_id_字形索引": char[1], "注音元件ID": char[1],
+                    "TTF字形SHA256": raw_sha, **bounds}}
 
 
 class GptSingleBundleV541Tests(unittest.TestCase):
@@ -60,11 +88,7 @@ class GptSingleBundleV541Tests(unittest.TestCase):
             # Keep the source guard real: this orchestration fixture has its
             # own finite PDF, not a source-less mocked READABLE result.
             pdf = folder / "a.pdf"
-            with fitz.open() as document:
-                document.new_page(width=200, height=200)
-                page = document.new_page(width=200, height=200)
-                page.insert_text((20, 30), "fixture", fontsize=8)
-                document.save(pdf)
+            source = _page_two_egg_source(pdf)
             info = {"pdf": str(pdf), "pdf_name": pdf.name, "pdf_sha256": sp.sha256_file(pdf)}
             for kind, directory in [("actual", "01_實際注音"), ("candidate", "02_候選報告")]:
                 path = folder / directory / (kind + ".xlsx")
@@ -86,7 +110,7 @@ class GptSingleBundleV541Tests(unittest.TestCase):
                 "actual_evidence": "glyph-evidence",
                 "stable_key": "k1",
                 "state": "DIFFERENCE_PENDING_CONFIRMATION",
-                "x0": 10, "y0": 10, "x1": 60, "y1": 40,
+                **source,
             }
             csv_path = folder / "actual_occurrence_decisions.csv"
             fields = [
@@ -114,6 +138,7 @@ class GptSingleBundleV541Tests(unittest.TestCase):
             # expose the changed actual only after the mocked apply has run.
             db = sp.normalize_db({})
             sp.json_save(folder / "人工判定資料庫.json", db)
+            original_db = (folder / "人工判定資料庫.json").read_bytes()
             with patch.object(sp, "load_or_initialize_db", return_value=db), \
                  patch.object(sp, "materialize_ledger", side_effect=lambda *_args:
                               [dict(entry, actual="ㄉㄢˋ") if apply_mock.called else entry]), \
@@ -128,6 +153,7 @@ class GptSingleBundleV541Tests(unittest.TestCase):
             self.assertEqual(report, folder / "report.xlsx")
             apply_mock.assert_called_once()
             refresh_mock.assert_called_once()
+            self.assertEqual((folder / "人工判定資料庫.json").read_bytes(), original_db)
 
 
 if __name__ == "__main__":

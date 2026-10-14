@@ -53,9 +53,9 @@ def test_real_pdf_snapshot_preserves_each_locator_identity_and_fresh_single_call
     with patch.object(gp,'TrueTypeGlyphInspector',wraps=gp.TrueTypeGlyphInspector) as inspect:
         with gp._DirectVisualPDFSnapshot(context) as snapshot:
             shared=[gp.direct_visual_intents(g,'ㄅ',[m['occurrence_id'] for m in g['members']],context,_snapshot=snapshot) for g in groups]
-            bad=copy.deepcopy(groups[-1]);bad['members'][-1]['x0']+=30
+            bad=copy.deepcopy(groups[-1]);bad['members'][-1]['x0']+=30;bad['members'][-1]['x1']+=30
             intents,admissions=gp.direct_visual_intents(bad,'ㄅ',[m['occurrence_id'] for m in bad['members']],context,_snapshot=snapshot)
-            assert len(intents)==1 and 'UNPROVABLE' in admissions[-1]['reason']
+            assert len(intents)==1 and admissions[-1]['reason']=='FINAL_PAINT_NOT_RAW_GLYPH_DONOR: SOURCE_DRAW_NOT_UNIQUE'
         assert inspect.call_count==1
     assert shared==fresh and all(len(intents)==2 for intents,admissions in shared)
     with pytest.raises(ValueError,match='closed'):

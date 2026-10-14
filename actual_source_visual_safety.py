@@ -685,10 +685,13 @@ class _SourceContributionDevice(_native_pdf.JM_new_texttrace_device):
     def _forward(self, name, ctx, args):
         native = _native_pdf.mupdf
         seqno = self._paint(name) if name in _PAINT_CALLBACKS else None
-        if seqno is not None:
-            self.seqno += 1
-        if name in ("begin_layer", "end_layer"):
+        if seqno is not None or name in ("begin_layer", "end_layer"):
+            # The installed vendor's paint callbacks own both seqno and trace
+            # state (notably stroke_path's linewidth). Synchronize even paint
+            # omitted from the prefix image; never copy expected audit values.
             getattr(_native_pdf.JM_new_texttrace_device, name)(self, ctx, *args)
+            if seqno is not None and self.seqno != seqno + 1:
+                raise ValueError("SOURCE_RENDER_PAINT_SEQUENCE_MISMATCH")
         if self.prefix and seqno is not None and seqno > self.target_seq:
             return
         if name == "end_mask":
@@ -701,13 +704,18 @@ class _SourceContributionDevice(_native_pdf.JM_new_texttrace_device):
         seqno = self._paint(name)
         retained = text
         selected = None
+        before = len(self.out)
+        callback = getattr(_native_pdf.JM_new_texttrace_device, name)
+        args = ((ctx, text, stroke, ctm, colorspace, color, alpha, params) if stroke is not None
+                else (ctx, text, ctm, colorspace, color, alpha, params))
+        callback(self, *args)
+        if self.seqno != seqno + 1:
+            raise ValueError("SOURCE_RENDER_PAINT_SEQUENCE_MISMATCH")
         if seqno == self.target_seq:
-            callback = getattr(_native_pdf.JM_new_texttrace_device, name)
-            args = ((ctx, text, stroke, ctm, colorspace, color, alpha, params) if stroke is not None
-                    else (ctx, text, ctm, colorspace, color, alpha, params))
-            callback(self, *args)
             expected = [span for span in self.analysis["traces"] if span["seqno"] == seqno]
-            if self.out != expected:
+            # Prior text has also executed its real vendor callback. Compare
+            # this operation's complete newly emitted trace, not the whole log.
+            if self.out[before:] != expected:
                 raise ValueError("SOURCE_RENDER_EXACT_OPERATION_MISMATCH")
             filtered, selected = native.FzText(), native.FzText()
             raw_span, ordinal = text.head, 0
@@ -764,8 +772,6 @@ class _SourceContributionDevice(_native_pdf.JM_new_texttrace_device):
                 raw_span = raw_span.next
             if self.remove or self.prefix:
                 retained = filtered.m_internal
-        else:
-            self.seqno += 1
         if not self.prefix or seqno <= self.target_seq:
             self._draw_text(self.draw, retained, ctm, stroke, colorspace, color, alpha, params)
         if selected is not None:

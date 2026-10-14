@@ -366,3 +366,89 @@ def test_native_outline_keeps_actual_stroke_outside_fill_contour(tmp_path):
     with fitz.open(covered_pdf) as document:
         assert all(value == 255 for value in document[0].get_pixmap(matrix=fitz.Matrix(4,4),clip=region,alpha=False).samples)
     assert not source_visual_safety(row)["location_readable"]
+
+
+def _stateful_replay_source(root, *, covered=False, ignored=False):
+    row = make_visual_source(root / "normal", count=1, outside_tone=True)[0]
+    changed = root / "stateful.pdf"
+    with fitz.open(row["pdf"]) as document:
+        page = document[0]
+        layer = document.add_ocg("prior-layer")
+        # Prepend genuine native operations; the final path before the source
+        # has width 2. Prior text must execute vendor state without polluting
+        # the exact comparison of this later source operation's output slice.
+        page.draw_line((140,160), (170,170), width=2, overlay=False)
+        page.draw_line((145,180), (175,190), width=5, overlay=False)
+        page.insert_text((130,120), "prior fill", fontsize=9, overlay=False)
+        page.insert_text((130,140), "prior stroke", fontsize=9,
+                         render_mode=1, border_width=3, oc=layer, overlay=False)
+        if ignored:
+            page.insert_text((130,100), "ignored", render_mode=3, overlay=False)
+        if covered:
+            page.draw_rect(fitz.Rect(53,40,56,44), fill=(1,1,1), color=None)
+        document.save(changed)
+    row.update(pdf=str(changed), pdf_name=changed.name,
+               pdf_sha256=hashlib.sha256(changed.read_bytes()).hexdigest())
+    return row
+
+
+def test_native_replay_synchronizes_prior_paint_and_target_trace_slice(tmp_path):
+    base = make_visual_source(tmp_path / "base", count=1, outside_tone=True)[0]
+    pages, crops, widths = {}, {}, {}
+    for name, overlay in (("plain", None), ("before", False), ("after", True)):
+        pdf = tmp_path / (name + ".pdf")
+        with fitz.open(base["pdf"]) as document:
+            if overlay is not None:
+                document[0].draw_line((140,160), (170,170), width=2, overlay=overlay)
+            document.save(pdf)
+        row = {**base, "pdf": str(pdf), "pdf_name": pdf.name,
+               "pdf_sha256": hashlib.sha256(pdf.read_bytes()).hexdigest()}
+        with fitz.open(pdf) as document:
+            page = document[0]
+            widths[name] = page.get_texttrace()[0]["linewidth"]
+            pages[name] = page.get_pixmap(matrix=fitz.Matrix(4,4), alpha=False).samples
+            crops[name] = page.get_pixmap(matrix=fitz.Matrix(4,4),
+                                          clip=fitz.Rect(38,32,57,56), alpha=False).samples
+        proof = source_visual_safety(row)
+        assert proof["location_readable"] and proof["donor_eligible"], proof
+    assert widths == {"plain": 1, "before": 2, "after": 1}
+    assert pages["before"] == pages["after"]
+    assert crops["plain"] == crops["before"] == crops["after"]
+
+    mixed = _stateful_replay_source(tmp_path / "mixed")
+    with fitz.open(mixed["pdf"]) as document:
+        traces = document[0].get_texttrace()
+        matches = [span for span in traces if any(
+            char[0] == ord(mixed["char"]) and char[1] == mixed["glyph_id"]
+            and tuple(char[3]) == tuple(mixed[key] for key in ("x0","y0","x1","y1"))
+            for char in span["chars"])]
+        assert len(matches) == 1
+        target = matches[0]
+        assert target["seqno"] == 4 and target["linewidth"] == 2 and target["layer"] == ""
+        assert any(span["type"] == 0 and span["seqno"] < 4 for span in traces)
+        assert any(span["type"] == 1 and span["layer"] == "prior-layer" for span in traces)
+        assert document[0].get_pixmap(matrix=fitz.Matrix(4,4),
+                    clip=fitz.Rect(38,32,57,56), alpha=False).samples == crops["plain"]
+    proof = source_visual_safety(mixed)
+    assert proof["location_readable"] and proof["donor_eligible"], proof
+
+
+def test_native_replay_state_sync_keeps_overpaint_and_vendor_failure_closed(tmp_path):
+    row = _stateful_replay_source(tmp_path / "covered", covered=True)
+    with fitz.open(row["pdf"]) as document:
+        tone = document[0].get_pixmap(matrix=fitz.Matrix(4,4),
+                                     clip=fitz.Rect(54,41,55,42), alpha=False)
+        assert all(value == 255 for value in tone.samples)
+    proof = source_visual_safety(row)
+    assert not proof["location_readable"] and not proof["donor_eligible"]
+    assert proof["reason"] == "SOURCE_OVERPAINT_CONFIRMED"
+    assert proof["overlay_status"] == "CONFIRMED"
+
+    # Installed PyMuPDF 1.26.7's ignored-text vendor callback has no ctx
+    # parameter. Its real callback failure is a capability refusal, never an
+    # opportunity to fabricate a successful native trace or omit its paint.
+    ignored = _stateful_replay_source(tmp_path / "ignored", ignored=True)
+    proof = source_visual_safety(ignored)
+    assert not proof["location_readable"] and not proof["donor_eligible"]
+    assert proof["reason"].startswith("SOURCE_NATIVE_CAPTURE_FAILED: TypeError: jm_lineart_ignore_text()")
+    assert proof["overlay_status"] == "SUSPECTED"

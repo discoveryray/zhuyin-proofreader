@@ -4,12 +4,14 @@ import ast
 import copy
 import hashlib
 import json
+import re
 import struct
 import tempfile
 import unittest
 from pathlib import Path
 
 from openpyxl import Workbook
+import fitz
 
 from actual_review import (
     ACTUAL_REVIEW_SCHEMA_VERSION,
@@ -39,6 +41,8 @@ from exact_glyph_identity import (
     legacy_v1_actual_group_id,
 )
 from export_pdf_text_diagnostics import TrueTypeGlyphInspector
+from cff_zhuyin_decoder import CFFZhuyinInspector
+from tests.actual_source_test_support import register_fixture_glyph, write_fixture_pdf, bind_source_from_pdf
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -163,6 +167,71 @@ def stage_group(root: Path, group: dict, reading: str = "ㄅ") -> dict:
     )
 
 
+def genuine_staging_entry(folder: Path, occurrence_id: str, *, cff=False) -> dict:
+    """Only writer fixtures use this real PDF; parser byte fixtures stay literal."""
+    member = ledger_entry(occurrence_id)
+    pdf = folder / "sources" / occurrence_id / "book.pdf"
+    if not cff:
+        digest = register_fixture_glyph("exact-identity-staging")
+        write_fixture_pdf(pdf, [{"glyph_sha256": digest, "char": "字", "x0": 10, "y0": 20}])
+        return bind_source_from_pdf(member, pdf)
+
+    from fontTools.fontBuilder import FontBuilder
+    from fontTools.pens.t2CharStringPen import T2CharStringPen
+    name = "DFKaiChuIn-Md-BPMF-BF"
+    builder = FontBuilder(1000, isTTF=False)
+    names = [".notdef", "cid00001"]
+    builder.setupGlyphOrder(names)
+    builder.setupCharacterMap({ord("字"): "cid00001"})
+    builder.setupHorizontalMetrics({key: (600, 0) for key in names})
+    builder.setupHorizontalHeader(ascent=800, descent=-200)
+    builder.setupNameTable({"familyName": name, "styleName": "Regular", "psName": name})
+    builder.setupOS2(sTypoAscender=800, sTypoDescender=-200, usWinAscent=800, usWinDescent=200)
+    builder.setupPost()
+    pen = T2CharStringPen(600, None)
+    pen.moveTo((0, 0)); pen.lineTo((250, 0)); pen.lineTo((250, 400)); pen.closePath()
+    builder.setupCFF(name, {}, {".notdef": T2CharStringPen(600, None).getCharString(),
+                              "cid00001": pen.getCharString()}, {})
+    program = builder.font["CFF "].compile(builder.font)
+    pdf.parent.mkdir(parents=True, exist_ok=True)
+    with fitz.open() as document:
+        page = document.new_page(width=300, height=300)
+        xref = page.insert_font(fontname="CFFFixture", fontbuffer=program)
+        page.insert_text((10, 36), "字", fontname="CFFFixture", fontsize=20)
+        descendant = int(re.search(r"\d+", document.xref_get_key(xref, "DescendantFonts")[1]).group())
+        descriptor = int(document.xref_get_key(descendant, "FontDescriptor")[1].split()[0])
+        stream = int(document.xref_get_key(descriptor, "FontFile3")[1].split()[0])
+        document.xref_set_key(stream, "Subtype", "/Type1C")
+        document.xref_set_key(descriptor, "FontName", "/" + name)
+        cmap = document.get_new_xref(); document.update_object(cmap, "<<>>")
+        document.update_stream(cmap, b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap "
+            b"/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def "
+            b"/CMapName /FixtureUnicode def /CMapType 2 def "
+            b"1 begincodespacerange <00> <ff> endcodespacerange "
+            b"1 beginbfchar <01> <5b57> endbfchar endcmap "
+            b"CMapName currentdict /CMap defineresource pop end end")
+        document.update_object(xref, f"<< /Type /Font /Subtype /Type1 /BaseFont /{name} "
+            f"/FirstChar 0 /LastChar 1 /Widths [600 600] "
+            f"/Encoding << /Type /Encoding /Differences [1 /cid00001] >> "
+            f"/FontDescriptor {descriptor} 0 R /ToUnicode {cmap} 0 R >>")
+        for content in page.get_contents():
+            document.update_stream(content, document.xref_stream(content).replace(b"<0000>", b"<01>"))
+        document.save(pdf)
+    with fitz.open(pdf) as document:
+        char = document[0].get_texttrace()[0]["chars"][0]
+        extracted_name, extension, _, data = document.extract_font(xref)
+    assert extension == "cff" and data == program and chr(char[0]) == "字"
+    identity = CFFZhuyinInspector(data, extracted_name, {}).global_exact_identity(char[1])
+    assert identity["style_group"] == "KAICHU_MD"
+    member.update(pdf=str(pdf), pdf_sha256=hashlib.sha256(pdf.read_bytes()).hexdigest(),
+                  font_xref=xref, glyph_id=char[1], zhuyin_component_id=char[1],
+                  **dict(zip(("x0", "y0", "x1", "y1"), char[3])))
+    member["source_record"].update({"CFF樣式群組": identity["style_group"],
+        "CFF整字字形SHA256": identity["glyph_sha256"], "font_xref": xref,
+        "glyph_id_字形索引": char[1], "注音元件ID": char[1]})
+    return member
+
+
 def legacy_single_group_snapshot(group: dict, legacy_group_id: str) -> str:
     return payload_sha256({
         "group_id": legacy_group_id,
@@ -267,13 +336,20 @@ class TTFExactIdentityTests(unittest.TestCase):
         self.assertEqual(invalid_range["reason"], "INVALID_GLYF_RECORD_RANGE")
 
     def test_project_local_raw_sha_group_and_promotion_remain_available_for_composite(self):
-        raw_sha = hashlib.sha256(composite_glyph()).hexdigest()
-        members = [
-            ledger_entry("composite-a", ttf_sha=raw_sha, x0=10.0),
-            ledger_entry("composite-b", ttf_sha=raw_sha, x0=30.0),
-        ]
-        group = build_actual_group_for_entry(members, members[0])
+        from tests.test_global_promotion_v580 import genuine_promotion_sources
         with tempfile.TemporaryDirectory() as directory:
+            members, _ = genuine_promotion_sources(Path(directory), count=2, composite=True)
+            for member, oid in zip(members, ("composite-a", "composite-b")):
+                member.update(occurrence_id=oid, review_id="review-" + oid, stable_key="stable-" + oid)
+                member["source_record"]["穩定注音鍵"] = "stable-" + oid
+            with fitz.open(members[0]["pdf"]) as document:
+                inspector = TrueTypeGlyphInspector(document.extract_font(members[0]["font_xref"])[3])
+                raw = inspector.glyph_bytes(members[0]["glyph_id"])
+                eligibility = inspector.global_exact_identity(members[0]["glyph_id"])
+            self.assertEqual(eligibility["eligibility"], NON_GLOBAL_ELIGIBLE)
+            self.assertEqual(eligibility["reason"], "COMPOSITE_GLYF")
+            self.assertEqual(members[0]["source_record"]["TTF字形SHA256"], hashlib.sha256(raw).hexdigest())
+            group = build_actual_group_for_entry(members, members[0])
             result = apply_verified_actual_group(
                 Path(directory),
                 group,
@@ -337,10 +413,10 @@ class CFFExactIdentityTests(unittest.TestCase):
         self.assertEqual(first["group_id"], actual_group_id(actual_group_identity(base)))
 
     def test_cff_live_revalidation_rejects_member_from_another_style_before_mutation(self):
-        member = ledger_entry("live-cff", cff_sha=SHA_A, style_group="KAICHU_MD")
-        group = build_actual_group_for_entry([member], member)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            member = genuine_staging_entry(root, "live-cff", cff=True)
+            group = build_actual_group_for_entry([member], member)
             stage_group(root, group)
             staging_before = manual_actual_staging_path(root).read_bytes()
             live = copy.deepcopy(group)
@@ -366,23 +442,23 @@ class ExactIdentitySchemaTests(unittest.TestCase):
         self.assertEqual(group["group_snapshot"], legacy_single_group_snapshot(group, legacy_id))
 
     def test_new_cff_staging_is_schema_1_1_and_style_bound(self):
-        member = ledger_entry("new-cff", cff_sha=SHA_A, style_group="KAICHU_MD")
-        group = build_actual_group_for_entry([member], member)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            member = genuine_staging_entry(root, "new-cff", cff=True)
+            group = build_actual_group_for_entry([member], member)
             staged = stage_group(root, group)
             raw = json.loads(manual_actual_staging_path(root).read_text(encoding="utf-8"))
-        identity = canonical_actual_group_identity(CFF_GLYPH_SHA256, SHA_A, "KAICHU_MD")
+        identity = canonical_actual_group_identity(CFF_GLYPH_SHA256, member["source_record"]["CFF整字字形SHA256"], "KAICHU_MD")
         self.assertEqual(MANUAL_ACTUAL_STAGING_SCHEMA_VERSION, "1.1")
         self.assertEqual(raw["schema_version"], "1.1")
         self.assertEqual(staged["group_id"], actual_group_id(identity))
         self.assertNotEqual(staged["group_id"], legacy_v1_actual_group_id(identity))
 
     def test_legacy_v1_empty_and_ttf_staging_use_read_only_explicit_adapter(self):
-        member = ledger_entry("legacy-ttf", ttf_sha=SHA_A)
-        group = build_actual_group_for_entry([member], member)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            member = genuine_staging_entry(root, "legacy-ttf")
+            group = build_actual_group_for_entry([member], member)
             path = manual_actual_staging_path(root)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(
@@ -411,14 +487,14 @@ class ExactIdentitySchemaTests(unittest.TestCase):
             self.assertEqual(path.read_bytes(), ttf_before)
 
     def test_legacy_v1_pending_cff_fails_closed_without_rewrite(self):
-        member = ledger_entry("legacy-cff", cff_sha=SHA_A, style_group="KAICHU_MD")
-        group = build_actual_group_for_entry([member], member)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            member = genuine_staging_entry(root, "legacy-cff", cff=True)
+            group = build_actual_group_for_entry([member], member)
             stage_group(root, group)
             path = manual_actual_staging_path(root)
             raw = json.loads(path.read_text(encoding="utf-8"))
-            identity = canonical_actual_group_identity(CFF_GLYPH_SHA256, SHA_A, "KAICHU_MD")
+            identity = canonical_actual_group_identity(CFF_GLYPH_SHA256, member["source_record"]["CFF整字字形SHA256"], "KAICHU_MD")
             legacy_id = legacy_v1_actual_group_id(identity)
             raw["schema_version"] = LEGACY_MANUAL_ACTUAL_STAGING_SCHEMA_VERSION
             raw["staged_groups"][0]["group_id"] = legacy_id
@@ -430,10 +506,10 @@ class ExactIdentitySchemaTests(unittest.TestCase):
             self.assertEqual(path.read_bytes(), before)
 
     def test_unknown_staging_schema_and_stale_snapshot_fail_closed(self):
-        member = ledger_entry("stale-ttf", ttf_sha=SHA_A)
-        group = build_actual_group_for_entry([member], member)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            member = genuine_staging_entry(root, "stale-ttf")
+            group = build_actual_group_for_entry([member], member)
             path = manual_actual_staging_path(root)
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(

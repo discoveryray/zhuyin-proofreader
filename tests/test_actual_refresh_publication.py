@@ -646,17 +646,25 @@ def test_default_actual_recovery_refuses_owner_before_any_mutation(tmp_path, mon
 
 def test_deferred_ack_restarts_preserve_real_global_evidence_and_delivery_receipt(tmp_path, monkeypatch):
     import global_exact_glyph_library as library
-    from tests.test_global_promotion_v580 import intent, sql_rows
+    from tests.test_global_promotion_v580 import sql_rows
+    from tests.test_staged_review_navigation_v580 import create_staged_navigation_fixture
+    from actual_review import build_actual_group_for_entry
     output, _ = sealed_project(tmp_path)
+    manifest = create_staged_navigation_fixture(output, same_exact_peers=True)
+    member = manifest["records"][0]
+    group = build_actual_group_for_entry([member], member)
+    intents, admissions = promotion.direct_visual_intents(group, "ㄅ", [member["occurrence_id"]],
+        sp._global_direct_source_context(output, manifest))
+    assert len(intents) == 1 and admissions[0]["status"] == "ELIGIBLE"
     root = sp.project_actual_evidence_root(output)
     repo = library.GlobalExactGlyphRepository.resolved(tmp_path / 'isolated-global')
     with promotion.direct_visual_project_transaction(root) as bind:
-        promotion.enqueue_promotion_intents(root, [intent()])
+        promotion.enqueue_promotion_intents(root, intents)
         bind({'schema_version': '1.0', 'affected_occurrence_ids': [], 'checked_postconditions': []})
     token = promotion.project_refresh_token(root)
     monkeypatch.setattr(sp, 'run_pipeline_pdfs', successful_stage)
     monkeypatch.setattr(sp, 'deliver_pending_promotion_outbox',
-                        lambda actual_root: promotion.deliver_pending_promotion_outbox(actual_root, repo))
+                        lambda actual_root, **kwargs: promotion.deliver_pending_promotion_outbox(actual_root, repo, **kwargs))
     expected_bytes = (output / '人工判定資料庫.json').read_bytes()
     assert not repo.path.exists()
     # The real recovery producer delivers first, then seals the source snapshot.

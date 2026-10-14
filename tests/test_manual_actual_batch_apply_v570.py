@@ -76,7 +76,10 @@ def entry(
         },
     }
     genuine = source_entry(glyph_sha256, occurrence_id=occurrence_id, pdf_name=pdf_name, x0=x0)
-    source = result["source_record"]
+    # The argument selects an isolated glyph seed. The saved PDF supplies
+    # its exact raw digest; retain only the non-identity fixture sentinels.
+    source = {key: value for key, value in result["source_record"].items()
+              if key != "TTF字形SHA256"}
     result.update(genuine)
     result["source_record"].update(source)
     return result
