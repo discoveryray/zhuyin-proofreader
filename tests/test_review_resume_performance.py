@@ -407,6 +407,7 @@ class ReviewResumeTests(unittest.TestCase):
 
 
     def test_same_session_source_error_keeps_strict_committed_recovery_only(self):
+        self.output = self.output.resolve()
         app = headless_app(self.output)
         row = app.current()
         sp.stage_manual_actual_correction(self.output, row["review_id"], "ㄎㄢ")

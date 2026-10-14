@@ -1068,7 +1068,7 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
         current = ledger[1]
         group = group_for(ledger, 1)
         app.root = Surface()
-        app.output_dir = self.output_dir
+        app.output_dir = self.output_dir.resolve()
         app.manifest = {"manifest": "current"}
         app.db = {"events": {}}
         app.records = list(ledger)
@@ -1241,7 +1241,7 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
         ImmediateThread.instances = []
         app = self.handler_app()
         app.root = ImmediateRoot()
-        app.output_dir = self.output_dir
+        app.output_dir = self.output_dir.resolve()
         app.index = 4
         app.records = []
         app.reload_staging_summary = MagicMock(return_value={"staged_group_count": 10})

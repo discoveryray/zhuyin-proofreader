@@ -542,6 +542,7 @@ class AsyncOwnerTkTests(unittest.TestCase):
 
     def test_actual_success_and_failure_release_owned_poll(self):
         app = self.app
+        app.output_dir = app.output_dir.resolve()
         app._start_owned_operation = MethodType(gui.ReviewApp._start_owned_operation, app)
         apply_actual = sp.apply_staged_manual_actual_corrections
         for failure in (False, True):
