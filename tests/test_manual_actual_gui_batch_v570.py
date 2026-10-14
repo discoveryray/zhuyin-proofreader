@@ -22,6 +22,7 @@ import review_save_service
 import standalone_proofread as sp
 from pdf_portability import _VerifiedExpectedConflicts
 from tests.review_save_test_support import QueuedRoot
+from tests.actual_source_test_support import source_entry, write_fixture_pdf, bind_source_from_pdf
 from actual_review import (
     GLYPH_CONFLICT_FILE,
     GLYPH_PROVENANCE_FILE,
@@ -63,7 +64,7 @@ def entry(
     expected: str = "ㄓㄨㄢˇ",
     x0: float = 10.0,
 ) -> dict:
-    return {
+    row = {
         "occurrence_id": occurrence_id,
         "review_id": "review-" + occurrence_id,
         "state": "ACTUAL_DECODE_ERROR",
@@ -86,6 +87,12 @@ def entry(
             "預期注音": "SECRET_EXPECTED_SOURCE",
         },
     }
+    bound = source_entry(glyph_sha256, occurrence_id=occurrence_id,
+        review_id=row["review_id"], pdf_name=row["pdf_name"], char=row["char"], x0=x0, y0=row["y0"])
+    row.update({key: value for key, value in bound.items() if key != "source_record"})
+    row["source_record"].update(bound["source_record"])
+    return row
+
 
 
 def make_project(base: Path) -> Path:
@@ -113,12 +120,16 @@ def actual_root(output_dir: Path) -> Path:
 
 
 def attach_source_bytes(output_dir, ledger):
-    # Headless behavior samples use auditable bytes; real PDF rendering has
-    # separate GUI fixtures. No production source or runtime asset is changed.
+    # Real embedded source replaces the former non-PDF byte placeholder.
+    by_name = {}
     for row in ledger:
-        path = output_dir / row["pdf_name"]
-        path.write_bytes(b"isolated source hash fixture")
-        row.update(pdf=str(path), pdf_sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+        by_name.setdefault(row["pdf_name"], []).append(row)
+    for name, rows in by_name.items():
+        path = output_dir / name
+        write_fixture_pdf(path, [{"glyph_sha256": row["source_record"]["TTF字形SHA256"],
+            "char": row["char"], "x0": row["x0"], "y0": row["y0"]} for row in rows])
+        for row in rows:
+            bind_source_from_pdf(row, path)
 
 
 def seal_resume_fixture(output_dir, ledger):
@@ -1374,10 +1385,9 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
         self.unexpected_error.assert_not_called()
 
     def sealed_preview_entries(self, rows):
-        for row in rows:
-            path = self.output / row["pdf_name"]
-            path.write_bytes(self.source_bytes)
-            row.update(pdf=str(path), pdf_sha256=hashlib.sha256(self.source_bytes).hexdigest())
+        # Each already genuine source stays distinct even when samples use the
+        # same label/coordinates. Pixel/viewport substitutes below only retire
+        # native display, not source admission proof.
         return rows
 
     def wait_for_gui(self, predicate, *, timeout=3.0):

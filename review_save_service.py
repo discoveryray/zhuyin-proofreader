@@ -394,6 +394,8 @@ class ReviewSaveService:
         confirms_current = (isinstance(event, dict)
                             and isinstance(event.get("manual_expected_decision"), dict)
                             and event["manual_expected_decision"].get("operation") == "CONFIRM_CURRENT_AS_EXPECTED")
+        if confirms_current or (isinstance(event, dict) and event.get("action") == "確認現版差異"):
+            sp.require_current_actual_visual_source(ledger[index[review_id]], self.output_dir)
         if confirms_current:
             current = ledger[index[review_id]]
             current = self._conflicts.review_view(db, [current], pending=unresolved_conflicts)[0]

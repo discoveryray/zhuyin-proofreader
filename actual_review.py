@@ -175,8 +175,10 @@ _prepared_actual_csv = ContextVar("prepared_actual_csv", default=None)
 
 
 class _PreparedActualCSV:
-    def __init__(self, root):
+    def __init__(self, root, *, source_context=None):
         self.root = Path(root).resolve()
+        self.visual_pdf_paths = {name: info["pdf"] for name, info in
+                                 (source_context or {}).get("pdfs", {}).items()}
         self.specs = {
             USER_GLYF_FILE: tuple(USER_GLYF_HEADERS), USER_CFF_FILE: tuple(USER_CFF_HEADERS),
             OCCURRENCE_OVERRIDE_FILE: tuple(OVERRIDE_HEADERS),
@@ -614,6 +616,10 @@ def stage_manual_actual_group(
     if unknown_checked:
         raise ValueError(f"manual actual staging checked occurrence 不屬於 group members：{unknown_checked}")
     checked_ids = [occurrence_id for occurrence_id in member_ids if occurrence_id in checked_set]
+
+    for member in members:
+        if _text(member.get("occurrence_id")) in checked_set:
+            require_actual_visual_target(member)
 
     canonical_reading = _canon(reading)
     if not canonical_reading:
@@ -1350,6 +1356,30 @@ def actual_source_consistency_errors(entry: Mapping[str, Any]) -> list[str]:
     return errors
 
 
+def actual_visual_source_safety(entry: Mapping[str, Any], output_dir: Path | None = None) -> dict:
+    """Recompute visual target/donor safety from real current PDF bytes.
+
+    The operation-local candidate can supply a relocated source path, never a
+    trusted safety flag. The helper still proves the occurrence/PDF seal.
+    """
+    from actual_source_visual_safety import source_visual_safety
+    try:
+        state = _prepared_actual_csv.get()
+        supplied = state.visual_pdf_paths.get(_text(entry.get("pdf_name"))) if state is not None else None
+        pdf = Path(supplied) if supplied else _resolve_pdf_path(entry, output_dir)
+        return source_visual_safety(entry, pdf=pdf)
+    except Exception as exc:
+        return {"location_readable": False, "donor_eligible": False,
+                "reason": "SOURCE_VISUAL_UNPROVABLE: " + str(exc)}
+
+
+def require_actual_visual_target(entry: Mapping[str, Any], output_dir: Path | None = None) -> dict:
+    safety = actual_visual_source_safety(entry, output_dir)
+    if not safety["location_readable"]:
+        raise ValueError("來源實際可見目標無法證明；禁止確認或寫入：" + safety["reason"])
+    return safety
+
+
 def actual_group_identity(entry: Mapping[str, Any]) -> dict[str, str]:
     source = _source(entry)
     sha = _text(source.get("TTF字形SHA256")).lower()
@@ -1524,6 +1554,7 @@ def _confirmed_render_location(entry: Mapping[str, Any], output_dir: Path | None
     A degenerate source rectangle has no proven replacement here. In particular,
     rawdict, character text and nearby glyphs cannot supply occurrence binding.
     """
+    require_actual_visual_target(entry, output_dir)
     pdf = _resolve_pdf_path(entry, output_dir)
     page_number = int(entry.get("physical_page") or 0) - 1
     if page_number < 0:
@@ -1643,6 +1674,15 @@ def _actual_sample_location(entry: Mapping[str, Any], output_dir: Path | None = 
             location = _confirmed_render_location(relocated)
     else:
         location = _confirmed_render_location(entry, output_dir)
+    if location is not None:
+        require_actual_visual_target(entry, output_dir)
+    elif pdf_resolver:
+        from actual_source_visual_safety import source_visual_safety
+        safety = source_visual_safety(entry, pdf=pdf_resolver(entry))
+        if not safety["location_readable"]:
+            raise ValueError("actual mapped source visual target 無法證明：" + safety["reason"])
+    else:
+        require_actual_visual_target(entry, output_dir)
     return "READABLE", location
 
 
@@ -2389,6 +2429,38 @@ def _append_or_update_overrides(root: Path, entries: Sequence[Mapping[str, Any]]
     _write_actual_evidence_csv(path, OVERRIDE_HEADERS, ordered)
 
 
+def has_direct_occurrence_actual(root: Path, entry: Mapping[str, Any], reading: str) -> bool:
+    """Existing exact override plus a singleton direct provenance event.
+
+    A propagated group override is not proof that this printed position was
+    independently checked. The occurrence ID binds the original PDF identity;
+    source/shape/reading and the existing canonical event hash must also match.
+    """
+    reading = _canon(reading)
+    if not reading:
+        return False
+    key = _override_key_from_entry(entry)
+    overrides = [row for row in _read_actual_evidence_csv(Path(root) / OCCURRENCE_OVERRIDE_FILE, OVERRIDE_HEADERS)
+                 if tuple(row.get(field, "") for field in
+                    ("pdf_contains", "pdf_excludes", "page", "target_char", "stable_key", "x0", "y0")) == key
+                 and _canon(row.get("actual_reading")) == reading]
+    if len(overrides) != 1:
+        return False
+    identity = actual_group_identity(entry)
+    oid = _text(entry.get("occurrence_id"))
+    for event in _read_actual_evidence_csv(Path(root) / GLYPH_PROVENANCE_FILE, GLYPH_PROVENANCE_HEADERS):
+        if (event.get("event_type") != "OCCURRENCE_OVERRIDE" or event.get("occurrence_ids") != oid
+                or _canon(event.get("bopomofo")) != reading or event.get("source") != overrides[0].get("source")
+                or event.get("kind") != identity["kind"] or event.get("style_group") != identity.get("style_group", "")
+                or event.get("glyph_sha256") != identity["exact_key"]):
+            continue
+        payload = {field: event[field] for field in
+                   ("kind", "style_group", "glyph_sha256", "bopomofo", "event_type", "occurrence_ids", "source", "note")}
+        if event.get("event_id") == "gpe_" + _hash_payload(payload)[:24]:
+            return True
+    return False
+
+
 def _update_learning_file(root: Path, group: Mapping[str, Any], reading: str, verified_entries: Sequence[Mapping[str, Any]], note: str) -> dict[str, Any]:
     kind = _text(group.get("kind"))
     exact_key = _text(group.get("exact_key")).lower()
@@ -2483,37 +2555,62 @@ def apply_verified_actual_group(
     root = Path(root)
     if any(actual_source_consistency_errors(member) for member in group.get("members") or []):
         raise ValueError("actual member 來源與位置資料矛盾；禁止套用或重用")
-    ensure_user_evidence_files(root)
     reading = _canon(reading)
     if not reading:
         raise ValueError("實際注音不是合法單一注音")
     members = list(group.get("members") or [])
+    group_identity = canonical_actual_group_identity(group.get("kind"), group.get("exact_key"), group.get("style_group", ""))
+    if any(actual_group_match_key(actual_group_identity(member)) != actual_group_match_key(group_identity)
+           for member in members):
+        raise ValueError("actual member 不屬於目前 exact identity；禁止寫入")
     checked = set(checked_occurrence_ids or [])
+    if checked - {_text(member.get("occurrence_id")) for member in members}:
+        raise ValueError("actual checked occurrence 不屬於目前 group；禁止寫入")
     if not checked:
         checked = {_text(members[0].get("occurrence_id"))} if members else set()
     verified_entries = [m for m in members if _text(m.get("occurrence_id")) in checked]
     if not verified_entries:
         raise ValueError("沒有任何已核對 occurrence")
 
-    learning = _update_learning_file(root, group, reading, verified_entries, note)
+    checked_safety = [require_actual_visual_target(member) for member in verified_entries]
+    peer_safety = [actual_visual_source_safety(member) for member in members
+                   if _text(member.get("occurrence_id")) not in checked]
+    # No missing proof/paint-altered peer may receive a glyph-wide override.
+    # Local-only evidence never enters the raw glyph learning row, even after
+    # multiple checks or when old reusable examples already exist.
+    raw_group = all(item["donor_eligible"] for item in checked_safety + peer_safety)
+    ensure_user_evidence_files(root)
+    donor_entries = [member for member, safety in zip(verified_entries, checked_safety)
+                     if safety["donor_eligible"]]
+    learning = (_update_learning_file(root, group, reading, donor_entries, note) if donor_entries else
+                {"learning_level": "OCCURRENCE_ONLY", "conflict": False})
     conflict = bool(learning.get("conflict"))
     verified_ids = {_text(e.get("occurrence_id")) for e in verified_entries if _text(e.get("occurrence_id"))}
     if conflict:
         preserve_ids = set(learning.get("old_verified_ids") or set()) | verified_ids
-        removed_ids = _remove_unverified_group_overrides(root, members, preserve_ids)
+        safe_raw_peers = [member for member in members
+                          if actual_visual_source_safety(member)["donor_eligible"]]
+        removed_ids = _remove_unverified_group_overrides(root, safe_raw_peers, preserve_ids)
         target_entries = verified_entries
         propagate_all = False
     else:
         removed_ids = []
-        propagate_all = len(members) <= 1 or len(verified_entries) >= 2
+        propagate_all = raw_group and (len(members) <= 1 or len(verified_entries) >= 2)
         target_entries = members if propagate_all else verified_entries
 
     # Local visual correction is committed regardless of reusable promotion.
     _append_or_update_overrides(root, target_entries, reading, source=source, note=note)
-    _append_provenance_event(
-        root, group, reading, "OCCURRENCE_OVERRIDE",
-        [_text(e.get("occurrence_id")) for e in target_entries], source=source, note=note,
-    )
+    if raw_group:
+        _append_provenance_event(
+            root, group, reading, "OCCURRENCE_OVERRIDE",
+            [_text(e.get("occurrence_id")) for e in target_entries], source=source, note=note,
+        )
+    else:
+        # Singleton existing provenance records distinguish directly checked
+        # local-only positions from an old group-propagated override roster.
+        for member in target_entries:
+            _append_provenance_event(root, group, reading, "OCCURRENCE_OVERRIDE",
+                [_text(member.get("occurrence_id"))], source=source, note=note)
     affected = sorted({_text(e.get("occurrence_id")) for e in members if _text(e.get("occurrence_id"))} if conflict else {_text(e.get("occurrence_id")) for e in target_entries if _text(e.get("occurrence_id"))})
     return {
         "reading": reading,
@@ -2679,6 +2776,17 @@ def apply_direct_visual_actual_batch(
             if not reading:
                 raise ValueError("invalid direct actual reading")
             checked = list(decision["checked_occurrence_ids"])
+            from actual_source_visual_safety import source_visual_safety
+            for member in group.get("members") or []:
+                if _text(member.get("occurrence_id")) not in checked:
+                    continue
+                if source_context is not None:
+                    _pdf_key, _seal, document = pdf_snapshot.source(source_context, member)
+                    safety = source_visual_safety(member, document=document)
+                    if not safety["location_readable"]:
+                        raise ValueError("actual prepared source target 不可靠；未寫入：" + safety["reason"])
+                else:
+                    require_actual_visual_target(member)
             intents, admissions = direct_visual_intents(group, reading, checked, source_context, _snapshot=pdf_snapshot)
             all_intents.extend(intents)
             prepared.append((decision, reading, checked, admissions))
@@ -2688,7 +2796,7 @@ def apply_direct_visual_actual_batch(
             prewrite_guard()
         if initialize_evidence is not None:
             initialize_evidence()
-        state = _PreparedActualCSV(root)
+        state = _PreparedActualCSV(root, source_context=source_context)
         token = _prepared_actual_csv.set(state)
         try:
             for decision, reading, checked, admissions in prepared:

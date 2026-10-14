@@ -166,6 +166,13 @@ def occurrence_preview(entry, *, padding=(150, 115), scale=2.2, output_dir=None,
         target = None
         notice = "外框僅供定位，不屬於原始證據圖片。"
         try:
+            from actual_review import actual_source_consistency_errors, actual_visual_source_safety
+            # Geometry-only callers without an occurrence/character are display
+            # utilities. A real review record must prove its visible source.
+            if entry.get("char") or entry.get("source_record"):
+                safety = actual_visual_source_safety(entry, output_dir)
+                if not safety["location_readable"]:
+                    raise ValueError(safety["reason"])
             from actual_review import actual_source_consistency_errors
             contradictions = actual_source_consistency_errors(entry)
             if contradictions:
@@ -190,7 +197,7 @@ def occurrence_preview(entry, *, padding=(150, 115), scale=2.2, output_dir=None,
                 notice = "目標區域超出頁邊，外框只標示頁內部分；僅供介面定位。"
         except (KeyError, TypeError, ValueError, OverflowError):
             clip = page.rect
-            notice = "無法可靠標示目標：來源與位置矛盾、資料缺失、無效或在頁面之外；本筆仍待處理。"
+            notice = "無法標示目標：無法可靠定位，來源與位置矛盾、資料缺失、無效或在頁面之外；本筆仍待處理。"
         if display_width is not None:
             scale = float(display_width) / clip.width
         if not math.isfinite(scale) or scale <= 0:

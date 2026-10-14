@@ -2396,6 +2396,12 @@ def _guard_actual_excel_sources(xlsx, source_ledger, target_dir, target_manifest
                 if group["group_id"] == gid:
                     groups[gid] = group
     def resolve(entry):
+        # A content mapping authorizes target geometry, not replacement of the
+        # source's font/draw seal. Re-prove the source profile against its bytes.
+        try:
+            return ar._resolve_pdf_path(entry, Path(target_dir))
+        except (FileNotFoundError, ValueError):
+            pass
         from actual_render_geometry import source_clipped_candidate
         if (source_clipped_candidate(entry) is not None
                 or entry.get("x0") == entry.get("x1") or entry.get("y0") == entry.get("y1")):
@@ -2422,6 +2428,21 @@ def _guard_actual_excel_sources(xlsx, source_ledger, target_dir, target_manifest
         if str(metadata.get("actual_review_schema_version")) == "1.1":
             raise ValueError("舊 Excel actual 沒有全頁證據或來源 contract 不符；不同 SHA／ID 不能走 historical_complete_samples_v1_1：" + str(exc)) from exc
         raise
+
+
+def _require_portable_actual_visual_pair(source, target, target_dir, *, source_dir=None,
+                                         directly_checked=False):
+    """A page-content map never creates a fresh visual vote or altered actual."""
+    import actual_review as ar
+    source_safety = ar.require_actual_visual_target(source, source_dir or target_dir)
+    target_safety = ar.require_actual_visual_target(target, target_dir)
+    altered = {"EXACT_ANNOTATION_OVERPAINT_LOCAL_ONLY"}
+    if source_safety["reason"] in altered or target_safety["reason"] in altered:
+        if (not directly_checked or source.get("pdf_sha256") != target.get("pdf_sha256")
+                or source.get("occurrence_id") != target.get("occurrence_id")
+                or source_safety["reason"] != target_safety["reason"]):
+            raise ValueError("portable actual 後畫修改位置僅接受同 PDF 同 occurrence 的直接核對；不得由 raw 字形或群組映射重用")
+    return target_safety
 
 
 @_stable_excel_import
@@ -2538,11 +2559,14 @@ def import_actual_excel(target_dir: Path, xlsx: Path, *,
         # independently mapped from the source's complete occurrence roster.
         selected = members if len(members) <= 1 or b_checked else members[:1]
         target_entries = []
-        for member in selected:
+        for member_index, member in enumerate(selected):
             pair = reviews.get(member["review_id"])
             if pair is None:
                 raise ValueError(f"Excel actual row {number} 來源 occurrence 無位置映射")
-            target_entries.append(by_target_occ[pair[1]["occurrence_id"]])
+            target_entry = by_target_occ[pair[1]["occurrence_id"]]
+            _require_portable_actual_visual_pair(member, target_entry, target_dir,
+                directly_checked=member_index == 0 or (member_index == 1 and b_checked))
+            target_entries.append(target_entry)
         provenance = {
             "source_session_id": source_manifest["session_id"],
             "source_manifest_integrity_sha256": source_manifest["manifest_integrity_sha256"],
@@ -2626,6 +2650,13 @@ def import_actual_excel(target_dir: Path, xlsx: Path, *,
             raise ValueError("目標封印或人工判定於 actual Excel 匯入期間變動；未寫入")
         _verify_mapped_target_pdfs(target_dir, live_manifest, pdf_map, geometry)
         _guard_actual_excel_sources(xlsx, source_ledger, target_dir, live_manifest, pdf_map)
+        for _group_id, _reading, target_entries, provenance in decisions:
+            checked = {provenance["source_roster"][0]["occurrence_id"]}
+            if str(provenance["source_decision"].get("sample_b_checked") or "").upper() == "Y":
+                checked.update(provenance["source_occurrence_ids"][1:2])
+            for source_oid, target_entry in zip(provenance["source_occurrence_ids"], target_entries):
+                _require_portable_actual_visual_pair(source_by_occ[source_oid], target_entry, target_dir,
+                    directly_checked=source_oid in checked)
         if (_sha(conflict_receipt_path) if conflict_receipt_path.exists() else None) != conflict_receipt_sha:
             raise ValueError("Excel actual 衝突紀錄於匯入期間變動；未寫入")
 
@@ -2729,6 +2760,15 @@ def import_actual_excel(target_dir: Path, xlsx: Path, *,
                 _guard_actual_excel_sources(xlsx, source_ledger, target_dir, live_manifest, pdf_map)
                 ar._write_csv(override_path, ar.OVERRIDE_HEADERS,
                               sorted(by_key.values(), key=lambda row: tuple(row[field] for field in fields)))
+                for _group_id, reading, target_entries, _provenance in decisions:
+                    for entry in target_entries:
+                        safety = ar.actual_visual_source_safety(entry, target_dir)
+                        if safety["reason"] == "EXACT_ANNOTATION_OVERPAINT_LOCAL_ONLY":
+                            stored = by_key[ar._override_key_from_entry(entry)]
+                            identity = ar.actual_group_identity(entry)
+                            ar._append_provenance_event(root, {**identity, "exact_key": identity["exact_key"]},
+                                reading, "OCCURRENCE_OVERRIDE", [entry["occurrence_id"]],
+                                source=stored["source"], note=stored["note"])
                 _assert_actual_marker_owner(marker, marker_sha)
                 _verify_mapped_target_pdfs(target_dir, live_manifest, pdf_map, geometry)
                 bind_recovery_plan(recovery_plan)
@@ -3232,6 +3272,9 @@ def _mapped_occurrence_overrides(source_dir: Path, source_manifest, target_manif
         if pair is None:
             raise ValueError(f"來源 actual occurrence override 無法唯一對應：{key}")
         source, target = pair
+        direct = ar.has_direct_occurrence_actual(source_root, source, row.get("actual_reading"))
+        _require_portable_actual_visual_pair(source, target, Path(target.get("pdf") or "").parent,
+            source_dir=source_dir, directly_checked=direct)
         reading = ar._canon(row.get("actual_reading"))
         if not reading or reading != row["actual_reading"]:
             raise ValueError("來源 actual occurrence override 讀音不是 canonical")

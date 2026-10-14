@@ -16,7 +16,7 @@ import review_gui as gui
 import global_glyph_promotion as promotion
 from review_operation_worker import preview_png
 from tests.no_window_review_support import Surface, Value, Preview
-from tests.test_manual_actual_batch_apply_v570 import group, stage
+from tests.test_manual_actual_batch_apply_v570 import stage
 
 
 class PageDialog(Surface, gui.ActualReadingDialog):
@@ -57,14 +57,8 @@ class PageDialog(Surface, gui.ActualReadingDialog):
 
 
 def sample_pdf(folder):
-    path = folder / "sample.pdf"
-    with fitz.open() as doc:
-        page = doc.new_page(width=200, height=200)
-        page.insert_text((20, 45), "A")
-        doc.save(path)
-    return {"pdf": str(path), "pdf_name": path.name, "pdf_sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-            "physical_page": 1, "char": "A", "x0": 20, "y0": 30, "x1": 35, "y1": 45,
-            "occurrence_id": "a", "review_id": "review-a"}
+    from tests.test_actual_source_visual_safety import make_visual_source
+    return make_visual_source(folder, count=1)[0]
 
 
 def page_views():
@@ -131,7 +125,9 @@ def test_only_a_submission_keeps_single_occurrence_quorum(tmp_path):
         dialog.show_sample_page(29)
         dialog.submit()
     assert dialog.result["checked_occurrence_ids"] == ["0"]
-    current = group("quorum", "1" * 64, count=3)
+    from tests.test_actual_source_visual_safety import make_visual_source
+    members = make_visual_source(tmp_path / "quorum-source", count=3)
+    current = actual.build_actual_group_for_entry(members, members[0])
     stage(tmp_path / "actual", current, "ㄅ")
     result = actual.apply_staged_manual_actual_batch(tmp_path / "actual", [current])
     assert not result["group_results"][0]["propagated_to_group"]
@@ -156,7 +152,9 @@ def test_source_location_contradictions_disable_target_and_writes(tmp_path):
 
 
 def test_same_exact_different_readings_survive_separate_staged_transactions(tmp_path):
-    current = group("conflicting", "1" * 64, count=2)
+    from tests.test_actual_source_visual_safety import make_visual_source
+    members = make_visual_source(tmp_path / "conflict-source", count=2)
+    current = actual.build_actual_group_for_entry(members, members[0])
     original = copy.deepcopy(current)
     root = tmp_path / "actual"
     ids = [row["occurrence_id"] for row in current["members"]]
@@ -172,7 +170,7 @@ def test_same_exact_different_readings_survive_separate_staged_transactions(tmp_
     assert not second["group_results"][0]["propagated_to_group"]
     with (root / actual.OCCURRENCE_OVERRIDE_FILE).open(encoding="utf-8-sig", newline="") as stream:
         rows = list(csv.DictReader(stream))
-    assert {(row["x0"], row["actual_reading"]) for row in rows} == {("10.0", "ㄅ"), ("30.0", "ㄆ")}
+    assert {(row["y0"], row["actual_reading"]) for row in rows} == {(str(members[0]["y0"]), "ㄅ"), (str(members[1]["y0"]), "ㄆ")}
     assert actual.load_user_verified_glyf(root / actual.USER_GLYF_FILE) == {}
     assert actual.load_manual_actual_staging(root)["staged_groups"] == []
     assert current == original  # expected chain/identity remain unchanged.

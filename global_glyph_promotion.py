@@ -407,7 +407,7 @@ def direct_visual_project_transaction(root: Path):
         # A crash after Global acknowledgement must not lose refresh recovery.
 
 
-def deliver_pending_promotion_outbox(root: Path, repository=None):
+def deliver_pending_promotion_outbox(root: Path, repository=None, *, source_context=None, source_entries=None):
     """A Global failure is a split outcome, never a project evidence rollback."""
     if not any((Path(root) / name).exists() for name in (GLOBAL_PROMOTION_OUTBOX_FILE, PROJECT_TRANSACTION_FILE)):
         return {"status": "NO_PENDING", "delivered_count": 0}
@@ -419,6 +419,25 @@ def deliver_pending_promotion_outbox(root: Path, repository=None):
                        for item in document["items"] if item["status"] == "PENDING"]
             if not pending:
                 return {"status": "NO_PENDING", "delivered_count": 0}
+            # Retained intents are not proof that their source is still a raw
+            # donor. Rebuild from current sealed source before Global mutation;
+            # retain pending bytes when original source cannot be re-proved.
+            if source_context is None or source_entries is None:
+                raise library.GlobalLibraryValidationError("PENDING_DONOR_SOURCE_PROOF_MISSING")
+            from actual_review import build_actual_group_for_entry
+            by_id = {entry["occurrence_id"]: entry for entry in source_entries}
+            if len(by_id) != len(source_entries):
+                raise library.GlobalLibraryValidationError("PENDING_DONOR_SOURCE_ID_DUPLICATE")
+            for original in pending:
+                evidence = original["payload"]["evidence"]
+                oid = evidence["source_occurrence_id"]
+                entry = by_id.get(oid)
+                if entry is None or entry.get("review_id") != evidence["source_review_id"]:
+                    raise library.GlobalLibraryValidationError("PENDING_DONOR_SOURCE_UNAVAILABLE")
+                group = build_actual_group_for_entry([entry], entry)
+                current, _admissions = direct_visual_intents(group, evidence["reading"], [oid], source_context)
+                if len(current) != 1 or current[0] != original:
+                    raise library.GlobalLibraryValidationError("PENDING_DONOR_SOURCE_NOT_REPROVED")
             repository = repository or library.GlobalExactGlyphRepository.resolved()
             receipts = library.deliver_global_direct_evidence(repository, pending)
             acknowledge_promotion_delivery(root, pending, receipts)
@@ -533,6 +552,10 @@ def direct_visual_intents(group, reading, checked_occurrence_ids, source_context
             member = members[oid]
             source = member.get("source_record") or {}
             pdf_key, pdf_sha, document = _snapshot.source(source_context, member)
+            from actual_source_visual_safety import source_visual_safety
+            safety = source_visual_safety(member, document=document)
+            if not safety["donor_eligible"]:
+                raise ValueError("FINAL_PAINT_NOT_RAW_GLYPH_DONOR: " + safety["reason"])
             if member.get("pdf_sha256") and member["pdf_sha256"] != pdf_sha:
                 raise ValueError("OCCURRENCE_PDF_SHA_MISMATCH")
             xref = _index(source.get("font_xref", member.get("font_xref")), "font_xref")

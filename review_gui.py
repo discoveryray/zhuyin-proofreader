@@ -2107,6 +2107,9 @@ class ReviewApp:
     def _confirm_difference_entry(self, entry):
         if entry.get("state") != "DIFFERENCE_PENDING_CONFIRMATION":
             return
+        if getattr(self, "_rendered_review_id", None) != entry.get("review_id"):
+            messagebox.showerror("無法確認教材錯誤", "目前位置原頁尚未可靠顯示；本筆仍待處理", parent=self.root)
+            return
         try:
             confirmation = build_gui_confirmation(entry)
         except InvalidTransitionError as exc:
@@ -2543,8 +2546,12 @@ class ReviewApp:
         try:
             if can_confirm_current_expected(entry):
                 getattr(self, "_confirm_current_expected_button", self.primary).config(state="disabled")
+            if entry.get("state") == "DIFFERENCE_PENDING_CONFIRMATION":
+                self.primary.config(state="disabled")
             if self.image.load(entry):
                 self._rendered_review_id = entry.get("review_id")
+                if entry.get("state") == "DIFFERENCE_PENDING_CONFIRMATION":
+                    self.primary.config(state="normal")
             elif can_confirm_current_expected(entry):
                 getattr(self, "_confirm_current_expected_button", self.primary).config(state="disabled")
         finally:
@@ -2556,12 +2563,16 @@ class ReviewApp:
         if (entry and preview is self.image and preview._entry == entry and preview.photo is not None
                 and preview.target is not None and not self._save_busy()):
             self._rendered_review_id = entry.get("review_id")
+            if entry.get("state") == "DIFFERENCE_PENDING_CONFIRMATION":
+                self.primary.config(state="normal")
             if can_confirm_current_expected(entry):
                 getattr(self, "_confirm_current_expected_button", self.primary).config(state="normal")
 
     def _preview_failed(self):
         self._rendered_review_id = None
         entry = self.current()
+        if entry and entry.get("state") == "DIFFERENCE_PENDING_CONFIRMATION":
+            self.primary.config(state="disabled")
         if entry and can_confirm_current_expected(entry):
             getattr(self, "_confirm_current_expected_button", self.primary).config(state="disabled")
 
