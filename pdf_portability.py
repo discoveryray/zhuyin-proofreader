@@ -2449,10 +2449,11 @@ def _require_portable_actual_visual_pair(source, target, target_dir, *, source_d
 @bound_operation(project_parameter="target_dir")
 def import_actual_excel(target_dir: Path, xlsx: Path, *,
                         _original_xlsx: Path, _snapshot_sha: str):
-    from actual_source_visual_safety import source_visual_operation
-    with source_visual_operation():
-        return _import_actual_excel_with_visual_sources(target_dir, xlsx,
-            _original_xlsx=_original_xlsx, _snapshot_sha=_snapshot_sha)
+    from actual_source_visual_safety import source_visual_write_result
+    return source_visual_write_result(lambda: _import_actual_excel_with_visual_sources(target_dir, xlsx,
+        _original_xlsx=_original_xlsx, _snapshot_sha=_snapshot_sha),
+        commit_state="COMMITTED_REFRESH_PENDING",
+        committed=lambda result: result.status.get("project_actual_commit") == "COMMITTED")
 
 
 def _import_actual_excel_with_visual_sources(target_dir: Path, xlsx: Path, *,
@@ -3318,11 +3319,13 @@ def import_project_decisions(source_dir: Path, target_dir: Path, *,
                              _allow_incomplete_target: bool = False,
                              _selected_local_pdf: Path | None = None,
                              _target_marker_sha: str | None = None) -> dict[str, Any]:
-    from actual_source_visual_safety import source_visual_operation
-    with source_visual_operation():
-        return _import_project_decisions_with_visual_sources(source_dir, target_dir,
-            _allow_incomplete_target=_allow_incomplete_target,
-            _selected_local_pdf=_selected_local_pdf, _target_marker_sha=_target_marker_sha)
+    from actual_source_visual_safety import source_visual_write_result
+    return source_visual_write_result(lambda: _import_project_decisions_with_visual_sources(source_dir, target_dir,
+        _allow_incomplete_target=_allow_incomplete_target,
+        _selected_local_pdf=_selected_local_pdf, _target_marker_sha=_target_marker_sha),
+        commit_state="COMMITTED_REFRESH_PENDING",
+        committed=lambda result: bool(result["imported"] or result["provenance_updates"] or result["conflicts"]
+            or result["actual_staging"] == "RECHECK_LOCAL_PDF_REQUIRED"))
 
 
 def _import_project_decisions_with_visual_sources(source_dir: Path, target_dir: Path, *,

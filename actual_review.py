@@ -551,6 +551,16 @@ def stage_manual_actual_group(
     source: str,
     note: str = "",
 ) -> dict[str, Any]:
+    from actual_source_visual_safety import source_visual_write_result
+    return source_visual_write_result(lambda: _stage_manual_actual_group_with_sources(
+        root, group, reading, checked_occurrence_ids=checked_occurrence_ids, source=source, note=note),
+        commit_state="STAGED_REFRESH_PENDING")
+
+
+def _stage_manual_actual_group_with_sources(
+    root: Path, group: Mapping[str, Any], reading: str, *,
+    checked_occurrence_ids: Sequence[str], source: str, note: str = "",
+) -> dict[str, Any]:
     """Durably upsert one uncommitted manual actual decision.
 
     This function extracts only actual group identity and audit fields.  It does
@@ -2555,6 +2565,16 @@ def apply_verified_actual_group(
     source: str,
     note: str = "",
 ) -> dict[str, Any]:
+    from actual_source_visual_safety import source_visual_write_result
+    return source_visual_write_result(lambda: _apply_verified_actual_group_with_sources(
+        root, group, reading, checked_occurrence_ids=checked_occurrence_ids, source=source, note=note),
+        commit_state="COMMITTED_REFRESH_PENDING")
+
+
+def _apply_verified_actual_group_with_sources(
+    root: Path, group: Mapping[str, Any], reading: str, *,
+    checked_occurrence_ids: Sequence[str] | None = None, source: str, note: str = "",
+) -> dict[str, Any]:
     """Apply direct visual actual evidence without coupling it to global learning.
 
     v5.5.1 rule: occurrence-local truth is authoritative for the checked printed
@@ -2766,12 +2786,12 @@ def apply_direct_visual_actual_batch(
     source_context: Mapping[str, Any] | None = None,
     acknowledge=None, apply_function=None, initialize_evidence=None, prewrite_guard=None,
 ) -> dict[str, Any]:
-    from actual_source_visual_safety import source_visual_operation
-    with source_visual_operation():
-        return _apply_direct_visual_actual_batch_with_sources(root, decisions,
+    from actual_source_visual_safety import source_visual_write_result
+    return source_visual_write_result(lambda: _apply_direct_visual_actual_batch_with_sources(root, decisions,
             source_context=source_context, acknowledge=acknowledge,
             apply_function=apply_function, initialize_evidence=initialize_evidence,
-            prewrite_guard=prewrite_guard)
+            prewrite_guard=prewrite_guard), commit_state="COMMITTED_REFRESH_PENDING",
+        committed=lambda result: result.get("project_actual_commit") == "COMMITTED")
 
 
 def _apply_direct_visual_actual_batch_with_sources(

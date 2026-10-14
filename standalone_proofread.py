@@ -4320,6 +4320,16 @@ def stage_manual_actual_correction(
     checked_occurrence_ids: list[str] | None = None,
     note: str = "",
 ) -> dict[str, Any]:
+    from actual_source_visual_safety import source_visual_write_result
+    return source_visual_write_result(lambda: _stage_manual_actual_correction_visual_result(
+        output_dir, review_id, reading, checked_occurrence_ids=checked_occurrence_ids, note=note),
+        commit_state="STAGED_REFRESH_PENDING")
+
+
+def _stage_manual_actual_correction_visual_result(
+    output_dir: Path, review_id: str, reading: str,
+    checked_occurrence_ids: list[str] | None = None, note: str = "",
+) -> dict[str, Any]:
     from actual_source_visual_safety import source_visual_operation
     with source_visual_operation() as operation:
         result = _stage_manual_actual_correction_with_visual_sources(output_dir, review_id, reading,
@@ -5971,7 +5981,7 @@ def main():
                             flush=True,
                         )
                 except Exception as exc:
-                    state = "COMMITTED_REFRESH_PENDING" if isinstance(exc, ManualActualPostApplyError) else "UNKNOWN"
+                    state = "COMMITTED_REFRESH_PENDING" if isinstance(exc, ManualActualPostApplyError) else getattr(exc, "commit_state", "UNKNOWN")
                     print(f"本次多檔匯入已完成 {completed_files}/{len(planned)} 檔；目前檔案未完整完成，狀態 {state}。"
                           "先前完成檔案保留，請依交易／恢復紀錄核對。", flush=True)
                     _cli_operation_event(outdir, "本檔未完整完成；先前完成檔案保留", completed_files=completed_files, total_files=len(planned), commit_state=state)
@@ -5985,7 +5995,7 @@ def main():
                 n, removed, report = import_actual_gpt_decisions(outdir, Path(args.import_actual_gpt))
             except Exception as exc:
                 _cli_operation_event(outdir, "actual 匯入未完整完成", commit_state=
-                    "COMMITTED_REFRESH_PENDING" if isinstance(exc, ManualActualPostApplyError) else "UNKNOWN")
+                    "COMMITTED_REFRESH_PENDING" if isinstance(exc, ManualActualPostApplyError) else getattr(exc, "commit_state", "UNKNOWN"))
                 raise
             _cli_operation_event(outdir, "actual 判定處理完成", completed_files=1, commit_state="FILE_COMPLETED")
             print(f"匯入 actual {n} 組；撤銷 {removed} 筆依賴舊 actual 的人工事件。\n{report}")

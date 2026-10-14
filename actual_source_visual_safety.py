@@ -28,6 +28,38 @@ _BOX_KEYS = ("x0", "y0", "x1", "y1")
 _CURRENT_OPERATION = ContextVar("actual_source_visual_operation", default=None)
 
 
+class SourceVisualCleanupError(RuntimeError):
+    """Owned document teardown failed; never a source qualification result."""
+
+
+class SourceVisualPostCommitCleanupError(RuntimeError):
+    """A completed durable writer retains its result for existing recovery."""
+    def __init__(self, result, commit_state, cause):
+        self.completed_result, self.commit_state, self.cause = result, commit_state, cause
+        super().__init__(f"{commit_state}: source cleanup failed after durable completion: {cause}")
+
+
+def source_visual_write_result(action, *, commit_state, committed=lambda result: True, completed_cleanup=None):
+    """Only completed product writes may carry a result across teardown failure.
+
+    This does not catch proof/device/body errors or change source eligibility.
+    The caller's durable result predicate classifies cleanup only after action
+    returns normally; it never authorizes a write or a checked source.
+    """
+    completed = False
+    try:
+        with source_visual_operation():
+            result = action()
+            completed = True
+        return result
+    except SourceVisualCleanupError as exc:
+        if not completed or not committed(result):
+            raise
+        if completed_cleanup is not None:
+            return completed_cleanup(result, exc)
+        raise SourceVisualPostCommitCleanupError(result, commit_state, exc) from exc
+
+
 def _file_revision(path):
     stat = path.stat()
     return (stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns)
@@ -118,13 +150,21 @@ class SourceVisualOperation:
             raise ValueError("SOURCE_VISUAL_OPERATION_WRONG_OWNER")
         if self._closed:
             return
-        self._pages.clear()
-        for _raw, document in self._documents.values():
-            document.close()
-        self._documents.clear()
-        self._sources.clear()
-        self._raws.clear()
-        self._closed = True
+        failures = []
+        try:
+            for _raw, document in list(self._documents.values()):
+                try:
+                    document.close()
+                except Exception as exc:
+                    failures.append(f"{type(exc).__name__}: {exc}")
+        finally:
+            self._pages.clear()
+            self._documents.clear()
+            self._sources.clear()
+            self._raws.clear()
+            self._closed = True
+        if failures:
+            raise SourceVisualCleanupError("; ".join(failures))
 
     def __enter__(self):
         self._require_owner()
@@ -137,7 +177,13 @@ class SourceVisualOperation:
     def __exit__(self, *args):
         _CURRENT_OPERATION.reset(self._tokens.pop())
         if not self._tokens:
-            self.close()
+            try:
+                self.close()
+            except SourceVisualCleanupError as cleanup:
+                primary = args[1] if len(args) > 1 else None
+                if primary is None:
+                    raise
+                primary.add_note("Secondary source teardown failure: " + str(cleanup))
 
 
 @contextmanager

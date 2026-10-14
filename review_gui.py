@@ -1946,6 +1946,8 @@ class ReviewApp:
                 self.last_expected_review_id = None
             try:
                 self._restore_save_controls()
+                if getattr(result, "cleanup_error", None):
+                    raise RuntimeError(result.cleanup_error)
                 if error is not None:
                     raise error
                 self._publish_staging_summary(result.staging_summary)

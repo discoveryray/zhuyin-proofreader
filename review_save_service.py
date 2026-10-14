@@ -15,7 +15,7 @@ import json
 import re
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +55,7 @@ class SaveResult:
     version_token: str
     resume_snapshot: ReviewResumeSnapshot | None = None
     review_view: list[dict[str, Any]] | None = None
+    cleanup_error: str | None = None
 
 
 @dataclass(frozen=True)
@@ -227,12 +228,17 @@ class ReviewSaveService:
             # those transactions racing a save of a now-obsolete expected row.
             notify("等待專案儲存鎖（尚未寫入）")
             waiting = time.perf_counter()
-            from actual_source_visual_safety import source_visual_operation
-            with self._lock, sp.project_delivery_lock(sp.project_actual_evidence_root(self.output_dir)), source_visual_operation():
-                return self._save(review_id, event, expected_manifest, expected_db,
-                                  defer_staging_validation=defer_staging_validation, notify=notify,
-                                  confirm_current_actual_snapshot=copy.deepcopy(confirm_current_actual_snapshot),
-                                  lock_wait=time.perf_counter() - waiting)
+            from actual_source_visual_safety import source_visual_write_result
+            with self._lock, sp.project_delivery_lock(sp.project_actual_evidence_root(self.output_dir)):
+                return source_visual_write_result(lambda: self._save(
+                    review_id, event, expected_manifest, expected_db,
+                    defer_staging_validation=defer_staging_validation, notify=notify,
+                    confirm_current_actual_snapshot=copy.deepcopy(confirm_current_actual_snapshot),
+                    lock_wait=time.perf_counter() - waiting), commit_state="COMMITTED_REFRESH_PENDING",
+                    completed_cleanup=lambda result, error: replace(result,
+                        cleanup_error="COMMITTED_REFRESH_PENDING: source cleanup failed after durable completion: " + str(error),
+                        staging_summary={**result.staging_summary, "staging_error": str(error),
+                                         "staged_checked_occurrence_ids": []}))
         finally:
             self._save_lock.release()
 
