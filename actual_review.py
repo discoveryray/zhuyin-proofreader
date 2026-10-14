@@ -571,6 +571,8 @@ def stage_manual_actual_group(
         raise ValueError("manual actual staging group.members 必須是非空 list")
     member_ids: list[str] = []
     for index, member in enumerate(members):
+        if isinstance(member, Mapping) and actual_source_consistency_errors(member):
+            raise ValueError("manual actual staging member 來源與位置資料矛盾；禁止暫存")
         if not isinstance(member, Mapping):
             raise ValueError(f"manual actual staging group.members[{index}] 必須是 mapping")
         member_ids.append(_staging_text(member.get("occurrence_id"), f"input.members[{index}].occurrence_id"))
@@ -1308,6 +1310,44 @@ def _cff_full_signature(source: Mapping[str, Any]) -> str:
     if not style or not body:
         return ""
     return cff_full_annotation_signature(style, body.split(";"), tone, neutral)
+
+
+def actual_source_consistency_errors(entry: Mapping[str, Any]) -> list[str]:
+    """Compare duplicated location fields only; never infer text or pronunciation.
+
+    Older finite records may lack source duplicates. Existing preview geometry
+    still rejects absent/invalid coordinates; present contradictory fields cannot
+    authorize visual confirmation or reusable actual evidence.
+    """
+    source = entry.get("source_record") or {}
+    if not isinstance(source, Mapping):
+        return ["source_record"]
+    aliases = {
+        "pdf_sha256": ("pdf_sha256",), "pdf_name": ("pdf_name",),
+        "physical_page": ("實體頁碼", "physical_page"),
+        "char": ("字元", "target_char", "char"),
+        "occurrence_id": ("occurrence_id",), "review_id": ("review_id",),
+        "stable_key": ("穩定注音鍵", "stable_key"),
+        **{key: (key,) for key in ("x0", "y0", "x1", "y1")},
+    }
+    errors = []
+    for key, names in aliases.items():
+        for name in names:
+            if name not in source or source[name] in (None, ""):
+                continue
+            actual, original = entry.get(key), source[name]
+            if key in {"physical_page", "x0", "y0", "x1", "y1"}:
+                try:
+                    consistent = (not isinstance(actual, bool) and not isinstance(original, bool)
+                                  and math.isfinite(float(actual)) and float(actual) == float(original))
+                except (TypeError, ValueError, OverflowError):
+                    consistent = False
+            else:
+                consistent = _text(actual) == _text(original)
+            if not consistent:
+                errors.append(key)
+                break
+    return errors
 
 
 def actual_group_identity(entry: Mapping[str, Any]) -> dict[str, str]:
@@ -2441,6 +2481,8 @@ def apply_verified_actual_group(
     back the local correction.
     """
     root = Path(root)
+    if any(actual_source_consistency_errors(member) for member in group.get("members") or []):
+        raise ValueError("actual member 來源與位置資料矛盾；禁止套用或重用")
     ensure_user_evidence_files(root)
     reading = _canon(reading)
     if not reading:

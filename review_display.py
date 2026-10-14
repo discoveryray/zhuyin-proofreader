@@ -21,6 +21,7 @@ class WrappedLabel(tk.Label):
         kwargs.setdefault("wraplength", 400)
         super().__init__(master, **kwargs)
         self.bind("<Configure>", self._wrap)
+        self.bind("<Map>", self._wrap)
 
     def _wrap(self, event):
         manager = self.winfo_manager()
@@ -38,6 +39,8 @@ class WrappedLabel(tk.Label):
         # Derive the wrap boundary from the externally allocated parent, never
         # from this label's requested/actual width. Grid callers declare their
         # proportional column share; widget padding stays outside that share.
+        if self.master.winfo_width() <= 1:
+            return
         padding = layout.get("padx", 0)
         if not isinstance(padding, (tuple, list)):
             padding = self.tk.splitlist(str(padding))
@@ -64,6 +67,7 @@ class ActionRows(tk.Frame):
         self._scheduled = None
         self._disposed = False
         self.bind("<Configure>", self.refresh)
+        self.bind("<Map>", self.refresh)
         self.bind("<Destroy>", self._dispose)
 
     def _cancel_layout(self):
@@ -91,7 +95,9 @@ class ActionRows(tk.Frame):
         self._cancel_layout()
         if self._disposed:
             return
-        width = max(1, self.winfo_width())
+        width = self.winfo_width()
+        if width <= 1:
+            return
         y, row_height, used = 3, 0, 0
         for item in self.items:
             if not item.winfo_exists():
@@ -160,6 +166,10 @@ def occurrence_preview(entry, *, padding=(150, 115), scale=2.2, output_dir=None,
         target = None
         notice = "外框僅供定位，不屬於原始證據圖片。"
         try:
+            from actual_review import actual_source_consistency_errors
+            contradictions = actual_source_consistency_errors(entry)
+            if contradictions:
+                raise ValueError("source/location contradiction: " + ", ".join(contradictions))
             values = [entry[key] for key in ("x0", "y0", "x1", "y1")]
             if any(isinstance(v, bool) or v is None or not math.isfinite(float(v)) for v in values):
                 raise ValueError("invalid coordinates")
@@ -175,11 +185,12 @@ def occurrence_preview(entry, *, padding=(150, 115), scale=2.2, output_dir=None,
             px, py = padding
             clip = (fitz.Rect(bounded.x0 - px, bounded.y0 - py, bounded.x1 + px, bounded.y1 + py)
                     & bounds) * page.rotation_matrix
-            if bounded != original:
+            if (original.x0 < bounds.x0 or original.y0 < bounds.y0
+                    or original.x1 > bounds.x1 or original.y1 > bounds.y1):
                 notice = "目標區域超出頁邊，外框只標示頁內部分；僅供介面定位。"
         except (KeyError, TypeError, ValueError, OverflowError):
             clip = page.rect
-            notice = "無法標示目標：位置資料缺失、無效或在頁面之外。請依原頁核對。"
+            notice = "無法可靠標示目標：來源與位置矛盾、資料缺失、無效或在頁面之外；本筆仍待處理。"
         if display_width is not None:
             scale = float(display_width) / clip.width
         if not math.isfinite(scale) or scale <= 0:
