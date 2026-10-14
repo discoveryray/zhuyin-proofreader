@@ -2449,6 +2449,14 @@ def _require_portable_actual_visual_pair(source, target, target_dir, *, source_d
 @bound_operation(project_parameter="target_dir")
 def import_actual_excel(target_dir: Path, xlsx: Path, *,
                         _original_xlsx: Path, _snapshot_sha: str):
+    from actual_source_visual_safety import source_visual_operation
+    with source_visual_operation():
+        return _import_actual_excel_with_visual_sources(target_dir, xlsx,
+            _original_xlsx=_original_xlsx, _snapshot_sha=_snapshot_sha)
+
+
+def _import_actual_excel_with_visual_sources(target_dir: Path, xlsx: Path, *,
+                                            _original_xlsx: Path, _snapshot_sha: str):
     """Carry source visual decisions as local occurrence evidence, never a vote."""
     import actual_review as ar
     import standalone_proofread as sp
@@ -2642,6 +2650,8 @@ def import_actual_excel(target_dir: Path, xlsx: Path, *,
                                      "verified_occurrence_ids": sorted(target_ids),
                                      "affected_occurrence_ids": sorted(target_ids)})
     def validate_live_target():
+        from actual_source_visual_safety import recheck_current_sources
+        recheck_current_sources()
         _verify_excel_import_snapshot(xlsx, _original_xlsx, _snapshot_sha)
         if (target_dir / INCOMPLETE_FILE).exists() or (root / PROJECT_TRANSACTION_FILE).exists():
             raise ValueError("目標 actual Excel 交易待專用恢復；未寫入或回報完成")
@@ -3308,6 +3318,17 @@ def import_project_decisions(source_dir: Path, target_dir: Path, *,
                              _allow_incomplete_target: bool = False,
                              _selected_local_pdf: Path | None = None,
                              _target_marker_sha: str | None = None) -> dict[str, Any]:
+    from actual_source_visual_safety import source_visual_operation
+    with source_visual_operation():
+        return _import_project_decisions_with_visual_sources(source_dir, target_dir,
+            _allow_incomplete_target=_allow_incomplete_target,
+            _selected_local_pdf=_selected_local_pdf, _target_marker_sha=_target_marker_sha)
+
+
+def _import_project_decisions_with_visual_sources(source_dir: Path, target_dir: Path, *,
+                             _allow_incomplete_target: bool = False,
+                             _selected_local_pdf: Path | None = None,
+                             _target_marker_sha: str | None = None) -> dict[str, Any]:
     """Import only proven mapped review events; conflicts remain untouched."""
     import standalone_proofread as sp
 
@@ -3512,6 +3533,8 @@ def import_project_decisions(source_dir: Path, target_dir: Path, *,
                     "sources": sources,
                 }
         def validate_source():
+            from actual_source_visual_safety import recheck_current_sources
+            recheck_current_sources()
             if _load_project(source_dir) != (source_manifest, source_db):
                 raise ValueError("來源工作階段或判定於匯入期間變動；未轉送")
             if _actual_transfer_state(source_dir, source_manifest) != source_actual:

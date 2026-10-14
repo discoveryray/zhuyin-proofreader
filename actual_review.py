@@ -237,6 +237,8 @@ class _PreparedActualCSV:
                 raise ValueError("actual batch 準備期間來源 CSV 已變動；未寫入候選")
 
     def flush(self):
+        from actual_source_visual_safety import recheck_current_sources
+        recheck_current_sources()
         self.verify_current()
         self.published = dict(self.original)
         for name, headers in self.specs.items():
@@ -279,6 +281,8 @@ def _write_actual_evidence_csv(path, headers, rows):
     if state is not None:
         state.write(path, headers, rows)
     else:
+        from actual_source_visual_safety import recheck_current_sources
+        recheck_current_sources()
         _write_csv(path, headers, rows)
 
 
@@ -517,6 +521,8 @@ def load_manual_actual_staging(root: Path) -> dict[str, Any]:
 
 def _write_manual_actual_staging(root: Path, document: Mapping[str, Any]) -> Path:
     validated = _validate_manual_actual_staging_document(dict(document))
+    from actual_source_visual_safety import recheck_current_sources
+    recheck_current_sources()
     path = manual_actual_staging_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -617,58 +623,60 @@ def stage_manual_actual_group(
         raise ValueError(f"manual actual staging checked occurrence 不屬於 group members：{unknown_checked}")
     checked_ids = [occurrence_id for occurrence_id in member_ids if occurrence_id in checked_set]
 
-    for member in members:
-        if _text(member.get("occurrence_id")) in checked_set:
-            require_actual_visual_target(member)
+    from actual_source_visual_safety import source_visual_operation
+    with source_visual_operation():
+        for member in members:
+            if _text(member.get("occurrence_id")) in checked_set:
+                require_actual_visual_target(member)
 
-    canonical_reading = _canon(reading)
-    if not canonical_reading:
-        raise ValueError("manual actual staging reading 不是合法單一注音")
-    source_text = _staging_text(source, "input.source")
-    note_text = _staging_text(note, "input.note", allow_empty=True)
+        canonical_reading = _canon(reading)
+        if not canonical_reading:
+            raise ValueError("manual actual staging reading 不是合法單一注音")
+        source_text = _staging_text(source, "input.source")
+        note_text = _staging_text(note, "input.note", allow_empty=True)
 
-    document = load_manual_actual_staging(root)
-    existing = next(
-        (item for item in document["staged_groups"] if item["group_id"] == group_id),
-        None,
-    )
-    immutable_identity = {
-        "group_snapshot": group_snapshot,
-        "kind": kind,
-        "exact_key": exact_key,
-        "style_group": style_group,
-        "member_occurrence_ids": member_ids,
-    }
-    if existing:
-        changed = [key for key, value in immutable_identity.items() if existing.get(key) != value]
-        if changed:
-            raise ValueError(
-                f"manual actual staging stale/contradictory group identity：{group_id} changed={changed}；請重新確認"
-            )
+        document = load_manual_actual_staging(root)
+        existing = next(
+            (item for item in document["staged_groups"] if item["group_id"] == group_id),
+            None,
+        )
+        immutable_identity = {
+            "group_snapshot": group_snapshot,
+            "kind": kind,
+            "exact_key": exact_key,
+            "style_group": style_group,
+            "member_occurrence_ids": member_ids,
+        }
+        if existing:
+            changed = [key for key, value in immutable_identity.items() if existing.get(key) != value]
+            if changed:
+                raise ValueError(
+                    f"manual actual staging stale/contradictory group identity：{group_id} changed={changed}；請重新確認"
+                )
 
-    now_dt = datetime.now().astimezone()
-    if existing:
-        previous_updated = datetime.fromisoformat(existing["updated_at"].replace("Z", "+00:00"))
-        if now_dt <= previous_updated:
-            now_dt = previous_updated + timedelta(microseconds=1)
-    now = now_dt.isoformat(timespec="microseconds")
-    staged = {
-        "group_id": group_id,
-        **immutable_identity,
-        "reading": canonical_reading,
-        "checked_occurrence_ids": checked_ids,
-        "note": note_text,
-        "staged_at": existing["staged_at"] if existing else now,
-        "updated_at": now,
-        "source": source_text,
-    }
-    groups = [item for item in document["staged_groups"] if item["group_id"] != group_id]
-    groups.append(staged)
-    _write_manual_actual_staging(root, {
-        "schema_version": MANUAL_ACTUAL_STAGING_SCHEMA_VERSION,
-        "staged_groups": groups,
-    })
-    return dict(staged)
+        now_dt = datetime.now().astimezone()
+        if existing:
+            previous_updated = datetime.fromisoformat(existing["updated_at"].replace("Z", "+00:00"))
+            if now_dt <= previous_updated:
+                now_dt = previous_updated + timedelta(microseconds=1)
+        now = now_dt.isoformat(timespec="microseconds")
+        staged = {
+            "group_id": group_id,
+            **immutable_identity,
+            "reading": canonical_reading,
+            "checked_occurrence_ids": checked_ids,
+            "note": note_text,
+            "staged_at": existing["staged_at"] if existing else now,
+            "updated_at": now,
+            "source": source_text,
+        }
+        groups = [item for item in document["staged_groups"] if item["group_id"] != group_id]
+        groups.append(staged)
+        _write_manual_actual_staging(root, {
+            "schema_version": MANUAL_ACTUAL_STAGING_SCHEMA_VERSION,
+            "staged_groups": groups,
+        })
+        return dict(staged)
 
 
 def remove_staged_manual_actual_group(
@@ -831,6 +839,8 @@ def _migrate_v540_known_bad_override(root: Path) -> bool:
     return removed
 
 def ensure_user_evidence_files(root: Path) -> None:
+    from actual_source_visual_safety import recheck_current_sources
+    recheck_current_sources()
     root = Path(root)
     state = _actual_csv_candidate(root / USER_GLYF_FILE)
     if state is not None and state.initialized:
@@ -2572,59 +2582,65 @@ def apply_verified_actual_group(
     if not verified_entries:
         raise ValueError("沒有任何已核對 occurrence")
 
-    checked_safety = [require_actual_visual_target(member) for member in verified_entries]
-    peer_safety = [actual_visual_source_safety(member) for member in members
-                   if _text(member.get("occurrence_id")) not in checked]
-    # No missing proof/paint-altered peer may receive a glyph-wide override.
-    # Local-only evidence never enters the raw glyph learning row, even after
-    # multiple checks or when old reusable examples already exist.
-    raw_group = all(item["donor_eligible"] for item in checked_safety + peer_safety)
-    ensure_user_evidence_files(root)
-    donor_entries = [member for member, safety in zip(verified_entries, checked_safety)
-                     if safety["donor_eligible"]]
-    learning = (_update_learning_file(root, group, reading, donor_entries, note) if donor_entries else
-                {"learning_level": "OCCURRENCE_ONLY", "conflict": False})
-    conflict = bool(learning.get("conflict"))
-    verified_ids = {_text(e.get("occurrence_id")) for e in verified_entries if _text(e.get("occurrence_id"))}
-    if conflict:
-        preserve_ids = set(learning.get("old_verified_ids") or set()) | verified_ids
-        safe_raw_peers = [member for member in members
-                          if actual_visual_source_safety(member)["donor_eligible"]]
-        removed_ids = _remove_unverified_group_overrides(root, safe_raw_peers, preserve_ids)
-        target_entries = verified_entries
-        propagate_all = False
-    else:
-        removed_ids = []
-        propagate_all = raw_group and (len(members) <= 1 or len(verified_entries) >= 2)
-        target_entries = members if propagate_all else verified_entries
+    from actual_source_visual_safety import source_visual_operation
+    with source_visual_operation():
+        checked_safety = [require_actual_visual_target(member) for member in verified_entries]
+        can_propagate = len(members) <= 1 or len(verified_entries) >= 2
+        peer_safety = ([actual_visual_source_safety(member) for member in members
+                       if _text(member.get("occurrence_id")) not in checked] if can_propagate else [])
+        # No missing proof/paint-altered peer may receive a glyph-wide override.
+        # Local-only evidence never enters the raw glyph learning row, even after
+        # multiple checks or when old reusable examples already exist.
+        # A-only remains a valid direct local check. It cannot copy an old
+        # reusable reading to peers, even if prior learning already has quorum.
+        # Unloaded peers need proof only when this call can affect them.
+        raw_group = can_propagate and all(item["donor_eligible"] for item in checked_safety + peer_safety)
+        ensure_user_evidence_files(root)
+        donor_entries = [member for member, safety in zip(verified_entries, checked_safety)
+                         if safety["donor_eligible"]]
+        learning = (_update_learning_file(root, group, reading, donor_entries, note) if donor_entries else
+                    {"learning_level": "OCCURRENCE_ONLY", "conflict": False})
+        conflict = bool(learning.get("conflict"))
+        verified_ids = {_text(e.get("occurrence_id")) for e in verified_entries if _text(e.get("occurrence_id"))}
+        if conflict:
+            preserve_ids = set(learning.get("old_verified_ids") or set()) | verified_ids
+            safe_raw_peers = [member for member in members
+                              if actual_visual_source_safety(member)["donor_eligible"]]
+            removed_ids = _remove_unverified_group_overrides(root, safe_raw_peers, preserve_ids)
+            target_entries = verified_entries
+            propagate_all = False
+        else:
+            removed_ids = []
+            propagate_all = raw_group and (len(members) <= 1 or len(verified_entries) >= 2)
+            target_entries = members if propagate_all else verified_entries
 
-    # Local visual correction is committed regardless of reusable promotion.
-    _append_or_update_overrides(root, target_entries, reading, source=source, note=note)
-    if raw_group:
-        _append_provenance_event(
-            root, group, reading, "OCCURRENCE_OVERRIDE",
-            [_text(e.get("occurrence_id")) for e in target_entries], source=source, note=note,
-        )
-    else:
-        # Singleton existing provenance records distinguish directly checked
-        # local-only positions from an old group-propagated override roster.
-        for member in target_entries:
-            _append_provenance_event(root, group, reading, "OCCURRENCE_OVERRIDE",
-                [_text(member.get("occurrence_id"))], source=source, note=note)
-    affected = sorted({_text(e.get("occurrence_id")) for e in members if _text(e.get("occurrence_id"))} if conflict else {_text(e.get("occurrence_id")) for e in target_entries if _text(e.get("occurrence_id"))})
-    return {
-        "reading": reading,
-        "target_occurrence_ids": [_text(e.get("occurrence_id")) for e in target_entries],
-        "affected_occurrence_ids": affected,
-        "verified_occurrence_ids": sorted(verified_ids),
-        "learning_level": learning.get("learning_level", "OCCURRENCE_ONLY"),
-        "propagated_to_group": propagate_all,
-        "glyph_truth_conflict": conflict,
-        "quarantined": conflict,
-        "quarantine_key": _text(group.get("exact_key")) if conflict else "",
-        "reopened_occurrence_ids": removed_ids,
-        "known_conflicting_readings": sorted(learning.get("known_readings") or []),
-    }
+        # Local visual correction is committed regardless of reusable promotion.
+        _append_or_update_overrides(root, target_entries, reading, source=source, note=note)
+        if raw_group:
+            _append_provenance_event(
+                root, group, reading, "OCCURRENCE_OVERRIDE",
+                [_text(e.get("occurrence_id")) for e in target_entries], source=source, note=note,
+            )
+        else:
+            # Singleton existing provenance records distinguish directly checked
+            # local-only positions from an old group-propagated override roster.
+            for member in target_entries:
+                _append_provenance_event(root, group, reading, "OCCURRENCE_OVERRIDE",
+                    [_text(member.get("occurrence_id"))], source=source, note=note)
+        affected = sorted({_text(e.get("occurrence_id")) for e in members if _text(e.get("occurrence_id"))} if conflict else {_text(e.get("occurrence_id")) for e in target_entries if _text(e.get("occurrence_id"))})
+        return {
+            "reading": reading,
+            "target_occurrence_ids": [_text(e.get("occurrence_id")) for e in target_entries],
+            "affected_occurrence_ids": affected,
+            "verified_occurrence_ids": sorted(verified_ids),
+            "learning_level": learning.get("learning_level", "OCCURRENCE_ONLY"),
+            "propagated_to_group": propagate_all,
+            "glyph_truth_conflict": conflict,
+            "quarantined": conflict,
+            "quarantine_key": _text(group.get("exact_key")) if conflict else "",
+            "reopened_occurrence_ids": removed_ids,
+            "known_conflicting_readings": sorted(learning.get("known_readings") or []),
+        }
 
 
 def _index_live_manual_actual_groups(
@@ -2750,6 +2766,19 @@ def apply_direct_visual_actual_batch(
     source_context: Mapping[str, Any] | None = None,
     acknowledge=None, apply_function=None, initialize_evidence=None, prewrite_guard=None,
 ) -> dict[str, Any]:
+    from actual_source_visual_safety import source_visual_operation
+    with source_visual_operation():
+        return _apply_direct_visual_actual_batch_with_sources(root, decisions,
+            source_context=source_context, acknowledge=acknowledge,
+            apply_function=apply_function, initialize_evidence=initialize_evidence,
+            prewrite_guard=prewrite_guard)
+
+
+def _apply_direct_visual_actual_batch_with_sources(
+    root: Path, decisions: Sequence[Mapping[str, Any]], *,
+    source_context: Mapping[str, Any] | None = None,
+    acknowledge=None, apply_function=None, initialize_evidence=None, prewrite_guard=None,
+) -> dict[str, Any]:
     """Shared project commit; Global delivery belongs to the post-commit controller.
 
     Low-level callers without a sealed session remain project-local and receive
@@ -2791,10 +2820,13 @@ def apply_direct_visual_actual_batch(
             all_intents.extend(intents)
             prepared.append((decision, reading, checked, admissions))
     results = []
+    from actual_source_visual_safety import recheck_current_sources
+    recheck_current_sources()
     with direct_visual_project_transaction(root) as bind_recovery_plan:
         if prewrite_guard is not None:
             prewrite_guard()
         if initialize_evidence is not None:
+            recheck_current_sources()
             initialize_evidence()
         state = _PreparedActualCSV(root, source_context=source_context)
         token = _prepared_actual_csv.set(state)

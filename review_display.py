@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import copy
 import math
+from pathlib import Path
 import tkinter as tk
 from tkinter import ttk
 
@@ -146,7 +147,41 @@ MAX_PREVIEW_DIMENSION = 8192
 MAX_PREVIEW_PIXELS = 16_000_000
 
 
-def occurrence_preview(entry, *, padding=(150, 115), scale=2.2, output_dir=None, display_width=None):
+def visual_source_notice(entry, safety):
+    """Display diagnostics do not grant actual evidence or replace a source gate."""
+    name = entry.get("pdf_name") or Path(str(entry.get("pdf") or "")).name
+    heading = f"PDF：{name}｜實體頁：{entry.get('physical_page', '')}"
+    printed = entry.get("printed_page")
+    source = entry.get("source_record")
+    if (isinstance(source, dict) and isinstance(printed, str) and printed.strip()
+            and printed == source.get("課本頁")):
+        heading += f"｜課本頁：{printed}"
+    reason = str(safety.get("reason") or "SOURCE_UNPROVABLE")
+    overlay = safety.get("overlay_status")
+    if "CONTRADICTION" in reason and reason != "SOURCE_SLOT_CONTRADICTION":
+        detail = "來源與位置矛盾，無法確認這筆資料對應的原頁內容。"
+    elif overlay == "CONFIRMED":
+        detail = "這個位置有後繪內容或重疊文字覆蓋，原始字形可能與畫面不同。"
+    elif overlay == "SUSPECTED" or reason == "SOURCE_SLOT_CONTRADICTION" or "PAINT" in reason or "OVERPAINT" in reason:
+        detail = "這個位置疑似有後繪內容影響，無法證明原始字形與畫面一致。"
+    elif not safety.get("location_readable"):
+        detail = "無法證明這個來源在原頁完整可見，請保留待處理。"
+    else:
+        detail = "原頁來源已通過目前可見性檢查。"
+    ability = ("可直接核對這個位置。" if safety.get("location_readable") else
+               "目前不能確認或寫入實際注音；警示框僅供找出問題位置。")
+    return f"{heading}\n{detail}{ability}\n原因：{reason}；外框不屬於原始證據圖片。"
+
+
+def occurrence_preview(entry, *, padding=(150, 115), scale=2.2, output_dir=None,
+                       display_width=None, return_details=False):
+    from actual_source_visual_safety import source_visual_operation
+    with source_visual_operation() as operation:
+        return _occurrence_preview(entry, padding=padding, scale=scale, output_dir=output_dir,
+            display_width=display_width, return_details=return_details, operation=operation)
+
+
+def _occurrence_preview(entry, *, padding, scale, output_dir, display_width, return_details, operation):
     """Return unmarked pixels and an optional target rectangle in pixel coordinates.
 
     Occurrence coordinates are PyMuPDF's unrotated page coordinates. Rendering
@@ -158,12 +193,21 @@ def occurrence_preview(entry, *, padding=(150, 115), scale=2.2, output_dir=None,
         # Preserve the actual dialog's existing unambiguous relocation lookup.
         from actual_review import _resolve_pdf_path
         pdf = _resolve_pdf_path(entry, output_dir)
-    with fitz.open(pdf) as doc:
+    if entry.get("char") or entry.get("source_record"):
+        # A diagnostic can frame an uncertain glyph in the sealed original,
+        # but it cannot label bytes from another PDF as that original page.
+        raw = operation.read_source(pdf, entry.get("pdf_sha256"))
+        document = fitz.open(stream=raw, filetype="pdf")
+    else:
+        document = fitz.open(pdf)  # geometry-only display utility, no review proof
+    with document as doc:
         number = entry.get("physical_page")
         if isinstance(number, bool) or float(number) != int(number) or int(number) < 1:
             raise ValueError("缺少有效實體頁碼")
         page = doc[int(number) - 1]
         target = None
+        warning_target = None
+        safety = None
         notice = "外框僅供定位，不屬於原始證據圖片。"
         try:
             from actual_review import actual_source_consistency_errors, actual_visual_source_safety
@@ -171,11 +215,10 @@ def occurrence_preview(entry, *, padding=(150, 115), scale=2.2, output_dir=None,
             # utilities. A real review record must prove its visible source.
             if entry.get("char") or entry.get("source_record"):
                 safety = actual_visual_source_safety(entry, output_dir)
-                if not safety["location_readable"]:
-                    raise ValueError(safety["reason"])
             from actual_review import actual_source_consistency_errors
             contradictions = actual_source_consistency_errors(entry)
-            if contradictions:
+            if any(key in {"pdf_sha256", "pdf_name", "physical_page", "x0", "y0", "x1", "y1"}
+                   for key in contradictions):
                 raise ValueError("source/location contradiction: " + ", ".join(contradictions))
             values = [entry[key] for key in ("x0", "y0", "x1", "y1")]
             if any(isinstance(v, bool) or v is None or not math.isfinite(float(v)) for v in values):
@@ -189,6 +232,11 @@ def occurrence_preview(entry, *, padding=(150, 115), scale=2.2, output_dir=None,
             if bounded.is_empty:
                 raise ValueError("outside page")
             target = bounded * page.rotation_matrix
+            if contradictions or (safety is not None and not safety["location_readable"]):
+                # The original slot remains findable without authorizing it.
+                # Never move to a neighboring character or reuse this box as
+                # a confirmation target, even if its coordinates are valid.
+                warning_target, target = target, None
             px, py = padding
             clip = (fitz.Rect(bounded.x0 - px, bounded.y0 - py, bounded.x1 + px, bounded.y1 + py)
                     & bounds) * page.rotation_matrix
@@ -198,6 +246,8 @@ def occurrence_preview(entry, *, padding=(150, 115), scale=2.2, output_dir=None,
         except (KeyError, TypeError, ValueError, OverflowError):
             clip = page.rect
             notice = "無法標示目標：無法可靠定位，來源與位置矛盾、資料缺失、無效或在頁面之外；本筆仍待處理。"
+        if safety is not None:
+            notice = visual_source_notice(entry, safety)
         if display_width is not None:
             scale = float(display_width) / clip.width
         if not math.isfinite(scale) or scale <= 0:
@@ -213,6 +263,13 @@ def occurrence_preview(entry, *, padding=(150, 115), scale=2.2, output_dir=None,
             coordinate * scale - origin
             for coordinate, origin in zip(target, (pix.x, pix.y, pix.x, pix.y))
         )
+        warning_rect = None if warning_target is None else tuple(
+            coordinate * scale - origin
+            for coordinate, origin in zip(warning_target, (pix.x, pix.y, pix.x, pix.y))
+        )
+        if return_details:
+            return dict(pixmap=pix, target=rect, warning_target=warning_rect,
+                        notice=notice, diagnostic=safety)
         return pix, rect, notice
 
 
@@ -240,7 +297,7 @@ class OccurrencePreview(tk.Frame):
             self.canvas.configure(yscrollcommand=self.scrollbar.set, yscrollincrement=1)
             self.canvas.bind("<MouseWheel>", self._mousewheel)
         self.canvas.pack(side="left", fill="both", expand=True)
-        self.pixmap = self.target = self.photo = None
+        self.pixmap = self.target = self.warning_target = self.photo = None
         self._entry = None
         self._draw_pending = self._render_pending = self._locate_pending = None
         self._render_width = None
@@ -271,7 +328,7 @@ class OccurrencePreview(tk.Frame):
             self._cancel_preview()
             # Tcl images and callback-held dialog variables must be released on
             # this owning Tk thread, before a save worker can collect cycles.
-            self.photo = self.pixmap = self.target = None
+            self.photo = self.pixmap = self.target = self.warning_target = None
             self.on_locate = self.on_failure = self.on_layout = self.before_locate = None
             self.on_ready = self.on_invalidated = None
             if event.widget is self:
@@ -290,7 +347,7 @@ class OccurrencePreview(tk.Frame):
         self.canvas.configure(scrollregion=(0, 0, 0, 0))
         self.canvas.yview_moveto(0)
         self._request_height(self._minimum_height)
-        self.pixmap = self.target = self.photo = None
+        self.pixmap = self.target = self.warning_target = self.photo = None
         self._entry = self._render_width = None
         self._needs_locate = False
         self.notice.configure(text=message)
@@ -362,7 +419,7 @@ class OccurrencePreview(tk.Frame):
         self._render_width = width
         self._preview_generation = getattr(self, "_preview_generation", 0) + 1
         token = (self._preview_generation, copy.deepcopy(self._entry), self._output_dir, width)
-        self.photo = self.target = self.pixmap = None
+        self.photo = self.target = self.warning_target = self.pixmap = None
         self.canvas.delete("all")
         self.notice.configure(text="正在載入原頁…")
         if getattr(self, "on_invalidated", None) is not None:
@@ -413,11 +470,17 @@ class OccurrencePreview(tk.Frame):
             return
         if (result.get("source_sha256") != self._entry.get("pdf_sha256")
                 or result.get("review_id") != self._entry.get("review_id")
-                or result.get("occurrence_id") != self._entry.get("occurrence_id")):
+                or result.get("occurrence_id") != self._entry.get("occurrence_id")
+                or result.get("physical_page") != self._entry.get("physical_page")
+                or result.get("pdf_name") != self._entry.get("pdf_name")):
             self._failed(ValueError("預覽結果不屬於目前封印與位置"))
+            return
+        if (self._entry.get("char") or self._entry.get("source_record")) and result.get("diagnostic") is None:
+            self._failed(ValueError("預覽缺少目前來源的可見性檢查"))
             return
         self.pixmap = SimpleNamespace(width=result["width"], height=result["height"], png=result["png"])
         self.target = result["target"]
+        self.warning_target = result.get("warning_target")
         self.notice.configure(text=result["notice"])
         self._draw()
         if self.target is None and self.on_failure is not None:
@@ -435,11 +498,11 @@ class OccurrencePreview(tk.Frame):
 
     def _locate(self):
         self._locate_pending = None
-        if self._disposed or not self._needs_locate or self.target is None:
+        if self._disposed or not self._needs_locate or (self.target is None and getattr(self, "warning_target", None) is None):
             return
         if self.before_locate is not None:
             ready = self.before_locate()
-            if self._disposed or not self._needs_locate or self.target is None:
+            if self._disposed or not self._needs_locate or (self.target is None and getattr(self, "warning_target", None) is None):
                 return
             if not ready:
                 self._failed(ValueError("無法完成預覽版面配置，請重新選取本筆"))
@@ -451,7 +514,7 @@ class OccurrencePreview(tk.Frame):
         if self._locate_pending is not None:
             self.after_cancel(self._locate_pending)
             self._locate_pending = None
-        targets = self.canvas.find_withtag("target")
+        targets = self.canvas.find_withtag("target" if self.target is not None else "warning")
         if not targets:
             return
         box = self.canvas.coords(targets[-1])
@@ -493,17 +556,31 @@ class OccurrencePreview(tk.Frame):
         requested_height = self._minimum_height
         if self.expand_content:
             requested_height = scaled.height + 16
-        elif self.target is not None:
+        elif self.target is not None or getattr(self, "warning_target", None) is not None:
             # The outer form may scroll its summary away to make room for the
             # complete target and 20px of context on each side. Derive this
             # minimum only from the display transform, never allocated height.
-            target_height = (self.target[3] - self.target[1]) * scaled.height / self.pixmap.height
+            region = self.target if self.target is not None else self.warning_target
+            target_height = (region[3] - region[1]) * scaled.height / self.pixmap.height
             requested_height = max(requested_height, math.ceil(target_height + 6) + 40)
         self._request_height(requested_height)
         x, y = (width - scaled.width) / 2, 8
         self.canvas.configure(scrollregion=(0, 0, width, scaled.height + 16))
         self.canvas.yview_moveto(fraction)
         self.canvas.create_image(x, y, image=self.photo, anchor="nw", tags="page")
+        warning = getattr(self, "warning_target", None)
+        if self.target is None and warning is not None:
+            sx, sy = scaled.width / self.pixmap.width, scaled.height / self.pixmap.height
+            x0, y0, x1, y1 = warning
+            box = (x + x0*sx - 3, y + y0*sy - 3, x + x1*sx + 3, y + y1*sy + 3)
+            self.canvas.create_rectangle(*box, outline="#ffffff", width=5, tags="warning")
+            self.canvas.create_rectangle(*box, outline="#b35d00", width=2, dash=(5, 3), tags="warning")
+            # This callback only positions the warning. It cannot call on_ready
+            # or create the target tag used by actual confirmation handlers.
+            if self._needs_locate:
+                if self._locate_pending is not None:
+                    self.after_cancel(self._locate_pending)
+                self._locate_pending = self.after(120, self._locate)
         if self.target is not None:
             sx, sy = scaled.width / self.pixmap.width, scaled.height / self.pixmap.height
             x0, y0, x1, y1 = self.target

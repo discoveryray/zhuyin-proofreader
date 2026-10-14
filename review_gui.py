@@ -876,7 +876,9 @@ class ActualReadingDialog(_ReviewDialog):
             if check is not None:
                 check.configure(state="disabled")
             if self.preview_buttons[index] is not None:
-                self.preview_buttons[index].configure(text="原頁無法顯示，請重新載入")
+                self.preview_buttons[index].configure(text=(
+                    "位置有警示，不能確認；可重新載入" if getattr(preview, "warning_target", None) is not None
+                    else "原頁未完成可靠檢查；可重新載入"))
 
         preview.on_failure = unavailable
         preview.on_invalidated = unavailable

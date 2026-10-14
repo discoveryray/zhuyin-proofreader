@@ -11,7 +11,8 @@ from actual_source_visual_safety import source_visual_safety
 from export_pdf_text_diagnostics import TrueTypeGlyphInspector
 
 
-def make_visual_source(root, *, painting=None, count=2, rotation=0, outside_tone=False):
+def make_visual_source(root, *, painting=None, count=2, rotation=0, outside_tone=False,
+                       tone_size=50):
     """Reusable real PDF entries for source and guarded writer regressions."""
     root.mkdir(parents=True, exist_ok=True)
     builder = FontBuilder(1000, isTTF=True)
@@ -27,8 +28,8 @@ def make_visual_source(root, *, painting=None, count=2, rotation=0, outside_tone
             if outside_tone:
                 # A separate tiny printed tone lies beyond the font's 600-unit
                 # advance. A layout bbox cannot certify this complete ink.
-                pen.moveTo((700, 400)); pen.lineTo((750, 400))
-                pen.lineTo((750, 450)); pen.lineTo((700, 450)); pen.closePath()
+                pen.moveTo((700, 400)); pen.lineTo((700+tone_size, 400))
+                pen.lineTo((700+tone_size, 400+tone_size)); pen.lineTo((700, 400+tone_size)); pen.closePath()
         glyphs[name] = pen.glyph()
     builder.setupGlyf(glyphs)
     builder.setupHorizontalMetrics({name: (600, 0) for name in names})
@@ -158,7 +159,7 @@ def test_later_replacement_paths_and_images_are_unprovable(tmp_path):
         first, peer = make_visual_source(tmp_path / painting, painting=painting)
         proof = source_visual_safety(first)
         assert not proof["location_readable"] and not proof["donor_eligible"]
-        assert proof["reason"] in ("LATER_PAINT_SOURCE_UNPROVABLE", "SOURCE_SLOT_CONTRADICTION")
+        assert proof["reason"] in ("SOURCE_OVERPAINT_CONFIRMED", "SOURCE_SLOT_CONTRADICTION")
         assert source_visual_safety(peer)["donor_eligible"]
     first, peer = make_visual_source(tmp_path / "same-slot", painting="same-slot")
     assert source_visual_safety(first)["reason"] == "SOURCE_SLOT_CONTRADICTION"

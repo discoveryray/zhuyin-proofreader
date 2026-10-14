@@ -428,16 +428,18 @@ def deliver_pending_promotion_outbox(root: Path, repository=None, *, source_cont
             by_id = {entry["occurrence_id"]: entry for entry in source_entries}
             if len(by_id) != len(source_entries):
                 raise library.GlobalLibraryValidationError("PENDING_DONOR_SOURCE_ID_DUPLICATE")
-            for original in pending:
-                evidence = original["payload"]["evidence"]
-                oid = evidence["source_occurrence_id"]
-                entry = by_id.get(oid)
-                if entry is None or entry.get("review_id") != evidence["source_review_id"]:
-                    raise library.GlobalLibraryValidationError("PENDING_DONOR_SOURCE_UNAVAILABLE")
-                group = build_actual_group_for_entry([entry], entry)
-                current, _admissions = direct_visual_intents(group, evidence["reading"], [oid], source_context)
-                if len(current) != 1 or current[0] != original:
-                    raise library.GlobalLibraryValidationError("PENDING_DONOR_SOURCE_NOT_REPROVED")
+            with _DirectVisualPDFSnapshot(source_context) as snapshot:
+                for original in pending:
+                    evidence = original["payload"]["evidence"]
+                    oid = evidence["source_occurrence_id"]
+                    entry = by_id.get(oid)
+                    if entry is None or entry.get("review_id") != evidence["source_review_id"]:
+                        raise library.GlobalLibraryValidationError("PENDING_DONOR_SOURCE_UNAVAILABLE")
+                    group = build_actual_group_for_entry([entry], entry)
+                    current, _admissions = direct_visual_intents(group, evidence["reading"], [oid], source_context,
+                                                                _snapshot=snapshot)
+                    if len(current) != 1 or current[0] != original:
+                        raise library.GlobalLibraryValidationError("PENDING_DONOR_SOURCE_NOT_REPROVED")
             repository = repository or library.GlobalExactGlyphRepository.resolved()
             receipts = library.deliver_global_direct_evidence(repository, pending)
             acknowledge_promotion_delivery(root, pending, receipts)
@@ -469,6 +471,8 @@ class _DirectVisualPDFSnapshot:
     def __enter__(self):
         if self.active or self.closed:
             raise ValueError("nested or closed direct visual PDF snapshot")
+        from actual_source_visual_safety import source_visual_operation
+        self.visual_operation = self.stack.enter_context(source_visual_operation())
         self.active = True
         return self
 
@@ -476,6 +480,7 @@ class _DirectVisualPDFSnapshot:
         for path, raw, document in self.pdfs.values():
             if path.read_bytes() != raw:
                 raise ValueError("CURRENT_PDF_SEALED_SHA_MISMATCH")
+        self.visual_operation.recheck_sources()
 
     def __exit__(self, kind, error, traceback):
         try:
@@ -496,9 +501,7 @@ class _DirectVisualPDFSnapshot:
         seal = library._sha256_text(info["pdf_sha256"], "sealed PDF SHA")
         key = (str(path.resolve()), seal)
         if key not in self.pdfs:
-            raw = path.read_bytes()
-            if hashlib.sha256(raw).hexdigest() != seal:
-                raise ValueError("CURRENT_PDF_SEALED_SHA_MISMATCH")
+            raw = self.visual_operation.read_source(path, seal)
             document = self.stack.enter_context(fitz.open(stream=raw, filetype="pdf"))
             self.pdfs[key] = (path, raw, document)
         return key, seal, self.pdfs[key][2]
