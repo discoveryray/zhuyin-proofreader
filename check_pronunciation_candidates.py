@@ -13,6 +13,7 @@ from typing import Any, Iterable, Mapping
 from unicodedata import normalize
 
 import fitz
+from excel_text import append_text_row, load_text_workbook
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
@@ -1748,7 +1749,7 @@ def analyze(
     context_overrides_path = context_overrides_path or runtime_context_overrides
     context_overrides = load_context_overrides(context_overrides_path, pdf_path)
 
-    wb_in = load_workbook(actual_xlsx, data_only=True, read_only=True)
+    wb_in = load_text_workbook(actual_xlsx, data_only=True)
 
     def actual_workbook_error(message: str):
         wb_in.close()
@@ -2719,18 +2720,18 @@ def analyze(
         "expected_set_json", "expected_evidence", "expected_status", "context_evidence", "comparison_result", "source_view",
         "blocking_state", "exclusion_state", "canonical_occurrence_id", "exclusion_reason", "confirmation_gates_json", "note", "source_record_json",
     ]
-    ws_ledger.append(ledger_cols)
+    append_text_row(ws_ledger, ledger_cols)
     for entry in ledger:
         source_json = json.dumps(entry.get("source_record") or {}, ensure_ascii=False, sort_keys=True, default=str)
         if len(source_json) > 32000:
-            raise ValueError(f"ledger source_record 超過 Excel 安全長度：{entry.get('occurrence_id')}")
+            raise ValueError(f"Occurrence Ledger/source_record_json 超過 Excel 安全長度 32000：{entry.get('occurrence_id')}")
         export_entry = {
             **entry,
             "expected_set_json": json.dumps(entry.get("expected_set") or [], ensure_ascii=False),
             "confirmation_gates_json": json.dumps(entry.get("confirmation_gates") or {}, ensure_ascii=False, sort_keys=True),
             "source_record_json": source_json,
         }
-        ws_ledger.append([export_entry.get(column, "") for column in ledger_cols])
+        append_text_row(ws_ledger, [export_entry.get(column, "") for column in ledger_cols])
 
     ws_reconcile.append(["項目", "結果", "明細"])
     reconcile_dict = reconciliation.as_dict()
@@ -2807,11 +2808,11 @@ def analyze(
         elif entry.get("source_view") == "結構偵測排除":
             target = ws_structural_excluded
         if target is not None:
-            target.append([entry.get(column, "") for column in excluded_view_cols])
+            append_text_row(target, [entry.get(column, "") for column in excluded_view_cols])
 
     def append_dict(ws, cols, data):
         for rec in data:
-            ws.append([rec.get(c, "") for c in cols])
+            append_text_row(ws, [rec.get(c, "") for c in cols])
 
     all_mismatches = single_mismatches + lexical_mismatches
     append_dict(ws_confirmed, confirmed_cols, confirmed_errors)

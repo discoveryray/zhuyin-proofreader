@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import csv
+import copy
+import io
+from contextvars import ContextVar
 import hashlib
 import json
 import math
@@ -9,11 +12,14 @@ import shutil
 import tempfile
 import zipfile
 from datetime import datetime, timedelta
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
 
 import fitz
+from excel_text import append_text_row
 from openpyxl import Workbook, load_workbook
+from pdf_portability import _memoized_excel_read, _read_excel_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
@@ -46,6 +52,7 @@ from global_glyph_promotion import (
     direct_visual_project_transaction,
     post_commit_recovery_plan_from_results,
     direct_visual_intents,
+    _DirectVisualPDFSnapshot,
     enqueue_promotion_intents,
     project_delivery_lock,
 )
@@ -139,12 +146,15 @@ def _style_sheet(ws) -> None:
 def _read_csv(path: Path, headers: Sequence[str]) -> list[dict[str, str]]:
     if not path.exists():
         return []
-    with path.open("r", encoding="utf-8-sig", newline="") as f:
-        reader = csv.DictReader(f)
-        actual_headers = [str(x or "") for x in (reader.fieldnames or [])]
-        if actual_headers != list(headers):
-            raise ValueError(f"{path.name} 欄位格式不符，禁止自動覆寫")
-        return [{h: _text(row.get(h)) for h in headers} for row in reader]
+    return _read_csv_bytes(path.read_bytes(), path.name, headers)
+
+
+def _read_csv_bytes(raw: bytes, name: str, headers: Sequence[str]) -> list[dict[str, str]]:
+    reader = csv.DictReader(io.StringIO(raw.decode("utf-8-sig"), newline=""))
+    actual_headers = [str(x or "") for x in (reader.fieldnames or [])]
+    if actual_headers != list(headers):
+        raise ValueError(f"{name} 欄位格式不符，禁止自動覆寫")
+    return [{h: _text(row.get(h)) for h in headers} for row in reader]
 
 
 def _write_csv(path: Path, headers: Sequence[str], rows: Iterable[Mapping[str, Any]]) -> None:
@@ -156,6 +166,123 @@ def _write_csv(path: Path, headers: Sequence[str], rows: Iterable[Mapping[str, A
         for row in rows:
             writer.writerow({h: row.get(h, "") for h in headers})
     tmp.replace(path)
+
+
+# Finite candidate state for the five existing project-local actual CSVs only.
+# The owner remains direct_visual_project_transaction; this is never a cache
+# of live project truth and never substitutes source/target prewrite guards.
+_prepared_actual_csv = ContextVar("prepared_actual_csv", default=None)
+
+
+class _PreparedActualCSV:
+    def __init__(self, root):
+        self.root = Path(root).resolve()
+        self.specs = {
+            USER_GLYF_FILE: tuple(USER_GLYF_HEADERS), USER_CFF_FILE: tuple(USER_CFF_HEADERS),
+            OCCURRENCE_OVERRIDE_FILE: tuple(OVERRIDE_HEADERS),
+            GLYPH_CONFLICT_FILE: tuple(GLYPH_CONFLICT_HEADERS),
+            GLYPH_PROVENANCE_FILE: tuple(GLYPH_PROVENANCE_HEADERS),
+        }
+        self.original = {}
+        self.rows = {}
+        self.dirty = set()
+        self.initialized = False
+        for name, headers in self.specs.items():
+            path = self.root / name
+            self._owned_name(path, headers)
+            raw = path.read_bytes() if path.exists() else None
+            self.original[name] = raw
+            if raw is None:
+                self.rows[name] = []
+                continue
+            reader = csv.DictReader(io.StringIO(raw.decode("utf-8-sig"), newline=""))
+            if [str(value or "") for value in (reader.fieldnames or [])] != list(headers):
+                raise ValueError(f"{name} 欄位格式不符，禁止自動覆寫")
+            self.rows[name] = [{field: _text(row.get(field)) for field in headers} for row in reader]
+
+    def _owned_name(self, path, headers=None):
+        path = Path(path)
+        name = path.name
+        if (path.parent.resolve() != self.root or name not in self.specs
+                or path.resolve() != self.root / name
+                or (headers is not None and tuple(headers) != self.specs[name])):
+            raise ValueError("actual batch CSV candidate root／file／header 不符")
+        return name
+
+    def read(self, path, headers):
+        # Preserve the prior write-then-read CSV contract between groups:
+        # csv.writer uses str(value), None is empty, then _read_csv strips text.
+        rows = self.rows[self._owned_name(path, headers)]
+        return [{field: _text(str(row.get(field)) if row.get(field) is not None else "")
+                 for field in headers} for row in rows]
+
+    def write(self, path, headers, rows):
+        name = self._owned_name(path, headers)
+        candidate = [{field: row.get(field, "") for field in headers} for row in rows]
+        self.rows[name] = copy.deepcopy(candidate)
+        self.dirty.add(name)
+
+    def exists(self, path):
+        name = self._owned_name(path)
+        return self.original[name] is not None or name in self.dirty
+
+    def verify_current(self):
+        # All source files, including unchanged/absent ones, remain byte-bound.
+        for name, original in self.original.items():
+            path = self.root / name
+            self._owned_name(path, self.specs[name])
+            if (path.read_bytes() if path.exists() else None) != original:
+                raise ValueError("actual batch 準備期間來源 CSV 已變動；未寫入候選")
+
+    def flush(self):
+        self.verify_current()
+        self.published = dict(self.original)
+        for name, headers in self.specs.items():
+            if name not in self.dirty:
+                continue
+            text = io.StringIO(newline="")
+            writer = csv.DictWriter(text, fieldnames=list(headers))
+            writer.writeheader()
+            for row in self.rows[name]:
+                writer.writerow({field: row.get(field, "") for field in headers})
+            expected = text.getvalue().encode("utf-8-sig")
+            _write_csv(self.root / name, headers, self.rows[name])
+            self.published[name] = expected
+            self.verify_published()
+
+    def verify_published(self):
+        for name, expected in self.published.items():
+            path = self.root / name
+            self._owned_name(path, self.specs[name])
+            if (path.read_bytes() if path.exists() else None) != expected:
+                raise ValueError("actual batch 提交期間 CSV 不符合準備結果；拒絕 acknowledgement")
+
+
+def _actual_csv_candidate(path):
+    state = _prepared_actual_csv.get()
+    if state is None:
+        return None
+    if Path(path).parent.resolve() != state.root:
+        raise ValueError("actual batch CSV candidate foreign root 不允許寫入")
+    return state
+
+
+def _read_actual_evidence_csv(path, headers):
+    state = _actual_csv_candidate(path)
+    return state.read(path, headers) if state is not None else _read_csv(path, headers)
+
+
+def _write_actual_evidence_csv(path, headers, rows):
+    state = _actual_csv_candidate(path)
+    if state is not None:
+        state.write(path, headers, rows)
+    else:
+        _write_csv(path, headers, rows)
+
+
+def _actual_evidence_exists(path):
+    state = _actual_csv_candidate(path)
+    return state.exists(path) if state is not None else Path(path).exists()
 
 
 def manual_actual_staging_path(root: Path) -> Path:
@@ -677,9 +804,9 @@ def _migrate_v540_known_bad_override(root: Path) -> bool:
     independently reconstructs the printed reading from the PDF.
     """
     path = Path(root) / OCCURRENCE_OVERRIDE_FILE
-    if not path.exists():
+    if not _actual_evidence_exists(path):
         return False
-    rows = _read_csv(path, OVERRIDE_HEADERS)
+    rows = _read_actual_evidence_csv(path, OVERRIDE_HEADERS)
     kept = []
     removed = False
     for row in rows:
@@ -692,11 +819,14 @@ def _migrate_v540_known_bad_override(root: Path) -> bool:
             continue
         kept.append(row)
     if removed:
-        _write_csv(path, OVERRIDE_HEADERS, kept)
+        _write_actual_evidence_csv(path, OVERRIDE_HEADERS, kept)
     return removed
 
 def ensure_user_evidence_files(root: Path) -> None:
     root = Path(root)
+    state = _actual_csv_candidate(root / USER_GLYF_FILE)
+    if state is not None and state.initialized:
+        return
     _migrate_v540_known_bad_override(root)
     for name, headers in (
         (USER_GLYF_FILE, USER_GLYF_HEADERS),
@@ -705,8 +835,11 @@ def ensure_user_evidence_files(root: Path) -> None:
         (GLYPH_PROVENANCE_FILE, GLYPH_PROVENANCE_HEADERS),
     ):
         path = root / name
-        if not path.exists():
-            _write_csv(path, headers, [])
+        if not _actual_evidence_exists(path):
+            _write_actual_evidence_csv(path, headers, [])
+
+    if state is not None:
+        state.initialized = True
 
 
 def _snapshot_dynamic_actual_evidence(root: Path) -> dict[Path, bytes | None]:
@@ -728,7 +861,7 @@ def _restore_dynamic_actual_evidence(backups: Mapping[Path, bytes | None]) -> No
             path.write_bytes(data)
 
 
-def validate_dynamic_actual_evidence(root: Path, *, read_only: bool = False) -> dict[str, Any]:
+def _capture_dynamic_actual_evidence(root: Path, *, read_only: bool = False) -> tuple:
     assert_project_actual_readable(root)
     root = Path(root)
     if read_only:
@@ -739,6 +872,7 @@ def validate_dynamic_actual_evidence(root: Path, *, read_only: bool = False) -> 
     else:
         ensure_user_evidence_files(root)
     result = {"ok": True, "errors": [], "hashes": {}}
+    raw_files, parsed_rows = {}, {}
     specs = [
         (OCCURRENCE_OVERRIDE_FILE, OVERRIDE_HEADERS),
         (USER_GLYF_FILE, USER_GLYF_HEADERS),
@@ -752,9 +886,13 @@ def validate_dynamic_actual_evidence(root: Path, *, read_only: bool = False) -> 
                 # A fresh installation may legitimately have no occurrence
                 # overrides yet.  Absence is a stable empty dynamic evidence
                 # state and is still fingerprinted distinctly from a real file.
+                raw_files[name], parsed_rows[name] = None, []
                 result["hashes"][name] = "ABSENT"
                 continue
-            rows = _read_csv(path, headers)
+            raw = path.read_bytes() if path.exists() else None
+            raw_files[name] = raw
+            rows = _read_csv_bytes(raw, name, headers) if raw is not None else []
+            parsed_rows[name] = rows
             for idx, row in enumerate(rows, 2):
                 reading_col = "actual_reading" if name == OCCURRENCE_OVERRIDE_FILE else "bopomofo"
                 reading = _canon(row.get(reading_col))
@@ -779,11 +917,64 @@ def validate_dynamic_actual_evidence(root: Path, *, read_only: bool = False) -> 
                     readings = [_canon(x) for x in _text(row.get("readings")).split("|") if _text(x)]
                     if len(set(filter(None, readings))) < 2:
                         raise ValueError(f"row {idx} conflict 至少需要兩個互斥讀音")
-            result["hashes"][name] = _sha256_file(path)
+            if raw is None:
+                raise FileNotFoundError(path)
+            result["hashes"][name] = hashlib.sha256(raw).hexdigest()
         except Exception as exc:
             result["ok"] = False
             result["errors"].append(f"{name}：{exc}")
-    return result
+    return result, raw_files, parsed_rows
+
+
+def validate_dynamic_actual_evidence(root: Path, *, read_only: bool = False) -> dict[str, Any]:
+    return _capture_dynamic_actual_evidence(root, read_only=read_only)[0]
+
+
+_DYNAMIC_SNAPSHOT_TOKEN = object()
+
+
+@dataclass(frozen=True, init=False)
+class ValidatedDynamicActualSnapshot:
+    """Immutable, finite actual rows and hashes from the same validated bytes."""
+    root: Path
+    raw_files: tuple
+    parsed_rows: tuple
+    hashes: tuple
+
+    def __init__(self, root, raw_files, parsed_rows, hashes, *, _token=None):
+        if _token is not _DYNAMIC_SNAPSHOT_TOKEN:
+            raise ValueError("dynamic actual snapshot requires validated capture")
+        object.__setattr__(self, "root", Path(root).resolve())
+        object.__setattr__(self, "raw_files", tuple(sorted(raw_files.items())))
+        object.__setattr__(self, "parsed_rows", tuple((name, tuple(tuple(row.items()) for row in rows))
+            for name, rows in sorted(parsed_rows.items())))
+        object.__setattr__(self, "hashes", tuple(sorted(hashes.items())))
+
+    def assert_current(self, root):
+        if Path(root).resolve() != self.root:
+            raise ValueError("foreign dynamic actual snapshot root")
+        assert_project_actual_readable(self.root)
+        for name, raw in self.raw_files:
+            path = self.root / name
+            current = path.read_bytes() if path.exists() else None
+            if current != raw:
+                raise ValueError(f"dynamic actual snapshot source changed: {name}")
+
+    def rows(self, name):
+        return [dict(row) for row in dict(self.parsed_rows)[name]]
+
+
+def load_dynamic_actual_snapshot(root: Path, *, read_only: bool = False) -> ValidatedDynamicActualSnapshot:
+    # Initialization and the finite legacy cleanup occur before capturing bytes.
+    # This view cannot certify a caller-supplied mapping as validated evidence.
+    root = Path(root).resolve()
+    report, raw_files, parsed_rows = _capture_dynamic_actual_evidence(root, read_only=read_only)
+    if not report.get("ok"):
+        raise ValueError("動態 actual 證據檔驗證失敗：" + "；".join(report.get("errors") or []))
+    snapshot = ValidatedDynamicActualSnapshot(root, raw_files, parsed_rows, report["hashes"],
+        _token=_DYNAMIC_SNAPSHOT_TOKEN)
+    snapshot.assert_current(root)
+    return snapshot
 
 
 def _subset_sha256(rows: Sequence[Mapping[str, Any]], headers: Sequence[str]) -> str:
@@ -1036,6 +1227,7 @@ def dynamic_actual_hashes(
     pdf_path: Path | None = None,
     dependencies: Mapping[str, Any] | None = None,
     read_only: bool = False,
+    snapshot: ValidatedDynamicActualSnapshot | None = None,
 ) -> dict[str, str]:
     """Hash dynamic actual evidence, optionally scoped to one PDF's dependencies.
 
@@ -1045,20 +1237,20 @@ def dynamic_actual_hashes(
     preserves fail-closed fingerprints while avoiding whole-project cache
     invalidation after an unrelated correction.
     """
-    report = validate_dynamic_actual_evidence(root, read_only=read_only)
-    if not report.get("ok"):
-        raise ValueError("動態 actual 證據檔驗證失敗：" + "；".join(report.get("errors") or []))
+    if snapshot is None:
+        snapshot = load_dynamic_actual_snapshot(root, read_only=read_only)
+    elif type(snapshot) is not ValidatedDynamicActualSnapshot:
+        raise ValueError("dynamic actual snapshot must be a validated typed capture")
+    snapshot.assert_current(root)
     if pdf_path is None:
-        return dict(sorted((report.get("hashes") or {}).items()))
+        return dict(snapshot.hashes)
 
-    root = Path(root)
     pdf_path = Path(pdf_path)
-    override_rows = _read_csv(root / OCCURRENCE_OVERRIDE_FILE, OVERRIDE_HEADERS) if (root / OCCURRENCE_OVERRIDE_FILE).exists() else []
-    override_rows = [row for row in override_rows if _override_applies_to_pdf(row, pdf_path)]
-
-    glyf_rows = _read_csv(root / USER_GLYF_FILE, USER_GLYF_HEADERS)
-    cff_rows = _read_csv(root / USER_CFF_FILE, USER_CFF_HEADERS)
-    conflict_rows = _read_csv(root / GLYPH_CONFLICT_FILE, GLYPH_CONFLICT_HEADERS)
+    override_rows = [row for row in snapshot.rows(OCCURRENCE_OVERRIDE_FILE)
+                     if _override_applies_to_pdf(row, pdf_path)]
+    glyf_rows = snapshot.rows(USER_GLYF_FILE)
+    cff_rows = snapshot.rows(USER_CFF_FILE)
+    conflict_rows = snapshot.rows(GLYPH_CONFLICT_FILE)
     mode = "global_fallback"
     if dependencies is not None:
         mode = "per_pdf_exact_dependency_v1"
@@ -1377,19 +1569,20 @@ def render_annotation_only_png(entry: Mapping[str, Any], output_path: Path, *, o
     return output_path
 
 
-def actual_sample_availability(entry: Mapping[str, Any], output_dir: Path | None = None,
-                               *, pdf_resolver=None) -> str:
+def _actual_sample_location(entry: Mapping[str, Any], output_dir: Path | None = None,
+                               *, pdf_resolver=None) -> tuple:
     """Classify source drawings, never editable workbook declarations.
 
     Only the two audited clipped bindings may be unavailable. Ordinary source
     boxes must still be finite and have area; zero-width CFF draws use their
     existing exact geometry proof. PDF relocation is always SHA verified.
     """
+    location = None
     from actual_render_geometry import source_clipped_candidate, source_drawing_clipped
     if source_clipped_candidate(entry) is not None:
         pdf = pdf_resolver(entry) if pdf_resolver else _resolve_pdf_path(entry, output_dir)
         source_drawing_clipped(pdf, entry)
-        return "SOURCE_DRAWING_CLIPPED"
+        return "SOURCE_DRAWING_CLIPPED", None
     bounds = tuple(float(entry[k]) for k in ("x0", "y0", "x1", "y1"))
     if not all(math.isfinite(v) for v in bounds) or min(bounds) < 0:
         raise ValueError("未知來源 drawing 定位不足；不能宣告 READABLE")
@@ -1399,7 +1592,7 @@ def actual_sample_availability(entry: Mapping[str, Any], output_dir: Path | None
             pdf = pdf_resolver(entry)
             exact_vertical_cff_location(pdf, entry, digest=_sha256_file(pdf))
         else:
-            _confirmed_render_location(entry, output_dir)
+            location = _confirmed_render_location(entry, output_dir)
     elif pdf_resolver:
         # The portable caller's resolver verifies actual mapped target bytes.
         # A different SHA is legal only after its existing full-page mapping;
@@ -1407,10 +1600,15 @@ def actual_sample_availability(entry: Mapping[str, Any], output_dir: Path | None
         pdf = pdf_resolver(entry)
         if _sha256_file(pdf) == entry.get("pdf_sha256"):
             relocated = dict(entry, pdf=str(pdf))
-            _confirmed_render_location(relocated)
+            location = _confirmed_render_location(relocated)
     else:
-        _confirmed_render_location(entry, output_dir)
-    return "READABLE"
+        location = _confirmed_render_location(entry, output_dir)
+    return "READABLE", location
+
+
+def actual_sample_availability(entry: Mapping[str, Any], output_dir: Path | None = None,
+                               *, pdf_resolver=None) -> str:
+    return _actual_sample_location(entry, output_dir, pdf_resolver=pdf_resolver)[0]
 
 
 def _sample_source_profile(entry, availability):
@@ -1455,15 +1653,15 @@ def _write_actual_sample_profile(workbook, profile):
     chunks = [text[i:i + 30000] for i in range(0, len(text), 30000)]
     digest = hashlib.sha256(raw).hexdigest()
     sheet = workbook.create_sheet(ACTUAL_SAMPLE_PROFILE_SHEET)
-    sheet.append(["schema", ACTUAL_SAMPLE_PROFILE_SCHEMA])
-    sheet.append(["sha256", digest])
-    sheet.append(["chunk_count", len(chunks)])
+    append_text_row(sheet, ["schema", ACTUAL_SAMPLE_PROFILE_SCHEMA])
+    append_text_row(sheet, ["sha256", digest])
+    append_text_row(sheet, ["chunk_count", len(chunks)])
     for index, chunk in enumerate(chunks, 1):
-        sheet.append([index, chunk])
+        append_text_row(sheet, [index, chunk])
     sheet.sheet_state = "veryHidden"
     for key, value in zip(ACTUAL_SAMPLE_PROFILE_META,
                           (ACTUAL_SAMPLE_PROFILE_SCHEMA, digest, ACTUAL_SAMPLE_PROFILE_SHEET)):
-        workbook["匯入中繼資料"].append([key, value])
+        append_text_row(workbook["匯入中繼資料"], [key, value])
 
 
 def _actual_profile_metadata(workbook):
@@ -1542,17 +1740,15 @@ def _load_actual_sample_profile(workbook):
     return profile
 
 
+@_memoized_excel_read
 def load_actual_sample_profile(xlsx: Path):
     """Read and structurally verify the carried profile; source guard is separate.
 
     Returns a profile dict for 1.2, None for the explicitly named 1.1 adapter.
     A self-sealed digest alone does not authenticate current source evidence.
     """
-    workbook = load_workbook(xlsx, read_only=True, data_only=True)
-    try:
+    with _read_excel_workbook(xlsx, data_only=True) as workbook:
         return _load_actual_sample_profile(workbook)
-    finally:
-        workbook.close()
 
 
 def validate_actual_sample_profile(xlsx: Path, groups, output_dir=None, *, pdf_resolver=None,
@@ -1560,15 +1756,12 @@ def validate_actual_sample_profile(xlsx: Path, groups, output_dir=None, *, pdf_r
     """Recompute the selected source contract before any visual import effects."""
     carried = load_actual_sample_profile(xlsx)
     from pdf_portability import EXCEL_PROOF_SHEET, validate_actual_profile_content_proof
-    workbook = load_workbook(xlsx, read_only=True)
-    try:
+    with _read_excel_workbook(xlsx, data_only=False) as workbook:
         if EXCEL_PROOF_SHEET not in workbook.sheetnames:
             if carried is not None and require_content_proof:
                 raise ValueError("actual GPT 1.2 source content proof deleted／missing")
         else:
             validate_actual_profile_content_proof(workbook, source_manifest=source_manifest)
-    finally:
-        workbook.close()
     _, rows = _load_sheet_rows(xlsx, "actual待判定")
     by_id = {group["group_id"]: group for group in groups}
     selected = []
@@ -1633,9 +1826,7 @@ def export_actual_review_package(
         selected = []
         for label, entry in zip(("A", "B"), group["members"][:2]):
             try:
-                availability = actual_sample_availability(entry, output_dir)
-                location = (None if availability == "SOURCE_DRAWING_CLIPPED" else
-                            _confirmed_render_location(entry, output_dir))
+                availability, location = _actual_sample_location(entry, output_dir)
                 selected.append((label.lower(), entry, location))
             except Exception as exc:
                 errors.append(json.dumps({
@@ -1798,12 +1989,12 @@ def _write_actual_review_package(
         ("待判定 unique groups", len(groups)),
         ("待判定 occurrences", sum(g["occurrence_count"] for g in groups)),
     ]
-    guide.append(["項目", "說明"])
+    append_text_row(guide, ["項目", "說明"])
     for row in instructions:
-        guide.append(row)
+        append_text_row(guide, row)
 
     meta = wb.create_sheet("匯入中繼資料")
-    meta.append(["項目", "內容"])
+    append_text_row(meta, ["項目", "內容"])
     for row in [
         ("version", version),
         ("session_id", session_id),
@@ -1815,7 +2006,7 @@ def _write_actual_review_package(
         ("readable_sample_count", readable_count),
         ("blocked_sample_count", blocked_count),
     ]:
-        meta.append(row)
+        append_text_row(meta, row)
     _write_actual_sample_profile(wb, profile)
 
     ws = wb.create_sheet("actual待判定")
@@ -1827,7 +2018,7 @@ def _write_actual_review_package(
         "sample_a_checked", "sample_b_checked", "note",
         "sample_a_availability", "sample_b_availability", "source_availability_reason",
     ]
-    ws.append(headers)
+    append_text_row(ws, headers)
 
     for index, (group, selected) in enumerate(zip(groups, plan), 1):
         members = group["members"]
@@ -1842,7 +2033,7 @@ def _write_actual_review_package(
             render_annotation_only_png(entry, annotation, output_dir=source_output_dir, _location=location)
             render_occurrence_png(entry, tight, context=False, output_dir=source_output_dir, _location=location)
             image_names[sample_index] = f"images/{annotation.name} | images/{tight.name}"
-        ws.append([
+        append_text_row(ws, [
             index, group["group_id"], group["group_snapshot"], group["kind"], group["exact_key"], group["occurrence_count"],
             image_names[0], image_names[1], a.get("occurrence_id", ""), b.get("occurrence_id", "") if b else "",
             a.get("pdf_name", ""), a.get("printed_page", ""),
@@ -1890,9 +2081,9 @@ def _write_actual_review_package(
     return zip_path
 
 
-def _load_sheet_rows(path: Path, sheet: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
-    wb = load_workbook(path, read_only=True, data_only=True)
-    try:
+@_memoized_excel_read
+def _load_sheet_rows(path: Path, sheet: str, required_columns=()) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    with _read_excel_workbook(path, data_only=True) as wb:
         if "匯入中繼資料" not in wb.sheetnames or sheet not in wb.sheetnames:
             raise ValueError("actual GPT 報表缺少必要工作表")
         meta_ws = wb["匯入中繼資料"]
@@ -1908,10 +2099,11 @@ def _load_sheet_rows(path: Path, sheet: str) -> tuple[dict[str, Any], list[dict[
             headers = []
         if len(headers) != len(set(headers)) or any(not h for h in headers):
             raise ValueError("actual GPT 報表 header 無效或重複")
+        missing = sorted(set(required_columns) - set(headers))
+        if missing:
+            raise ValueError(f"actual GPT workbook 缺少欄位：{missing}")
         rows = [{headers[i]: row[i] if i < len(row) else None for i in range(len(headers))} for row in iterator]
         return meta, rows
-    finally:
-        wb.close()
 
 
 def load_glyph_truth_quarantine(root: Path) -> dict[str, set[Any]]:
@@ -1923,7 +2115,7 @@ def load_glyph_truth_quarantine(root: Path) -> dict[str, set[Any]]:
     """
     root = Path(root)
     ensure_user_evidence_files(root)
-    rows = _read_csv(root / GLYPH_CONFLICT_FILE, GLYPH_CONFLICT_HEADERS)
+    rows = _read_actual_evidence_csv(root / GLYPH_CONFLICT_FILE, GLYPH_CONFLICT_HEADERS)
     ttf: set[str] = set()
     cff: set[tuple[str, str]] = set()
     for row in rows:
@@ -1993,7 +2185,7 @@ def _append_provenance_event(
     note: str = "",
 ) -> None:
     path = Path(root) / GLYPH_PROVENANCE_FILE
-    rows = _read_csv(path, GLYPH_PROVENANCE_HEADERS)
+    rows = _read_actual_evidence_csv(path, GLYPH_PROVENANCE_HEADERS)
     ids = sorted({_text(x) for x in occurrence_ids if _text(x)})
     payload = {
         "kind": _text(group.get("kind")),
@@ -2014,7 +2206,7 @@ def _append_provenance_event(
         "created_at": datetime.now().isoformat(timespec="seconds"),
     })
     rows.sort(key=lambda r: (_text(r.get("created_at")), _text(r.get("event_id"))))
-    _write_csv(path, GLYPH_PROVENANCE_HEADERS, rows)
+    _write_actual_evidence_csv(path, GLYPH_PROVENANCE_HEADERS, rows)
 
 
 def _upsert_conflict(
@@ -2026,7 +2218,7 @@ def _upsert_conflict(
     note: str = "",
 ) -> None:
     path = Path(root) / GLYPH_CONFLICT_FILE
-    rows = _read_csv(path, GLYPH_CONFLICT_HEADERS)
+    rows = _read_actual_evidence_csv(path, GLYPH_CONFLICT_HEADERS)
     kind = _text(group.get("kind"))
     style = _text(group.get("style_group"))
     sha = _text(group.get("exact_key")).lower()
@@ -2058,7 +2250,7 @@ def _upsert_conflict(
     else:
         rows.append(new_row)
     rows.sort(key=lambda r: (_text(r.get("kind")), _text(r.get("style_group")), _text(r.get("glyph_sha256"))))
-    _write_csv(path, GLYPH_CONFLICT_HEADERS, rows)
+    _write_actual_evidence_csv(path, GLYPH_CONFLICT_HEADERS, rows)
 
 
 def _demote_learning_record_to_conflict(root: Path, group: Mapping[str, Any], conflict_note: str) -> None:
@@ -2066,7 +2258,7 @@ def _demote_learning_record_to_conflict(root: Path, group: Mapping[str, Any], co
     if not info:
         return
     path, headers, key_fields, base = info
-    rows = _read_csv(path, headers)
+    rows = _read_actual_evidence_csv(path, headers)
     key = tuple(base.get(k, "") for k in key_fields)
     changed = False
     for row in rows:
@@ -2078,7 +2270,7 @@ def _demote_learning_record_to_conflict(root: Path, group: Mapping[str, Any], co
             row["notes"] = (_text(row.get("notes")) + "；" + _text(conflict_note)).strip("；")
             changed = True
     if changed:
-        _write_csv(path, headers, rows)
+        _write_actual_evidence_csv(path, headers, rows)
 
 
 def _override_key_from_entry(entry: Mapping[str, Any]) -> tuple[str, ...]:
@@ -2105,9 +2297,9 @@ def _remove_unverified_group_overrides(
     peer occurrence pinned to the contaminated reading.
     """
     path = Path(root) / OCCURRENCE_OVERRIDE_FILE
-    if not path.exists():
+    if not _actual_evidence_exists(path):
         return []
-    rows = _read_csv(path, OVERRIDE_HEADERS)
+    rows = _read_actual_evidence_csv(path, OVERRIDE_HEADERS)
     member_by_key = {_override_key_from_entry(entry): _text(entry.get("occurrence_id")) for entry in members}
     kept = []
     removed_ids = []
@@ -2119,13 +2311,13 @@ def _remove_unverified_group_overrides(
             continue
         kept.append(row)
     if len(kept) != len(rows):
-        _write_csv(path, OVERRIDE_HEADERS, kept)
+        _write_actual_evidence_csv(path, OVERRIDE_HEADERS, kept)
     return sorted(set(removed_ids))
 
 
 def _append_or_update_overrides(root: Path, entries: Sequence[Mapping[str, Any]], reading: str, *, source: str, note: str) -> None:
     path = Path(root) / OCCURRENCE_OVERRIDE_FILE
-    rows = _read_csv(path, OVERRIDE_HEADERS)
+    rows = _read_actual_evidence_csv(path, OVERRIDE_HEADERS)
     by_key = {
         tuple(row[h] for h in ("pdf_contains", "pdf_excludes", "page", "target_char", "stable_key", "x0", "y0")): row
         for row in rows
@@ -2154,7 +2346,7 @@ def _append_or_update_overrides(root: Path, entries: Sequence[Mapping[str, Any]]
             new_row["note"] = (note + "；" + audit).strip("；")
         by_key[key] = new_row
     ordered = sorted(by_key.values(), key=lambda r: (r["pdf_contains"], r["page"], r["target_char"], r["stable_key"], r["y0"], r["x0"]))
-    _write_csv(path, OVERRIDE_HEADERS, ordered)
+    _write_actual_evidence_csv(path, OVERRIDE_HEADERS, ordered)
 
 
 def _update_learning_file(root: Path, group: Mapping[str, Any], reading: str, verified_entries: Sequence[Mapping[str, Any]], note: str) -> dict[str, Any]:
@@ -2164,7 +2356,7 @@ def _update_learning_file(root: Path, group: Mapping[str, Any], reading: str, ve
     if not info or not exact_key:
         return {"learning_level": "OCCURRENCE_ONLY", "conflict": False, "old_verified_ids": set(), "known_readings": set()}
     path, headers, key_fields, base = info
-    rows = _read_csv(path, headers)
+    rows = _read_actual_evidence_csv(path, headers)
     key = tuple(base.get(k, "") for k in key_fields)
     existing = next((row for row in rows if tuple(row.get(k, "") for k in key_fields) == key), None)
     examples = {_text(x.get("occurrence_id")) for x in verified_entries if _text(x.get("occurrence_id"))}
@@ -2188,7 +2380,7 @@ def _update_learning_file(root: Path, group: Mapping[str, Any], reading: str, ve
         all_readings = set(known_readings) | {reading}
         # If the row was already quarantined, the registry itself may contain
         # the second reading even when the demoted learning row carries only one.
-        conflict_rows = _read_csv(Path(root) / GLYPH_CONFLICT_FILE, GLYPH_CONFLICT_HEADERS)
+        conflict_rows = _read_actual_evidence_csv(Path(root) / GLYPH_CONFLICT_FILE, GLYPH_CONFLICT_HEADERS)
         for crow in conflict_rows:
             same = _text(crow.get("kind")) == kind and _text(crow.get("glyph_sha256")).lower() == exact_key
             if kind == "CFF_GLYPH_SHA256":
@@ -2227,7 +2419,7 @@ def _update_learning_file(root: Path, group: Mapping[str, Any], reading: str, ve
     else:
         rows.append(new_row)
     rows.sort(key=lambda r: tuple(r.get(k, "") for k in key_fields))
-    _write_csv(path, headers, rows)
+    _write_actual_evidence_csv(path, headers, rows)
     _append_provenance_event(root, group, reading, "PROMOTED" if level == "VERIFIED_EXACT_GLYPH" else "SINGLE_VISUAL_EVIDENCE", sorted(examples), source="visual actual review", note=note)
     return {"learning_level": level, "conflict": False, "old_verified_ids": old_verified_ids, "known_readings": {reading}}
 
@@ -2424,6 +2616,8 @@ def apply_direct_visual_actual_batch(
     Low-level callers without a sealed session remain project-local and receive
     explicit NON_GLOBAL_ELIGIBLE admissions. They cannot synthesize provenance.
     """
+    if _prepared_actual_csv.get() is not None:
+        raise ValueError("nested actual batch candidate 不允許重入交易")
     if prewrite_guard is not None:
         prewrite_guard()
     if not decisions:
@@ -2436,43 +2630,52 @@ def apply_direct_visual_actual_batch(
     apply_function = apply_function or apply_verified_actual_group
     prepared = []
     all_intents = []
-    for decision in decisions:
-        group = decision["group"]
-        reading = _canon(decision["reading"])
-        if not reading:
-            raise ValueError("invalid direct actual reading")
-        checked = list(decision["checked_occurrence_ids"])
-        intents, admissions = direct_visual_intents(group, reading, checked, source_context)
-        all_intents.extend(intents)
-        prepared.append((decision, reading, checked, admissions))
+    with _DirectVisualPDFSnapshot(source_context) as pdf_snapshot:
+        for decision in decisions:
+            group = decision["group"]
+            reading = _canon(decision["reading"])
+            if not reading:
+                raise ValueError("invalid direct actual reading")
+            checked = list(decision["checked_occurrence_ids"])
+            intents, admissions = direct_visual_intents(group, reading, checked, source_context, _snapshot=pdf_snapshot)
+            all_intents.extend(intents)
+            prepared.append((decision, reading, checked, admissions))
     results = []
     with direct_visual_project_transaction(root) as bind_recovery_plan:
         if prewrite_guard is not None:
             prewrite_guard()
         if initialize_evidence is not None:
             initialize_evidence()
-        for decision, reading, checked, admissions in prepared:
-            if prewrite_guard is not None:
-                prewrite_guard()
-            group = decision["group"]
-            applied = apply_function(
-                root, group, reading, checked_occurrence_ids=checked,
-                source=decision["source"], note=decision.get("note", ""),
-            )
-            if not isinstance(applied, Mapping):
-                raise ValueError("invalid project actual apply result")
-            results.append({
-                **dict(applied), "group_id": group["group_id"],
-                "group_snapshot": group.get("group_snapshot", ""),
-                "global_admissions": admissions,
-            })
+        state = _PreparedActualCSV(root)
+        token = _prepared_actual_csv.set(state)
+        try:
+            for decision, reading, checked, admissions in prepared:
+                group = decision["group"]
+                applied = apply_function(
+                    root, group, reading, checked_occurrence_ids=checked,
+                    source=decision["source"], note=decision.get("note", ""),
+                )
+                if not isinstance(applied, Mapping):
+                    raise ValueError("invalid project actual apply result")
+                results.append({
+                    **dict(applied), "group_id": group["group_id"],
+                    "group_snapshot": group.get("group_snapshot", ""),
+                    "global_admissions": admissions,
+                })
+        finally:
+            _prepared_actual_csv.reset(token)
         if prewrite_guard is not None:
             prewrite_guard()
+        state.flush()
         bind_recovery_plan(post_commit_recovery_plan_from_results(results))
         enqueue_promotion_intents(root, all_intents)
+        if prewrite_guard is not None:
+            prewrite_guard()
+        state.verify_published()
         acknowledgement = acknowledge() if acknowledge else {}
         if prewrite_guard is not None:
             prewrite_guard()
+        state.verify_published()
     return {
         "group_results": results, "acknowledgement": acknowledgement,
         "project_actual_commit": "COMMITTED",
@@ -2578,6 +2781,30 @@ def _actual_workbook_schema_mismatches(
     return mismatched
 
 
+def _screen_actual_import_rows(xlsx):
+    """Only input shape/enums here; all source identity and quorum guards remain."""
+    required = ("group_id", "group_snapshot", "decision", "actual_reading", "confidence",
+                "sample_a_checked", "sample_b_checked", "note")
+    meta, rows = _load_sheet_rows(Path(xlsx), "actual待判定", required)
+    errors = []
+    for number, row in enumerate(rows, 2):
+        decision = _text(row.get("decision")).upper()
+        if decision not in {"", "VERIFIED", "UNRESOLVED"}:
+            errors.append(f"row {number}: decision 必須是 VERIFIED/UNRESOLVED")
+        if decision != "VERIFIED":
+            continue
+        if not _canon(row.get("actual_reading")):
+            errors.append(f"row {number}: VERIFIED 缺少合法 actual_reading")
+        if _text(row.get("confidence")) not in {"高", "中"}:
+            errors.append(f"row {number}: VERIFIED confidence 只能是高/中")
+        for label in ("a", "b"):
+            if _text(row.get(f"sample_{label}_checked")).upper() not in {"", "Y", "N"}:
+                errors.append(f"row {number}: sample_{label}_checked 必須是 Y/N")
+    if errors:
+        raise ValueError("actual GPT 匯入整批拒絕；未寫入任何一列：\n" + "\n".join(errors[:100]))
+    return meta, rows
+
+
 def import_actual_review_workbook(
     root: Path,
     xlsx: Path,
@@ -2587,7 +2814,7 @@ def import_actual_review_workbook(
     source_context: Mapping[str, Any] | None = None,
     initialize_evidence=None, prewrite_guard=None, source_output_dir: Path | None = None,
 ) -> dict[str, Any]:
-    meta, rows = _load_sheet_rows(Path(xlsx), "actual待判定")
+    meta, rows = _screen_actual_import_rows(xlsx)
     required_meta = dict(expected_metadata)
     required_meta["actual_review_schema_version"] = meta.get("actual_review_schema_version")
     validate_actual_sample_profile(xlsx, groups, source_output_dir)

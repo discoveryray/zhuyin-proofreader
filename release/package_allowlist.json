@@ -48,6 +48,10 @@
       "role": "runtime_module"
     },
     {
+      "path": "excel_text.py",
+      "role": "runtime_module"
+    },
+    {
       "path": "export_pdf_text_diagnostics.py",
       "role": "runtime_module"
     },
@@ -105,6 +109,10 @@
     },
     {
       "path": "review_gui.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "review_operation_worker.py",
       "role": "runtime_module"
     },
     {

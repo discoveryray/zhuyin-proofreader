@@ -407,6 +407,7 @@ class ReviewResumeTests(unittest.TestCase):
 
 
     def test_same_session_source_error_keeps_strict_committed_recovery_only(self):
+        self.output = self.output.resolve()
         app = headless_app(self.output)
         row = app.current()
         sp.stage_manual_actual_correction(self.output, row["review_id"], "ㄎㄢ")
@@ -427,9 +428,10 @@ class ReviewResumeTests(unittest.TestCase):
                 patch.object(gui.messagebox, "showerror") as errors, \
                 patch.object(gui.messagebox, "showinfo") as success, \
                 patch.object(sp, "deliver_pending_promotion_outbox", return_value={"status": "ISOLATED_NO_GLOBAL"}):
-            with patch.object(sp, "refresh_actual_project", side_effect=OSError("isolated refresh failure")):
+            with patch.object(sp, "refresh_actual_project", side_effect=OSError("isolated refresh failure")) as failed_refresh:
                 app.apply_staged_actuals()
                 app.root.update()
+            failed_refresh.assert_called_once()
             self.assertTrue(errors.called)
             self.assertIsNotNone(sp.committed_project_recovery(root))
             self.assertTrue(app.staging_summary.get("staging_error"))
@@ -439,6 +441,9 @@ class ReviewResumeTests(unittest.TestCase):
             self.assertIs(app._save_service.evidence_anchor, anchor)
             self.assertEqual((self.output / "人工判定資料庫.json").read_bytes(), expected_bytes)
             raw = journal.read_bytes()
+            protected_actual = {root / name: (root / name).read_bytes()
+                                for name in promotion.PROJECT_FILES if (root / name).exists()}
+            manifest_bytes = (self.output / "校對工作階段.json").read_bytes()
             # A malformed plan is not a trusted recovery entry, nor a reason
             # to clear the original evidence anchor or accept staged checks.
             journal.write_bytes(b'{"state":"COMMITTED","recovery_plan":{}}')
@@ -449,27 +454,68 @@ class ReviewResumeTests(unittest.TestCase):
             self.assertIs(app._save_service.evidence_anchor, anchor)
             journal.write_bytes(raw)
             app.reload_records()
+            # A valid but different owner or plan after confirmation cannot
+            # reuse the old authorization. Corrupt plans also fail before writes.
+            for mutation in ("owner", "plan", "malformed"):
+                with self.subTest(mutation=mutation):
+                    original_identity = sp.committed_project_recovery(root)
+                    changed = json.loads(raw)
+                    if mutation == "owner":
+                        changed["transaction_id"] = "f" * 64 if changed["transaction_id"] != "f" * 64 else "e" * 64
+                    elif mutation == "plan":
+                        changed["recovery_plan"]["checked_postconditions"][0]["reading"] = "ㄎㄢˋ"
+                    else:
+                        changed["recovery_plan"] = {}
+                    injected = []
+                    def replace_after_confirm(*args, **kwargs):
+                        injected.append(True)
+                        journal.write_text(json.dumps(changed), encoding="utf-8")
+                        return True
+                    with patch.object(gui.messagebox, "askyesno", side_effect=replace_after_confirm), \
+                            patch.object(sp, "apply_staged_manual_actual_corrections") as ordinary_apply, \
+                            patch.object(sp, "refresh_actual_project") as refresh, \
+                            patch.object(sp, "recover_committed_actual_project", wraps=sp.recover_committed_actual_project) as recover:
+                        app.apply_staged_actuals()
+                        app.root.update()
+                    self.assertEqual(injected, [True])
+                    recover.assert_called_once_with(self.output, expected_recovery=original_identity)
+                    ordinary_apply.assert_not_called()
+                    refresh.assert_not_called()
+                    self.assertIn("復原紀錄已變更", errors.call_args.args[1])
+                    self.assertEqual((self.output / "人工判定資料庫.json").read_bytes(), expected_bytes)
+                    self.assertEqual((self.output / "校對工作階段.json").read_bytes(), manifest_bytes)
+                    for path, original in protected_actual.items():
+                        self.assertEqual(path.read_bytes(), original)
+                    self.assertFalse(app.staged_checked_occurrence_ids)
+                    self.assertIs(app._save_service.evidence_anchor, anchor)
+                    journal.write_bytes(raw)
+                    app.reload_records()
             # Remove the journal after the strict availability check but while
             # the user is confirming. The worker must not apply new staging.
             success.reset_mock()
-            with patch.object(gui.messagebox, "askyesno", side_effect=lambda *a, **k: (journal.unlink() or True)), \
-                    patch.object(gui, "apply_staged_manual_actual_corrections") as ordinary_apply:
+            with patch.object(gui.messagebox, "askyesno", side_effect=lambda *a, **k: (journal.unlink() or True)) as deleted, \
+                    patch.object(sp, "apply_staged_manual_actual_corrections") as ordinary_apply:
                 app.apply_staged_actuals()
                 app.root.update()
             ordinary_apply.assert_not_called()
+            deleted.assert_called_once()
             success.assert_not_called()
             self.assertIn("復原紀錄已變更", errors.call_args.args[1])
             self.assertFalse(app.staging_summary.get("actual_recovery_pending"))
             self.assertIs(app._save_service.evidence_anchor, anchor)
+            for path, original in protected_actual.items():
+                self.assertEqual(path.read_bytes(), original)
             journal.write_bytes(raw)
             app.reload_records()
-            with patch.object(gui, "recover_committed_actual_project", wraps=sp.recover_committed_actual_project) as recover, \
-                    patch.object(gui, "apply_staged_manual_actual_corrections") as ordinary_apply, \
+            identity = sp.committed_project_recovery(root)
+            with patch.object(sp, "recover_committed_actual_project", wraps=sp.recover_committed_actual_project) as recover, \
+                    patch.object(sp, "apply_staged_manual_actual_corrections") as ordinary_apply, \
                     patch.object(sp, "apply_staged_manual_actual_batch") as batch, \
-                    patch.object(sp, "refresh_actual_project", side_effect=controlled_refresh):
+                    patch.object(sp, "refresh_actual_project", side_effect=controlled_refresh) as refreshed:
                 app.apply_staged_actuals()
                 app.root.update()
-            recover.assert_called_once_with(self.output)
+            recover.assert_called_once_with(self.output, expected_recovery=identity)
+            refreshed.assert_called_once()
             ordinary_apply.assert_not_called()
             batch.assert_not_called()
             self.assertIsNone(sp.committed_project_recovery(root))

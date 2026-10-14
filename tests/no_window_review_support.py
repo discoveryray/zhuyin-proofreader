@@ -8,6 +8,7 @@ from contextlib import ExitStack, contextmanager
 from types import SimpleNamespace
 from unittest.mock import patch
 import copy
+import queue
 import tkinter as tk
 from tkinter import ttk
 
@@ -15,6 +16,7 @@ import review_display as display
 import review_gui as gui
 import standalone_proofread as sp
 from review_save_service import ReviewSaveService
+from review_operation_worker import ReviewOperationState, preview_png, validate_preview_png
 from tests.review_save_test_support import QueuedRoot
 
 
@@ -235,10 +237,45 @@ def inspector_views():
         yield
 
 
+class InlineReviewService(ReviewSaveService):
+    """Tests-only serial transport: execute the same finite dispatcher/service."""
+    def invoke(self, operation, payload, *, progress=None, cancelled=None):
+        state = getattr(self, "_operation_state", None)
+        if state is None:
+            self._operation_state = state = ReviewOperationState(self.output_dir, service=self)
+        return state.dispatch(operation, payload, progress or (lambda phase: None), cancelled or (lambda: False))
+
+    def with_invalidated_cache(self):
+        return InlineReviewService(self.output_dir, evidence_anchor=self.evidence_anchor)
+
+
+class ImmediateOperations:
+    """Legacy handler fixtures retire scheduling, while running actual work."""
+    def _start_owned_operation(self, title, work, publish, *, committed=False, on_terminal=None):
+        if getattr(self, "_operation_in_progress", False):
+            return False
+        self._operation_in_progress = True
+        request = dict(project=self.output_dir, generation=getattr(self, "_project_generation", 0),
+                       manifest=self.manifest, db=self.db, title=title)
+        if on_terminal is not None:
+            request["on_terminal"] = on_terminal
+        self._operation_request = request
+        completed = queue.Queue(maxsize=1)
+        try:
+            value = work(lambda phase: None)
+        except Exception as exc:
+            completed.put((None, exc))
+        else:
+            completed.put((value, None))
+        gui.ReviewApp._poll_owned_operation(self, request, completed, queue.Queue(), publish, committed)
+        return True
+
+
 class Preview(Surface, display.OccurrencePreview):
     """Real load/render/failure logic; only native canvas/image drawing retires."""
     def __init__(self, parent=None, *, on_failure=None, expand_content=False,
-                 on_locate=None, on_layout=None, before_locate=None, **_options):
+                 on_locate=None, on_layout=None, before_locate=None,
+                 on_ready=None, on_invalidated=None, **_options):
         Surface.__init__(self, parent)
         self.canvas = Surface(self, height=120)
         self.notice = Surface(self)
@@ -249,6 +286,9 @@ class Preview(Surface, display.OccurrencePreview):
         self._draw_pending = self._render_pending = self._locate_pending = None
         self._render_width = self._entry = None
         self._disposed, self._needs_locate = False, False
+        self.on_ready, self.on_invalidated = on_ready, on_invalidated
+        self._preview_generation = 0
+        self._preview_job = self._preview_pending = self._preview_poll = None
         self.canvas.find_withtag = lambda tag: (1,) if (
             self.photo is not None and (tag == 'page' or tag == 'target' and self.target is not None)) else ()
         self.canvas.coords = lambda _tag: list(self.target or ())
@@ -258,12 +298,43 @@ class Preview(Surface, display.OccurrencePreview):
         self.canvas.delete = lambda *_args: None
         self.canvas.yview_moveto = lambda *_args: None
 
+    def _start_preview(self, token, payload):
+        class InlineJob:
+            def poll(job):
+                return validate_preview_png(preview_png(**payload))
+            def cancel(job):
+                pass
+        self._preview_token = token
+        self._preview_job = InlineJob()
+        self._poll_preview()
+
+    def load(self, *args, **kwargs):
+        display.OccurrencePreview.load(self, *args, **kwargs)
+        return self.target is not None
+
     def _draw(self):
         # Native image/canvas boundary: use the decoder's real pixel buffer.
         self._cancel_draw()
         if self._disposed:
             return
         self.photo = self.pixmap
+        if self.target is not None and self.on_ready is not None:
+            owner = getattr(self.on_ready, "__self__", None)
+            if owner is not None and owner._save_busy():
+                # Pixel decoding is synchronous here; the real raster child
+                # delivers readiness after the controller's current callback.
+                # Preserve that ordering when a save publishes its next view.
+                generation, photo, target, ready = (self._preview_generation,
+                    self.photo, self.target, self.on_ready)
+                def deliver_ready():
+                    self._draw_pending = None
+                    if (not self._disposed and generation == self._preview_generation
+                            and self.photo is photo and self.target == target
+                            and self.on_ready is ready):
+                        ready(self)
+                self._draw_pending = self.after_idle(deliver_ready)
+            else:
+                self.on_ready(self)
 
     def destroy(self):
         self._dispose(SimpleNamespace(widget=self.canvas))
@@ -281,7 +352,7 @@ class Menu:
         return self.commands[label]()
 
 
-class ReviewApp(gui.ReviewApp):
+class ReviewApp(ImmediateOperations, gui.ReviewApp):
     """Real review handlers/services with finite controls instead of a layout."""
     def __init__(self, root, output_dir):
         self.root, self.output_dir = root, output_dir
@@ -295,7 +366,7 @@ class ReviewApp(gui.ReviewApp):
         self.last_expected_review_id = None
         self._save_in_progress = False
         self._project_generation = 0
-        self._save_service = ReviewSaveService(output_dir)
+        self._save_service = InlineReviewService(output_dir)
         self._save_recovery_required = False
         self.last_save_timings = {}
         self.deferred_items = set()
@@ -309,7 +380,8 @@ class ReviewApp(gui.ReviewApp):
         self.tech_text = Text(root)
         self.more_menu = Menu()
         self.more_menu.commands["返回待辦"] = self.return_to_pending
-        self.image = Preview(root, on_failure=self._preview_failed)
+        self.image = Preview(root, on_failure=self._preview_failed,
+                             on_ready=self._preview_ready, on_invalidated=self._preview_failed)
         self.reload_records()
         self.show()
 

@@ -6,6 +6,7 @@ import hashlib
 import json
 import tempfile
 import threading
+import time
 import tkinter as tk
 import tkinter.font as tkfont
 import unittest
@@ -327,6 +328,22 @@ class ManualReviewGuiTests(unittest.TestCase):
         self.window.destroy()
         self.temp.cleanup()
 
+    def wait_for_current_confirmation_ready(self):
+        """Pump actual callbacks; never enable a pending or failed preview."""
+        app = self.app
+        review_id = app.current()["review_id"]
+        deadline = time.monotonic() + 15
+        while (app._save_busy() or app._rendered_review_id != review_id
+               or app.primary.cget("state") != "normal"
+               or app.staging_summary.get("staging_validation_pending")):
+            self.assertLess(time.monotonic(), deadline, "current preview/staging did not become ready")
+            self.window.update()
+            time.sleep(.001)
+        self.assertEqual(app.current()["review_id"], review_id)
+        self.assertIsNotNone(app.image.photo)
+        self.assertIsNotNone(app.image.target)
+        self.assertFalse(app.staging_summary.get("staging_error"))
+
     def test_missing_printed_page_gui_save_reopen_and_report(self):
         with tempfile.TemporaryDirectory() as td:
             output = Path(td)
@@ -506,6 +523,7 @@ class ManualReviewGuiTests(unittest.TestCase):
 
         app._review_action_cooldown_until = 0
         app._shortcut_cooldown_until = 0
+        self.wait_for_current_confirmation_ready()
         app.primary.invoke()
         wait_for_save(app)
         self.assertIsNone(app.focused_entry)
@@ -526,10 +544,12 @@ class ManualReviewGuiTests(unittest.TestCase):
         before = (self.output / "人工判定資料庫.json").read_bytes()
         app._review_action_cooldown_until = 0
         app._shortcut_cooldown_until = 0
-        with patch.object(sp, "json_save", side_effect=OSError("isolated re-entry failure")), \
+        self.wait_for_current_confirmation_ready()
+        with patch.object(sp, "json_save", side_effect=OSError("isolated re-entry failure")) as injected, \
                 patch.object(gui.messagebox, "showerror") as error:
             app.primary.invoke()
             wait_for_save(app)
+        injected.assert_called_once()
         error.assert_called_once()
         self.assertEqual((self.output / "人工判定資料庫.json").read_bytes(), before)
         self.assertEqual(app.current()["review_id"], first["review_id"])
@@ -565,6 +585,7 @@ class ManualReviewGuiTests(unittest.TestCase):
         self.assertNotEqual(second["review_id"], first["review_id"])
         app._review_action_cooldown_until = 0
         app._shortcut_cooldown_until = 0
+        self.wait_for_current_confirmation_ready()
         app.primary.invoke()  # Save B.
         wait_for_save(app)
         self.assertEqual(app.last_expected_review_id, second["review_id"])

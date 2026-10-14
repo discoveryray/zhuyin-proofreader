@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import copy
 from contextlib import contextmanager, ExitStack
+from contextvars import ContextVar
 import base64
 import binascii
 import functools
+from excel_text import append_text_row
 import hashlib
 import json
 import math
@@ -49,6 +51,92 @@ def _sha(path: Path) -> str:
     return digest.hexdigest()
 
 
+# Only a private, content-verified snapshot owns these operation-local reads.
+# No live project/DB/receipt state is cached here.
+_excel_snapshot_reads = ContextVar("excel_snapshot_reads", default=None)
+
+
+def _active_excel_snapshot(path):
+    state = _excel_snapshot_reads.get()
+    if state is None or Path(path).resolve() != state["path"]:
+        return None
+    if _sha(state["path"]) != state["sha256"]:
+        raise ValueError("Excel 私有快照於讀取期間變動；未使用已解析資料")
+    return state
+
+
+@contextmanager
+def _read_excel_workbook(path, *, data_only=True):
+    """Finite read-only handles owned by _workbook_snapshot, never writers."""
+    from excel_text import load_text_workbook
+    state = _active_excel_snapshot(path)
+    if state is None:
+        workbook = load_text_workbook(path, data_only=data_only)
+        try:
+            yield workbook
+        finally:
+            workbook.close()
+        return
+    mode = bool(data_only)
+    if mode not in state["workbooks"]:
+        state["workbooks"][mode] = load_text_workbook(path, data_only=mode)
+    yield state["workbooks"][mode]
+
+
+def _memoized_excel_read(reader):
+    """Memoize only the four named source parsers; each caller gets its own view."""
+    module = reader.__module__
+    if (module == "__main__"
+            and Path(reader.__globals__.get("__file__", "")).resolve()
+            == Path(__file__).with_name("standalone_proofread.py").resolve()):
+        module = "standalone_proofread"
+    if (module, reader.__name__) not in {
+        ("standalone_proofread", "workbook_metadata"), ("standalone_proofread", "workbook_rows"),
+        ("actual_review", "_load_sheet_rows"), ("actual_review", "load_actual_sample_profile"),
+    }:
+        raise ValueError("unknown Excel snapshot parser")
+    @functools.wraps(reader)
+    def wrapped(path, *args, **kwargs):
+        state = _active_excel_snapshot(path)
+        if state is None:
+            return reader(path, *args, **kwargs)
+        # The finite parsers accept sheet strings and required-column lists.
+        key = (reader.__module__, reader.__name__, repr(args), repr(sorted(kwargs.items())))
+        if key not in state["parsed"]:
+            state["parsed"][key] = copy.deepcopy(reader(path, *args, **kwargs))
+        return copy.deepcopy(state["parsed"][key])
+    return wrapped
+
+
+def _snapshot_workbook_result(workbook, key, parse):
+    """Cache immutable carried proof fields, never source/target validation."""
+    if key not in {("proof_rows",), ("decoded_proof", "Excel 跨電腦內容證據"),
+                   ("decoded_proof", "actual GPT source content proof")}:
+        raise ValueError("unknown Excel carried proof parser")
+    state = _excel_snapshot_reads.get()
+    if state is None:
+        return parse()
+    modes = [mode for mode, item in state["workbooks"].items() if workbook is item]
+    if not modes:
+        return parse()
+    _active_excel_snapshot(state["path"])
+    key = (*key, modes[0])
+    if key not in state["parsed"]:
+        state["parsed"][key] = copy.deepcopy(parse())
+    return copy.deepcopy(state["parsed"][key])
+
+
+def _excel_proof_rows(workbook):
+    return _snapshot_workbook_result(workbook, ("proof_rows",),
+                                     lambda: list(workbook[EXCEL_PROOF_SHEET].values))
+
+
+def _decoded_excel_proof(workbook, rows, *, label):
+    return _snapshot_workbook_result(
+        workbook, ("decoded_proof", label),
+        lambda: _decode_excel_content_proof((row[1] for row in rows[3:]), label=label))
+
+
 @contextmanager
 def _workbook_snapshot(path: Path, *, expected_sha256: str | None = None):
     """All workbook consumers read the same bytes whose digest was verified."""
@@ -60,7 +148,16 @@ def _workbook_snapshot(path: Path, *, expected_sha256: str | None = None):
     with tempfile.TemporaryDirectory(prefix="portable-excel-snapshot-") as folder:
         snapshot = Path(folder) / original.name
         snapshot.write_bytes(data)
-        yield snapshot, digest
+        state = {"path": snapshot.resolve(), "sha256": digest, "workbooks": {}, "parsed": {}}
+        token = _excel_snapshot_reads.set(state)
+        try:
+            yield snapshot, digest
+        finally:
+            _excel_snapshot_reads.reset(token)
+            for workbook in state["workbooks"].values():
+                workbook.close()
+            state["workbooks"].clear()
+            state["parsed"].clear()
 
 
 def _stable_excel_import(importer):
@@ -943,18 +1040,18 @@ def write_excel_content_proof(workbook, output_dir: Path, manifest, db, *, kind:
     encoded = base64.b64encode(zlib.compress(raw, level=9)).decode("ascii")
     chunks = [encoded[index:index + 30000] for index in range(0, len(encoded), 30000)]
     sheet = workbook.create_sheet(EXCEL_PROOF_SHEET)
-    sheet.append(["version", EXCEL_PROOF_VERSION])
-    sheet.append(["sha256", hashlib.sha256(raw).hexdigest()])
-    sheet.append(["chunk_count", len(chunks)])
+    append_text_row(sheet, ["version", EXCEL_PROOF_VERSION])
+    append_text_row(sheet, ["sha256", hashlib.sha256(raw).hexdigest()])
+    append_text_row(sheet, ["chunk_count", len(chunks)])
     for index, chunk in enumerate(chunks, 1):
-        sheet.append([index, chunk])
+        append_text_row(sheet, [index, chunk])
     sheet.sheet_state = "veryHidden"
 
 
 def validate_actual_profile_content_proof(workbook, *, source_manifest=None):
     """Bounded read-only consistency check for the 1.2 same-session route."""
     import actual_review as ar
-    rows = list(workbook[EXCEL_PROOF_SHEET].values)
+    rows = _excel_proof_rows(workbook)
     if (len(rows) < 4 or rows[0][:2] != ("version", EXCEL_PROOF_VERSION)
             or rows[1][0] != "sha256" or rows[2][0] != "chunk_count"
             or type(rows[2][1]) is not int or rows[2][1] < 1
@@ -962,8 +1059,7 @@ def validate_actual_profile_content_proof(workbook, *, source_manifest=None):
             or any(row[0] != i or not isinstance(row[1], str) or not row[1]
                    for i, row in enumerate(rows[3:], 1))):
         raise ValueError("actual GPT source content proof chunk contract 不完整")
-    raw, payload = _decode_excel_content_proof(
-        (row[1] for row in rows[3:]), label="actual GPT source content proof")
+    raw, payload = _decoded_excel_proof(workbook, rows, label="actual GPT source content proof")
     if not isinstance(payload, dict):
         raise ValueError("actual GPT source content proof 根節點無效")
     metadata = ar._actual_profile_metadata(workbook)
@@ -983,10 +1079,8 @@ def load_excel_content_proof(xlsx: Path, target_dir: Path, target_manifest, *,
                              kind: str, workbook_session: str):
     """Validate the carried source and map every occurrence by displayed position."""
     import standalone_proofread as sp
-    from openpyxl import load_workbook
 
-    workbook = load_workbook(xlsx, read_only=True, data_only=True)
-    try:
+    with _read_excel_workbook(xlsx, data_only=True) as workbook:
         actual_profile_metadata = None
         if kind == "actual":
             import actual_review as ar
@@ -997,10 +1091,8 @@ def load_excel_content_proof(xlsx: Path, target_dir: Path, target_manifest, *,
                 raise ValueError("actual GPT 1.2 source content proof deleted／missing")
             return _legacy_exact_excel_mapping(xlsx, target_dir, target_manifest,
                                                kind=kind, workbook_session=workbook_session)
-        rows = list(workbook[EXCEL_PROOF_SHEET].values)
+        rows = _excel_proof_rows(workbook)
         bound_rows = _excel_bound_rows(workbook, kind)
-    finally:
-        workbook.close()
     if (len(rows) < 4 or rows[0][:2] != ("version", EXCEL_PROOF_VERSION)
             or rows[1][0] != "sha256" or rows[2][0] != "chunk_count"
             or type(rows[2][1]) is not int or rows[2][1] < 1
@@ -1008,8 +1100,7 @@ def load_excel_content_proof(xlsx: Path, target_dir: Path, target_manifest, *,
             or any(row[0] != index or not isinstance(row[1], str)
                    for index, row in enumerate(rows[3:], 1))):
         raise ValueError("Excel 跨電腦內容證據格式損壞")
-    raw, payload = _decode_excel_content_proof(
-        (row[1] for row in rows[3:]), label="Excel 跨電腦內容證據")
+    raw, payload = _decoded_excel_proof(workbook, rows, label="Excel 跨電腦內容證據")
     if (hashlib.sha256(raw).hexdigest() != rows[1][1]
             or not isinstance(payload, dict) or payload.get("version") != EXCEL_PROOF_VERSION
             or payload.get("kind") != kind or _canonical(payload) != raw):
@@ -1038,17 +1129,23 @@ def load_excel_content_proof(xlsx: Path, target_dir: Path, target_manifest, *,
             or [(item.get("pdf_sha256"), item.get("pdf_name")) for item in proof.get("pdfs", [])]
             != [(item.get("pdf_sha256"), item.get("pdf_name")) for item in source_manifest.get("pdfs", [])]):
         raise ValueError("Excel 來源全頁內容證據與封印不符")
+    canonical_reviews = None
     if kind == "expected" and source_manifest["session_id"] == target_manifest["session_id"]:
         _verify_available_session_pdfs(Path(target_dir), target_manifest)
         pdf_map = {item["pdf_sha256"]: item["pdf_sha256"] for item in proof["pdfs"]}
         geometry = _SealedSessionGeometry(
             {item["pdf_sha256"]: (item["pages"], item["pages"]) for item in proof["pdfs"]},
             source_manifest, target_manifest, pdf_map)
-        if _canonical_roster_mapping(source_manifest, target_manifest, pdf_map, geometry) is None:
+        canonical_reviews = _canonical_roster_mapping(source_manifest, target_manifest, pdf_map, geometry)
+        if canonical_reviews is None:
             raise ValueError("同 session expected 離線匯入缺少完整 sealed canonical roster")
     else:
         pdf_map, geometry = _match_pdfs(proof, source_manifest, target_manifest, Path(target_dir))
-    reviews = _map_reviews(source_manifest, target_manifest, pdf_map, geometry)
+    # The same-session admission immediately above already validated the full
+    # source and target rosters against this exact geometry; reuse that map only
+    # within this call. Other mapping routes retain their independent validator.
+    reviews = (canonical_reviews if canonical_reviews is not None else
+               _map_reviews(source_manifest, target_manifest, pdf_map, geometry))
     if kind == "actual":
         _guard_actual_excel_sources(xlsx, source_ledger, target_dir, target_manifest, pdf_map)
     return (source_manifest, source_db, source_ledger, reviews, pdf_map,
@@ -1709,6 +1806,63 @@ def _historical_import_replay(conflicts, identity, source_event, target_event, *
     return False
 
 
+
+class _ExpectedExcelHistory:
+    """One validated receipt snapshot, indexed without changing exact equality.
+
+    The finite locator only narrows candidates. Complete source identity and the
+    original decision projection still must compare equal before any replay.
+    Local adjudication remains in the live target DB, never in this index.
+    """
+    def __init__(self, conflicts, supplements):
+        self.historical = {}
+        self.receipts = {}
+        for conflict in conflicts:
+            for side in ("source", "target"):
+                saved = conflict.get(f"{side}_event")
+                if side == "target" and saved is None and conflict.get("contract") in {
+                        EXPECTED_BUSINESS_CONTRACT, DEPENDENCY_RECHECK_CONTRACT}:
+                    saved = conflict["target_basis"]["event"]
+                if not isinstance(saved, dict):
+                    continue
+                payload = _excel_expected_decision(saved)
+                known = [conflict.get(f"{side}_identity"), saved.get("portability_source"),
+                         *saved.get("portability_duplicate_sources", [])]
+                for identity in known:
+                    if isinstance(identity, dict):
+                        self.historical.setdefault(self._key(identity), []).append(
+                            (copy.deepcopy(identity), copy.deepcopy(payload), side,
+                             conflict.get("target_review_id")))
+        for record in [*supplements, *conflicts]:
+            identity = record.get("source_identity")
+            if isinstance(identity, dict):
+                self.receipts.setdefault(self._key(identity), []).append(
+                    (copy.deepcopy(identity), copy.deepcopy(_excel_expected_decision(record.get("source_event", {})))))
+
+    @staticmethod
+    def _key(identity):
+        return (identity.get("target_review_id"), identity.get("source_excel_sha256"),
+                identity.get("source_excel_row"))
+
+    def historical_replay(self, identity, source_event, target_event):
+        candidates = self.historical.get(self._key(identity), ())
+        if not candidates:
+            return False
+        source_payload = _excel_expected_decision(source_event)
+        payloads = {"source": source_payload,
+                    "target": (source_payload if target_event is source_event else
+                               _excel_expected_decision(target_event))}
+        return any(target_id == identity["target_review_id"] and saved == identity
+                   and payload == payloads[side]
+                   for saved, payload, side, target_id in candidates)
+
+    def receipt_replay(self, identity, event):
+        candidates = self.receipts.get(self._key(identity), ())
+        if not candidates:
+            return False
+        incoming = _excel_expected_decision(event)
+        return any(saved == identity and payload == incoming for saved, payload in candidates)
+
 def _restore_exact_file(path: Path, original: bytes | None) -> None:
     if original is None:
         path.unlink(missing_ok=True)
@@ -1939,6 +2093,7 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
     """Import filled expected rows after full-page and occurrence-local mapping."""
     import standalone_proofread as sp
 
+    rows = sp._screen_expected_import_rows(xlsx)
     target_dir, xlsx = Path(target_dir).resolve(), Path(xlsx).resolve()
     manifest_path = target_dir / "校對工作階段.json"
     if _target_manifest_sha is None:
@@ -1959,10 +2114,6 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
                *map(str, target_manifest.get("compatible_expected_asset_fingerprints") or [])}
     if str(metadata.get("expected_asset_fingerprint") or "") not in allowed:
         raise ValueError("Excel 與目標 expected 資產 fingerprint 不相容")
-    required = ["occurrence_id", "review_id", "review_snapshot", "state", "action",
-                "proposed_expected_set", "proposed_expected_evidence", "proposed_context_evidence",
-                "exclusion_reason", "exclusion_evidence", *sp.CONFIRMATION_GATES, "note"]
-    rows = sp.workbook_rows(xlsx, "待判定候選", required)
     _verify_excel_import_snapshot(xlsx, _original_xlsx, _snapshot_sha)
     sp.assert_unique_ids(rows, "occurrence_id")
     sp.assert_unique_ids(rows, "review_id")
@@ -2085,17 +2236,15 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
             prior_conflicts = copy.deepcopy(receipt_snapshots[CONFLICT_FILE][1]["conflicts"])
         prior_supplements = copy.deepcopy((receipt_snapshots[CONFLICT_FILE][1] or {}).get("supplements", []))
         prior_pending_ids = set(validate_conflict_state(target_dir, live_manifest, target_db))
+        history = _ExpectedExcelHistory(prior_conflicts, prior_supplements)
         candidate = copy.deepcopy(target_db)
         imported, duplicates, conflicts, supplements = 0, 0, [], []
         for target, event, identity, same_conditions, recheck in actions:
             review_id = target["review_id"]
-            if _historical_import_replay(prior_conflicts, identity, event, event,
-                                         decision_payload=_excel_expected_decision):
+            if history.historical_replay(identity, event, event):
                 duplicates += 1
                 continue
-            if any(item.get("source_identity") == identity
-                   and _excel_expected_decision(item.get("source_event", {})) == _excel_expected_decision(event)
-                   for item in [*prior_supplements, *prior_conflicts]):
+            if history.receipt_replay(identity, event):
                 duplicates += 1
                 continue
             current = candidate["events"].get(review_id)
@@ -2148,7 +2297,13 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
         ledger = sp.materialize_ledger(target_manifest, candidate)
         if any(row.get("review_event_replay_status") for row in ledger):
             raise ValueError("Excel 匯入後判定無法在目標安全重播")
-        if imported or duplicates or conflicts or supplements:
+        db_changed = candidate != target_db
+        # A new same-answer source can change DB provenance without importing a
+        # new reading. Receipt-only supplements/conflicts also remain mutations.
+        # A report has no binding proving it reusable here: keep the existing
+        # durable marker/resume publication even for an exact duplicate replay.
+        publish_required = bool(actions or db_changed or conflicts or supplements)
+        if publish_required:
             receipt_path = target_dir / CONFLICT_FILE
             presentation_paths = [target_dir / name for name in
                                   ("待人工確認.json", "注音校對_最終報告.xlsx", "pipeline_status.json")]
@@ -2183,7 +2338,8 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
                 if sp.json_load_strict(marker_path) != owned_marker:
                     raise ValueError("Excel expected 匯入標記已由其他交易變動；未寫入判定")
                 validate_write()
-                sp.json_save(db_path, candidate, expected_sha256=before)
+                if db_changed:
+                    sp.json_save(db_path, candidate, expected_sha256=before)
                 db_committed = True
                 written_candidate_sha = _sha(db_path)
             except Exception as exc:
@@ -2194,7 +2350,7 @@ def import_expected_excel(target_dir: Path, xlsx: Path, *, dry_run: bool = False
                     _restore_exact_file(receipt_path, receipt_before)
                     _restore_exact_file(marker_path, marker_before)
                 raise
-    if imported or duplicates or conflicts or supplements:
+    if publish_required:
         try:
             resume_portable_project(target_dir, _expected_marker_sha=marker_sha)
         except Exception:
@@ -2280,21 +2436,17 @@ def import_actual_excel(target_dir: Path, xlsx: Path, *,
         post_commit_recovery_plan_from_results, PROJECT_TRANSACTION_FILE,
     )
 
+    metadata, rows = ar._screen_actual_import_rows(xlsx)
     target_dir, xlsx = Path(target_dir).resolve(), Path(xlsx).resolve()
     target_manifest, target_db = _load_project(target_dir, allow_actual_excel_conflict=True)
     existing_actual_conflicts = actual_excel_conflict_state(target_dir, target_manifest, target_db)
     target_actual_state = _actual_transfer_state(target_dir, target_manifest)
     if target_actual_state["status"] != "NONE":
         raise ValueError("目標尚有未核對的 actual 暫存/來源轉送；先完成本地恢復")
-    metadata, rows = ar._load_sheet_rows(xlsx, "actual待判定")
     ar.load_actual_sample_profile(xlsx)
     _verify_excel_import_snapshot(xlsx, _original_xlsx, _snapshot_sha)
-    from openpyxl import load_workbook
-    workbook = load_workbook(xlsx, read_only=True)
-    try:
+    with _read_excel_workbook(xlsx, data_only=False) as workbook:
         legacy = EXCEL_PROOF_SHEET not in workbook.sheetnames
-    finally:
-        workbook.close()
     if legacy:
         _guard_actual_excel_sources(
             xlsx, sp.materialize_ledger(target_manifest, target_db), target_dir, target_manifest,

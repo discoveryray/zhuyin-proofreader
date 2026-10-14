@@ -52,6 +52,11 @@ class ExportFeedbackTests(unittest.TestCase):
         self.app.log.insert.assert_called_with("end", "匯出完成通知之後的紀錄\n")
         self.app.root.after.assert_called_with(100, self.app.poll)
 
+    def post_result(self, result):
+        project = str(self.folder.resolve())
+        token = self.app._reserve_operation(project, "test")
+        self.app.q.put(("__OP_DONE__", token, project, 0, result, None))
+
     def workbook_script(self, count):
         path = self.folder / "待判定候選_給GPT.xlsx"
         return ("from openpyxl import Workbook; from pathlib import Path; "
@@ -121,14 +126,14 @@ class ExportFeedbackTests(unittest.TestCase):
                                      ("open", PermissionError("無法讀取輸出"))):
             with self.subTest(operation=operation), patch.object(Path, operation, side_effect=exception):
                 result = gui.gpt_export_result("actual", 0, str(path))
-            self.app.q.put(("__DONE__", None, 0, result))
+            self.post_result(result)
             self.app.q.put("completion後的紀錄\n")
             self.app.poll()
             self.assertIn(str(exception), self.error.call_args.args[1])
             self.app.log.insert.assert_called_with("end", "completion後的紀錄\n")
         result = gui.gpt_export_result("actual", 0, "\0/actual待判定_GPT包.zip")
         self.assertTrue(result[2])
-        self.app.q.put(("__DONE__", None, 0, result))
+        self.post_result(result)
         self.app.poll()
         self.app.root.after.assert_called_with(100, self.app.poll)
 
@@ -167,7 +172,8 @@ class ExportFeedbackTests(unittest.TestCase):
             self.app.poll()
             button.config.assert_called_with(state="normal")
             text = self.app.run_status.config.call_args.kwargs["text"]
-            self.assertIn("處理已結束" if code == 0 else "操作失敗（代碼 2）", text)
+            self.assertIn("操作已結束" if code == 0 else "操作未完整完成（代碼 2）", text)
+            self.assertNotIn("專案資料未", text)
         self.app.refresh_project_status.assert_called()
         self.app.log.insert.assert_any_call("end", "保留一般命令\n")
         self.info.assert_not_called()

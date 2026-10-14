@@ -8,6 +8,8 @@ import tkinter as tk
 from tkinter import ttk
 
 import fitz
+from types import SimpleNamespace
+from review_operation_worker import PreviewJob
 
 
 class WrappedLabel(tk.Label):
@@ -199,7 +201,7 @@ def occurrence_preview(entry, *, padding=(150, 115), scale=2.2, output_dir=None,
 class OccurrencePreview(tk.Frame):
     """Width-fit PDF view; an expanded sample delegates scrolling to its form."""
     def __init__(self, master, *, height=120, expand_content=False, on_locate=None, on_failure=None,
-                 on_layout=None, before_locate=None):
+                 on_layout=None, before_locate=None, on_ready=None, on_invalidated=None):
         super().__init__(master)
         self.expand_content = expand_content
         self._minimum_height = height
@@ -207,6 +209,10 @@ class OccurrencePreview(tk.Frame):
         self.on_failure = on_failure
         self.on_layout = on_layout
         self.before_locate = before_locate
+        self.on_ready, self.on_invalidated = on_ready, on_invalidated
+        self._preview_generation = 0
+        self._preview_job = self._preview_pending = self._preview_poll = None
+        self._preview_session = None
         self.notice = WrappedLabel(self, fg="#555555")
         self.notice.pack(side="bottom", fill="x")
         self.canvas = tk.Canvas(self, bg="white", height=height, highlightthickness=0, width=1)
@@ -234,8 +240,8 @@ class OccurrencePreview(tk.Frame):
 
     def _cancel_callbacks(self):
         self._cancel_draw()
-        for name in ("_render_pending", "_locate_pending"):
-            pending = getattr(self, name)
+        for name in ("_render_pending", "_locate_pending", "_preview_poll"):
+            pending = getattr(self, name, None)
             if pending is not None:
                 self.after_cancel(pending)
                 setattr(self, name, None)
@@ -244,10 +250,12 @@ class OccurrencePreview(tk.Frame):
         if event.widget is self or event.widget is self.canvas:
             self._disposed = True
             self._cancel_callbacks()
+            self._cancel_preview()
             # Tcl images and callback-held dialog variables must be released on
             # this owning Tk thread, before a save worker can collect cycles.
             self.photo = self.pixmap = self.target = None
             self.on_locate = self.on_failure = self.on_layout = self.before_locate = None
+            self.on_ready = self.on_invalidated = None
             if event.widget is self:
                 # Each child points back to this frame through master. Keep no
                 # Python-only cycle alive after Tcl destroys the widget tree.
@@ -256,6 +264,10 @@ class OccurrencePreview(tk.Frame):
 
     def clear(self, message=""):
         self._cancel_callbacks()
+        self._cancel_preview()
+        self._preview_generation = getattr(self, "_preview_generation", 0) + 1
+        if getattr(self, "on_invalidated", None) is not None:
+            self.on_invalidated()
         self.canvas.delete("all")
         self.canvas.configure(scrollregion=(0, 0, 0, 0))
         self.canvas.yview_moveto(0)
@@ -264,6 +276,8 @@ class OccurrencePreview(tk.Frame):
         self._entry = self._render_width = None
         self._needs_locate = False
         self.notice.configure(text=message)
+        if self._preview_job is not None and not self._disposed:
+            self._preview_poll = self.after(20, self._poll_preview)
 
     def load(self, entry, *, padding=(150, 115), output_dir=None):
         self.clear()
@@ -274,14 +288,9 @@ class OccurrencePreview(tk.Frame):
             self._padding, self._output_dir = padding, output_dir
             width = self.canvas.winfo_width() - 16
             self._render_width = width if width > 16 else None
-            self.pixmap, self.target, notice = occurrence_preview(
-                self._entry, padding=padding, output_dir=output_dir, display_width=self._render_width)
-            self.notice.configure(text=notice)
             self._needs_locate = True
-            self._draw()
-            # A full-page fallback is useful context, but is not a successfully
-            # located sample and cannot authorize a visual confirmation.
-            return self.target is not None
+            self._request_preview(self._render_width)
+            return False  # Pending pixels never authorize visual confirmation.
         except Exception as exc:
             self._failed(exc)
             return False
@@ -319,15 +328,82 @@ class OccurrencePreview(tk.Frame):
             return
         width = max(1, self.canvas.winfo_width() - 16)
         try:
-            self.pixmap, self.target, notice = occurrence_preview(
-                self._entry, padding=self._padding, output_dir=self._output_dir, display_width=width)
-            self._render_width = width
-            self.notice.configure(text=notice)
-            self._draw()
-            if self.target is None and self.on_failure is not None:
-                self.on_failure()
+            self._request_preview(width)
         except Exception as exc:
             self._failed(exc)
+
+    def _cancel_preview(self):
+        self._preview_pending = None
+        if self._disposed:
+            job = getattr(self, "_preview_session", None) or getattr(self, "_preview_job", None)
+            self._preview_job = self._preview_session = None
+            if job is not None:
+                job.cancel()
+
+    def _request_preview(self, width):
+        self._render_width = width
+        self._preview_generation = getattr(self, "_preview_generation", 0) + 1
+        token = (self._preview_generation, copy.deepcopy(self._entry), self._output_dir, width)
+        self.photo = self.target = self.pixmap = None
+        self.canvas.delete("all")
+        self.notice.configure(text="正在載入原頁…")
+        if getattr(self, "on_invalidated", None) is not None:
+            self.on_invalidated()
+        payload = dict(entry=token[1], padding=self._padding, output_dir=self._output_dir, display_width=width)
+        if getattr(self, "_preview_job", None) is not None:
+            self._preview_pending = (token, payload)  # Coalesce to one latest request.
+            if self._preview_poll is None:
+                self._preview_poll = self.after(20, self._poll_preview)
+            return
+        self._start_preview(token, payload)
+
+    def _start_preview(self, token, payload):
+        self._preview_token = token
+        if getattr(self, "_preview_session", None) is None:
+            self._preview_session = PreviewJob(payload)
+        else:
+            self._preview_session.submit(payload)
+        self._preview_job = self._preview_session
+        self._preview_poll = self.after(20, self._poll_preview)
+
+    def _poll_preview(self):
+        self._preview_poll = None
+        if self._disposed or self._preview_job is None:
+            return
+        try:
+            result = self._preview_job.poll()
+        except Exception as exc:
+            self._preview_job = None
+            session = getattr(self, "_preview_session", None)
+            if session is not None and session.active:
+                session.cancel()
+                self._preview_session = None
+            if self._preview_pending is None:
+                self._failed(exc)
+                return
+            result = None
+        if result is None and self._preview_job is not None:
+            self._preview_poll = self.after(20, self._poll_preview)
+            return
+        token = self._preview_token
+        self._preview_job = None
+        pending, self._preview_pending = self._preview_pending, None
+        if pending is not None:
+            self._start_preview(*pending)
+            return
+        if self._entry is None or token != (self._preview_generation, self._entry, self._output_dir, self._render_width):
+            return
+        if (result.get("source_sha256") != self._entry.get("pdf_sha256")
+                or result.get("review_id") != self._entry.get("review_id")
+                or result.get("occurrence_id") != self._entry.get("occurrence_id")):
+            self._failed(ValueError("預覽結果不屬於目前封印與位置"))
+            return
+        self.pixmap = SimpleNamespace(width=result["width"], height=result["height"], png=result["png"])
+        self.target = result["target"]
+        self.notice.configure(text=result["notice"])
+        self._draw()
+        if self.target is None and self.on_failure is not None:
+            self.on_failure()
 
     def _schedule_draw(self, _event=None):
         if not self._disposed and self._draw_pending is None:
@@ -387,8 +463,12 @@ class OccurrencePreview(tk.Frame):
             self._failed(ValueError("預覽超出可安全顯示的尺寸，請縮小視窗後重新選取本筆"))
             return
         try:
-            scaled = fitz.Pixmap(self.pixmap, *size)
-            self.photo = tk.PhotoImage(master=self, data=base64.b64encode(scaled.tobytes("png")))
+            if width - 16 != self._render_width:
+                self._render_width = width - 16
+                self._render()
+                return
+            scaled = self.pixmap
+            self.photo = tk.PhotoImage(master=self, data=base64.b64encode(scaled.png))
         except Exception as exc:
             self._failed(exc)
             return
@@ -413,6 +493,8 @@ class OccurrencePreview(tk.Frame):
             box = (x + x0 * sx - 3, y + y0 * sy - 3, x + x1 * sx + 3, y + y1 * sy + 3)
             self.canvas.create_rectangle(*box, outline="#ffffff", width=5, tags="target")
             self.canvas.create_rectangle(*box, outline="#bc230d", width=2, tags="target")
+            if getattr(self, "on_ready", None) is not None:
+                self.on_ready(self)
             if self._needs_locate:
                 if self._locate_pending is not None:
                     self.after_cancel(self._locate_pending)

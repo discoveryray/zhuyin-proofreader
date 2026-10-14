@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import base64
+import copy
 import hashlib
 import json
 import os
 import re
 import threading
-from contextlib import contextmanager
+from contextlib import contextmanager, ExitStack
 from pathlib import Path
 from typing import Any, Mapping
 from uuid import uuid4
@@ -437,12 +438,86 @@ def _index(value, label):
     return result
 
 
-def direct_visual_intents(group, reading, checked_occurrence_ids, source_context):
+class _DirectVisualPDFSnapshot:
+    """Finite sealed PDF/page/font view for one direct-visual preparation."""
+    def __init__(self, source_context):
+        self.source_context = copy.deepcopy(source_context)
+        self.stack = ExitStack()
+        self.pdfs, self.pages, self.fonts, self.inspectors = {}, {}, {}, {}
+        self.active = False
+        self.closed = False
+
+    def __enter__(self):
+        if self.active or self.closed:
+            raise ValueError("nested or closed direct visual PDF snapshot")
+        self.active = True
+        return self
+
+    def assert_current(self):
+        for path, raw, document in self.pdfs.values():
+            if path.read_bytes() != raw:
+                raise ValueError("CURRENT_PDF_SEALED_SHA_MISMATCH")
+
+    def __exit__(self, kind, error, traceback):
+        try:
+            if kind is None:
+                self.assert_current()
+        finally:
+            self.active = False
+            self.closed = True
+            self.stack.close()
+
+    def source(self, source_context, member):
+        if not self.active or self.source_context != source_context:
+            raise ValueError("inactive or foreign direct visual PDF snapshot")
+        if source_context is None:
+            raise ValueError("NO_SEALED_SESSION_CONTEXT")
+        info = self.source_context["pdfs"][str(member["pdf_name"])]
+        path = Path(info["pdf"])
+        seal = library._sha256_text(info["pdf_sha256"], "sealed PDF SHA")
+        key = (str(path.resolve()), seal)
+        if key not in self.pdfs:
+            raw = path.read_bytes()
+            if hashlib.sha256(raw).hexdigest() != seal:
+                raise ValueError("CURRENT_PDF_SEALED_SHA_MISMATCH")
+            document = self.stack.enter_context(fitz.open(stream=raw, filetype="pdf"))
+            self.pdfs[key] = (path, raw, document)
+        return key, seal, self.pdfs[key][2]
+
+    def page(self, key, document, page_index):
+        page_key = (key, page_index)
+        if page_key not in self.pages:
+            page = document[page_index]
+            fonts = page.get_fonts(full=True)
+            self.pages[page_key] = (fonts, build_font_lookup(fonts), page.get_texttrace())
+        return self.pages[page_key]
+
+    def font(self, key, document, xref):
+        font_key = (key, xref)
+        if font_key not in self.fonts:
+            self.fonts[font_key] = document.extract_font(xref)
+        return self.fonts[font_key]
+
+    def inspector(self, key, xref, kind, font_bytes, font_name):
+        font_key = (key, xref, kind)
+        if font_key not in self.inspectors:
+            self.inspectors[font_key] = (TrueTypeGlyphInspector(font_bytes)
+                if kind == library.TTF_GLYF_SHA256 else
+                CFFZhuyinInspector(font_bytes, normalize_basefont(font_name), {}))
+        return self.inspectors[font_key]
+
+
+def direct_visual_intents(group, reading, checked_occurrence_ids, source_context, *, _snapshot=None):
     """Only frozen checked decisions admitted from current, sealed PDF bytes.
 
     Insufficient Global proof is explicitly reported without rejecting the local
     occurrence correction. No expected/decoder reading is consulted here.
     """
+    if _snapshot is None:
+        with _DirectVisualPDFSnapshot(source_context) as snapshot:
+            return direct_visual_intents(group, reading, checked_occurrence_ids, source_context, _snapshot=snapshot)
+    if not isinstance(_snapshot, _DirectVisualPDFSnapshot):
+        raise ValueError("invalid direct visual PDF snapshot")
     ids = list(checked_occurrence_ids)
     if len(set(ids)) != len(ids) or not ids:
         raise ValueError("direct visual checked IDs must be nonempty and unique")
@@ -457,11 +532,7 @@ def direct_visual_intents(group, reading, checked_occurrence_ids, source_context
             project_id = library._strict_text(source_context["session_id"], "source_project_id")
             member = members[oid]
             source = member.get("source_record") or {}
-            info = source_context["pdfs"][str(member["pdf_name"])]
-            raw_pdf = Path(info["pdf"]).read_bytes()
-            pdf_sha = hashlib.sha256(raw_pdf).hexdigest()
-            if library._sha256_text(info["pdf_sha256"], "sealed PDF SHA") != pdf_sha:
-                raise ValueError("CURRENT_PDF_SEALED_SHA_MISMATCH")
+            pdf_key, pdf_sha, document = _snapshot.source(source_context, member)
             if member.get("pdf_sha256") and member["pdf_sha256"] != pdf_sha:
                 raise ValueError("OCCURRENCE_PDF_SHA_MISMATCH")
             xref = _index(source.get("font_xref", member.get("font_xref")), "font_xref")
@@ -469,36 +540,34 @@ def direct_visual_intents(group, reading, checked_occurrence_ids, source_context
             page_index = _index(member.get("physical_page"), "physical_page") - 1
             if page_index < 0:
                 raise ValueError("invalid physical page")
-            with fitz.open(stream=raw_pdf, filetype="pdf") as document:
-                fonts = document[page_index].get_fonts(full=True)
-                if xref not in {int(font[0]) for font in fonts}:
-                    raise ValueError("OCCURRENCE_FONT_NOT_ON_CURRENT_PAGE")
-                lookup = build_font_lookup(fonts)
-                root_gid = _index(
-                    source.get("glyph_id_字形索引", member.get("glyph_id", gid)), "root glyph",
+            fonts, lookup, trace = _snapshot.page(pdf_key, document, page_index)
+            if xref not in {int(font[0]) for font in fonts}:
+                raise ValueError("OCCURRENCE_FONT_NOT_ON_CURRENT_PAGE")
+            root_gid = _index(
+                source.get("glyph_id_字形索引", member.get("glyph_id", gid)), "root glyph",
+            )
+            matches = []
+            for span in trace:
+                matched_xref, _basefont, _resource, _encoding = resolve_font(
+                    lookup, normalize_basefont(span.get("font")),
                 )
-                matches = []
-                for span in document[page_index].get_texttrace():
-                    matched_xref, _basefont, _resource, _encoding = resolve_font(
-                        lookup, normalize_basefont(span.get("font")),
-                    )
-                    if matched_xref != xref:
-                        continue
-                    for character in span.get("chars", ()):
-                        codepoint, printed_gid, _origin, bbox = character[:4]
-                        if (chr(codepoint) == member.get("char") and printed_gid == root_gid
-                                and abs(float(bbox[0]) - float(member["x0"])) <= 0.8
-                                and abs(float(bbox[1]) - float(member["y0"])) <= 0.8):
-                            matches.append(printed_gid)
-                if len(matches) != 1:
-                    raise ValueError("CURRENT_OCCURRENCE_FONT_GLYPH_UNPROVABLE")
-                font_name, extension, _kind, font_bytes = document.extract_font(xref)
+                if matched_xref != xref:
+                    continue
+                for character in span.get("chars", ()):
+                    codepoint, printed_gid, _origin, bbox = character[:4]
+                    if (chr(codepoint) == member.get("char") and printed_gid == root_gid
+                            and abs(float(bbox[0]) - float(member["x0"])) <= 0.8
+                            and abs(float(bbox[1]) - float(member["y0"])) <= 0.8):
+                        matches.append(printed_gid)
+            if len(matches) != 1:
+                raise ValueError("CURRENT_OCCURRENCE_FONT_GLYPH_UNPROVABLE")
+            font_name, extension, _kind, font_bytes = _snapshot.font(pdf_key, document, xref)
             if not font_bytes:
                 raise ValueError("EMBEDDED_FONT_UNAVAILABLE")
             if group["kind"] == library.TTF_GLYF_SHA256:
                 if extension != "ttf":
                     raise ValueError("NOT_CURRENT_TTF")
-                inspector = TrueTypeGlyphInspector(font_bytes)
+                inspector = _snapshot.inspector(pdf_key, xref, group["kind"], font_bytes, font_name)
                 if root_gid != gid and gid not in {part["gid"] for part in inspector.components(root_gid)}:
                     raise ValueError("CURRENT_TTF_GLYPH_NOT_ATTACHED_TO_OCCURRENCE")
                 identity = inspector.global_exact_identity(gid)
@@ -511,7 +580,7 @@ def direct_visual_intents(group, reading, checked_occurrence_ids, source_context
                 if root_gid != gid:
                     raise ValueError("CURRENT_CFF_GLYPH_MISMATCH")
                 name = normalize_basefont(font_name)
-                inspector = CFFZhuyinInspector(font_bytes, name, {})
+                inspector = _snapshot.inspector(pdf_key, xref, group["kind"], font_bytes, font_name)
                 identity = inspector.global_exact_identity(gid)
                 style = identity["style_group"]
                 if style != group["style_group"] or style != source.get("CFF樣式群組"):

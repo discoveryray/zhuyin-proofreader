@@ -11,6 +11,7 @@ from pathlib import Path
 import sys
 
 import fitz
+from excel_text import append_text_row, write_text_value
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
@@ -639,7 +640,7 @@ def _attach_occurrence_metadata(ws, pdf_path: Path, pdf_sha256: str) -> list[dic
     ]
     for name in metadata_headers:
         if name not in headers:
-            ws.cell(1, len(headers) + 1, name)
+            write_text_value(ws, 1, len(headers) + 1, name)
             headers.append(name)
     rows: list[dict] = []
     for excel_row in range(2, ws.max_row + 1):
@@ -666,7 +667,7 @@ def _attach_occurrence_metadata(ws, pdf_path: Path, pdf_sha256: str) -> list[dic
             "workbook_schema_version": WORKBOOK_SCHEMA_VERSION,
         }
         for name, value in values.items():
-            ws.cell(excel_row, header_index[name], value)
+            write_text_value(ws, excel_row, header_index[name], value)
     return rows
 
 
@@ -762,7 +763,7 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
     ws_global_exact = wb.create_sheet("Global exact reuse 稽核")
     ws_runtime = wb.create_sheet("v5.2中繼資料")
 
-    ws.append([
+    append_text_row(ws, [
         "實體頁碼", "課本頁", "頁面標籤", "字元", "Unicode", "實際注音", "解碼狀態",
         "解碼依據", "字型相容群組", "對照來源font", "穩定注音鍵", "群組注音鍵",
         "font", "font_xref", "glyph_id_字形索引", "主字元件ID", "注音元件ID",
@@ -798,14 +799,14 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
     ])
     ws_struct.append(["font", "偵測架構", "舊版名稱規則命中", "出現次數", "已解碼", "未解碼", "說明"])
     ws_actual_override.append(["課本頁", "字元", "穩定注音鍵", "font", "font_xref", "x0", "y0", "自動解碼原值", "人工覆寫後實際注音", "來源", "備註"])
-    ws_struct_excl.append(["實體頁碼", "課本頁", "字元", "font", "font_xref", "glyph_id", "候選注音元件ID", "x0", "y0", "來源", "排除理由"])
+    append_text_row(ws_struct_excl, ["實體頁碼", "課本頁", "字元", "font", "font_xref", "glyph_id", "候選注音元件ID", "x0", "y0", "來源", "排除理由"])
     ws_cff_bootstrap.append(["未見家族鍵", "CFF符號簽名", "暫存符號", "處置", "目標glyph_id支持數", "最高安全雙重來源家族支持", "證據筆數", "來源已知樣式", "目標font", "安全說明"])
     ws_global_exact.append([
         "kind", "style_group", "glyph_sha256", "global_effective_state",
         "verified_exact_sources", "exact_reading", "conflicting_readings",
         "處置", "出現次數", "已由獨立fallback解碼筆數", "頁碼", "字元例", "actual-only安全說明",
     ])
-    ws_runtime.append(["項目", "內容"])
+    append_text_row(ws_runtime, ["項目", "內容"])
     ws_groups.append(["群組ID", "font_regex", "說明"])
     for g in groups:
         ws_groups.append([g["group_id"], g["regex"].pattern, g["notes"]])
@@ -1139,7 +1140,7 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
                     if exact_source_label:
                         decode_basis = exact_source_label
                     source_label = exact_source_label or font
-                    ws.append([
+                    append_text_row(ws, [
                         page_no, printed_page, label, c, f"U+{int(ucs):04X}" if isinstance(ucs, int) else "",
                         bop, status, decode_basis, f"CFF:{cff_group_key}", source_label, stable_key, group_key,
                         font, xref, glyph_id, "", "",
@@ -1197,7 +1198,7 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
                     safe_round(bbox[0]), safe_round(bbox[1]), structural_exclusions
                 )
                 if struct_ex:
-                    ws_struct_excl.append([
+                    append_text_row(ws_struct_excl, [
                         page_no, printed_page, c, font, xref, glyph_id, zh_id,
                         safe_round(bbox[0]), safe_round(bbox[1]),
                         struct_ex.get("source", ""), struct_ex.get("note", ""),
@@ -1323,7 +1324,7 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
                 structural_counts[(font, structural_source)] += 1
                 if bop:
                     structural_mapped[(font, structural_source)] += 1
-                ws.append([
+                append_text_row(ws, [
                     page_no, printed_page, label, c, f"U+{int(ucs):04X}" if isinstance(ucs, int) else "",
                     bop, status, decode_basis, gid_group, source_font, stable_key, group_key,
                     font, xref, glyph_id, main_id, zh_id,
@@ -1396,14 +1397,14 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
             row_no = item["row"]
             symbols = "".join(temp_map[s] for s in item["signatures"])
             auto_group = f"AUTOBOOT:{item['family_key']}"
-            ws.cell(row_no, 6).value = reading
-            ws.cell(row_no, 7).value = "已解碼"
-            ws.cell(row_no, 8).value = "CFF未見家族零對照自舉（暫存exact簽名）"
-            ws.cell(row_no, 9).value = f"CFF:{auto_group}"
-            ws.cell(row_no, 12).value = f"CFF:{auto_group}#{item['glyph_id']}"
-            ws.cell(row_no, 23).value = "跨已知家族CID雙重共識→目標家族exact簽名暫存→exact解碼"
-            ws.cell(row_no, 25).value = auto_group
-            ws.cell(row_no, 27).value = symbols
+            write_text_value(ws, row_no, 6, reading)
+            write_text_value(ws, row_no, 7, "已解碼")
+            write_text_value(ws, row_no, 8, "CFF未見家族零對照自舉（暫存exact簽名）")
+            write_text_value(ws, row_no, 9, f"CFF:{auto_group}")
+            write_text_value(ws, row_no, 12, f"CFF:{auto_group}#{item['glyph_id']}")
+            write_text_value(ws, row_no, 23, "跨已知家族CID雙重共識→目標家族exact簽名暫存→exact解碼")
+            write_text_value(ws, row_no, 25, auto_group)
+            write_text_value(ws, row_no, 27, symbols)
             cff_bootstrap_mapped_rows += 1
 
         # 注音鍵彙整只有在同一穩定鍵的所有出現位置都得到同一讀音時才升格。
@@ -1603,13 +1604,13 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
             shape_conflict_occurrences += len(items)
             for item in items:
                 row_no = item["row"]
-                ws.cell(row_no, 6).value = ""
-                ws.cell(row_no, 7).value = "字形自驗衝突"
-                ws.cell(row_no, 8).value = "既有對照與TTF字形OOF自驗衝突（保守停用）"
-                ws.cell(row_no, 31).value = oof_prediction
-                ws.cell(row_no, 32).value = self_state
-                ws.cell(row_no, 33).value = cv_text
-                ws.cell(row_no, 34).value = evidence
+                write_text_value(ws, row_no, 6, "")
+                write_text_value(ws, row_no, 7, "字形自驗衝突")
+                write_text_value(ws, row_no, 8, "既有對照與TTF字形OOF自驗衝突（保守停用）")
+                write_text_value(ws, row_no, 31, oof_prediction)
+                write_text_value(ws, row_no, 32, self_state)
+                write_text_value(ws, row_no, 33, cv_text)
+                write_text_value(ws, row_no, 34, evidence)
                 sk = item["stable_key"]
                 if sk in key_meta:
                     key_meta[sk]["rec"] = None
@@ -1638,18 +1639,18 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
                 }
             for item in items:
                 row_no = item["row"]
-                ws.cell(row_no, 6).value = shape_prediction
-                ws.cell(row_no, 7).value = "已解碼"
-                ws.cell(row_no, 8).value = "TTF字形分解自動泛化（OOF驗證模型）"
-                ws.cell(row_no, 9).value = f"SHAPE:{font}"
-                ws.cell(row_no, 10).value = "同字型已驗證Bopomofo輪廓模板"
-                ws.cell(row_no, 12).value = f"SHAPE:{font}#{zh_id}"
+                write_text_value(ws, row_no, 6, shape_prediction)
+                write_text_value(ws, row_no, 7, "已解碼")
+                write_text_value(ws, row_no, 8, "TTF字形分解自動泛化（OOF驗證模型）")
+                write_text_value(ws, row_no, 9, f"SHAPE:{font}")
+                write_text_value(ws, row_no, 10, "同字型已驗證Bopomofo輪廓模板")
+                write_text_value(ws, row_no, 12, f"SHAPE:{font}#{zh_id}")
                 if isinstance(item.get("xref"), int) and xref_hash_map.get(item.get("xref")):
-                    ws.cell(row_no, 30).value = xref_hash_map.get(item.get("xref"))
-                ws.cell(row_no, 31).value = shape_prediction
-                ws.cell(row_no, 32).value = self_state
-                ws.cell(row_no, 33).value = cv_text
-                ws.cell(row_no, 34).value = evidence
+                    write_text_value(ws, row_no, 30, xref_hash_map.get(item.get("xref")))
+                write_text_value(ws, row_no, 31, shape_prediction)
+                write_text_value(ws, row_no, 32, self_state)
+                write_text_value(ws, row_no, 33, cv_text)
+                write_text_value(ws, row_no, 34, evidence)
                 sk = item["stable_key"]
                 if sk in key_meta:
                     key_meta[sk]["rec"] = rec
@@ -1677,10 +1678,10 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
                 self_state = "仍未知"
             for item in items:
                 row_no = item["row"]
-                ws.cell(row_no, 31).value = final_prediction
-                ws.cell(row_no, 32).value = self_state
-                ws.cell(row_no, 33).value = cv_text
-                ws.cell(row_no, 34).value = evidence
+                write_text_value(ws, row_no, 31, final_prediction)
+                write_text_value(ws, row_no, 32, self_state)
+                write_text_value(ws, row_no, 33, cv_text)
+                write_text_value(ws, row_no, 34, evidence)
 
         chars = "、".join(dict.fromkeys(x.get("char", "") for x in items if x.get("char")))
         pages = ",".join(str(x) for x in sorted({x.get("page_no") for x in items if x.get("page_no")}))
@@ -1885,16 +1886,16 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
         }
         for item in items:
             row_no = item["row"]
-            ws.cell(row_no, 6).value = bridge_reading
-            ws.cell(row_no, 7).value = "已解碼"
-            ws.cell(row_no, 8).value = exact_basis
-            ws.cell(row_no, 9).value = "GLYF-SHA256"
-            ws.cell(row_no, 10).value = source_text
-            ws.cell(row_no, 12).value = f"GLYF-SHA256#{zh_id}"
-            ws.cell(row_no, 31).value = bridge_reading
-            ws.cell(row_no, 32).value = "跨字型指紋橋接"
-            ws.cell(row_no, 33).value = "exact SHA-256 + conservative safe glyph source"
-            ws.cell(row_no, 34).value = f"sha256={hash_text}; source={source_text}"
+            write_text_value(ws, row_no, 6, bridge_reading)
+            write_text_value(ws, row_no, 7, "已解碼")
+            write_text_value(ws, row_no, 8, exact_basis)
+            write_text_value(ws, row_no, 9, "GLYF-SHA256")
+            write_text_value(ws, row_no, 10, source_text)
+            write_text_value(ws, row_no, 12, f"GLYF-SHA256#{zh_id}")
+            write_text_value(ws, row_no, 31, bridge_reading)
+            write_text_value(ws, row_no, 32, "跨字型指紋橋接")
+            write_text_value(ws, row_no, 33, "exact SHA-256 + conservative safe glyph source")
+            write_text_value(ws, row_no, 34, f"sha256={hash_text}; source={source_text}")
             sk = item["stable_key"]
             if sk in key_meta:
                 key_meta[sk]["rec"] = rec
@@ -2009,9 +2010,9 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
                     symbol_audit_conflict_occurrences += len(items)
                     for item in items:
                         row_no = item["row"]
-                        ws.cell(row_no, 32).value = "符號重組稽核衝突"
-                        ws.cell(row_no, 33).value = "exact symbol recombination disagrees with current decode"
-                        ws.cell(row_no, 34).value = f"current={current}; recombined={prediction}; {evidence}"[:3000]
+                        write_text_value(ws, row_no, 32, "符號重組稽核衝突")
+                        write_text_value(ws, row_no, 33, "exact symbol recombination disagrees with current decode")
+                        write_text_value(ws, row_no, 34, f"current={current}; recombined={prediction}; {evidence}")
             elif len(current_readings) > 1:
                 action = "既有同鍵多讀音，略過自驗"
         elif prediction:
@@ -2026,16 +2027,16 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
             }
             for item in items:
                 row_no = item["row"]
-                ws.cell(row_no, 6).value = prediction
-                ws.cell(row_no, 7).value = "已解碼"
-                ws.cell(row_no, 8).value = "TTF exact注音符號重組"
-                ws.cell(row_no, 9).value = "SYMBOL-RECOMB"
-                ws.cell(row_no, 10).value = source_text
-                ws.cell(row_no, 12).value = f"SYMBOL-RECOMB#{zh_id}"
-                ws.cell(row_no, 31).value = prediction
-                ws.cell(row_no, 32).value = "符號重組新增解碼"
-                ws.cell(row_no, 33).value = f"exact signatures; min source keys={min_support_keys}"
-                ws.cell(row_no, 34).value = evidence[:3000]
+                write_text_value(ws, row_no, 6, prediction)
+                write_text_value(ws, row_no, 7, "已解碼")
+                write_text_value(ws, row_no, 8, "TTF exact注音符號重組")
+                write_text_value(ws, row_no, 9, "SYMBOL-RECOMB")
+                write_text_value(ws, row_no, 10, source_text)
+                write_text_value(ws, row_no, 12, f"SYMBOL-RECOMB#{zh_id}")
+                write_text_value(ws, row_no, 31, prediction)
+                write_text_value(ws, row_no, 32, "符號重組新增解碼")
+                write_text_value(ws, row_no, 33, f"exact signatures; min source keys={min_support_keys}")
+                write_text_value(ws, row_no, 34, evidence)
                 sk = item["stable_key"]
                 if sk in key_meta:
                     key_meta[sk]["rec"] = rec
@@ -2071,13 +2072,13 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
         new_bop = (ov.get("actual_reading") or "").strip()
         if not new_bop:
             continue
-        ws.cell(row_no, actual_headers["自動解碼原值"]).value = old_bop
-        ws.cell(row_no, actual_headers["人工實際注音覆寫"]).value = new_bop
-        ws.cell(row_no, actual_headers["人工覆寫來源"]).value = ov.get("source", "")
-        ws.cell(row_no, actual_headers["人工覆寫備註"]).value = ov.get("note", "")
-        ws.cell(row_no, actual_headers["實際注音"]).value = new_bop
-        ws.cell(row_no, actual_headers["解碼狀態"]).value = "已解碼"
-        ws.cell(row_no, actual_headers["解碼依據"]).value = "使用者原頁人工覆核（出現位置限定）"
+        write_text_value(ws, row_no, actual_headers["自動解碼原值"], old_bop)
+        write_text_value(ws, row_no, actual_headers["人工實際注音覆寫"], new_bop)
+        write_text_value(ws, row_no, actual_headers["人工覆寫來源"], ov.get("source", ""))
+        write_text_value(ws, row_no, actual_headers["人工覆寫備註"], ov.get("note", ""))
+        write_text_value(ws, row_no, actual_headers["實際注音"], new_bop)
+        write_text_value(ws, row_no, actual_headers["解碼狀態"], "已解碼")
+        write_text_value(ws, row_no, actual_headers["解碼依據"], "使用者原頁人工覆核（出現位置限定）")
         manual_actual_override_count += 1
         ws_actual_override.append([
             rv.get("課本頁"), rv.get("字元"), rv.get("穩定注音鍵"), rv.get("font"), rv.get("font_xref"),
@@ -2322,7 +2323,7 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
         ("actual_source_row_count", len(actual_source_rows)),
         ("structural_exclusion_source_row_count", len(exclusion_source_rows)),
     ]:
-        ws_runtime.append(item)
+        append_text_row(ws_runtime, item)
 
     style_sheet(ws)
     style_sheet(ws_keys)

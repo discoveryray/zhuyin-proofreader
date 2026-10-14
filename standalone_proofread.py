@@ -21,7 +21,9 @@ from typing import Any, Mapping
 from uuid import uuid4
 from sealed_workbook_paths import binding_scope, bind_workbooks, workbook_path, owned_path, descriptor, bound_operation, trusted_root
 
+from excel_text import append_text_row
 from openpyxl import Workbook, load_workbook
+from pdf_portability import _memoized_excel_read, _read_excel_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
@@ -102,6 +104,7 @@ from runtime_regression_gate import load_mandatory_cases, validate_regression_ex
 from actual_review import (
     ACTUAL_REVIEW_SCHEMA_VERSION,
     OCCURRENCE_OVERRIDE_FILE, USER_GLYF_FILE, USER_CFF_FILE, GLYPH_CONFLICT_FILE, GLYPH_PROVENANCE_FILE,
+    load_dynamic_actual_snapshot,
     apply_staged_manual_actual_batch,
     build_actual_review_groups,
     build_actual_group_for_entry,
@@ -247,7 +250,7 @@ def _publish_local_actual_conflict_resolution(output_dir: Path, report: Path) ->
 
 
 @bound_operation(project_parameter="output_dir")
-def recover_committed_actual_project(output_dir: Path, *, acknowledge: bool = True):
+def recover_committed_actual_project(output_dir: Path, *, acknowledge: bool = True, expected_recovery=None):
     """Explicit restart recovery; staging is never reapplied here.
 
     The single-correction caller defers acknowledgement until its additional
@@ -262,9 +265,23 @@ def recover_committed_actual_project(output_dir: Path, *, acknowledge: bool = Tr
         raise ValueError("專案未完成標記仍存在；請先使用所屬交易的恢復入口，未 acknowledgement")
     root = project_actual_evidence_root(output_dir)
     from global_glyph_promotion import PROJECT_TRANSACTION_FILE
-    if not (root / PROJECT_TRANSACTION_FILE).exists() and not (output_dir / ACTUAL_REFRESH_PUBLICATION).exists():
+    if expected_recovery is None and not (root / PROJECT_TRANSACTION_FILE).exists() and not (output_dir / ACTUAL_REFRESH_PUBLICATION).exists():
         return None
     with project_delivery_lock(root):
+        if expected_recovery is not None:
+            # The confirmation belongs to this complete durable plan, not just
+            # to a project path. Check before recovery can write or acknowledge.
+            from global_glyph_promotion import validate_post_commit_recovery_plan
+            try:
+                if (type(expected_recovery) not in (tuple, list) or len(expected_recovery) != 2
+                        or type(expected_recovery[0]) is not str):
+                    raise ValueError("invalid recovery identity")
+                token, plan = expected_recovery
+                validate_post_commit_recovery_plan(plan)
+                if committed_project_recovery(root) != (token, plan):
+                    raise ValueError("recovery owner or plan changed")
+            except Exception as exc:
+                raise ValueError("已提交 actual 復原紀錄已變更；未套用新暫存") from exc
         if acknowledge and (output_dir / INCOMPLETE_FILE).exists():
             raise ValueError("專案未完成標記仍存在；請先使用所屬交易的恢復入口，未 acknowledgement")
         recover_pending_project_actual_write(root)
@@ -806,9 +823,9 @@ def candidate_workbook_path(cand_dir: Path, pdf: Path) -> Path:
     return cand_dir / f"{pdf.stem}_注音校對候選.xlsx"
 
 
+@_memoized_excel_read
 def workbook_metadata(path: Path, sheet: str = "v5.2中繼資料") -> dict[str, Any]:
-    wb = load_workbook(path, read_only=True, data_only=True)
-    try:
+    with _read_excel_workbook(path, data_only=True) as wb:
         if sheet not in wb.sheetnames:
             raise ValueError(f"缺少必要工作表：{sheet}")
         ws = wb[sheet]
@@ -821,8 +838,6 @@ def workbook_metadata(path: Path, sheet: str = "v5.2中繼資料") -> dict[str, 
                 raise ValueError(f"{path.name}/{sheet} metadata key 重複：{key} (row {row_number})")
             out[key] = row[1] if len(row) > 1 else None
         return out
-    finally:
-        wb.close()
 
 
 @bound_operation(project_parameter="output_dir")
@@ -1172,7 +1187,7 @@ def export_pending_for_gpt(output_dir: Path, *, _allow_unpublished_pipeline: boo
     wb = Workbook()
     guide = wb.active
     guide.title = "使用說明"
-    guide.append(["項目", "說明"])
+    append_text_row(guide, ["項目", "說明"])
     instructions = [
         ("用途", "本表用來補充應標讀音證據、解決規則衝突或完成教材錯誤確認；程式仍會自行做 actual／expected 比較。"),
         ("actual 修正", "不得在本表直接改 actual。請用『輸出 actual 待判定給 GPT』產生 actual 視覺判定包，再以『匯入 GPT 判定檔（自動辨識）』匯入；程式會自行維護 occurrence override 並增量重解碼，不需要手動編輯 CSV。"),
@@ -1183,10 +1198,10 @@ def export_pending_for_gpt(output_dir: Path, *, _allow_unpublished_pipeline: boo
         ("expected／差異待處理數", len(pending)),
     ]
     for item in instructions:
-        guide.append(item)
+        append_text_row(guide, item)
 
     meta = wb.create_sheet("匯入中繼資料")
-    meta.append(["項目", "內容"])
+    append_text_row(meta, ["項目", "內容"])
     for item in [
         ("version", VERSION),
         ("session_id", manifest.get("session_id", "")),
@@ -1196,7 +1211,7 @@ def export_pending_for_gpt(output_dir: Path, *, _allow_unpublished_pipeline: boo
         ("expected_asset_fingerprint", manifest.get("expected_asset_fingerprint", "")),
         ("exported_review_count", len(pending)),
     ]:
-        meta.append(item)
+        append_text_row(meta, item)
 
     ws = wb.create_sheet("待判定候選")
     headers = [
@@ -1205,7 +1220,7 @@ def export_pending_for_gpt(output_dir: Path, *, _allow_unpublished_pipeline: boo
         "source_view", "action", "proposed_expected_set", "proposed_expected_evidence", "proposed_context_evidence",
         "exclusion_reason", "exclusion_evidence", *CONFIRMATION_GATES, "note",
     ]
-    ws.append(headers)
+    append_text_row(ws, headers)
     for index, entry in enumerate(pending, 1):
         source = entry.get("source_record") or {}
         row = {
@@ -1232,7 +1247,7 @@ def export_pending_for_gpt(output_dir: Path, *, _allow_unpublished_pipeline: boo
             "context_evidence": entry.get("context_evidence"),
             "source_view": entry.get("source_view"),
         }
-        ws.append([row.get(header, "") for header in headers])
+        append_text_row(ws, [row.get(header, "") for header in headers])
     action_column = headers.index("action") + 1
     dv = DataValidation(type="list", formula1='"補建expected證據,解決expected證據,確認現版差異,確認非校對範圍,保留待人工"', allow_blank=True)
     ws.add_data_validation(dv)
@@ -1492,6 +1507,9 @@ def import_actual_occurrence_decisions(output_dir: Path, csv_path: Path, *, pack
         prewrite_guard()
         return 0, 0, generate_report(output_dir, manifest, db)
 
+    from actual_review import index_actual_group_members, actual_group_identity, actual_group_match_key
+    member_index = index_actual_group_members(ledger)
+    group_memo = {}
     staged_by_group: dict[str, dict[str, Any]] = {}
     errors: list[str] = []
     seen_occ: set[str] = set()
@@ -1550,7 +1568,10 @@ def import_actual_occurrence_decisions(output_dir: Path, csv_path: Path, *, pack
         if str(row.get("exported_actual_evidence_sha256") or "").strip() != _sha_text(entry.get("actual_evidence")):
             errors.append(f"row {row_no}: actual evidence 已改變，請重新覆核")
             continue
-        group = build_actual_group_for_entry(ledger, entry)
+        key = actual_group_match_key(actual_group_identity(entry))
+        if key not in group_memo:
+            group_memo[key] = build_actual_group_for_entry(ledger, entry, member_index=member_index)
+        group = group_memo[key]
         slot = staged_by_group.setdefault(group["group_id"], {"group": group, "reading": verified, "ids": [], "notes": []})
         if slot["reading"] != verified:
             errors.append(f"row {row_no}: 同一 exact glyph group 出現互斥 actual")
@@ -1708,11 +1729,33 @@ def _snapshot_gpt_decisions_entry(operation):
     return snapshotted
 
 
+def _screen_expected_import_rows(xlsx):
+    """Reject cheap input errors before source mapping or target materialization."""
+    required = ["occurrence_id", "review_id", "review_snapshot", "state", "action",
+                "proposed_expected_set", "proposed_expected_evidence", "proposed_context_evidence",
+                "exclusion_reason", "exclusion_evidence", *CONFIRMATION_GATES, "note"]
+    rows = workbook_rows(xlsx, "待判定候選", required)
+    errors = []
+    for number, row in enumerate(rows, 2):
+        action = str(row.get("action") or "").strip()
+        if not action or action == "保留待人工":
+            continue
+        if action not in DECISIONS:
+            errors.append(f"row {number}: 禁止的直接結論或未知 action {action}")
+        for gate in CONFIRMATION_GATES:
+            if str(row.get(gate) or "").strip().upper() not in {"", "Y", "N"}:
+                errors.append(f"row {number}: gate {gate} 必須是 Y/N")
+    if errors:
+        raise ValueError("GPT／人工匯入整批拒絕；未寫入任何一列：\n" + "\n".join(errors[:100]))
+    return rows
+
+
 @_serialized_user_project_entry
 @_snapshot_gpt_decisions_entry
 @bound_operation(project_parameter="output_dir")
 def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False,
                          _original_xlsx: Path, _snapshot_sha: str) -> tuple[int, int, Path]:
+    rows = _screen_expected_import_rows(xlsx)
     _reject_incomplete_portable_project(output_dir)
     manifest, manifest_before_sha = json_load_snapshot(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
@@ -1734,11 +1777,8 @@ def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False,
     if mismatched:
         raise ValueError(f"匯入 workbook session/evidence 不相容：{mismatched}")
     from pdf_portability import import_expected_excel, EXCEL_PROOF_SHEET
-    workbook = load_workbook(xlsx, read_only=True, data_only=True)
-    try:
+    with _read_excel_workbook(xlsx, data_only=True) as workbook:
         portable_expected = EXCEL_PROOF_SHEET in workbook.sheetnames
-    finally:
-        workbook.close()
     if portable_expected or str(metadata.get("session_id") or "") != str(manifest.get("session_id") or ""):
         return import_expected_excel.__wrapped__(output_dir, xlsx, dry_run=dry_run,
             _original_xlsx=_original_xlsx, _snapshot_sha=_snapshot_sha,
@@ -1757,12 +1797,6 @@ def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False,
     if mismatched:
         raise ValueError(f"匯入 workbook session/evidence 不相容：{mismatched}")
 
-    required_columns = [
-        "occurrence_id", "review_id", "review_snapshot", "state", "action", "proposed_expected_set",
-        "proposed_expected_evidence", "proposed_context_evidence", "exclusion_reason", "exclusion_evidence",
-        *CONFIRMATION_GATES, "note",
-    ]
-    rows = workbook_rows(xlsx, "待判定候選", required_columns)
     assert_unique_ids(rows, "occurrence_id")
     assert_unique_ids(rows, "review_id")
 
@@ -2069,9 +2103,9 @@ def _summary_int(summary: Mapping[str, Any], key: str, *, missing: int = -1) -> 
     return int(value)
 
 
+@_memoized_excel_read
 def workbook_rows(path: Path, sheet: str, required_columns: list[str] | None = None) -> list[dict[str, Any]]:
-    wb = load_workbook(path, read_only=True, data_only=True)
-    try:
+    with _read_excel_workbook(path, data_only=True) as wb:
         if sheet not in wb.sheetnames:
             raise ValueError(f"{path.name} 缺少必要工作表：{sheet}")
         ws = wb[sheet]
@@ -2094,8 +2128,6 @@ def workbook_rows(path: Path, sheet: str, required_columns: list[str] | None = N
                 continue
             out.append({headers[i]: vals[i] for i in range(min(len(headers), len(vals)))})
         return out
-    finally:
-        wb.close()
 
 
 def make_review_id(pdf_hash: str, category: str, row: dict[str, Any]) -> str:
@@ -4796,6 +4828,8 @@ def import_actual_gpt_decisions(output_dir: Path, xlsx: Path) -> tuple[int, int,
 @bound_operation(project_parameter="output_dir")
 def _import_actual_gpt_decisions_snapshot(output_dir: Path, xlsx: Path, *,
                                          _original_xlsx: Path, _snapshot_sha: str):
+    from actual_review import _screen_actual_import_rows
+    _screen_actual_import_rows(xlsx)
     output_dir = Path(output_dir)
     from pdf_portability import INCOMPLETE_FILE
     if (output_dir / INCOMPLETE_FILE).exists():
@@ -5247,9 +5281,7 @@ def run_pipeline_pdfs(
     actual_dir=output_dir/"01_實際注音"; cand_dir=output_dir/"02_候選報告"
     actual_dir.mkdir(exist_ok=True); cand_dir.mkdir(exist_ok=True)
     if _source_project_dir is not None:
-        from actual_review import dynamic_actual_hashes
         dynamic_actual_root = project_actual_evidence_root(Path(_source_project_dir).resolve())
-        dynamic_actual_hashes(dynamic_actual_root, read_only=True)
     else:
         dynamic_actual_root = initialize_project_actual_evidence(output_dir, root)
     # Freeze the previous session before any output file is touched.  Reuse
@@ -5257,6 +5289,7 @@ def run_pipeline_pdfs(
     # otherwise one changed file would invalidate the old manifest and make all
     # later PDFs look stale.
     try:
+        dynamic_snapshot = load_dynamic_actual_snapshot(dynamic_actual_root, read_only=_source_project_dir is not None)
         baseline_manifest = load_reuse_baseline_manifest(output_dir)
         expected_chain_fingerprint = compute_expected_asset_fingerprint(
             root,
@@ -5281,6 +5314,7 @@ def run_pipeline_pdfs(
                 ),
                 dynamic_dependencies=dependencies,
                 dynamic_evidence_root=dynamic_actual_root,
+                dynamic_snapshot=dynamic_snapshot,
             )
     except Exception as exc:
         blocked_report = {
@@ -5349,6 +5383,7 @@ def run_pipeline_pdfs(
                 # global-fallback fingerprint before its exact glyph dependencies
                 # were known.  Re-seal only the metadata with the final per-PDF
                 # dependency fingerprint; pronunciation cells are untouched.
+                dynamic_snapshot.assert_current(dynamic_actual_root)
                 final_dependencies = actual_workbook_dynamic_dependencies(actual)
                 final_global_dependencies = actual_workbook_global_exact_dependencies(actual, pdf)
                 if final_global_dependencies is None:
@@ -5367,6 +5402,7 @@ def run_pipeline_pdfs(
                     ),
                     dynamic_dependencies=final_dependencies,
                     dynamic_evidence_root=dynamic_actual_root,
+                    dynamic_snapshot=dynamic_snapshot,
                 )
                 if final_fingerprint.get("fingerprint") != fingerprint.get("fingerprint"):
                     rewrite_actual_workbook_fingerprint(actual, final_fingerprint)
@@ -5433,16 +5469,20 @@ def run_pipeline_pdfs(
         if session_id_override:
             manifest["session_id"] = str(session_id_override)
             seal_manifest(manifest)
+        dynamic_snapshot.assert_current(dynamic_actual_root)
         with project_delivery_lock(project_actual_evidence_root(output_dir)):
             if _prewrite_guard is not None:
                 _prewrite_guard()
+            dynamic_snapshot.assert_current(dynamic_actual_root)
             json_save(output_dir/"校對工作階段.json",manifest)
             db=load_or_initialize_db(output_dir)
             if _prewrite_guard is not None:
                 _prewrite_guard()
+            dynamic_snapshot.assert_current(dynamic_actual_root)
             json_save(output_dir/"人工判定資料庫.json",db)
             if _prewrite_guard is not None:
                 _prewrite_guard()
+            dynamic_snapshot.assert_current(dynamic_actual_root)
             pending=save_pending_json(output_dir,manifest,db)
             ledger = materialize_ledger(manifest, db)
             reconciliation = reconcile_ledger(ledger, manifest.get("actual_source_ids") or [])
@@ -5452,6 +5492,7 @@ def run_pipeline_pdfs(
             gate = hold_expected_conflict_completion(_source_project_dir or output_dir, manifest, db, gate)
             if _prewrite_guard is not None:
                 _prewrite_guard()
+            dynamic_snapshot.assert_current(dynamic_actual_root)
             if defer_excel_reports:
                 # Interactive actual correction should refresh the authoritative
                 # ledger quickly. The large reports can be regenerated on demand.
@@ -5580,6 +5621,7 @@ def regenerate_report(output_dir: Path) -> Path:
         )
         raise SourceValidationError("global exact glyph 資料來源驗證失敗；未覆寫最終報告") from exc
     dynamic_actual_root = initialize_project_actual_evidence(output_dir, root)
+    dynamic_snapshot = load_dynamic_actual_snapshot(dynamic_actual_root, read_only=True)
     pdfs = _resolve_session_pdfs(output_dir, old_manifest)
     fingerprints = {}
     sealed_locations = {(index, kind): relative for index, kind, relative, sha in bind_workbooks(output_dir, old_manifest)}
@@ -5603,6 +5645,7 @@ def regenerate_report(output_dir: Path) -> Path:
                 actual_path
             ),
             dynamic_evidence_root=dynamic_actual_root,
+            dynamic_snapshot=dynamic_snapshot,
         )
     manifest = collect_manifest(
         pdfs,
@@ -5620,6 +5663,8 @@ def regenerate_report(output_dir: Path) -> Path:
     if validate_conflict_state(output_dir, old_manifest, db):
         raise ValueError("專案出現未裁決衝突；未重新發布")
     validate_output_artifact_hashes(old_manifest, output_dir=output_dir)
+    # _serialized_user_project_entry already owns the dynamic project lock.
+    dynamic_snapshot.assert_current(dynamic_actual_root)
     json_save(output_dir/"校對工作階段.json",manifest)
     save_pending_json(output_dir,manifest,db)
     return generate_report(output_dir,manifest,db)
@@ -5724,6 +5769,17 @@ def resolve_existing_project_dir(path: Path) -> Path:
     return unique[0] if len(unique) == 1 else path
 
 
+def _cli_operation_event(output_dir, phase, *, completed_files=0, total_files=1, commit_state="UNKNOWN"):
+    """Advisory presentation only; it creates no receipt or completion proof."""
+    operation_id = os.environ.get("ZHUYIN_OPERATION_ID", "")
+    project = str(Path(output_dir).resolve())
+    if not operation_id or os.environ.get("ZHUYIN_OPERATION_PROJECT") != project:
+        return
+    print("[ZHUYIN_OPERATION] " + json.dumps(dict(schema="zhuyin-operation/1", operation_id=operation_id,
+        project=project, phase=phase, completed_files=completed_files, total_files=total_files,
+        commit_state=commit_state), ensure_ascii=False), flush=True)
+
+
 def main():
     ap=argparse.ArgumentParser(description=f"{PROGRAM} v{VERSION}")
     ap.add_argument("input",nargs="?",help="PDF 或含 PDF 的資料夾")
@@ -5780,57 +5836,85 @@ def main():
                 raise ValueError("沒有可匯入的 GPT 判定檔")
             if len(planned) > 1:
                 print("[GPT 批次匯入] 已自動排序：判定包／actual -> expected；不需手動決定先後。", flush=True)
+            completed_files = 0
             for import_path, kind in planned:
-                if kind == "bundle":
-                    actual_n, removed, expected_n, skipped, report = import_gpt_decision_bundle(outdir, import_path)
-                    print(
-                        f"自動辨識：{import_path.name} = GPT 單檔判定包。"
-                        f"匯入 actual occurrence {actual_n} 筆；撤銷 {removed} 筆依賴舊 actual 的最終確認；"
-                        f"匯入 expected／差異 {expected_n} 筆；略過 {skipped} 筆未操作列。\n{report}",
-                        flush=True,
-                    )
-                elif kind == "actual":
-                    n, removed, report = import_actual_gpt_decisions(outdir, import_path)
-                    print(
-                        f"自動辨識：{import_path.name} = actual GPT 判定檔。"
-                        f"匯入 actual {n} 組；撤銷 {removed} 筆依賴舊 actual 的最終確認。\n{report}",
-                        flush=True,
-                    )
-                else:
-                    expected_result = import_gpt_decisions(outdir, import_path)
-                    n, skipped, report = expected_result
-                    business = getattr(expected_result, "status", {})
-                    business_text = (f"本次已保存：新增 {business['imported']} 筆；"
-                                     f"一致保留／補充 {business['consistent_supplements']} 筆；"
-                                     f"已處理重複 {business['duplicates']} 筆（未新增判定）；"
-                                     f"新增衝突 {business['new_conflicts']} 筆；"
-                                     f"待本地裁決 {business['pending_conflicts']} 筆。\n"
-                                     f"原待辦保留：保留待人工 {business['retained_manual']} 筆；"
-                                     f"未操作列 {business['skipped_unoperated']} 筆。\n"
-                                     + (f"依賴變動待重核 {business['dependency_rechecks']} 筆；"
-                                        f"有效本地完成判定保留 {business['preserved_local_decisions']} 筆（只保存來源稽核）。\n"
-                                        if 'dependency_rechecks' in business else "")
-                                     + ("請按「繼續校對」，查看雙方證據後用「輸入其他應標注音」裁決。\n"
-                                        if business['pending_conflicts'] else "")
-                                     + ("非校對範圍提案請重核原頁後使用既有排除入口；不會自動沿用舊排除。\n"
-                                        if business.get('dependency_rechecks') else "")
-                                     if business else "")
-                    print(
-                        f"自動辨識：{import_path.name} = expected／差異 GPT 證據檔。"
-                        f"{business_text if business else f'匯入 {n} 筆，略過 {skipped} 筆。'}\n{report}\n"
-                        "完成狀態請以本次產生的報告／pipeline_status.json 為準；"
-                        "若剛升級規則，請按「修復／更新報告」。",
-                        flush=True,
-                    )
+                _cli_operation_event(outdir, f"正在匯入 {import_path.name}", completed_files=completed_files, total_files=len(planned))
+                try:
+                    if kind == "bundle":
+                        actual_n, removed, expected_n, skipped, report = import_gpt_decision_bundle(outdir, import_path)
+                        print(
+                            f"自動辨識：{import_path.name} = GPT 單檔判定包。"
+                            f"匯入 actual occurrence {actual_n} 筆；撤銷 {removed} 筆依賴舊 actual 的最終確認；"
+                            f"匯入 expected／差異 {expected_n} 筆；略過 {skipped} 筆未操作列。\n{report}",
+                            flush=True,
+                        )
+                    elif kind == "actual":
+                        n, removed, report = import_actual_gpt_decisions(outdir, import_path)
+                        print(
+                            f"自動辨識：{import_path.name} = actual GPT 判定檔。"
+                            f"匯入 actual {n} 組；撤銷 {removed} 筆依賴舊 actual 的最終確認。\n{report}",
+                            flush=True,
+                        )
+                    else:
+                        expected_result = import_gpt_decisions(outdir, import_path)
+                        n, skipped, report = expected_result
+                        business = getattr(expected_result, "status", {})
+                        business_text = (f"本次已保存：新增 {business['imported']} 筆；"
+                                         f"一致保留／補充 {business['consistent_supplements']} 筆；"
+                                         f"已處理重複 {business['duplicates']} 筆（未新增判定）；"
+                                         f"新增衝突 {business['new_conflicts']} 筆；"
+                                         f"待本地裁決 {business['pending_conflicts']} 筆。\n"
+                                         f"原待辦保留：保留待人工 {business['retained_manual']} 筆；"
+                                         f"未操作列 {business['skipped_unoperated']} 筆。\n"
+                                         + (f"依賴變動待重核 {business['dependency_rechecks']} 筆；"
+                                            f"有效本地完成判定保留 {business['preserved_local_decisions']} 筆（只保存來源稽核）。\n"
+                                            if 'dependency_rechecks' in business else "")
+                                         + ("請按「繼續校對」，查看雙方證據後用「輸入其他應標注音」裁決。\n"
+                                            if business['pending_conflicts'] else "")
+                                         + ("非校對範圍提案請重核原頁後使用既有排除入口；不會自動沿用舊排除。\n"
+                                            if business.get('dependency_rechecks') else "")
+                                         if business else "")
+                        print(
+                            f"自動辨識：{import_path.name} = expected／差異 GPT 證據檔。"
+                            f"{business_text if business else f'匯入 {n} 筆，略過 {skipped} 筆。'}\n{report}\n"
+                            "完成狀態請以本次產生的報告／pipeline_status.json 為準；"
+                            "若剛升級規則，請按「修復／更新報告」。",
+                            flush=True,
+                        )
+                except Exception as exc:
+                    state = "COMMITTED_REFRESH_PENDING" if isinstance(exc, ManualActualPostApplyError) else "UNKNOWN"
+                    print(f"本次多檔匯入已完成 {completed_files}/{len(planned)} 檔；目前檔案未完整完成，狀態 {state}。"
+                          "先前完成檔案保留，請依交易／恢復紀錄核對。", flush=True)
+                    _cli_operation_event(outdir, "本檔未完整完成；先前完成檔案保留", completed_files=completed_files, total_files=len(planned), commit_state=state)
+                    raise
+                completed_files += 1
+                _cli_operation_event(outdir, "本檔處理完成", completed_files=completed_files, total_files=len(planned), commit_state="FILE_COMPLETED")
             return 0
         if args.import_actual_gpt:
-            n,removed,report=import_actual_gpt_decisions(outdir,Path(args.import_actual_gpt)); print(f"匯入 actual {n} 組；撤銷 {removed} 筆依賴舊 actual 的人工事件。\n{report}"); return 0
+            _cli_operation_event(outdir, "正在匯入 actual 判定")
+            try:
+                n, removed, report = import_actual_gpt_decisions(outdir, Path(args.import_actual_gpt))
+            except Exception as exc:
+                _cli_operation_event(outdir, "actual 匯入未完整完成", commit_state=
+                    "COMMITTED_REFRESH_PENDING" if isinstance(exc, ManualActualPostApplyError) else "UNKNOWN")
+                raise
+            _cli_operation_event(outdir, "actual 判定處理完成", completed_files=1, commit_state="FILE_COMPLETED")
+            print(f"匯入 actual {n} 組；撤銷 {removed} 筆依賴舊 actual 的人工事件。\n{report}")
+            return 0
         if args.refresh_actual:
             print(refresh_actual_with_recovery(outdir)); return 0
         if args.export_gpt:
             print(export_pending_for_gpt(outdir)); return 0
         if args.import_gpt:
-            n,skipped,report=import_gpt_decisions(outdir,Path(args.import_gpt)); print(f"匯入 {n} 筆，略過 {skipped} 筆。\n{report}"); return 0
+            _cli_operation_event(outdir, "正在匯入 expected 判定")
+            try:
+                n, skipped, report = import_gpt_decisions(outdir, Path(args.import_gpt))
+            except Exception:
+                _cli_operation_event(outdir, "expected 匯入未完整完成", commit_state="UNKNOWN")
+                raise
+            _cli_operation_event(outdir, "expected 判定處理完成", completed_files=1, commit_state="FILE_COMPLETED")
+            print(f"匯入 {n} 筆，略過 {skipped} 筆。\n{report}")
+            return 0
         print(regenerate_report(outdir)); return 0
     if not args.input: raise SystemExit("請指定 PDF 或 PDF 資料夾。")
     inp=Path(args.input)

@@ -209,6 +209,8 @@ def _ratio(a: str, b: str) -> float:
 
 
 def pair_pages(old_pages: list[PageData], new_pages: list[PageData]) -> tuple[list[PagePair], list[PageData], list[PageData]]:
+    old_chars = [page.chars for page in old_pages]
+    new_chars = [page.chars for page in new_pages]
     pairs: list[PagePair] = []
     used_old: set[int] = set()
     used_new: set[int] = set()
@@ -228,7 +230,7 @@ def pair_pages(old_pages: list[PageData], new_pages: list[PageData]) -> tuple[li
         nj = new_by_label[label]
         if len(oi) == 1 and len(nj) == 1:
             i, j = oi[0], nj[0]
-            score = _ratio(old_pages[i].chars, new_pages[j].chars)
+            score = _ratio(old_chars[i], new_chars[j])
             if score >= 0.35:
                 pairs.append(PagePair(old_pages[i], new_pages[j], "課本頁碼一致", score))
                 used_old.add(i); used_new.add(j)
@@ -237,12 +239,17 @@ def pair_pages(old_pages: list[PageData], new_pages: list[PageData]) -> tuple[li
     candidates: list[tuple[float, float, int, int]] = []
     maxn = max(len(old_pages), len(new_pages), 1)
     for i, op in enumerate(old_pages):
-        if i in used_old or not op.chars:
+        if i in used_old or not old_chars[i]:
             continue
         for j, np in enumerate(new_pages):
-            if j in used_new or not np.chars:
+            if j in used_new or not new_chars[j]:
                 continue
-            score = _ratio(op.chars, np.chars)
+            matcher = SequenceMatcher(None, old_chars[i], new_chars[j], autojunk=False)
+            if matcher.real_quick_ratio() < 0.72:
+                continue
+            if matcher.quick_ratio() < 0.72:
+                continue
+            score = matcher.ratio()
             if score < 0.72:
                 continue
             order_gap = abs(op.global_index - np.global_index) / maxn
