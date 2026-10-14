@@ -4189,6 +4189,16 @@ def _manual_actual_snapshot_ledger(manifest, db, ledger, *, base_ledger=None):
 
 def _validate_manual_actual_group_sources(output_dir, live_groups, *, source_hashes=None, checked_occurrence_ids=None):
     """Reprove the source bytes before retaining any prior visual checks."""
+    from actual_source_visual_safety import source_visual_operation
+    with source_visual_operation() as operation:
+        _validate_manual_actual_group_sources_in_operation(output_dir, live_groups,
+            source_hashes=source_hashes, checked_occurrence_ids=checked_occurrence_ids,
+            operation=operation)
+        operation.recheck_sources()
+
+
+def _validate_manual_actual_group_sources_in_operation(output_dir, live_groups, *,
+        source_hashes, checked_occurrence_ids, operation):
     checked_sources = set()
     for live in live_groups:
         for member in live["members"]:
@@ -4196,10 +4206,16 @@ def _validate_manual_actual_group_sources(output_dir, live_groups, *, source_has
             wanted = str(member.get("pdf_sha256") or "")
             key = (path, wanted)
             if key not in checked_sources:
-                observed = (source_hashes.get(str(path.resolve())) if source_hashes is not None
-                            else sha256_file(path))
-                if not wanted or observed != wanted:
+                if not wanted or (source_hashes is not None
+                        and source_hashes.get(str(path.resolve())) != wanted):
                     raise ValueError(f"SOURCE_INVALID：actual 暫存來源 PDF 已變更：{path.name}")
+                # The verified snapshot hash is an additional binding, not a
+                # substitute for current sealed bytes. Register every original
+                # source dependency without proving unchecked peer glyphs.
+                try:
+                    operation.read_source(path, wanted)
+                except ValueError as exc:
+                    raise ValueError(f"SOURCE_INVALID：actual 暫存來源 PDF 已變更：{path.name}") from exc
                 checked_sources.add(key)
             if checked_occurrence_ids is None or str(member.get("occurrence_id")) in checked_occurrence_ids:
                 from actual_review import require_actual_visual_target
@@ -4228,6 +4244,20 @@ def _manual_actual_staging_inventory(staging):
 
 def _manual_actual_summary_from_verified_snapshot(output_dir, staging, manifest, db, ledger,
                                                 *, base_ledger=None, source_hashes=None, cancelled=None):
+    from actual_source_visual_safety import source_visual_operation
+    with source_visual_operation() as operation:
+        summary = _manual_actual_summary_in_visual_operation(output_dir, staging, manifest, db, ledger,
+            base_ledger=base_ledger, source_hashes=source_hashes, cancelled=cancelled)
+        try:
+            operation.recheck_sources()
+        except Exception as exc:
+            summary["staging_error"] = str(exc)
+            summary["staged_checked_occurrence_ids"] = []
+        return summary
+
+
+def _manual_actual_summary_in_visual_operation(output_dir, staging, manifest, db, ledger,
+                                              *, base_ledger=None, source_hashes=None, cancelled=None):
     """Internal save path: all arguments belong to one content-verified snapshot.
 
     This shares group/source validators with the ordinary read path. It never
@@ -4289,6 +4319,22 @@ def stage_manual_actual_correction(
     reading: str,
     checked_occurrence_ids: list[str] | None = None,
     note: str = "",
+) -> dict[str, Any]:
+    from actual_source_visual_safety import source_visual_operation
+    with source_visual_operation() as operation:
+        result = _stage_manual_actual_correction_with_visual_sources(output_dir, review_id, reading,
+            checked_occurrence_ids=checked_occurrence_ids, note=note)
+        try:
+            operation.recheck_sources()
+        except Exception as exc:
+            result["staging_summary"]["staging_error"] = str(exc)
+            result["staging_summary"]["staged_checked_occurrence_ids"] = []
+        return result
+
+
+def _stage_manual_actual_correction_with_visual_sources(
+    output_dir: Path, review_id: str, reading: str,
+    checked_occurrence_ids: list[str] | None = None, note: str = "",
 ) -> dict[str, Any]:
     """Rebuild one current live group and durably stage its visual actual decision."""
     output_dir = Path(output_dir)

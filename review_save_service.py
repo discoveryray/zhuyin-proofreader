@@ -227,7 +227,8 @@ class ReviewSaveService:
             # those transactions racing a save of a now-obsolete expected row.
             notify("等待專案儲存鎖（尚未寫入）")
             waiting = time.perf_counter()
-            with self._lock, sp.project_delivery_lock(sp.project_actual_evidence_root(self.output_dir)):
+            from actual_source_visual_safety import source_visual_operation
+            with self._lock, sp.project_delivery_lock(sp.project_actual_evidence_root(self.output_dir)), source_visual_operation():
                 return self._save(review_id, event, expected_manifest, expected_db,
                                   defer_staging_validation=defer_staging_validation, notify=notify,
                                   confirm_current_actual_snapshot=copy.deepcopy(confirm_current_actual_snapshot),
@@ -352,6 +353,11 @@ class ReviewSaveService:
         return ReviewResumeSnapshot(manifest, db, baseline, ledger, content, hashes, timings)
 
     def validate_resume_staging(self, snapshot, *, cancelled=None):
+        from actual_source_visual_safety import source_visual_operation
+        with source_visual_operation():
+            return self._validate_resume_staging_with_visual_sources(snapshot, cancelled=cancelled)
+
+    def _validate_resume_staging_with_visual_sources(self, snapshot, *, cancelled=None):
         """Reuse verified bytes/ledger, then reject drift before publication."""
         phase = time.perf_counter()
         staging_path = sp.project_actual_evidence_root(self.output_dir) / "manual_actual_staging.json"
@@ -368,6 +374,8 @@ class ReviewSaveService:
                 raise InterruptedError("actual 暫存核對已由新操作取代")
             with self._lock, sp.project_delivery_lock(sp.project_actual_evidence_root(self.output_dir)):
                 _, final_hashes = self._capture(snapshot.timings)
+            from actual_source_visual_safety import recheck_current_sources
+            recheck_current_sources()
             if final_hashes != snapshot.hashes:
                 raise StaleReviewProjectError("actual 暫存核對期間專案內容已變更；請重新載入")
         except Exception as exc:
@@ -501,6 +509,10 @@ class ReviewSaveService:
         # Recheck every dependency immediately before the atomic replacement;
         # no side effect has happened yet if any input changed during validation.
         notify("寫入前再次完整核對依賴（尚未寫入）")
+        # Advisory callbacks run before the last strong content barrier too,
+        # including independent expected saves that intentionally defer actual
+        # source qualification and therefore have no registered visual sources.
+        notify("正在原子寫入人工判定")
         _, final_hashes = self._capture(timings)
         if final_hashes != hashes:
             raise StaleReviewProjectError("驗證期間專案來源或暫存已變更；未保存，請重新載入")
@@ -510,10 +522,18 @@ class ReviewSaveService:
         # may evict the calculation cache, but cannot erase the verified anchor.
         self._evidence_anchor = candidate_anchor
         phase = time.perf_counter()
-        notify("正在原子寫入人工判定")
+        from actual_source_visual_safety import recheck_current_sources
+        recheck_current_sources()
         saved_sha = sp.json_save(db_path, staged_db, expected_sha256=db_sha)
         timings["json_save"] = time.perf_counter() - phase
         notify("人工判定已寫入")
+        # A late source change cannot undo the independently committed expected
+        # decision or be reported as NOT_WRITTEN. It must not publish checked
+        # actual IDs from the now-retired source view either.
+        try:
+            recheck_current_sources()
+        except Exception as exc:
+            summary = {"staging_error": str(exc), "staged_checked_occurrence_ids": []}
         # No further fallible UI/staging work may turn this into a failed save.
         # The next operation verifies durable bytes again before reusing cache.
         hashes[str(db_path)] = saved_sha
