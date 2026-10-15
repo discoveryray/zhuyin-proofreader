@@ -19,7 +19,7 @@ def _state(root):
             if path.is_file() and path.name != ".global_exact_glyph_delivery.lock"}
 
 
-def _case(tmp_path, monkeypatch, *, moved=True, covered=False):
+def _case(tmp_path, monkeypatch, *, moved=True, covered=False, proof_kind="complete"):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-user"))
     source_pdf, local = tmp_path / "original.pdf", tmp_path / "local.pdf"
     pdf(source_pdf, title="source", genuine_source=True)
@@ -34,11 +34,25 @@ def _case(tmp_path, monkeypatch, *, moved=True, covered=False):
     add_override(source, manifest["records"][0])
     reseal_actual_dynamic(source, source_pdf)
     manifest = sp.json_load_strict(source / "校對工作階段.json")
-    p.prepare_portable_project(source)
+    if proof_kind != "missing":
+        p.prepare_portable_project(source)
+        if proof_kind == "legacy":
+            _legacy_proof(source)
     alias = source_pdf.rename(tmp_path / "moved original.pdf") if moved else source_pdf
     binding = {"source_project": str(source), "session_id": manifest["session_id"],
                "pdf_sha256": manifest["pdfs"][0]["pdf_sha256"], "path": str(alias)}
     return source, local, alias, binding, manifest
+
+
+def _legacy_proof(source):
+    path = source / p.PROOF_FILE
+    proof = sp.json_load_strict(path)
+    proof.pop("integrity_sha256")
+    for info in proof["pdfs"]:
+        for page in info["pages"]:
+            page.pop("candidate_text_sha256")
+    proof["integrity_sha256"] = hashlib.sha256(p._canonical(proof)).hexdigest()
+    sp.json_save(path, proof)
 
 
 def _pipeline(monkeypatch, local):
@@ -226,3 +240,142 @@ def test_real_cli_completed_merge_retains_saved_result_after_native_close_failur
     assert [row["expected_set"] for row in reopened["records"]] == [row["expected_set"] for row in original["records"]]
     overrides = ar._read_csv(sp.project_actual_evidence_root(target) / ar.OCCURRENCE_OVERRIDE_FILE, ar.OVERRIDE_HEADERS)
     assert len(overrides) == 1 and overrides[0]["actual_reading"] == "ㄐㄩㄝˊ"
+
+
+@pytest.mark.parametrize("proof_kind", ["missing", "legacy"])
+def test_alias_content_proof_public_transfer_and_import_reuse_original_bytes(tmp_path, monkeypatch, proof_kind):
+    from actual_source_visual_safety import source_visual_operation
+    source, local, original, binding, manifest = _case(
+        tmp_path, monkeypatch, moved=False, proof_kind=proof_kind)
+    source_before = _state(source)
+    source_bytes = original.read_bytes()
+    with source_visual_operation():
+        original_control = p._preflight_merge_sources([source.resolve()], local.resolve())
+    assert _state(source) == source_before
+    alias = original.rename(tmp_path / "renamed exact original.pdf")
+    binding["path"] = str(alias)
+    calls = _pipeline(monkeypatch, local)
+    snapshots = []
+    real_snapshot = p._pdf_content_snapshot
+    def snapshot(path, **kwargs):
+        if kwargs.get("_source_bytes") is not None:
+            snapshots.append((str(path), hashlib.sha256(kwargs["_source_bytes"]).hexdigest()))
+            assert kwargs["_source_bytes"] == alias.read_bytes()
+        return real_snapshot(path, **kwargs)
+    monkeypatch.setattr(p, "_pdf_content_snapshot", snapshot)
+    target = tmp_path / "continued"
+    result = (p.continue_project(source, local, target, source_pdf_aliases=[binding])
+              if proof_kind == "missing" else
+              p.merge_projects([source], local, target, source_pdf_aliases=[binding]))
+    assert result["matched_actual_overrides"] == 1 and calls == ["pipeline", "refresh"]
+    assert len(snapshots) == 1 and all(digest == binding["pdf_sha256"] for _, digest in snapshots)
+    assert (_state(source), alias.read_bytes()) == (source_before, source_bytes)
+    reopened, _ = p._load_project(target)
+    assert [r["expected_set"] for r in reopened["records"]] == [r["expected_set"] for r in manifest["records"]]
+    assert len(ar._read_csv(sp.project_actual_evidence_root(target) / ar.OCCURRENCE_OVERRIDE_FILE,
+                           ar.OVERRIDE_HEADERS)) == 1
+    assert not (target / p.INCOMPLETE_FILE).exists()
+    # The target now has its own sealed actual, satisfying the original import
+    # prerequisite. Exercise both public direct and selected-local branches.
+    for kwargs in ({}, {"_selected_local_pdf": local}):
+        imported = p.import_project_decisions(source, target, source_pdf_aliases=[binding], **kwargs)
+        assert imported["conflicts"] == []
+        assert p._load_project(target)[0]["session_id"] == reopened["session_id"]
+    assert _state(source) == source_before
+    with source_visual_operation():
+        bindings = p._SourcePdfBindings([source], [binding])
+        complete = p._load_proof(source, manifest, source_pdfs=bindings)
+        assert complete["pdfs"][0]["pages"] == original_control
+    assert _state(source) == source_before
+    assert not list((tmp_path / "isolated-user").rglob("*.sqlite*"))
+    assert ar._read_csv(sp.project_actual_evidence_root(target) / ar.USER_GLYF_FILE,
+                        ar.USER_GLYF_HEADERS) == []
+
+
+@pytest.mark.parametrize("proof_kind", ["missing", "legacy"])
+def test_real_pipeline_alias_content_reconstruction_saves_and_reopens(tmp_path, monkeypatch, proof_kind):
+    from unittest.mock import patch
+    from tests.test_pdf_portability_integration import _pdfs, _synthetic_decode
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-user"))
+    original, local = _pdfs(tmp_path)
+    source, target = tmp_path / "source", tmp_path / "continued"
+    # Only deterministic decoder output is injected; native qualification,
+    # content mapping, pipeline, actual refresh, save and publication are real.
+    with patch.object(sp, "decode", side_effect=_synthetic_decode), \
+         patch.object(sp, "actual_workbook_global_exact_dependencies", return_value=()), \
+         patch("check_pronunciation_candidates.actual_workbook_global_exact_dependencies", return_value=()):
+        sp.run_pipeline_pdfs([original], source, defer_excel_reports=True)
+        initial = sp.json_load_strict(source / "校對工作階段.json")
+        seed_overrides = ar._read_csv(sp.project_actual_evidence_root(source) / ar.OCCURRENCE_OVERRIDE_FILE,
+                                      ar.OVERRIDE_HEADERS)
+        add_override(source, initial["records"][0])
+        sp.refresh_actual_project(source)
+        manifest, _ = p._load_project(source)
+        if proof_kind == "legacy":
+            p.prepare_portable_project(source)
+            _legacy_proof(source)
+        else:
+            assert not (source / p.PROOF_FILE).exists()
+        before = _state(source)
+        source_bytes = original.read_bytes()
+        alias = original.rename(tmp_path / "renamed source.pdf")
+        binding = {"source_project": str(source), "session_id": manifest["session_id"],
+                   "pdf_sha256": manifest["pdfs"][0]["pdf_sha256"], "path": str(alias)}
+        result = p.continue_project(source, local, target, source_pdf_aliases=[binding])
+        assert result["matched_actual_overrides"] == 1
+        reopened, _ = p._load_project(target)
+        assert [r["expected_set"] for r in reopened["records"]] == [r["expected_set"] for r in manifest["records"]]
+        overrides = ar._read_csv(sp.project_actual_evidence_root(target) / ar.OCCURRENCE_OVERRIDE_FILE,
+                                 ar.OVERRIDE_HEADERS)
+        fields = ("pdf_contains", "pdf_excludes", "page", "target_char", "stable_key", "x0", "y0")
+        target_key = ar._override_key_from_entry(reopened["records"][0])
+        mapped = [row for row in overrides if tuple(row[field] for field in fields) == target_key]
+        retained = [row for row in overrides if tuple(row[field] for field in fields) != target_key]
+        assert len(mapped) == 1 and mapped[0]["actual_reading"] == "ㄐㄩㄝˊ"
+        assert retained == seed_overrides and len(overrides) == len(seed_overrides) + 1
+        assert not (target / p.INCOMPLETE_FILE).exists()
+        assert (target / "注音校對_最終報告.xlsx").is_file()
+        assert (target / "待人工確認.json").is_file()
+        assert _state(source) == before and alias.read_bytes() == source_bytes
+    assert not list((tmp_path / "isolated-user").rglob("*.sqlite*"))
+
+
+@pytest.mark.parametrize("fault", ["integrity", "session", "pdf_roster", "legacy_visual"])
+def test_alias_does_not_replace_corrupt_or_contradictory_content_proof(tmp_path, monkeypatch, fault):
+    source, local, alias, binding, _ = _case(tmp_path, monkeypatch,
+        proof_kind="legacy" if fault == "legacy_visual" else "complete")
+    path = source / p.PROOF_FILE
+    proof = sp.json_load_strict(path)
+    if fault == "integrity":
+        proof["integrity_sha256"] = "0" * 64
+    else:
+        proof.pop("integrity_sha256")
+        if fault == "session":
+            proof["session_id"] = "foreign-session"
+        elif fault == "pdf_roster":
+            proof["pdfs"][0]["pdf_sha256"] = "0" * 64
+        else:
+            proof["pdfs"][0]["pages"][0]["rgb_sha256"] = "0" * 64
+        proof["integrity_sha256"] = hashlib.sha256(p._canonical(proof)).hexdigest()
+    sp.json_save(path, proof)
+    before = _state(source), alias.read_bytes(), local.read_bytes()
+    target = tmp_path / "must-not-create"
+    with pytest.raises(ValueError, match="證據損壞|清單不符|原頁不符"):
+        p.continue_project(source, local, target, source_pdf_aliases=[binding])
+    assert not target.exists() and (_state(source), alias.read_bytes(), local.read_bytes()) == before
+
+
+def test_import_cannot_reuse_a_foreign_closed_content_binding(tmp_path, monkeypatch):
+    from actual_source_visual_safety import source_visual_operation
+    source, local, alias, binding, _ = _case(tmp_path, monkeypatch, proof_kind="missing")
+    target = tmp_path / "target"
+    target_manifest, _ = project(target, local, session="target", genuine_source=True)
+    add_override(target, target_manifest["records"][0])
+    reseal_actual_dynamic(target, local)
+    with source_visual_operation():
+        closed_binding = p._SourcePdfBindings([source], [binding])
+    before = _state(source), _state(target), alias.read_bytes()
+    with pytest.raises(ValueError, match="operation owner 不符"):
+        p.import_project_decisions(source, target, source_pdf_aliases=[binding],
+                                   _source_pdf_bindings=closed_binding)
+    assert (_state(source), _state(target), alias.read_bytes()) == before

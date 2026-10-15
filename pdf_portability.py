@@ -181,7 +181,8 @@ def _canonical(value: Any) -> bytes:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
-def _pdf_content_snapshot(path: Path, *, expected_sha256: str | None = None):
+def _pdf_content_snapshot(path: Path, *, expected_sha256: str | None = None,
+                          _source_bytes: bytes | None = None):
     """Read PDF bytes once, then derive SHA, candidate text and raster from them.
 
     The candidate resolver uses RAWDICT text even when a PDF marks it invisible.
@@ -191,7 +192,7 @@ def _pdf_content_snapshot(path: Path, *, expected_sha256: str | None = None):
     """
     from check_pronunciation_candidates import build_pdf_line_index
 
-    data = Path(path).read_bytes()
+    data = Path(path).read_bytes() if _source_bytes is None else _source_bytes
     digest = hashlib.sha256(data).hexdigest()
     if expected_sha256 is not None and digest != expected_sha256:
         raise ValueError(f"PDF SHA 在建立內容證據前已變動：{path}")
@@ -262,7 +263,9 @@ class _SourcePdfBindings:
     """
     def __init__(self, source_dirs, aliases=()):
         from actual_source_visual_safety import source_visual_operation
-        self._sources, self._aliases = {}, {}
+        self._sources, self._aliases, self._content_snapshots = {}, {}, {}
+        with source_visual_operation() as operation:
+            self._operation = operation
         for directory in source_dirs:
             directory = Path(directory).resolve()
             if directory in self._sources:
@@ -334,6 +337,19 @@ class _SourcePdfBindings:
         return [{"source_project": str(directory), "session_id": manifest["session_id"],
                  "pdf_sha256": digest, "path": str(path)}
                 for (owner, digest), path in self._aliases.items() if owner == directory]
+
+    def content_snapshot(self, directory, manifest, info):
+        """Derive content from the same owned exact bytes as native proof."""
+        from actual_source_visual_safety import source_visual_operation
+        path = self.source_path(directory, manifest, info)
+        digest = info["pdf_sha256"]
+        with source_visual_operation() as operation:
+            raw = operation.read_source(path, digest)
+            cached = self._content_snapshots.get(digest)
+            if cached is None or cached[0] is not operation:
+                snapshot = _pdf_content_snapshot(path, expected_sha256=digest, _source_bytes=raw)
+                self._content_snapshots[digest] = operation, snapshot
+            return copy.deepcopy(self._content_snapshots[digest][1])
 
     def recheck(self):
         from actual_source_visual_safety import recheck_current_sources
@@ -1079,11 +1095,14 @@ def _actual_transfer_state(output_dir: Path, manifest: Mapping[str, Any]):
     }
 
 
-def _proof_payload(output_dir: Path, manifest: Mapping[str, Any]) -> dict[str, Any]:
+def _proof_payload(output_dir: Path, manifest: Mapping[str, Any], *, source_pdfs=None) -> dict[str, Any]:
     pdfs = []
     for info in manifest.get("pdfs", []):
-        path = _source_pdf(manifest, info, output_dir)
-        observed_sha, pages = _pdf_content_snapshot(path, expected_sha256=str(info["pdf_sha256"]))
+        if source_pdfs is None:
+            path = _source_pdf(manifest, info, output_dir)
+            observed_sha, pages = _pdf_content_snapshot(path, expected_sha256=str(info["pdf_sha256"]))
+        else:
+            observed_sha, pages = source_pdfs.content_snapshot(output_dir, manifest, info)
         pdfs.append({
             "pdf_sha256": observed_sha,
             "pdf_name": str(info["pdf_name"]),
@@ -1526,7 +1545,7 @@ def prepare_portable_project(output_dir: Path) -> Path:
     return path
 
 
-def _load_proof(output_dir: Path, manifest: Mapping[str, Any]):
+def _load_proof(output_dir: Path, manifest: Mapping[str, Any], *, source_pdfs=None):
     import standalone_proofread as sp
 
     path = output_dir / PROOF_FILE
@@ -1549,29 +1568,32 @@ def _load_proof(output_dir: Path, manifest: Mapping[str, Any]):
             upgraded = copy.deepcopy(proof)
             for saved, info in zip(upgraded["pdfs"], manifest["pdfs"]):
                 try:
-                    original = _source_pdf(manifest, info, output_dir)
+                    if source_pdfs is None:
+                        original = _source_pdf(manifest, info, output_dir)
+                        _, fresh = _pdf_content_snapshot(original, expected_sha256=str(info["pdf_sha256"]))
+                    else:
+                        _, fresh = source_pdfs.content_snapshot(output_dir, manifest, info)
                 except FileNotFoundError:
                     # _match_pdfs may still prove byte-for-byte identity with
                     # the target; different bytes require this missing layer.
                     return proof
-                _, fresh = _pdf_content_snapshot(original, expected_sha256=str(info["pdf_sha256"]))
                 if not _pages_visual_equivalent(saved["pages"], fresh):
                     raise ValueError("舊 PDF 內容證據與來源原頁不符；未補證")
                 saved["pages"] = fresh
             return upgraded
         return proof
     # Source bytes may still be present without a previously exported proof.
-    return _proof_payload(output_dir, manifest)
+    return _proof_payload(output_dir, manifest, source_pdfs=source_pdfs)
 
 
 def _proof_from_explicit_local(output_dir: Path, manifest: Mapping[str, Any],
-                               local_pdf: Path, local_pages):
+                               local_pdf: Path, local_pages, *, source_pdfs=None):
     infos = manifest.get("pdfs", [])
     observed_sha, observed_pages = _pdf_content_snapshot(local_pdf)
     if observed_pages != local_pages:
         raise ValueError("明確指定的本地 PDF 在頁面內容取證後已變動")
     try:
-        return _load_proof(output_dir, manifest)
+        return _load_proof(output_dir, manifest, source_pdfs=source_pdfs)
     except FileNotFoundError:
         if len(infos) != 1 or observed_sha != infos[0].get("pdf_sha256"):
             raise
@@ -3496,12 +3518,14 @@ def _publish_portable_outputs(target_dir: Path, manifest, db):
 
 def import_project_decisions(source_dir: Path, target_dir: Path, *,
                              source_pdf_aliases=(),
+                             _source_pdf_bindings=None,
                              _allow_incomplete_target: bool = False,
                              _selected_local_pdf: Path | None = None,
                              _target_marker_sha: str | None = None) -> dict[str, Any]:
     from actual_source_visual_safety import source_visual_write_result
     return source_visual_write_result(lambda: _import_project_decisions_with_visual_sources(source_dir, target_dir,
         source_pdf_aliases=source_pdf_aliases,
+        _source_pdf_bindings=_source_pdf_bindings,
         _allow_incomplete_target=_allow_incomplete_target,
         _selected_local_pdf=_selected_local_pdf, _target_marker_sha=_target_marker_sha),
         commit_state="COMMITTED_REFRESH_PENDING",
@@ -3511,6 +3535,7 @@ def import_project_decisions(source_dir: Path, target_dir: Path, *,
 
 def _import_project_decisions_with_visual_sources(source_dir: Path, target_dir: Path, *,
                              source_pdf_aliases=(),
+                             _source_pdf_bindings=None,
                              _allow_incomplete_target: bool = False,
                              _selected_local_pdf: Path | None = None,
                              _target_marker_sha: str | None = None) -> dict[str, Any]:
@@ -3525,7 +3550,17 @@ def _import_project_decisions_with_visual_sources(source_dir: Path, target_dir: 
             raise ValueError("內部接續缺少明確 owner；未匯入")
         _assert_actual_marker_owner(target_dir / INCOMPLETE_FILE, _target_marker_sha)
     source_manifest, source_db = _load_project(source_dir)
-    source_pdfs = _SourcePdfBindings([source_dir], source_pdf_aliases)
+    if _source_pdf_bindings is None:
+        source_pdfs = _SourcePdfBindings([source_dir], source_pdf_aliases)
+    else:
+        if (not isinstance(_source_pdf_bindings, _SourcePdfBindings)
+                or list(source_pdf_aliases) != _source_pdf_bindings.aliases_for(source_dir)):
+            raise ValueError("內部內容證據來源綁定不符")
+        from actual_source_visual_safety import source_visual_operation
+        with source_visual_operation() as operation:
+            if _source_pdf_bindings._operation is not operation:
+                raise ValueError("內部內容證據 operation owner 不符")
+        source_pdfs = _source_pdf_bindings
     _preflight_actual_source_overrides(source_dir, source_manifest, source_pdfs)
     source_pdfs.recheck()
     target_manifest, _ = _load_project(target_dir, allow_incomplete=_allow_incomplete_target)
@@ -3534,7 +3569,7 @@ def _import_project_decisions_with_visual_sources(source_dir: Path, target_dir: 
     source_actual = _actual_transfer_state(source_dir, source_manifest)
     _actual_transfer_state(target_dir, target_manifest)
     if _selected_local_pdf is None:
-        proof = _load_proof(source_dir, source_manifest)
+        proof = _load_proof(source_dir, source_manifest, source_pdfs=source_pdfs)
     else:
         local_pdf = Path(_selected_local_pdf).resolve()
         target_pdfs = target_manifest.get("pdfs", [])
@@ -3543,7 +3578,7 @@ def _import_project_decisions_with_visual_sources(source_dir: Path, target_dir: 
             raise ValueError("明確指定的本地 PDF 與目標封印 SHA 不符")
         _, local_pages = _pdf_content_snapshot(local_pdf, expected_sha256=target_pdfs[0]["pdf_sha256"])
         proof = _proof_from_explicit_local(source_dir, source_manifest,
-                                            local_pdf, local_pages)
+                                            local_pdf, local_pages, source_pdfs=source_pdfs)
     pdf_map, geometry = _match_pdfs(proof, source_manifest, target_manifest, target_dir)
     reviews = _map_reviews(source_manifest, target_manifest, pdf_map, geometry)
     mapped_overrides = _mapped_occurrence_overrides(source_dir, source_manifest, target_manifest, reviews,
@@ -3794,7 +3829,8 @@ def _preflight_merge_sources(source_dirs, local_pdf, *, source_pdfs=None):
         source_manifest, _ = _load_project(source_dir)
         _actual_transfer_state(source_dir, source_manifest)
         _preflight_actual_source_overrides(source_dir, source_manifest, source_pdfs)
-        proof = _proof_from_explicit_local(source_dir, source_manifest, local_pdf, local_pages)
+        proof = _proof_from_explicit_local(source_dir, source_manifest, local_pdf, local_pages,
+                                         source_pdfs=source_pdfs)
         if len(proof["pdfs"]) != 1:
             raise ValueError("此入口目前僅支援單一 PDF 專案；多 PDF 請先建立目標專案再匯入")
         if not _pages_equivalent(proof["pdfs"][0]["pages"], local_pages):
@@ -3879,7 +3915,8 @@ def _merge_projects_locked(source_dirs, local_pdf: Path, target_dir: Path, *, so
         mapped_by_key = {}
         for source_dir in source_dirs:
             source_manifest, _ = _load_project(source_dir)
-            proof = _proof_from_explicit_local(source_dir, source_manifest, local_pdf, local_pages)
+            proof = _proof_from_explicit_local(source_dir, source_manifest, local_pdf, local_pages,
+                                             source_pdfs=source_pdfs)
             pdf_map, geometry = _match_pdfs(proof, source_manifest, target_manifest, target_dir)
             reviews = _map_reviews(source_manifest, target_manifest, pdf_map, geometry)
             for row in _mapped_occurrence_overrides(source_dir, source_manifest, target_manifest, reviews,
@@ -3921,6 +3958,7 @@ def _merge_projects_locked(source_dirs, local_pdf: Path, target_dir: Path, *, so
         for source_dir in source_dirs:
             result = import_project_decisions(source_dir, target_dir,
                                               source_pdf_aliases=source_pdfs.aliases_for(source_dir),
+                                              _source_pdf_bindings=source_pdfs,
                                               _allow_incomplete_target=True,
                                               _selected_local_pdf=local_pdf,
                                               _target_marker_sha=marker_sha)
