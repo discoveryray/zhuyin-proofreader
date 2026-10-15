@@ -447,7 +447,11 @@ def test_real_pipeline_actual_override_refresh_publishes_current_manifest(tmp_pa
         assert refreshed["session_id"] == original["session_id"]
         portability.prepare_portable_project(a)
         first.rename(tmp_path / "source-away.pdf")
-        result = portability.continue_project(a, second, b)
+        result = portability.continue_project(a, second, b, source_pdf_aliases=[{
+            "source_project": str(a), "session_id": refreshed["session_id"],
+            "pdf_sha256": refreshed["pdfs"][0]["pdf_sha256"],
+            "path": str(tmp_path / "source-away.pdf"),
+        }])
         assert result["matched_actual_overrides"] == 1
         assert not (b / portability.INCOMPLETE_FILE).exists()
         b_manifest = sp.json_load_strict(b / "校對工作階段.json")

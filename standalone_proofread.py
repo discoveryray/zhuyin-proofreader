@@ -5897,7 +5897,12 @@ def main():
     ap.add_argument("--continue-from-project",help="以來源專案與當地 PDF 建立新的接續專案")
     ap.add_argument("--merge-with-project",help="接續時一併匯入另一來源專案，原兩專案均不修改")
     ap.add_argument("--local-pdf",help="跨電腦接續時指定當地下載的 PDF")
+    ap.add_argument("--source-pdf-alias", action="append", nargs=4,
+                    metavar=("SOURCE_PROJECT", "SESSION", "SEALED_SHA256", "PDF_PATH"),
+                    help="接續時明確指定同 SHA 的改名／移動原 PDF，可重複指定")
     args=ap.parse_args()
+    if args.source_pdf_alias and not args.continue_from_project:
+        ap.error("--source-pdf-alias 僅適用 --continue-from-project")
     if args.report_only or args.repair_project or args.export_gpt or args.import_gpt or args.import_gpt_auto or args.export_actual_gpt or args.import_actual_gpt or args.refresh_actual or args.prepare_portable or args.attach_portable_excel or args.resume_portable_excel or args.continue_from_project:
         if not args.output_dir: raise SystemExit("此操作需要 -o 輸出資料夾")
         if args.continue_from_project:
@@ -5907,7 +5912,13 @@ def main():
             sources = [Path(args.continue_from_project)]
             if args.merge_with_project:
                 sources.append(Path(args.merge_with_project))
-            print(json.dumps(merge_projects(sources, Path(args.local_pdf), Path(args.output_dir)), ensure_ascii=False))
+            aliases = [dict(zip(("source_project", "session_id", "pdf_sha256", "path"), values))
+                       for values in (args.source_pdf_alias or ())]
+            result = merge_projects(sources, Path(args.local_pdf), Path(args.output_dir),
+                                    source_pdf_aliases=aliases)
+            if result.get("source_cleanup_error"):
+                print(f"已保存接續專案；來源清理警示：{result['source_cleanup_error']}", flush=True)
+            print(json.dumps(result, ensure_ascii=False))
             return 0
         requested_outdir = Path(args.output_dir)
         outdir = resolve_existing_project_dir(requested_outdir)

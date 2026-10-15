@@ -731,6 +731,8 @@ class App:
         self.start(self.proof_cmd(["--prepare-portable", "-o", out]))
 
     def continue_portable(self):
+        current = self.output.get().strip()
+        generation = getattr(self, "_status_generation", None)
         source = filedialog.askdirectory(title="選擇從另一台電腦帶來的專案")
         if not source:
             return
@@ -740,12 +742,43 @@ class App:
         target = filedialog.askdirectory(title="選擇空的資料夾保存接續專案")
         if not target:
             return
+        alias_args = self._portable_alias_args([source], current, generation)
+        if alias_args is None:
+            return
         self.input.set(local_pdf)
         self.output.set(target)
-        self.start(self.proof_cmd(["--continue-from-project", source, "--local-pdf", local_pdf, "-o", target]))
+        self.start(self.proof_cmd(["--continue-from-project", source, "--local-pdf", local_pdf,
+                                   "-o", target, *alias_args]))
+
+    def _portable_alias_args(self, sources, original_output, generation):
+        """Collect explicit original-byte aliases before changing selection."""
+        from pdf_portability import source_pdf_alias_requests, validate_source_pdf_aliases
+        aliases = []
+        try:
+            for request in source_pdf_alias_requests(sources):
+                path = filedialog.askopenfilename(
+                    title=(f"指定原 PDF 別名：{request['pdf_name']}；來源專案：{request['source_project']}；"
+                           f"session：{request['session_id']}；原封印 SHA256：{request['pdf_sha256']}"),
+                    filetypes=[("PDF", "*.pdf")],
+                )
+                if not path:
+                    return None
+                aliases.append({key: request[key] for key in ("source_project", "session_id", "pdf_sha256")}
+                               | {"path": path})
+            validate_source_pdf_aliases(sources, aliases)
+            if (self.output.get().strip() != original_output
+                    or getattr(self, "_status_generation", None) != generation):
+                raise ValueError("選檔期間目前專案已變更；請重新選擇接續來源與目的地。")
+        except Exception as exc:
+            messagebox.showerror("無法確認原 PDF 來源", str(exc))
+            return None
+        return [token for alias in aliases for token in (
+            "--source-pdf-alias", alias["source_project"], alias["session_id"],
+            alias["pdf_sha256"], alias["path"])]
 
     def import_project_decisions(self):
         current = self.output.get().strip()
+        generation = getattr(self, "_status_generation", None)
         if not current:
             messagebox.showerror("缺少專案資料夾", "請先選擇目前的校對專案。")
             return
@@ -758,10 +791,13 @@ class App:
         merged = filedialog.askdirectory(title="選擇空的資料夾保存合併後專案")
         if not merged:
             return
+        alias_args = self._portable_alias_args([current, source], current, generation)
+        if alias_args is None:
+            return
         self.input.set(local_pdf)
         self.output.set(merged)
         self.start(self.proof_cmd(["--continue-from-project", current, "--merge-with-project", source,
-                                   "--local-pdf", local_pdf, "-o", merged]))
+                                   "--local-pdf", local_pdf, "-o", merged, *alias_args]))
 
     # Backward-compatible method names: even if an old shortcut/menu binding
     # reaches one of these, workbook type is still auto-detected.

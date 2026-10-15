@@ -434,9 +434,9 @@ def test_project_import_rechecks_conflict_receipt_after_preflight(tmp_path, monk
     report_path.write_bytes(b"previous report")
     prior_views = {path: path.read_bytes() for path in (pending_path, status_path, report_path)}
     original_mapper = portable._mapped_occurrence_overrides
-    def completed_concurrent_conflict(*args):
+    def completed_concurrent_conflict(*args, **kwargs):
         sp.json_save(receipt_path, {"version": 1, "conflicts": [conflict]})
-        return original_mapper(*args)
+        return original_mapper(*args, **kwargs)
     with patch.object(portable, "_mapped_occurrence_overrides", side_effect=completed_concurrent_conflict):
         with pytest.raises(ValueError, match="衝突|未裁決"):
             portable.import_project_decisions(source, target)
@@ -611,9 +611,9 @@ def test_project_import_rejects_target_pdf_changed_after_mapping(tmp_path, monke
     original = portable._mapped_occurrence_overrides
     changed = False
 
-    def replace_after_mapping(*args):
+    def replace_after_mapping(*args, **kwargs):
         nonlocal changed
-        result = original(*args)
+        result = original(*args, **kwargs)
         changed = True
         b_pdf.write_bytes(changed_pdf.read_bytes())
         return result
@@ -1460,24 +1460,27 @@ def test_unrelated_pdf_actual_override_does_not_invalidate_sealed_source(tmp_pat
 def test_saved_actual_override_maps_without_global_promotion(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
     first, local = tmp_path / "first.pdf", tmp_path / "local.pdf"
-    pdf(first, title="A")
-    pdf(local, title="B")
+    pdf(first, title="A", genuine_source=True)
+    pdf(local, title="B", genuine_source=True)
     source, continued = tmp_path / "source", tmp_path / "continued"
-    source_manifest, _ = project(source, first, session="A", event_positions=(0,))
+    source_manifest, _ = project(source, first, session="A", event_positions=(0,), genuine_source=True)
     add_override(source, source_manifest["records"][0])
     reseal_actual_dynamic(source, first)
     portable.prepare_portable_project(source)
     first.rename(tmp_path / "first-away.pdf")
+    alias = {"source_project": str(source), "session_id": source_manifest["session_id"],
+             "pdf_sha256": source_manifest["pdfs"][0]["pdf_sha256"],
+             "path": str(tmp_path / "first-away.pdf")}
 
     def build_target(paths, output_dir, **kwargs):
-        project(output_dir, local, session="B")
+        project(output_dir, local, session="B", genuine_source=True)
 
     def refresh_target(output_dir, **kwargs):
         reseal_actual_dynamic(output_dir, local)
 
     with patch.object(sp, "run_pipeline_pdfs", side_effect=build_target), \
          patch.object(sp, "refresh_actual_project", side_effect=refresh_target):
-        result = portable.continue_project(source, local, continued)
+        result = portable.continue_project(source, local, continued, source_pdf_aliases=[alias])
     assert result["matched_actual_overrides"] == 1
     target_rows = ar._read_csv(sp.project_actual_evidence_root(continued) / ar.OCCURRENCE_OVERRIDE_FILE,
                                ar.OVERRIDE_HEADERS)
@@ -1752,9 +1755,9 @@ def test_target_db_becomes_nonobject_before_locked_candidate_read(tmp_path):
     project(target, second, session="B")
     original_mapper = portable._mapped_occurrence_overrides
 
-    def change_target_db(*args):
+    def change_target_db(*args, **kwargs):
         (target / "人工判定資料庫.json").write_text("[]", encoding="utf-8")
-        return original_mapper(*args)
+        return original_mapper(*args, **kwargs)
 
     with patch.object(portable, "_mapped_occurrence_overrides", side_effect=change_target_db):
         with pytest.raises(ValueError, match="根節點"):
