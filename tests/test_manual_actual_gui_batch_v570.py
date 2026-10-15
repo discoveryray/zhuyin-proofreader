@@ -20,8 +20,10 @@ import global_exact_glyph_library as global_library
 import review_gui
 import review_save_service
 import standalone_proofread as sp
+from review_display import occurrence_preview as native_source_preview
 from pdf_portability import _VerifiedExpectedConflicts
 from tests.review_save_test_support import QueuedRoot
+from tests.actual_source_test_support import source_entry, write_fixture_pdf, bind_source_from_pdf
 from actual_review import (
     GLYPH_CONFLICT_FILE,
     GLYPH_PROVENANCE_FILE,
@@ -63,7 +65,7 @@ def entry(
     expected: str = "ㄓㄨㄢˇ",
     x0: float = 10.0,
 ) -> dict:
-    return {
+    row = {
         "occurrence_id": occurrence_id,
         "review_id": "review-" + occurrence_id,
         "state": "ACTUAL_DECODE_ERROR",
@@ -86,6 +88,12 @@ def entry(
             "預期注音": "SECRET_EXPECTED_SOURCE",
         },
     }
+    bound = source_entry(glyph_sha256, occurrence_id=occurrence_id,
+        review_id=row["review_id"], pdf_name=row["pdf_name"], char=row["char"], x0=x0, y0=row["y0"])
+    row.update({key: value for key, value in bound.items() if key != "source_record"})
+    row["source_record"].update(bound["source_record"])
+    return row
+
 
 
 def make_project(base: Path) -> Path:
@@ -113,12 +121,16 @@ def actual_root(output_dir: Path) -> Path:
 
 
 def attach_source_bytes(output_dir, ledger):
-    # Headless behavior samples use auditable bytes; real PDF rendering has
-    # separate GUI fixtures. No production source or runtime asset is changed.
+    # Real embedded source replaces the former non-PDF byte placeholder.
+    by_name = {}
     for row in ledger:
-        path = output_dir / row["pdf_name"]
-        path.write_bytes(b"isolated source hash fixture")
-        row.update(pdf=str(path), pdf_sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+        by_name.setdefault(row["pdf_name"], []).append(row)
+    for name, rows in by_name.items():
+        path = output_dir / name
+        write_fixture_pdf(path, [{"glyph_sha256": row["source_record"]["TTF字形SHA256"],
+            "char": row["char"], "x0": row["x0"], "y0": row["y0"]} for row in rows])
+        for row in rows:
+            bind_source_from_pdf(row, path)
 
 
 def seal_resume_fixture(output_dir, ledger):
@@ -1374,10 +1386,9 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
         self.unexpected_error.assert_not_called()
 
     def sealed_preview_entries(self, rows):
-        for row in rows:
-            path = self.output / row["pdf_name"]
-            path.write_bytes(self.source_bytes)
-            row.update(pdf=str(path), pdf_sha256=hashlib.sha256(self.source_bytes).hexdigest())
+        # Each already genuine source stays distinct even when samples use the
+        # same label/coordinates. Pixel/viewport substitutes below only retire
+        # native display, not source admission proof.
         return rows
 
     def wait_for_gui(self, predicate, *, timeout=3.0):
@@ -1388,16 +1399,28 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
         self.assertTrue(predicate())
 
     @staticmethod
-    def preview_pixels(*_args, **_kwargs):
-        pixmap = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 120, 80), False)
-        pixmap.clear_with(255)
-        return pixmap, (10.0, 10.0, 30.0, 30.0), "合成預覽"
+    def preview_pixels(*args, **kwargs):
+        return ManualActualGuiVisibleLayoutTests._pixel_view_fixture(80, *args, **kwargs)
 
     @staticmethod
-    def tall_preview_pixels(*_args, **_kwargs):
-        pixmap = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 120, 160), False)
+    def tall_preview_pixels(*args, **kwargs):
+        return ManualActualGuiVisibleLayoutTests._pixel_view_fixture(160, *args, **kwargs)
+
+    @staticmethod
+    def _pixel_view_fixture(height, *args, **kwargs):
+        # Retire only the native view's pixels/viewport geometry. The current
+        # sealed PDF, actual glyph source proof and diagnostic are real. Keep
+        # this unpatched function reference to avoid replacing qualification.
+        details = native_source_preview(*args, **{**kwargs, "return_details": True})
+        pixmap = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 120, height), False)
         pixmap.clear_with(255)
-        return pixmap, (10.0, 10.0, 30.0, 30.0), "合成原頁"
+        fixture_rect = (10.0, 10.0, 30.0, 30.0)
+        details = {**details, "pixmap": pixmap,
+                   "target": fixture_rect if details["target"] is not None else None,
+                   "warning_target": fixture_rect if details["warning_target"] is not None else None}
+        if kwargs.get("return_details", False):
+            return details
+        return details["pixmap"], details["target"], details["notice"]
 
     def reveal_sample_target(self, dialog, index):
         preview = dialog.previews[index]

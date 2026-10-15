@@ -13,6 +13,10 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
+from tests.actual_source_test_support import (
+    register_fixture_glyph, write_fixture_pdf, bind_source_from_pdf,
+)
+
 import fitz
 from openpyxl import load_workbook
 
@@ -37,15 +41,14 @@ from actual_review import (
 O1 = "occ_" + hashlib.sha256(b"o1").hexdigest()
 O2 = "occ_" + hashlib.sha256(b"o2").hexdigest()
 
-SHA = "a" * 64
+SHA = register_fixture_glyph("actual-review-v540")
 
 
 def make_pdf(path: Path):
-    doc = fitz.open()
-    page = doc.new_page(width=300, height=300)
-    page.insert_text((60, 100), "ABC", fontsize=24)
-    doc.save(path)
-    doc.close()
+    write_fixture_pdf(path, [
+        {"glyph_sha256": SHA, "char": "A", "x0": 60, "y0": 70},
+        {"glyph_sha256": SHA, "char": "B", "x0": 120, "y0": 70},
+    ])
 
 
 def entry(oid: str, rid: str, pdf: Path, x: float, *, state="ACTUAL_DECODE_ERROR", source=None):
@@ -53,9 +56,7 @@ def entry(oid: str, rid: str, pdf: Path, x: float, *, state="ACTUAL_DECODE_ERROR
         "TTF字形SHA256": SHA,
         "穩定注音鍵": f"key-{oid}",
     }
-    if source:
-        src.update(source)
-    return {
+    result = {
         "occurrence_id": oid,
         "review_id": rid,
         "state": state,
@@ -73,6 +74,12 @@ def entry(oid: str, rid: str, pdf: Path, x: float, *, state="ACTUAL_DECODE_ERROR
         "actual_evidence": "decoder unresolved",
         "source_record": src,
     }
+    bind_source_from_pdf(result, pdf, x0=x, y0=70)
+    if source:
+        # Pure grouping cases intentionally exercise declared CFF identities;
+        # they do not perform visual-source acceptance or actual writes.
+        result["source_record"].update(source)
+    return result
 
 
 class ActualReviewV540Tests(unittest.TestCase):

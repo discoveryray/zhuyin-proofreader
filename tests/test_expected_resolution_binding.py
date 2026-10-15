@@ -25,8 +25,21 @@ from tests.review_save_test_support import wait_for_save
 
 def captured_confirmation(row, db):
     saved = []
-    app = SimpleNamespace(db=db, save_event=lambda entry, event: saved.append(event))
-    gui.ReviewApp._confirm_difference_entry(app, row)
+    from review_display import occurrence_preview
+    pixels, target, _notice = occurrence_preview(row)
+    app = gui.ReviewApp.__new__(gui.ReviewApp)
+    app.db, app.records, app.index, app.focused_entry = db, [row], 0, None
+    app.root, app.primary = Surface(), Surface()
+    app.save_event = lambda entry, event: saved.append(event)
+    # Only the native view is substituted: real PDF rendering/source proof
+    # supplies the target and the real owner callback establishes readiness.
+    app.image = SimpleNamespace(_entry=row, photo=object() if pixels else None, target=target)
+    errors = []
+    with patch.object(gui.messagebox, "showerror", lambda _title, message, **kw: errors.append(message)):
+        gui.ReviewApp._preview_ready(app, app.image)
+        gui.ReviewApp._confirm_difference_entry(app, row)
+    if not saved:
+        raise ol.InvalidTransitionError("; ".join(errors) or "source preview could not confirm")
     return saved[0]
 
 

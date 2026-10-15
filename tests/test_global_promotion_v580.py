@@ -7,6 +7,7 @@ import io
 import json
 import multiprocessing
 import os
+import re
 import sqlite3
 import tempfile
 import unittest
@@ -17,7 +18,7 @@ import actual_review as review
 import global_exact_glyph_library as library
 import global_glyph_promotion as promotion
 import standalone_proofread as pipeline
-from test_exact_glyph_identity_v580 import simple_glyph, composite_glyph, synthetic_sfnt
+from tests.actual_source_test_support import register_fixture_glyph, write_fixture_pdf, bind_source_from_pdf
 
 
 def sha(value):
@@ -44,6 +45,48 @@ def sql_rows(repo, table):
     with closing(sqlite3.connect(repo.path)) as connection:
         connection.row_factory = sqlite3.Row
         return [dict(row) for row in connection.execute("SELECT * FROM " + table)]
+
+
+def genuine_promotion_sources(folder, count=2, *, start=1, composite=False):
+    """Current sealed real sources, including complete project-only composite."""
+    pdf = Path(folder) / "book.pdf"
+    digest = register_fixture_glyph("global-admission-source")
+    specs = [{"glyph_sha256": digest, "char": "字", "x0": 10+20*i, "y0": 10}
+             for i in range(count)]
+    if not composite:
+        write_fixture_pdf(pdf, specs)
+    else:
+        from fontTools.fontBuilder import FontBuilder
+        from fontTools.pens.ttGlyphPen import TTGlyphPen
+        builder = FontBuilder(1000, isTTF=True)
+        names = [".notdef", "base", "composite"]
+        builder.setupGlyphOrder(names); builder.setupCharacterMap({ord("字"): "composite"})
+        pen = TTGlyphPen(None); pen.moveTo((0, 0)); pen.lineTo((250, 0)); pen.lineTo((250, 400)); pen.closePath()
+        glyphs = {".notdef": TTGlyphPen(None).glyph(), "base": pen.glyph()}
+        composite_pen = TTGlyphPen(glyphs); composite_pen.addComponent("base", (1, 0, 0, 1, 0, 0))
+        glyphs["composite"] = composite_pen.glyph()
+        builder.setupGlyf(glyphs); builder.setupHorizontalMetrics({name: (600, 0) for name in names})
+        builder.setupHorizontalHeader(ascent=800, descent=-200)
+        builder.setupNameTable({"familyName": "GenuineCompositeFixture", "styleName": "Regular"})
+        builder.setupOS2(sTypoAscender=800, sTypoDescender=-200, usWinAscent=800, usWinDescent=200)
+        builder.setupPost(); data = io.BytesIO(); builder.save(data)
+        pdf.parent.mkdir(parents=True, exist_ok=True)
+        with promotion.fitz.open() as document:
+            page = document.new_page(width=300, height=300)
+            page.insert_font(fontname="CompositeFixture", fontbuffer=data.getvalue())
+            for spec in specs:
+                page.insert_text((spec["x0"], spec["y0"]+16), "字", fontname="CompositeFixture", fontsize=20)
+            document.save(pdf)
+    members = [{"occurrence_id": "occ_" + sha(f"occ-{index+start}"), "review_id": f"review-{index+start}",
+                "actual": "", "actual_evidence": "unresolved", "state": "ACTUAL_DECODE_ERROR",
+                "stable_key": f"key-{index+start}", "x0": spec["x0"], "y0": spec["y0"],
+                "source_record": {}}
+               for index, spec in enumerate(specs)]
+    for member in members:
+        bind_source_from_pdf(member, pdf)
+    context = {"session_id": "sealed-session", "pdfs": {
+        pdf.name: {"pdf": str(pdf), "pdf_sha256": members[0]["pdf_sha256"]}}}
+    return members, context
 
 
 def approve(repo, **overrides):
@@ -393,13 +436,17 @@ class OutboxTests(unittest.TestCase):
         self.root = Path(self.temp.name) / "project"
         self.root.mkdir()
         self.repo = library.GlobalExactGlyphRepository.resolved(Path(self.temp.name) / "global")
+        self.entries, self.context = genuine_promotion_sources(Path(self.temp.name) / "sources")
+        group = review.build_actual_group_for_entry(self.entries, self.entries[0])
+        self.intents, admissions = promotion.direct_visual_intents(group, "ㄅ", [m["occurrence_id"] for m in self.entries], self.context)
+        self.assertEqual(len(self.intents), 2, admissions)
 
     def test_refresh_marker_survives_delivery_and_blocks_newer_transaction(self):
         with promotion.direct_visual_project_transaction(self.root) as bind:
             bind({"schema_version": "1.0", "affected_occurrence_ids": [], "checked_postconditions": []})
-            promotion.enqueue_promotion_intents(self.root, [intent()])
+            promotion.enqueue_promotion_intents(self.root, self.intents[:1])
         token = promotion.project_refresh_token(self.root)
-        self.assertEqual(promotion.deliver_pending_promotion_outbox(self.root, self.repo)["status"], "DELIVERED")
+        self.assertEqual(promotion.deliver_pending_promotion_outbox(self.root, self.repo, source_context=self.context, source_entries=self.entries)["status"], "DELIVERED")
         before = (self.root / promotion.PROJECT_TRANSACTION_FILE).read_bytes()
         with self.assertRaises(library.GlobalLibraryValidationError):
             with promotion.direct_visual_project_transaction(self.root):
@@ -424,7 +471,7 @@ class OutboxTests(unittest.TestCase):
         self.assertEqual(path.read_bytes(), raw)
 
     def test_strict_schema_rejects_every_malformed_item_without_repair(self):
-        promotion.enqueue_promotion_intents(self.root, [intent()])
+        promotion.enqueue_promotion_intents(self.root, self.intents[:1])
         path = self.root / promotion.GLOBAL_PROMOTION_OUTBOX_FILE
         original = promotion.load_promotion_outbox(self.root)
         bad_documents = []
@@ -451,13 +498,13 @@ class OutboxTests(unittest.TestCase):
             promotion.load_promotion_outbox(self.root)
 
     def test_outbox_ack_failure_restart_reuses_original_receipt(self):
-        promotion.enqueue_promotion_intents(self.root, [intent(), intent(2)])
+        promotion.enqueue_promotion_intents(self.root, self.intents)
         with patch.object(promotion, "acknowledge_promotion_delivery", side_effect=OSError("ack crash")):
-            result = promotion.deliver_pending_promotion_outbox(self.root, self.repo)
+            result = promotion.deliver_pending_promotion_outbox(self.root, self.repo, source_context=self.context, source_entries=self.entries)
         self.assertEqual(result["status"], "PENDING_RETRY")
         before = sql_rows(self.repo, "processed_intent")
         self.assertEqual({item["status"] for item in promotion.load_promotion_outbox(self.root)["items"]}, {"PENDING"})
-        result = promotion.deliver_pending_promotion_outbox(self.root, self.repo)
+        result = promotion.deliver_pending_promotion_outbox(self.root, self.repo, source_context=self.context, source_entries=self.entries)
         self.assertEqual(result["status"], "DELIVERED")
         self.assertEqual(before, sql_rows(self.repo, "processed_intent"))
         self.assertEqual(len(sql_rows(self.repo, "source_evidence")), 2)
@@ -468,9 +515,9 @@ class OutboxTests(unittest.TestCase):
         with promotion.direct_visual_project_transaction(self.root) as bind:
             bind({"schema_version": "1.0", "affected_occurrence_ids": [], "checked_postconditions": []})
             (self.root / promotion.PROJECT_FILES[0]).write_bytes(b"local correction")
-            promotion.enqueue_promotion_intents(self.root, [intent()])
+            promotion.enqueue_promotion_intents(self.root, self.intents[:1])
         with patch.object(library, "deliver_global_direct_evidence", side_effect=OSError("locked")):
-            result = promotion.deliver_pending_promotion_outbox(self.root, self.repo)
+            result = promotion.deliver_pending_promotion_outbox(self.root, self.repo, source_context=self.context, source_entries=self.entries)
         self.assertEqual(result["status"], "PENDING_RETRY")
         self.assertEqual((self.root / promotion.PROJECT_FILES[0]).read_bytes(), b"local correction")
         self.assertFalse(self.repo.path.exists())
@@ -478,14 +525,14 @@ class OutboxTests(unittest.TestCase):
     def test_project_six_file_rollback_and_global_untouched(self):
         for name in promotion.PROJECT_FILES[:-1]:
             (self.root / name).write_bytes(b"before " + name.encode())
-        promotion.enqueue_promotion_intents(self.root, [intent()])
+        promotion.enqueue_promotion_intents(self.root, self.intents[:1])
         before = {name: (self.root / name).read_bytes() for name in promotion.PROJECT_FILES}
         with self.assertRaisesRegex(RuntimeError, "project failure"):
             with promotion.direct_visual_project_transaction(self.root) as bind:
                 bind({"schema_version": "1.0", "affected_occurrence_ids": [], "checked_postconditions": []})
                 for name in promotion.PROJECT_FILES[:-1]:
                     (self.root / name).write_bytes(b"after")
-                promotion.enqueue_promotion_intents(self.root, [intent(2)])
+                promotion.enqueue_promotion_intents(self.root, self.intents[1:])
                 raise RuntimeError("project failure")
         self.assertEqual(before, {name: (self.root / name).read_bytes() for name in promotion.PROJECT_FILES})
         self.assertFalse(self.repo.path.exists())
@@ -498,58 +545,33 @@ class OutboxTests(unittest.TestCase):
         worker.join(30)
         self.assertEqual(worker.exitcode, 19)
         self.assertTrue((self.root / promotion.PROJECT_TRANSACTION_FILE).exists())
-        result = promotion.deliver_pending_promotion_outbox(self.root, self.repo)
+        result = promotion.deliver_pending_promotion_outbox(self.root, self.repo, source_context=self.context, source_entries=self.entries)
         self.assertEqual(result["status"], "NO_PENDING")
         self.assertEqual((self.root / promotion.PROJECT_FILES[0]).read_bytes(), b"before")
         self.assertFalse(self.repo.path.exists())
         self.assertFalse((self.root / promotion.GLOBAL_PROMOTION_OUTBOX_FILE).exists())
 
     def test_stale_ack_token_cannot_erase_newer_queue(self):
-        promotion.enqueue_promotion_intents(self.root, [intent()])
-        receipts = library.deliver_global_direct_evidence(self.repo, [intent()])
-        promotion.enqueue_promotion_intents(self.root, [intent(2)])
-        promotion.acknowledge_promotion_delivery(self.root, [intent()], receipts)
+        promotion.enqueue_promotion_intents(self.root, self.intents[:1])
+        receipts = library.deliver_global_direct_evidence(self.repo, self.intents[:1])
+        promotion.enqueue_promotion_intents(self.root, self.intents[1:])
+        promotion.acknowledge_promotion_delivery(self.root, self.intents[:1], receipts)
         rows = promotion.load_promotion_outbox(self.root)["items"]
         self.assertEqual({row["status"] for row in rows}, {"PENDING", "DELIVERED"})
         path = self.root / promotion.GLOBAL_PROMOTION_OUTBOX_FILE
         document = promotion.load_promotion_outbox(self.root)
-        document["items"] = [row for row in document["items"] if row["intent_id"] != intent()["intent_id"]]
+        document["items"] = [row for row in document["items"] if row["intent_id"] != self.intents[0]["intent_id"]]
         promotion._write_json(path, document)
         with self.assertRaises(library.GlobalLibraryIntentConflictError):
-            promotion.acknowledge_promotion_delivery(self.root, [intent()], receipts)
+            promotion.acknowledge_promotion_delivery(self.root, self.intents[:1], receipts)
 
     def test_outbox_and_receipts_are_not_dynamic_actual_truth(self):
         review.ensure_user_evidence_files(self.root)
         before = review.dynamic_actual_hashes(self.root)
-        promotion.enqueue_promotion_intents(self.root, [intent()])
+        promotion.enqueue_promotion_intents(self.root, self.intents[:1])
         self.assertEqual(before, review.dynamic_actual_hashes(self.root))
-        promotion.deliver_pending_promotion_outbox(self.root, self.repo)
+        promotion.deliver_pending_promotion_outbox(self.root, self.repo, source_context=self.context, source_entries=self.entries)
         self.assertEqual(before, review.dynamic_actual_hashes(self.root))
-
-
-class FakeDocument:
-    def __init__(self, font, extension="ttf", name="synthetic"):
-        self.font, self.extension, self.name = font, extension, name
-    def __enter__(self):
-        return self
-    def __exit__(self, *args):
-        return False
-    def __getitem__(self, index):
-        if index != 0:
-            raise IndexError(index)
-        return self
-    def get_fonts(self, full=True):
-        return [(7, self.extension, "", self.name, "", "")]
-    def get_texttrace(self):
-        gid = 1 if self.extension == "cff" else 0
-        return [{"font": self.name, "chars": [
-            (ord("字"), gid, (10 + 20 * i, 10), (10 + 20 * i, 10, 20 + 20 * i, 30))
-            for i in range(3)
-        ]}]
-    def extract_font(self, xref):
-        if xref != 7:
-            raise ValueError("wrong font")
-        return self.name, self.extension, "", self.font
 
 
 def cff_program():
@@ -557,6 +579,13 @@ def cff_program():
     from fontTools.pens.t2CharStringPen import T2CharStringPen
     builder = FontBuilder(1000, isTTF=False)
     builder.setupGlyphOrder([".notdef", "cid00001"])
+    builder.setupCharacterMap({ord("字"): "cid00001"})
+    builder.setupHorizontalMetrics({".notdef": (600, 0), "cid00001": (600, 0)})
+    builder.setupHorizontalHeader(ascent=800, descent=-200)
+    builder.setupNameTable({"familyName": "DFBiaoKaiZhuIn-W5", "styleName": "Regular",
+                           "psName": "DFBiaoKaiZhuIn-W5"})
+    builder.setupOS2(sTypoAscender=800, sTypoDescender=-200, usWinAscent=800, usWinDescent=200)
+    builder.setupPost()
     pen = T2CharStringPen(600, None)
     pen.moveTo((0, 0))
     pen.lineTo((200, 0))
@@ -569,6 +598,72 @@ def cff_program():
     return builder.font["CFF "].compile(builder.font)
 
 
+class FakeDocument:
+    """Retained shared legacy parser fixture; current source gates do not use it."""
+    def __init__(self, font, extension="ttf", name="synthetic"):
+        self.font, self.extension, self.name = font, extension, name
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def __getitem__(self, index):
+        if index != 0:
+            raise IndexError(index)
+        return self
+
+    def get_fonts(self, full=True):
+        return [(7, self.extension, "", self.name, "", "")]
+
+    def get_texttrace(self):
+        gid = 1 if self.extension == "cff" else 0
+        return [{"font": self.name, "chars": [
+            (ord("字"), gid, (10 + 20 * i, 10), (10 + 20 * i, 10, 20 + 20 * i, 30))
+            for i in range(3)
+        ]}]
+
+    def extract_font(self, xref):
+        if xref != 7:
+            raise ValueError("wrong font")
+        return self.name, self.extension, "", self.font
+
+
+def write_real_cff_pdf(path):
+    """A genuine non-CID Type1C program with explicit one-byte PDF encoding.
+
+    MuPDF's raw-font insertion creates a CID wrapper by default. This program
+    is non-CID (no ROS), so use the correct Type1C declaration and named-glyph
+    encoding. ToUnicode records the source character; the painted glyph is the
+    real cid00001 CharString, not a fake document/trace or decoder result.
+    """
+    with promotion.fitz.open() as document:
+        page = document.new_page(width=300, height=300)
+        xref = page.insert_font(fontname="CFFFixture", fontbuffer=cff_program())
+        page.insert_text((10, 26), "字", fontname="CFFFixture", fontsize=20)
+        descendant = int(re.search(r"\d+", document.xref_get_key(xref, "DescendantFonts")[1]).group())
+        descriptor = int(document.xref_get_key(descendant, "FontDescriptor")[1].split()[0])
+        stream = int(document.xref_get_key(descriptor, "FontFile3")[1].split()[0])
+        document.xref_set_key(stream, "Subtype", "/Type1C")
+        document.xref_set_key(descriptor, "FontName", "/DFBiaoKaiZhuIn-W5")
+        cmap = document.get_new_xref(); document.update_object(cmap, "<<>>")
+        document.update_stream(cmap, b"/CIDInit /ProcSet findresource begin 12 dict begin begincmap "
+            b"/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def "
+            b"/CMapName /FixtureUnicode def /CMapType 2 def "
+            b"1 begincodespacerange <00> <ff> endcodespacerange "
+            b"1 beginbfchar <01> <5b57> endbfchar endcmap "
+            b"CMapName currentdict /CMap defineresource pop end end")
+        document.update_object(xref, f"<< /Type /Font /Subtype /Type1 /BaseFont /DFBiaoKaiZhuIn-W5 "
+            f"/FirstChar 0 /LastChar 1 /Widths [600 600] "
+            f"/Encoding << /Type /Encoding /Differences [1 /cid00001] >> "
+            f"/FontDescriptor {descriptor} 0 R /ToUnicode {cmap} 0 R >>")
+        for content in page.get_contents():
+            document.update_stream(content, document.xref_stream(content).replace(b"<0000>", b"<01>"))
+        document.save(path)
+    return xref
+
+
 class AdmissionAndProjectIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="phase4-admit-")
@@ -576,70 +671,29 @@ class AdmissionAndProjectIntegrationTests(unittest.TestCase):
         self.base = Path(self.temp.name)
         self.root = self.base / "actual"
         self.pdf = self.base / "book.pdf"
-        self.pdf.write_bytes(b"sealed synthetic PDF fixture")
-        self.context = {"session_id": "sealed-session", "pdfs": {
-            self.pdf.name: {"pdf": str(self.pdf), "pdf_sha256": hashlib.sha256(self.pdf.read_bytes()).hexdigest()},
-        }}
 
     def group(self, record=None, count=3):
-        record = simple_glyph() if record is None else record
-        font = synthetic_sfnt([record], font_name_marker=b"same-font")
-        digest = hashlib.sha256(record).hexdigest()
-        members = [{
-            "occurrence_id": "occ_" + sha(f"occ-{index}"), "review_id": f"review-{index}",
-            "pdf": str(self.pdf), "pdf_name": self.pdf.name, "physical_page": 1,
-            "char": "字", "x0": 10 + index * 20, "y0": 10, "x1": 20 + index * 20, "y1": 30,
-            "actual": "", "actual_evidence": "unresolved", "state": "ACTUAL_DECODE_ERROR",
-            "stable_key": f"key-{index}",
-            "source_record": {"TTF字形SHA256": digest, "font_xref": 7, "注音元件ID": 0},
-        } for index in range(count)]
+        members, self.context = genuine_promotion_sources(self.base, count=count, start=0,
+                                                         composite=(record == "composite"))
         group = review.build_actual_group_for_entry(members, members[0])
+        with promotion.fitz.open(self.pdf) as document:
+            font = document.extract_font(members[0]["font_xref"])[3]
         return group, font
 
     def test_real_embedded_pdf_ttf_admission_and_locator_rejection(self):
-        from fontTools.fontBuilder import FontBuilder
-        from fontTools.pens.ttGlyphPen import TTGlyphPen
-        builder = FontBuilder(1000, isTTF=True)
-        builder.setupGlyphOrder([".notdef", "testGlyph"])
-        builder.setupCharacterMap({ord("字"): "testGlyph"})
-        empty = TTGlyphPen(None)
-        pen = TTGlyphPen(None)
-        pen.moveTo((0, 0)); pen.lineTo((200, 0)); pen.lineTo((200, 300)); pen.closePath()
-        builder.setupGlyf({".notdef": empty.glyph(), "testGlyph": pen.glyph()})
-        builder.setupHorizontalMetrics({".notdef": (600, 0), "testGlyph": (600, 0)})
-        builder.setupHorizontalHeader(ascent=800, descent=-200)
-        builder.setupNameTable({"familyName": "PhaseFourTest", "styleName": "Regular"})
-        builder.setupOS2(sTypoAscender=800, sTypoDescender=-200, usWinAscent=800, usWinDescent=200)
-        builder.setupPost()
-        data = io.BytesIO(); builder.save(data)
-        with promotion.fitz.open() as document:
-            page = document.new_page()
-            xref = page.insert_font(fontname="PhaseFour", fontbuffer=data.getvalue())
-            page.insert_text((60, 80), "字", fontname="PhaseFour", fontsize=16)
-            document.save(self.pdf)
-        with promotion.fitz.open(self.pdf) as document:
-            char = document[0].get_texttrace()[0]["chars"][0]
-            font = document.extract_font(xref)[3]
-        self.context["pdfs"][self.pdf.name]["pdf_sha256"] = hashlib.sha256(self.pdf.read_bytes()).hexdigest()
-        identity = promotion.TrueTypeGlyphInspector(font).global_exact_identity(char[1])
         group, _ = self.group(count=1)
-        member = group["members"][0]
-        member.update(x0=char[3][0], y0=char[3][1], glyph_id=char[1])
-        member["source_record"] = {"TTF字形SHA256": identity["glyph_sha256"],
-                                   "font_xref": xref, "注音元件ID": char[1]}
-        group = review.build_actual_group_for_entry([member], member)
         items, admissions = promotion.direct_visual_intents(group, "ㄅ", ["occ_" + sha("occ-0")], self.context)
         self.assertEqual(len(items), 1, admissions)
         group["members"][0]["x0"] += 20
+        group["members"][0]["x1"] += 20
         items, admissions = promotion.direct_visual_intents(group, "ㄅ", ["occ_" + sha("occ-0")], self.context)
         self.assertEqual(items, [])
-        self.assertIn("UNPROVABLE", admissions[0]["reason"])
+        self.assertIn("SOURCE_DRAW_NOT_UNIQUE", admissions[0]["reason"])
 
     def test_only_checked_current_ttf_creates_deterministic_intents(self):
         group, font = self.group()
-        with patch.object(promotion.fitz, "open", return_value=FakeDocument(font)):
-            first, admissions = promotion.direct_visual_intents(group, "ㄅ", ["occ_" + sha("occ-0"), "occ_" + sha("occ-1")], self.context)
-            second, _ = promotion.direct_visual_intents(group, "ㄅ", ["occ_" + sha("occ-0"), "occ_" + sha("occ-1")], self.context)
+        first, admissions = promotion.direct_visual_intents(group, "ㄅ", ["occ_" + sha("occ-0"), "occ_" + sha("occ-1")], self.context)
+        second, _ = promotion.direct_visual_intents(group, "ㄅ", ["occ_" + sha("occ-0"), "occ_" + sha("occ-1")], self.context)
         self.assertEqual(first, second)
         self.assertEqual(len(first), 2)
         self.assertTrue(all(row["status"] == "ELIGIBLE" for row in admissions))
@@ -651,62 +705,78 @@ class AdmissionAndProjectIntegrationTests(unittest.TestCase):
         self.assertEqual(sql_rows(repo, "glyph_truth")[0]["state"], library.CANDIDATE)
 
     def test_ineligible_ttf_and_sha_mismatch_preserve_local_correction(self):
-        for index, record in enumerate((composite_glyph(), b"\0" * 10, b"\0", simple_glyph())):
-            group, font = self.group(record)
-            if index == 3:
-                font = synthetic_sfnt([simple_glyph(50)], font_name_marker=b"different")
+        # A genuine complete composite is project-local, never Global simple
+        # glyf. Reliable location without any exact claim is local-only too.
+        for index, mode in enumerate(("composite", "location-only")):
+            group, _ = self.group("composite" if mode == "composite" else None, count=1)
+            if mode == "location-only":
+                member = group["members"][0]
+                member["source_record"].pop("TTF字形SHA256")
+                group = review.build_actual_group_for_entry([member], member)
             root = self.base / str(index)
-            with patch.object(promotion.fitz, "open", return_value=FakeDocument(font)):
-                result = review.apply_direct_visual_actual_batch(root, [{
-                    "group": group, "reading": "ㄅ", "checked_occurrence_ids": ["occ_" + sha("occ-0")], "source": "visual",
-                }], source_context=self.context)
+            result = review.apply_direct_visual_actual_batch(root, [{
+                "group": group, "reading": "ㄅ", "checked_occurrence_ids": ["occ_" + sha("occ-0")], "source": "visual",
+            }], source_context=self.context)
             self.assertEqual(result["project_actual_commit"], "COMMITTED")
             self.assertEqual(result["group_results"][0]["global_admissions"][0]["status"], "NON_GLOBAL_ELIGIBLE")
             self.assertFalse((root / promotion.GLOBAL_PROMOTION_OUTBOX_FILE).exists())
             self.assertTrue((root / review.OCCURRENCE_OVERRIDE_FILE).exists())
+        # A contradicted exact SHA is not missing proof: refuse before writes.
+        group, _ = self.group(count=1)
+        group["members"][0]["source_record"]["TTF字形SHA256"] = sha("wrong raw record")
+        bad_root = self.base / "wrong-sha"
+        with self.assertRaisesRegex(ValueError, "SOURCE_EXACT_SHA_MISMATCH"):
+            review.apply_direct_visual_actual_batch(bad_root, [{"group": group, "reading": "ㄅ",
+                "checked_occurrence_ids": ["occ_" + sha("occ-0")], "source": "visual"}], source_context=self.context)
+        self.assertFalse(bad_root.exists())
 
     def test_pdf_font_page_and_missing_context_fail_global_admission_only(self):
         group, font = self.group()
         cases = [None, {"session_id": "sealed-session", "pdfs": {}}, copy.deepcopy(self.context)]
         cases[2]["pdfs"][self.pdf.name]["pdf_sha256"] = sha("wrong")
         for context in cases:
-            with patch.object(promotion.fitz, "open", return_value=FakeDocument(font)):
-                items, admissions = promotion.direct_visual_intents(group, "ㄅ", ["occ_" + sha("occ-0")], context)
+            items, admissions = promotion.direct_visual_intents(group, "ㄅ", ["occ_" + sha("occ-0")], context)
             self.assertEqual(items, [])
             self.assertEqual(admissions[0]["status"], "NON_GLOBAL_ELIGIBLE")
         group["members"][0]["source_record"]["font_xref"] = 999
-        with patch.object(promotion.fitz, "open", return_value=FakeDocument(font)):
-            items, admissions = promotion.direct_visual_intents(group, "ㄅ", ["occ_" + sha("occ-0")], self.context)
+        items, admissions = promotion.direct_visual_intents(group, "ㄅ", ["occ_" + sha("occ-0")], self.context)
         self.assertEqual(items, [])
-        self.assertIn("FONT_NOT_ON", admissions[0]["reason"])
+        self.assertIn("SOURCE_TUPLE_CONTRADICTION:font_xref", admissions[0]["reason"])
 
     def test_real_cff_parser_complete_recording_and_style_separation(self):
-        data = cff_program()
-        inspector = promotion.CFFZhuyinInspector(data, "DFBiaoKaiZhuIn-W5", {})
-        identity = inspector.global_exact_identity(1)
-        group, _ = self.group(count=1)
-        member = group["members"][0]
+        xref = write_real_cff_pdf(self.pdf)
+        with promotion.fitz.open(self.pdf) as document:
+            char = document[0].get_texttrace()[0]["chars"][0]
+            name, extension, _kind, data = document.extract_font(xref)
+        self.assertEqual(extension, "cff")
+        self.assertEqual(data, cff_program())
+        inspector = promotion.CFFZhuyinInspector(data, name, {})
+        identity = inspector.global_exact_identity(char[1])
+        member = {"occurrence_id": "occ_" + sha("occ-0"), "review_id": "review-0",
+                  "state": "ACTUAL_DECODE_ERROR", "actual": "", "pdf": str(self.pdf),
+                  "pdf_name": self.pdf.name, "pdf_sha256": hashlib.sha256(self.pdf.read_bytes()).hexdigest(),
+                  "physical_page": 1, "char": chr(char[0]), "font_xref": xref,
+                  "glyph_id": char[1], **dict(zip(("x0", "y0", "x1", "y1"), char[3]))}
         member["source_record"] = {
             "CFF樣式群組": "BIAOKAI_W5", "CFF整字字形SHA256": identity["glyph_sha256"],
-            "font_xref": 7, "注音元件ID": 1,
+            "font_xref": xref, "glyph_id_字形索引": char[1], "注音元件ID": char[1],
         }
+        self.context = {"session_id": "sealed-session", "pdfs": {
+            self.pdf.name: {"pdf": str(self.pdf), "pdf_sha256": member["pdf_sha256"]}}}
         group = review.build_actual_group_for_entry([member], member)
-        with patch.object(promotion.fitz, "open", return_value=FakeDocument(data, "cff", "DFBiaoKaiZhuIn-W5")):
-            items, admissions = promotion.direct_visual_intents(group, "ㄅ", ["occ_" + sha("occ-0")], self.context)
+        items, admissions = promotion.direct_visual_intents(group, "ㄅ", ["occ_" + sha("occ-0")], self.context)
         self.assertEqual(admissions[0]["status"], "ELIGIBLE")
         other = intent(2, identity=dict(items[0]["payload"]["identity"], style_group="YUAN_W7"))
         self.assertNotEqual(items[0]["payload"]["evidence"]["glyph_id"], other["payload"]["evidence"]["glyph_id"])
         member["source_record"]["CFF整字字形SHA256"] = sha("untrusted workbook")
-        with patch.object(promotion.fitz, "open", return_value=FakeDocument(data, "cff", "DFBiaoKaiZhuIn-W5")):
-            items, admissions = promotion.direct_visual_intents(group, "ㄅ", ["occ_" + sha("occ-0")], self.context)
+        items, admissions = promotion.direct_visual_intents(group, "ㄅ", ["occ_" + sha("occ-0")], self.context)
         self.assertEqual(items, [])
 
     def test_staged_ack_failure_rolls_back_six_and_retains_staging(self):
         group, font = self.group()
         review.stage_manual_actual_group(self.root, group, "ㄅ", checked_occurrence_ids=["occ_" + sha("occ-0")], source="visual")
         staging = (self.root / review.MANUAL_ACTUAL_STAGING_FILE).read_bytes()
-        with (patch.object(promotion.fitz, "open", return_value=FakeDocument(font)),
-              patch.object(review, "remove_staged_manual_actual_groups", side_effect=RuntimeError("ack failure")),
+        with (patch.object(review, "remove_staged_manual_actual_groups", side_effect=RuntimeError("ack failure")),
               self.assertRaisesRegex(RuntimeError, "ack failure")):
             review.apply_staged_manual_actual_batch(self.root, [group], source_context=self.context)
         self.assertEqual((self.root / review.MANUAL_ACTUAL_STAGING_FILE).read_bytes(), staging)
@@ -714,11 +784,10 @@ class AdmissionAndProjectIntegrationTests(unittest.TestCase):
 
     def test_propagated_peers_commit_locally_but_never_become_direct_sources(self):
         group, font = self.group()
-        with patch.object(promotion.fitz, "open", return_value=FakeDocument(font)):
-            result = review.apply_direct_visual_actual_batch(self.root, [{
-                "group": group, "reading": "ㄅ", "checked_occurrence_ids": ["occ_" + sha("occ-0"), "occ_" + sha("occ-1")],
-                "source": "visual",
-            }], source_context=self.context)
+        result = review.apply_direct_visual_actual_batch(self.root, [{
+            "group": group, "reading": "ㄅ", "checked_occurrence_ids": ["occ_" + sha("occ-0"), "occ_" + sha("occ-1")],
+            "source": "visual",
+        }], source_context=self.context)
         self.assertTrue(result["group_results"][0]["propagated_to_group"])
         rows = promotion.load_promotion_outbox(self.root)["items"]
         self.assertEqual(len(rows), 2)
@@ -785,11 +854,19 @@ class AdmissionAndProjectIntegrationTests(unittest.TestCase):
     def test_successful_global_delivery_then_refresh_failure_is_structured(self):
         output = self.base / "output"
         root = pipeline.project_actual_evidence_root(output)
-        promotion.enqueue_promotion_intents(root, [intent()])
+        group, _ = self.group(count=1)
+        entries = group["members"]
+        items, admissions = promotion.direct_visual_intents(group, "ㄆ", [entries[0]["occurrence_id"]], self.context)
+        self.assertEqual(len(items), 1, admissions)
+        promotion.enqueue_promotion_intents(root, items)
+        output.mkdir(parents=True, exist_ok=True)
+        manifest = pipeline.seal_manifest({"session_id": self.context["session_id"], "records": entries,
+            "pdfs": [{"pdf": str(self.pdf), "pdf_name": self.pdf.name, "pdf_sha256": entries[0]["pdf_sha256"]}]})
+        pipeline.json_save(output / "校對工作階段.json", manifest)
         repo = library.GlobalExactGlyphRepository.resolved(self.base / "global")
         original = promotion.deliver_pending_promotion_outbox
         result = {"applied_group_count": 1, "group_results": [{"group_id": "agr_fixture", "affected_occurrence_ids": ["occ_" + sha("occ-0")], "verified_occurrence_ids": ["occ_" + sha("occ-0")], "reading": "ㄆ"}]}
-        with (patch.object(pipeline, "deliver_pending_promotion_outbox", side_effect=lambda root: original(root, repo)),
+        with (patch.object(pipeline, "deliver_pending_promotion_outbox", side_effect=lambda root, **kwargs: original(root, repo, **kwargs)),
               patch.object(pipeline, "_clear_actual_dependent_events", return_value=1),
               patch.object(pipeline, "refresh_actual_project", side_effect=RuntimeError("refresh failure")),
               self.assertRaises(pipeline.ManualActualPostApplyError) as raised):

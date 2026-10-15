@@ -6,6 +6,7 @@ import tempfile
 from pathlib import Path
 
 import fitz
+from tests.actual_source_test_support import register_fixture_glyph, write_fixture_pdf, bind_source_from_pdf
 
 from actual_review import (
     GLYPH_CONFLICT_FILE,
@@ -29,15 +30,14 @@ SHA = "5adfc5e3" + "0" * 56
 
 
 def make_pdf(path: Path):
-    doc = fitz.open()
-    page = doc.new_page(width=300, height=300)
-    page.insert_text((60, 100), "ABCD", fontsize=24)
-    doc.save(path)
-    doc.close()
+    digest = register_fixture_glyph("glyph-truth-conflict-same-exact-record")
+    write_fixture_pdf(path, [{"glyph_sha256": digest, "char": "樂", "x0": x, "y0": 70}
+                             for x in (40, 80, 120, 160)])
+    return digest
 
 
 def entry(oid: str, rid: str, pdf: Path, x: float, *, state="ACTUAL_DECODE_ERROR"):
-    return {
+    member = {
         "occurrence_id": oid,
         "review_id": rid,
         "state": state,
@@ -54,10 +54,10 @@ def entry(oid: str, rid: str, pdf: Path, x: float, *, state="ACTUAL_DECODE_ERROR
         "actual": "",
         "actual_evidence": "decoder unresolved",
         "source_record": {
-            "TTF字形SHA256": SHA,
             "穩定注音鍵": f"key-{oid}",
         },
     }
+    return bind_source_from_pdf(member, pdf)
 
 
 def read_csv(path: Path):
@@ -70,7 +70,7 @@ def test_conflicting_global_truth_does_not_block_occurrence_local_correction():
         root = Path(td)
         ensure_user_evidence_files(root)
         pdf = root / "book.pdf"
-        make_pdf(pdf)
+        source_sha = make_pdf(pdf)
         members = [
             entry(O1, "r1", pdf, 40),
             entry(O2, "r2", pdf, 80),
@@ -78,6 +78,8 @@ def test_conflicting_global_truth_does_not_block_occurrence_local_correction():
             entry(O4, "r4", pdf, 160),
         ]
         group = build_actual_review_groups(members)[0]
+        assert group["exact_key"] == source_sha
+        assert {member["char"] for member in members} == {"樂"}
 
         first = apply_verified_actual_group(
             root, group, "ㄩㄝˋ", checked_occurrence_ids=[O1, O2],
@@ -111,7 +113,7 @@ def test_conflicting_global_truth_does_not_block_occurrence_local_correction():
         assert len(conflicts) == 1
         assert conflicts[0]["status"] == "GLYPH_TRUTH_CONFLICT"
         assert set(conflicts[0]["readings"].split("|")) == {"ㄩㄝˋ", "ㄌㄜˋ"}
-        assert SHA in load_glyph_truth_quarantine(root)["ttf"]
+        assert source_sha in load_glyph_truth_quarantine(root)["ttf"]
         assert read_csv(root / GLYPH_PROVENANCE_FILE)
 
 
@@ -158,6 +160,11 @@ def test_gpt_import_conflict_is_not_batch_fatal_and_local_override_commits():
             "workbook_schema_version": "2.6.0",
             "review_id_schema_version": "2.5.0",
         }
+        # The package carries the genuine current source sample profile.  The
+        # import also receives the same PDF digest as a sealed session source;
+        # no fabricated font trace or successful qualification is substituted.
+        source_context = {"session_id": meta["session_id"], "pdfs": {
+            pdf.name: {"pdf": str(pdf), "pdf_sha256": members[0]["pdf_sha256"]}}}
         export_actual_review_package(root, members, **meta)
         xlsx = root / "actual待判定_GPT包" / "actual待判定_給GPT.xlsx"
         wb = load_workbook(xlsx)
@@ -172,7 +179,8 @@ def test_gpt_import_conflict_is_not_batch_fatal_and_local_override_commits():
         wb.save(xlsx)
         wb.close()
 
-        result = import_actual_review_workbook(root, xlsx, [group], expected_metadata=meta)
+        result = import_actual_review_workbook(root, xlsx, [group], expected_metadata=meta,
+                                              source_context=source_context)
         assert result["imported_groups"] == 1
         item = result["results"][0]
         assert item["learning_level"] == "GLYPH_TRUTH_CONFLICT"

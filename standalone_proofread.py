@@ -222,8 +222,17 @@ def _global_direct_source_context(output_dir, manifest):
 def _deliver_after_actual_commit(output_dir, result):
     result.setdefault("project_actual_commit",
                       "COMMITTED" if result.get("group_results", result.get("results")) else "NO_CHANGES")
+    try:
+        source_manifest = json_load_strict(Path(output_dir) / "校對工作階段.json")
+        validate_manifest_integrity(source_manifest)
+        source_context = _global_direct_source_context(output_dir, source_manifest)
+        source_entries = source_manifest.get("records") or []
+    except Exception:
+        # Delivery below retains pending intents; no guessed source/reuse.
+        source_context = source_entries = None
     result["global_promotion_delivery"] = deliver_pending_promotion_outbox(
-        project_actual_evidence_root(output_dir)
+        project_actual_evidence_root(output_dir), source_context=source_context,
+        source_entries=source_entries,
     )
     result["project_refresh"] = "NOT_STARTED"
     try:
@@ -309,12 +318,23 @@ def recover_committed_actual_project(output_dir: Path, *, acknowledge: bool = Tr
                   "recovery_plan": plan, "project_refresh_token": token}
         phase, removed = "global_promotion_delivery", None
         try:
-            result["global_promotion_delivery"] = deliver_pending_promotion_outbox(root)
+            donor_manifest = json_load_strict(output_dir / "校對工作階段.json")
+            validate_manifest_integrity(donor_manifest)
+            result["global_promotion_delivery"] = deliver_pending_promotion_outbox(root,
+                source_context=_global_direct_source_context(output_dir, donor_manifest),
+                source_entries=donor_manifest.get("records") or [])
             phase = "reload_current_ledger"
             manifest = json_load_strict(output_dir / "校對工作階段.json")
             validate_manifest_integrity(manifest)
             validate_output_artifact_hashes(manifest, output_dir=output_dir)
             ledger = materialize_ledger(manifest, load_or_initialize_db(output_dir))
+            from actual_review import require_actual_visual_target
+            source_by_id = {entry["occurrence_id"]: entry for entry in ledger}
+            for condition in plan["checked_postconditions"]:
+                entry = source_by_id.get(condition["occurrence_id"])
+                if entry is None:
+                    raise ValueError("復原 actual checked occurrence 已不在目前來源；未 refresh／acknowledgement")
+                require_actual_visual_target(entry, output_dir)
             phase = "refresh_actual_project"
             refresh_status = {}
             report = refresh_actual_project(output_dir, _refresh_plan=plan, _refresh_status=refresh_status,
@@ -1891,6 +1911,8 @@ def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False,
             event[gate] = value == "Y"
         if action in expected_only_actions and manifest.get("expected_asset_fingerprint"):
             event = bind_expected_resolution(import_baseline_by_id[review_id], event, manifest)
+        if action == "確認現版差異":
+            require_current_actual_visual_source(entry, output_dir)
         staged_events[review_id] = event
 
     if errors:
@@ -2789,6 +2811,22 @@ def build_manual_expected_event(
     if not valid_manual_expected_decision({**entry, **event}):
         raise InvalidTransitionError("人工應標判定缺少有效項目識別或語境")
     return event
+
+
+def require_current_actual_visual_source(entry, output_dir):
+    """Guard new actual-dependent confirmations, never independent expected input.
+
+    Final-paint local-only sources need their current authoritative occurrence
+    override before a raw decoder value can be adopted/confirmed. Old saved
+    expected decisions/replay remain independent and are not rewritten here.
+    """
+    from actual_review import require_actual_visual_target
+    safety = require_actual_visual_target(entry, output_dir)
+    if safety["reason"] == "EXACT_ANNOTATION_OVERPAINT_LOCAL_ONLY":
+        from actual_review import has_direct_occurrence_actual
+        if not has_direct_occurrence_actual(project_actual_evidence_root(output_dir), entry, entry.get("actual")):
+            raise ValueError("原頁注音包含後畫修改；目前 raw decoder actual 尚不可用作確認，請先保存本位置實際注音")
+    return safety
 
 
 def actual_confirmation_snapshot(entry: Mapping[str, Any]) -> dict[str, str]:
@@ -4149,8 +4187,18 @@ def _manual_actual_snapshot_ledger(manifest, db, ledger, *, base_ledger=None):
     return projected
 
 
-def _validate_manual_actual_group_sources(output_dir, live_groups, *, source_hashes=None):
+def _validate_manual_actual_group_sources(output_dir, live_groups, *, source_hashes=None, checked_occurrence_ids=None):
     """Reprove the source bytes before retaining any prior visual checks."""
+    from actual_source_visual_safety import source_visual_operation
+    with source_visual_operation() as operation:
+        _validate_manual_actual_group_sources_in_operation(output_dir, live_groups,
+            source_hashes=source_hashes, checked_occurrence_ids=checked_occurrence_ids,
+            operation=operation)
+        operation.recheck_sources()
+
+
+def _validate_manual_actual_group_sources_in_operation(output_dir, live_groups, *,
+        source_hashes, checked_occurrence_ids, operation):
     checked_sources = set()
     for live in live_groups:
         for member in live["members"]:
@@ -4158,11 +4206,20 @@ def _validate_manual_actual_group_sources(output_dir, live_groups, *, source_has
             wanted = str(member.get("pdf_sha256") or "")
             key = (path, wanted)
             if key not in checked_sources:
-                observed = (source_hashes.get(str(path.resolve())) if source_hashes is not None
-                            else sha256_file(path))
-                if not wanted or observed != wanted:
+                if not wanted or (source_hashes is not None
+                        and source_hashes.get(str(path.resolve())) != wanted):
                     raise ValueError(f"SOURCE_INVALID：actual 暫存來源 PDF 已變更：{path.name}")
+                # The verified snapshot hash is an additional binding, not a
+                # substitute for current sealed bytes. Register every original
+                # source dependency without proving unchecked peer glyphs.
+                try:
+                    operation.read_source(path, wanted)
+                except ValueError as exc:
+                    raise ValueError(f"SOURCE_INVALID：actual 暫存來源 PDF 已變更：{path.name}") from exc
                 checked_sources.add(key)
+            if checked_occurrence_ids is None or str(member.get("occurrence_id")) in checked_occurrence_ids:
+                from actual_review import require_actual_visual_target
+                require_actual_visual_target(member, output_dir)
 
 
 def _manual_actual_staging_inventory(staging):
@@ -4187,6 +4244,20 @@ def _manual_actual_staging_inventory(staging):
 
 def _manual_actual_summary_from_verified_snapshot(output_dir, staging, manifest, db, ledger,
                                                 *, base_ledger=None, source_hashes=None, cancelled=None):
+    from actual_source_visual_safety import source_visual_operation
+    with source_visual_operation() as operation:
+        summary = _manual_actual_summary_in_visual_operation(output_dir, staging, manifest, db, ledger,
+            base_ledger=base_ledger, source_hashes=source_hashes, cancelled=cancelled)
+        try:
+            operation.recheck_sources()
+        except Exception as exc:
+            summary["staging_error"] = str(exc)
+            summary["staged_checked_occurrence_ids"] = []
+        return summary
+
+
+def _manual_actual_summary_in_visual_operation(output_dir, staging, manifest, db, ledger,
+                                              *, base_ledger=None, source_hashes=None, cancelled=None):
     """Internal save path: all arguments belong to one content-verified snapshot.
 
     This shares group/source validators with the ordinary read path. It never
@@ -4202,7 +4273,8 @@ def _manual_actual_summary_from_verified_snapshot(output_dir, staging, manifest,
                 ledger, groups, snapshot_ledger=projected, cancelled=cancelled)
             # Supplying snapshot_ledger makes the group builder validate each
             # live (or proven expected-only projected) group before returning.
-            _validate_manual_actual_group_sources(output_dir, live_groups, source_hashes=source_hashes)
+            _validate_manual_actual_group_sources(output_dir, live_groups, source_hashes=source_hashes,
+                checked_occurrence_ids={oid for item in groups for oid in item["checked_occurrence_ids"]})
     except Exception as exc:
         summary["staging_error"] = str(exc)
         summary["staged_checked_occurrence_ids"] = []
@@ -4248,6 +4320,32 @@ def stage_manual_actual_correction(
     checked_occurrence_ids: list[str] | None = None,
     note: str = "",
 ) -> dict[str, Any]:
+    from actual_source_visual_safety import source_visual_write_result
+    return source_visual_write_result(lambda: _stage_manual_actual_correction_visual_result(
+        output_dir, review_id, reading, checked_occurrence_ids=checked_occurrence_ids, note=note),
+        commit_state="STAGED_REFRESH_PENDING")
+
+
+def _stage_manual_actual_correction_visual_result(
+    output_dir: Path, review_id: str, reading: str,
+    checked_occurrence_ids: list[str] | None = None, note: str = "",
+) -> dict[str, Any]:
+    from actual_source_visual_safety import source_visual_operation
+    with source_visual_operation() as operation:
+        result = _stage_manual_actual_correction_with_visual_sources(output_dir, review_id, reading,
+            checked_occurrence_ids=checked_occurrence_ids, note=note)
+        try:
+            operation.recheck_sources()
+        except Exception as exc:
+            result["staging_summary"]["staging_error"] = str(exc)
+            result["staging_summary"]["staged_checked_occurrence_ids"] = []
+        return result
+
+
+def _stage_manual_actual_correction_with_visual_sources(
+    output_dir: Path, review_id: str, reading: str,
+    checked_occurrence_ids: list[str] | None = None, note: str = "",
+) -> dict[str, Any]:
     """Rebuild one current live group and durably stage its visual actual decision."""
     output_dir = Path(output_dir)
     manifest = json_load_strict(output_dir / "校對工作階段.json")
@@ -4285,7 +4383,8 @@ def stage_manual_actual_correction(
         # only after proving the retained snapshot, sources and same reading.
         if canonical_bopomofo(reading) != prior["reading"]:
             raise ValueError("此字形已有不同讀音的 actual 暫存；未覆寫既有確認。請先釐清既有暫存，再重新核對本筆。")
-        _validate_manual_actual_group_sources(output_dir, [group])
+        _validate_manual_actual_group_sources(output_dir, [group],
+            checked_occurrence_ids=set(prior["checked_occurrence_ids"]) | set(checked_ids))
         checked_ids = _staging_id_list(checked_ids, "input.checked_occurrence_ids")
         if not checked_ids:
             raise ValueError("manual actual staging checked_occurrence_ids 不得為空")
@@ -5798,7 +5897,12 @@ def main():
     ap.add_argument("--continue-from-project",help="以來源專案與當地 PDF 建立新的接續專案")
     ap.add_argument("--merge-with-project",help="接續時一併匯入另一來源專案，原兩專案均不修改")
     ap.add_argument("--local-pdf",help="跨電腦接續時指定當地下載的 PDF")
+    ap.add_argument("--source-pdf-alias", action="append", nargs=4,
+                    metavar=("SOURCE_PROJECT", "SESSION", "SEALED_SHA256", "PDF_PATH"),
+                    help="接續時明確指定同 SHA 的改名／移動原 PDF，可重複指定")
     args=ap.parse_args()
+    if args.source_pdf_alias and not args.continue_from_project:
+        ap.error("--source-pdf-alias 僅適用 --continue-from-project")
     if args.report_only or args.repair_project or args.export_gpt or args.import_gpt or args.import_gpt_auto or args.export_actual_gpt or args.import_actual_gpt or args.refresh_actual or args.prepare_portable or args.attach_portable_excel or args.resume_portable_excel or args.continue_from_project:
         if not args.output_dir: raise SystemExit("此操作需要 -o 輸出資料夾")
         if args.continue_from_project:
@@ -5808,7 +5912,13 @@ def main():
             sources = [Path(args.continue_from_project)]
             if args.merge_with_project:
                 sources.append(Path(args.merge_with_project))
-            print(json.dumps(merge_projects(sources, Path(args.local_pdf), Path(args.output_dir)), ensure_ascii=False))
+            aliases = [dict(zip(("source_project", "session_id", "pdf_sha256", "path"), values))
+                       for values in (args.source_pdf_alias or ())]
+            result = merge_projects(sources, Path(args.local_pdf), Path(args.output_dir),
+                                    source_pdf_aliases=aliases)
+            if result.get("source_cleanup_error"):
+                print(f"已保存接續專案；來源清理警示：{result['source_cleanup_error']}", flush=True)
+            print(json.dumps(result, ensure_ascii=False))
             return 0
         requested_outdir = Path(args.output_dir)
         outdir = resolve_existing_project_dir(requested_outdir)
@@ -5882,7 +5992,7 @@ def main():
                             flush=True,
                         )
                 except Exception as exc:
-                    state = "COMMITTED_REFRESH_PENDING" if isinstance(exc, ManualActualPostApplyError) else "UNKNOWN"
+                    state = "COMMITTED_REFRESH_PENDING" if isinstance(exc, ManualActualPostApplyError) else getattr(exc, "commit_state", "UNKNOWN")
                     print(f"本次多檔匯入已完成 {completed_files}/{len(planned)} 檔；目前檔案未完整完成，狀態 {state}。"
                           "先前完成檔案保留，請依交易／恢復紀錄核對。", flush=True)
                     _cli_operation_event(outdir, "本檔未完整完成；先前完成檔案保留", completed_files=completed_files, total_files=len(planned), commit_state=state)
@@ -5896,7 +6006,7 @@ def main():
                 n, removed, report = import_actual_gpt_decisions(outdir, Path(args.import_actual_gpt))
             except Exception as exc:
                 _cli_operation_event(outdir, "actual 匯入未完整完成", commit_state=
-                    "COMMITTED_REFRESH_PENDING" if isinstance(exc, ManualActualPostApplyError) else "UNKNOWN")
+                    "COMMITTED_REFRESH_PENDING" if isinstance(exc, ManualActualPostApplyError) else getattr(exc, "commit_state", "UNKNOWN"))
                 raise
             _cli_operation_event(outdir, "actual 判定處理完成", completed_files=1, commit_state="FILE_COMPLETED")
             print(f"匯入 actual {n} 組；撤銷 {removed} 筆依賴舊 actual 的人工事件。\n{report}")

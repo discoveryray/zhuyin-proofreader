@@ -28,13 +28,15 @@ REGRESSION = {"ok": True, "required": 1, "executed": 1, "passed": 1, "failed": 0
 
 
 def make_entry(n=1, *, actual="ㄎㄢˋ", expected=(), blocked="", excluded=False, pdf="fixture.pdf", pdf_sha="f" * 64,
-               printed_page="1"):
+               printed_page="1", source_binding=None):
     source = {"ledger_schema_version": ol.LEDGER_SCHEMA_VERSION,
               "workbook_schema_version": ol.WORKBOOK_SCHEMA_VERSION, "pdf_sha256": pdf_sha, "pdf": str(pdf), "pdf_name": Path(pdf).name,
               "實體頁碼": 1, "課本頁": printed_page, "字元": "看", "穩定注音鍵": f"fixture-{n}",
               "font": "fixture", "font_xref": 1, "glyph_id_字形索引": n, "注音元件ID": "",
               "x0": 72.0, "y0": float(72 + n * 45), "x1": 96.0, "y1": float(96 + n * 45),
               "source_row_number": n, "所在行": f"看一看窗外的風景（隔離操作樣本 {n}）", "局部詞境": "看一看"}
+    if source_binding:
+        source.update(source_binding)
     ol.prepare_occurrence_rows(pdf_sha, [source])
     classified = {"actual": actual, "actual_evidence": "isolated fixture reading" if actual else "",
                   "actual_status": "RESOLVED" if actual else "UNRESOLVED",
@@ -76,15 +78,29 @@ def create_gui_fixture(output_dir: Path, *, mixed=True, missing_printed_page=Fal
             page.insert_text((72, 91 + n * 45), f"看一看窗外的風景  樣本 {n}   ㄎㄢˋ", fontname="china-t", fontsize=15)
         doc.save(pdf)
     sha = hashlib.sha256(pdf.read_bytes()).hexdigest()
-    entries = [make_entry(1, pdf=pdf, pdf_sha=sha), make_entry(2, pdf=pdf, pdf_sha=sha)]
+    # Bind the source tuple to the actual first Han draw in each fixture line;
+    # earlier fixtures used invented font/glyph IDs and oversized rectangles.
+    from export_pdf_text_diagnostics import build_font_lookup, normalize_basefont, resolve_font
+    bindings = []
+    with fitz.open(pdf) as document:
+        lookup = build_font_lookup(document[0].get_fonts(full=True))
+        for span in document[0].get_texttrace():
+            xref, *_ = resolve_font(lookup, normalize_basefont(span["font"]))
+            for char in span["chars"]:
+                if char[0] == ord("看") and abs(char[2][0] - 72) < .001:
+                    bindings.append({"font": span["font"], "font_xref": xref,
+                        "glyph_id_字形索引": char[1], **dict(zip(("x0", "y0", "x1", "y1"), char[3]))})
+    def fixture_entry(n, **kwargs):
+        return make_entry(n, pdf=pdf, pdf_sha=sha, source_binding=bindings[n - 1], **kwargs)
+    entries = [fixture_entry(1), fixture_entry(2)]
     if mixed:
         entries.extend([
-            make_entry(3, actual="", pdf=pdf, pdf_sha=sha),
-            make_entry(4, actual="", expected=["ㄎㄢˋ"], pdf=pdf, pdf_sha=sha),
-            make_entry(5, expected=["ㄎㄢ"], pdf=pdf, pdf_sha=sha,
+            fixture_entry(3, actual=""),
+            fixture_entry(4, actual="", expected=["ㄎㄢˋ"]),
+            fixture_entry(5, expected=["ㄎㄢ"],
                        printed_page="" if missing_printed_page else "1"),
-            make_entry(6, blocked="DATA_INTEGRITY_ERROR", pdf=pdf, pdf_sha=sha),
-            make_entry(7, excluded=True, pdf=pdf, pdf_sha=sha),
+            fixture_entry(6, blocked="DATA_INTEGRITY_ERROR"),
+            fixture_entry(7, excluded=True),
         ])
     manifest = make_manifest(entries)
     sp.json_save(output_dir / "校對工作階段.json", manifest)

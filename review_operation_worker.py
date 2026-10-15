@@ -10,6 +10,7 @@ import copy
 import atexit
 import hashlib
 import json
+import math
 import multiprocessing
 import os
 import struct
@@ -349,35 +350,79 @@ def preview_png(entry, *, padding, output_dir, display_width):
     """Called only by the isolated raster child, with the real preview service."""
     from review_display import occurrence_preview
     from actual_review import _resolve_pdf_path
+    from actual_source_visual_safety import source_visual_operation
     path = _resolve_pdf_path(entry, output_dir)
-    before = path.read_bytes()
-    digest = hashlib.sha256(before).hexdigest()
-    if digest != entry.get("pdf_sha256"):
-        raise ValueError("預覽來源 PDF 與封印不符")
-    pixmap, target, notice = occurrence_preview(entry, padding=padding,
-        output_dir=output_dir, display_width=display_width)
-    if path.read_bytes() != before:
-        raise ValueError("预覽期間來源 PDF 已變更")
+    with source_visual_operation() as operation:
+        before = operation.read_source(path, entry.get("pdf_sha256"))
+        digest = entry["pdf_sha256"]
+        details = occurrence_preview(entry, padding=padding,
+            output_dir=output_dir, display_width=display_width, return_details=True)
+        pixmap = details["pixmap"]
+        # The pixels come from immutable, SHA-proved bytes. Check revision at
+        # publication; writers independently re-read the complete source seal.
+        if operation.read_source(path, digest) != before:
+            raise ValueError("预覽期間來源 PDF 已變更")
     return dict(png=pixmap.tobytes("png"), width=pixmap.width, height=pixmap.height,
-                target=target, notice=notice, pid=os.getpid(), source_sha256=digest,
+                target=details["target"], warning_target=details["warning_target"],
+                diagnostic=details["diagnostic"], notice=details["notice"],
+                physical_page=entry.get("physical_page"), pdf_name=entry.get("pdf_name"),
+                pid=os.getpid(), source_sha256=digest,
                 review_id=entry.get("review_id"), occurrence_id=entry.get("occurrence_id"))
 
 
 def _preview_child(connection, payload):
+    from actual_source_visual_safety import SourceVisualOperation
+    operation = owner = None
     try:
         while payload is not None:
             try:
+                entry = payload["entry"]
+                current_owner = (payload["output_dir"], entry.get("pdf_sha256"), entry.get("physical_page"))
+                if current_owner != owner:
+                    if operation is not None:
+                        retired, operation, owner = operation, None, None
+                        retired.__exit__(None, None, None)
+                    fresh = SourceVisualOperation()
+                    fresh.__enter__()
+                    operation = fresh
+                    owner = current_owner
                 connection.send((preview_png(**payload), None))
             except Exception as exc:
+                if operation is not None:
+                    retired, operation, owner = operation, None, None
+                    retired.__exit__(None, None, None)
                 connection.send((None, str(exc)))
             payload = connection.recv()
     except (EOFError, BrokenPipeError):
         pass
     finally:
+        if operation is not None:
+            operation.__exit__(None, None, None)
         connection.close()
 
 
 def validate_preview_png(value):
+    # These display fields never substitute for the shared prewrite source
+    # proof. Keep an unsafe/warning result from becoming a UI-ready target.
+    diagnostic = value.get("diagnostic")
+    if diagnostic is not None:
+        if (type(diagnostic) is not dict or type(diagnostic.get("location_readable")) is not bool
+                or type(diagnostic.get("donor_eligible")) is not bool):
+            raise ValueError("預覽來源診斷不完整")
+        if not diagnostic["location_readable"] and value.get("target") is not None:
+            raise ValueError("不可確認的警示不能提供確認目標")
+    if value.get("warning_target") is not None and value.get("target") is not None:
+        raise ValueError("警示框與確認目標不能混用")
+    for key in ("target", "warning_target"):
+        region = value.get(key)
+        if region is not None and (type(region) not in (tuple,list) or len(region) != 4
+                or any(type(item) not in (int,float) or not math.isfinite(item) for item in region)
+                or region[2] <= region[0] or region[3] <= region[1]):
+            raise ValueError("預覽定位框無效")
+    physical_page = value.get("physical_page")
+    if physical_page is not None and (type(physical_page) not in (int,float)
+            or not math.isfinite(physical_page) or int(physical_page) != physical_page or physical_page < 1):
+        raise ValueError("預覽實體頁碼無效")
     raw = value["png"]
     if (not isinstance(raw, bytes) or raw[:8] != b"\x89PNG\r\n\x1a\n"
             or raw[12:16] != b"IHDR" or raw[8:12] != b"\x00\x00\x00\r" or len(raw) < 33):

@@ -22,21 +22,33 @@ from export_zhuyin_readings import load_actual_occurrence_overrides, match_actua
 _REAL_REFRESH_ACTUAL_PROJECT = sp.refresh_actual_project
 
 
-def create_staged_navigation_fixture(output, *, same_exact_peers=False):
+def create_staged_navigation_fixture(output, *, same_exact_peers=False, exact_peer_count=3):
     """Synthetic visual samples plus sealed fixture workbooks; no real textbook.
 
     Workbook rows are explicit fixture input, not a decoder acceptance claim.
     Their recorded hashes exercise the ordinary artifact integrity gate.
     """
     manifest = create_gui_fixture(output)
-    if same_exact_peers:
-        # Explicit synthetic group identity for navigation/transaction tests,
-        # not a claim of production glyph identity or Global eligibility.
-        for row in manifest["records"][:3]:
-            row["source_record"]["TTF字形SHA256"] = "a" * 64
-            row.update(actual="ㄎㄢˋ", actual_status="RESOLVED", actual_evidence="isolated fixture reading")
-            row.update(ol.refresh_derived_state(row))
     pdf = Path(manifest["records"][0]["pdf"])
+    if same_exact_peers:
+        from tests.actual_source_test_support import register_fixture_glyph, write_fixture_pdf, bind_source_from_pdf
+        exact = register_fixture_glyph("navigation-shared")
+        separate = register_fixture_glyph("navigation-other")
+        specs = [{"glyph_sha256": exact if index < exact_peer_count else separate,
+                  "char": row["char"], "x0": row["x0"], "y0": row["y0"]}
+                 for index, row in enumerate(manifest["records"])]
+        pdf.unlink()
+        write_fixture_pdf(pdf, specs)
+        for index, row in enumerate(manifest["records"]):
+            bind_source_from_pdf(row, pdf)
+            row["source_record"].update({"pdf": row["pdf"], "pdf_name": row["pdf_name"],
+                "pdf_sha256": row["pdf_sha256"], "font": "", "實體頁碼": 1,
+                "glyph_id_字形索引": row["glyph_id"], "注音元件ID": row["zhuyin_component_id"],
+                **{key: row[key] for key in ("x0", "y0", "x1", "y1")}})
+            row["font"] = ""
+            if index < exact_peer_count:
+                row.update(actual="ㄎㄢˋ", actual_status="RESOLVED", actual_evidence="isolated fixture reading")
+                row.update(ol.refresh_derived_state(row))
     info = {"pdf": str(pdf), "pdf_name": pdf.name,
             "pdf_sha256": hashlib.sha256(pdf.read_bytes()).hexdigest()}
     for kind in ("actual", "candidate"):
@@ -251,10 +263,7 @@ class StagedNavigationTests(unittest.TestCase):
         self.assertEqual(self.app.records, [pending])
 
     def test_unchecked_exact_peer_remains_and_defer_revisit_preserve_counts(self):
-        manifest = self.app.manifest
-        for row in manifest["records"][:2]:
-            row["source_record"]["TTF字形SHA256"] = "a" * 64
-        sp.json_save(self.output / "校對工作階段.json", sp.seal_manifest(manifest))
+        create_staged_navigation_fixture(self.output, same_exact_peers=True, exact_peer_count=2)
         self.app = headless_app(self.output)
         first, second = self.row(1), self.row(2)
         self.save_expected(first)

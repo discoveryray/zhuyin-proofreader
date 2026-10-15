@@ -17,39 +17,53 @@ import actual_review as review
 import global_exact_glyph_library as library
 import global_glyph_promotion as promotion
 import standalone_proofread as pipeline
-from test_global_promotion_v580 import intent, sql_rows
+from test_global_promotion_v580 import sql_rows
+from tests.actual_source_test_support import register_fixture_glyph, source_entry, write_fixture_pdf, bind_source_from_pdf
 
 
 def oid(index):
     return 'occ_' + hashlib.sha256(str(index).encode()).hexdigest()
 
 
-def fixture_group():
+def fixture_group(output=None):
+    digest = register_fixture_glyph('durable-recovery')
     members = [{
         'occurrence_id': oid(i), 'review_id': 'rev_' + hashlib.sha256(str(i).encode()).hexdigest(),
-        'pdf_name': 'book.pdf', 'physical_page': 1, 'char': '字', 'x0': i * 20, 'y0': 10,
-        'x1': i * 20 + 10, 'y1': 30, 'actual': '', 'state': 'ACTUAL_DECODE_ERROR',
-        'source_record': {'TTF字形SHA256': 'a' * 64},
+        'pdf_name': 'book.pdf', 'physical_page': 1, 'char': '字', 'x0': 10 + i * 20, 'y0': 10,
+        'x1': 20 + i * 20, 'y1': 30, 'actual': '', 'state': 'ACTUAL_DECODE_ERROR',
+        'source_record': {'TTF字形SHA256': digest},
     } for i in range(3)]
+    if output is None:
+        for member in members:
+            genuine = source_entry(digest, occurrence_id=member['occurrence_id'],
+                review_id=member['review_id'], char='字', x0=member['x0'], y0=member['y0'])
+            member.update(genuine)
+    else:
+        pdf = Path(output).parent / 'book.pdf'
+        if not pdf.exists():
+            write_fixture_pdf(pdf, [dict(member, glyph_sha256=digest) for member in members])
+        for member in members:
+            bind_source_from_pdf(member, pdf)
     return review.build_actual_group_for_entry(members, members[0])
 
 
 def commit(output, eligible=True):
     root = pipeline.project_actual_evidence_root(Path(output))
-    group = fixture_group()
+    group = fixture_group(output)
+    manifest = sealed_recovery_pdf(output)
     checked = [oid(0), oid(1)]
     review.stage_manual_actual_group(root, group, 'ㄅ', checked_occurrence_ids=checked, source='test visual')
-    with ExitStack() as stack:
-        if eligible:
-            stack.enter_context(patch.object(review, 'direct_visual_intents', return_value=([intent()], [])))
-        return review.apply_staged_manual_actual_batch(root, [group])
+    context = pipeline._global_direct_source_context(output, manifest) if eligible else None
+    return review.apply_staged_manual_actual_batch(root, [group], source_context=context)
 
 
 def crash_worker(output, store, after_delivery):
     commit(output)
     if after_delivery:
+        manifest = sealed_recovery_pdf(output)
         promotion.deliver_pending_promotion_outbox(
-            pipeline.project_actual_evidence_root(Path(output)), library.GlobalExactGlyphRepository.resolved(store))
+            pipeline.project_actual_evidence_root(Path(output)), library.GlobalExactGlyphRepository.resolved(store),
+            source_context=pipeline._global_direct_source_context(output, manifest), source_entries=manifest['records'])
     os._exit(29)
 
 
@@ -70,12 +84,9 @@ def sealed_recovery_pdf(output):
     if path.exists():
         return pipeline.json_load_strict(path)
     output.mkdir(parents=True, exist_ok=True)
+    records = fixture_group(output)['members']
     pdf = output.parent / 'book.pdf'
-    document = fitz.open()
-    document.new_page()
-    document.save(pdf)
-    document.close()
-    manifest = pipeline.seal_manifest({'session_id': 'recovery-fixture', 'records': [],
+    manifest = pipeline.seal_manifest({'session_id': 'recovery-fixture', 'records': records,
         'pdfs': [{'pdf': str(pdf), 'pdf_name': pdf.name, 'pdf_sha256': pipeline.sha256_file(pdf)}]})
     pipeline.json_save(path, manifest)
     return manifest
@@ -84,7 +95,7 @@ def sealed_recovery_pdf(output):
 def crash_after_refresh_worker(output, store):
     output = Path(output)
     manifest = sealed_recovery_pdf(output)
-    ledger = [dict(row, actual='ㄅ') for row in fixture_group()['members']]
+    ledger = [dict(row, actual='ㄅ') for row in fixture_group(output)['members']]
     with ExitStack() as stack:
         stack.enter_context(patch.object(pipeline, 'json_load_strict', return_value=manifest))
         stack.enter_context(patch.object(pipeline, 'validate_manifest_integrity'))
@@ -96,8 +107,9 @@ def crash_after_refresh_worker(output, store):
             kwargs['_refresh_status']['cleared_actual_dependent_event_count'] = 0
             return output / 'report.xlsx'
         stack.enter_context(patch.object(pipeline, 'refresh_actual_project', side_effect=refreshed))
-        stack.enter_context(patch.object(pipeline, 'deliver_pending_promotion_outbox', side_effect=lambda root:
-            promotion.deliver_pending_promotion_outbox(root, library.GlobalExactGlyphRepository.resolved(store))))
+        def deliver(root, **kwargs):
+            return promotion.deliver_pending_promotion_outbox(root, library.GlobalExactGlyphRepository.resolved(store), **kwargs)
+        stack.enter_context(patch.object(pipeline, 'deliver_pending_promotion_outbox', side_effect=deliver))
         stack.enter_context(patch.object(pipeline, 'acknowledge_project_refresh', side_effect=lambda *args: os._exit(31)))
         pipeline.recover_committed_actual_project(output)
 
@@ -109,7 +121,7 @@ class DurableActualRecoveryTests(unittest.TestCase):
         self.output = Path(self.temp.name) / 'project'
         self.root = pipeline.project_actual_evidence_root(self.output)
         self.repo = library.GlobalExactGlyphRepository.resolved(Path(self.temp.name) / 'global')
-        self.ledger = [dict(row, actual='ㄅ') for row in fixture_group()['members']]
+        self.ledger = [dict(row, actual='ㄅ') for row in fixture_group(self.output)['members']]
         self.calls = []
         self.events = {'events': {row['review_id']: {
             'action': '確認現版差異', 'expected_set': ['ㄆ'],
@@ -119,11 +131,11 @@ class DurableActualRecoveryTests(unittest.TestCase):
     def run_recovery(self, fail=None, wrapper=False, mismatch=False, defer_ack=False):
         manifest = sealed_recovery_pdf(self.output)
         real_clear = pipeline._clear_actual_dependent_events
-        def deliver(root):
+        def deliver(root, **kwargs):
             self.calls.append('delivery')
             if fail == 'global':
                 return {'status': 'PENDING_RETRY'}
-            return promotion.deliver_pending_promotion_outbox(root, self.repo)
+            return promotion.deliver_pending_promotion_outbox(root, self.repo, **kwargs)
         def clear(output, ledger, ids):
             self.calls.append(('clear', sorted(ids)))
             if fail == 'clear':
@@ -202,7 +214,7 @@ class DurableActualRecoveryTests(unittest.TestCase):
         result = self.run_recovery()
         self.assertEqual(result['project_refresh'], 'SUCCESS')
         self.assert_recovered()
-        self.assertEqual(len(sql_rows(self.repo, 'source_evidence')), 1)
+        self.assertEqual(len(sql_rows(self.repo, 'source_evidence')), 2)
 
     def test_process_restart_after_global_delivery_reuses_original_receipt(self):
         self.crash(True)
@@ -210,7 +222,7 @@ class DurableActualRecoveryTests(unittest.TestCase):
         self.run_recovery()
         self.assert_recovered()
         self.assertEqual(sql_rows(self.repo, 'processed_intent'), receipts)
-        self.assertEqual(len(sql_rows(self.repo, 'source_evidence')), 1)
+        self.assertEqual(len(sql_rows(self.repo, 'source_evidence')), 2)
 
     def test_clear_failure_preserves_plan_and_retries_durable_affected_ids(self):
         commit(self.output)

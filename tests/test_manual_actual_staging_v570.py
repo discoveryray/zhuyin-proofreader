@@ -9,6 +9,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from tests.actual_source_test_support import register_fixture_glyph, source_entry
+
 from actual_review import (
     GLYPH_CONFLICT_FILE,
     GLYPH_PROVENANCE_FILE,
@@ -28,8 +30,8 @@ from actual_review import (
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SHA_A = "a" * 64
-SHA_B = "b" * 64
+SHA_A = register_fixture_glyph("staging-a")
+SHA_B = register_fixture_glyph("staging-b")
 AUTHORITATIVE_DYNAMIC_FILES = (
     OCCURRENCE_OVERRIDE_FILE,
     USER_GLYF_FILE,
@@ -40,7 +42,7 @@ AUTHORITATIVE_DYNAMIC_FILES = (
 
 
 def entry(occurrence_id: str, glyph_sha256: str, *, x0: float) -> dict:
-    return {
+    result = {
         "occurrence_id": occurrence_id,
         "review_id": "review-" + occurrence_id,
         "state": "ACTUAL_DECODE_ERROR",
@@ -64,6 +66,11 @@ def entry(occurrence_id: str, glyph_sha256: str, *, x0: float) -> dict:
             "預期注音": "SECRET_EXPECTED_SOURCE_FIELD",
         },
     }
+    genuine = source_entry(glyph_sha256, occurrence_id=occurrence_id, x0=x0)
+    source = result["source_record"]
+    result.update(genuine)
+    result["source_record"].update(source)
+    return result
 
 
 def group_a() -> dict:

@@ -98,7 +98,8 @@ def test_difference_secondary_shortcut_render_failure_preserves_primary():
     assert app.secondary.cget("text") == "確認目前注音就是應標注音"
     app._preview_failed()
     assert app.secondary.cget("state") == "disabled"
-    assert app.primary.cget("state") == "normal"
+    # Neither actual-dependent confirmation may use an unrendered source.
+    assert app.primary.cget("state") == "disabled"
 
 
 @pytest.mark.parametrize("reason", ["source", "staging", "staged_member", "not_rendered"])
@@ -132,6 +133,8 @@ def test_real_handler_saves_rule_and_human_conflicts_and_retry_cannot_revive(bat
     app = controls(headless_app(target))
     monkeypatch.setattr(gui.messagebox, "showinfo", lambda *a, **kw: None)
     monkeypatch.setattr(gui.messagebox, "showwarning", lambda *a, **kw: None)
+    errors = []
+    monkeypatch.setattr(gui.messagebox, "showerror", lambda title, message, **kw: errors.append((title, message)))
     receipt = (target / p.CONFLICT_FILE).read_bytes()
     for n in (2, 4):
         rid = tm["records"][n]["review_id"]
@@ -143,6 +146,7 @@ def test_real_handler_saves_rule_and_human_conflicts_and_retry_cannot_revive(bat
         assert app.primary.cget("text") == "確認目前注音就是應標注音"
         app.primary.invoke()
         wait_for_save(app)
+        assert not errors, errors
         saved = sp.json_load_strict(target / "人工判定資料庫.json")["events"][rid]
         assert saved["manual_expected_decision"]["operation"] == "CONFIRM_CURRENT_AS_EXPECTED"
         assert saved["expected_set"] == [row["actual"]]

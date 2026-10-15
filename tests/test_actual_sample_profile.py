@@ -23,6 +23,9 @@ import actual_review as ar
 import pdf_portability as portable
 import standalone_proofread as sp
 from tests.test_actual_review_v540 import entry, make_pdf
+from tests.actual_source_test_support import (
+    register_fixture_glyph, write_fixture_pdf, bind_source_from_pdf,
+)
 
 
 META = dict(version="5.4.0", session_id="sess", session_schema_version="2.5.0",
@@ -78,18 +81,33 @@ def edit_row(workbook, values, *, index=2):
         sheet.cell(index, headers.index(key) + 1, value)
 
 
-def test_bounded_export_keeps_all_ids_and_only_readable_images(clipped, tmp_path):
-    pdf, blocked = clipped
-    rows = list(blocked)
-    for group in range(50):
+def genuine_onpage_groups(root):
+    """Fifty real exact programs, with each sample bound to its own draw."""
+    glyphs = [register_fixture_glyph(f"sample-profile-onpage-group-{group}") for group in range(50)]
+    assert len(set(glyphs)) == 50
+    specs, rows = [], []
+    for group, digest in enumerate(glyphs):
         for sample in range(2 if group < 32 else 1):
             oid = "occ_" + hashlib.sha256(f"{group}-{sample}".encode()).hexdigest()
-            source_sha = hashlib.sha256(f"group{group}".encode()).hexdigest()
-            row = entry(oid, f"r{group}-{sample}", pdf, 60 + sample * 40,
-                        state="PASS" if sample else "ACTUAL_DECODE_ERROR",
-                        source={"TTF字形SHA256": source_sha})
-            row["pdf_sha256"] = hashlib.sha256(pdf.read_bytes()).hexdigest()
-            rows.append(row)
+            x0, y0 = 60 + sample * 40, 70 + group * 30
+            specs.append({"glyph_sha256": digest, "char": "A", "x0": x0, "y0": y0})
+            rows.append({"occurrence_id": oid, "review_id": f"r{group}-{sample}",
+                         "state": "PASS" if sample else "ACTUAL_DECODE_ERROR",
+                         "actual": "", "actual_evidence": "decoder unresolved",
+                         "stable_key": f"key-{oid}", "x0": x0, "y0": y0,
+                         "source_record": {"穩定注音鍵": f"key-{oid}"}})
+    pdf = write_fixture_pdf(root / "normal-profile-sources.pdf", specs)
+    for row, spec in zip(rows, specs):
+        bind_source_from_pdf(row, pdf)
+        assert row["source_record"]["TTF字形SHA256"] == spec["glyph_sha256"]
+    boxes = [fitz.Rect(*(row[key] for key in ("x0", "y0", "x1", "y1"))) for row in rows]
+    assert all(not first.intersects(second) for index, first in enumerate(boxes) for second in boxes[index+1:])
+    return rows
+
+
+def test_bounded_export_keeps_all_ids_and_only_readable_images(clipped, tmp_path):
+    _, blocked = clipped
+    rows = [*blocked, *genuine_onpage_groups(tmp_path)]
     original = copy.deepcopy(rows)
     groups = ar.build_actual_review_groups(rows)
     expected_ids = [member["occurrence_id"] for group in groups for member in group["members"][:2]]
@@ -128,11 +146,13 @@ def test_clipped_bytes_spoof_unknown_box_and_changed_normal_reject(clipped, tmp_
     pdf.write_bytes(pdf.read_bytes() + b"changed")
     with pytest.raises((ValueError, FileNotFoundError)):
         ar.actual_sample_availability(rows[0], tmp_path)
-    unrelated = entry("unknown", "review", pdf, 60)
+    normal_pdf = tmp_path / "normal-onpage.pdf"
+    make_pdf(normal_pdf)
+    unrelated = entry("unknown", "review", normal_pdf, 60)
     unrelated.update(x0=110.926, y0=-5.036, x1=125.143, y1=9.181)
     with pytest.raises(ValueError, match="未知"):
         ar.actual_sample_availability(unrelated, tmp_path)
-    normal = entry("normal", "review", pdf, 60)
+    normal = entry("normal", "review", normal_pdf, 60)
     normal["pdf_sha256"] = "f" * 64
     with pytest.raises((ValueError, FileNotFoundError)):
         ar.actual_sample_availability(normal, tmp_path)
@@ -203,7 +223,9 @@ def make_historical(workbook):
 
 
 def test_historical_complete_samples_adapter_and_clipped_downgrade(clipped, tmp_path):
-    pdf, blocked = clipped
+    _, blocked = clipped
+    pdf = tmp_path / "normal-onpage.pdf"
+    make_pdf(pdf)
     normal = [entry("normal", "review", pdf, 60)]
     xlsx = export(tmp_path, normal)
     workbook = load_workbook(xlsx)
