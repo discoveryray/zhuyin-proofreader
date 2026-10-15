@@ -175,10 +175,9 @@ _prepared_actual_csv = ContextVar("prepared_actual_csv", default=None)
 
 
 class _PreparedActualCSV:
-    def __init__(self, root, *, source_context=None):
+    def __init__(self, root, *, source_context=None, source_bindings=None):
         self.root = Path(root).resolve()
-        self.visual_pdf_paths = {name: info["pdf"] for name, info in
-                                 (source_context or {}).get("pdfs", {}).items()}
+        self.source_bindings = source_bindings
         self.specs = {
             USER_GLYF_FILE: tuple(USER_GLYF_HEADERS), USER_CFF_FILE: tuple(USER_CFF_HEADERS),
             OCCURRENCE_OVERRIDE_FILE: tuple(OVERRIDE_HEADERS),
@@ -637,7 +636,7 @@ def _stage_manual_actual_group_with_sources(
     with source_visual_operation():
         for member in members:
             if _text(member.get("occurrence_id")) in checked_set:
-                require_actual_visual_target(member)
+                require_actual_visual_target(member, _actual_project_output(root))
 
         canonical_reading = _canon(reading)
         if not canonical_reading:
@@ -1385,8 +1384,8 @@ def actual_visual_source_safety(entry: Mapping[str, Any], output_dir: Path | Non
     from actual_source_visual_safety import source_visual_safety
     try:
         state = _prepared_actual_csv.get()
-        supplied = state.visual_pdf_paths.get(_text(entry.get("pdf_name"))) if state is not None else None
-        pdf = Path(supplied) if supplied else _resolve_pdf_path(entry, output_dir)
+        bindings = state.source_bindings if state is not None else None
+        pdf = bindings.path_for(entry) if bindings is not None else _resolve_pdf_path(entry, output_dir)
         return source_visual_safety(entry, pdf=pdf)
     except Exception as exc:
         return {"location_readable": False, "donor_eligible": False,
@@ -1579,6 +1578,81 @@ def _resolve_pdf_path(entry: Mapping[str, Any], output_dir: Path | None = None) 
         if len(unique) == 1:
             return unique[0]
     raise FileNotFoundError(f"找不到現版 PDF：{name or stored}")
+
+
+def _actual_project_output(root):
+    """Recognize only the existing project-owned actual directory layout."""
+    import standalone_proofread as sp
+    root = Path(root).resolve()
+    candidate = root.parent.parent
+    if (sp.project_actual_evidence_root(candidate).resolve() == root
+            and (candidate / "校對工作階段.json").is_file()):
+        return candidate
+    return None
+
+
+class _ActualSourceBindings:
+    """Finite occurrence source selection for one actual write operation."""
+    def __init__(self, root, decisions, source_context):
+        from actual_source_visual_safety import source_visual_operation
+        self.output_dir = _actual_project_output(root)
+        self.paths, self.entries = {}, {}
+        self.source_context = copy.deepcopy(source_context)
+        self.occurrences = None
+        self.manifest_seal = None
+        with source_visual_operation() as operation:
+            self.operation = operation
+            if self.output_dir is not None:
+                import standalone_proofread as sp
+                manifest = sp.json_load_strict(self.output_dir / "校對工作階段.json")
+                sp.validate_manifest_integrity(manifest)
+                self.manifest_seal = manifest["manifest_integrity_sha256"]
+                if source_context is not None and source_context.get("session_id") != manifest.get("session_id"):
+                    raise ValueError("SOURCE_CONTEXT_SESSION_MISMATCH")
+                self.occurrences = {entry["occurrence_id"]: entry for entry in manifest["records"]}
+            for decision in decisions:
+                checked = set(decision["checked_occurrence_ids"])
+                for member in decision["group"].get("members") or []:
+                    if _text(member.get("occurrence_id")) in checked:
+                        self.path_for(member)
+
+    @staticmethod
+    def _key(entry):
+        source = _source(entry)
+        return (_text(entry.get("pdf_name")), _text(entry.get("pdf_sha256")),
+                _text(entry.get("pdf")), _text(source.get("pdf")))
+
+    def path_for(self, entry):
+        self.operation._require_owner()
+        if self.occurrences is not None:
+            sealed = self.occurrences.get(entry.get("occurrence_id"))
+            fields = ("occurrence_id", "review_id", "pdf_sha256", "pdf_name", "physical_page", "char",
+                      "font_xref", "glyph_id", "zhuyin_component_id", "x0", "y0", "x1", "y1")
+            if sealed is None or any(entry.get(key) != sealed.get(key) for key in fields):
+                raise ValueError("SOURCE_CONTEXT_OCCURRENCE_BINDING_MISMATCH")
+        key = self._key(entry)
+        if key not in self.paths:
+            path = _resolve_pdf_path(entry, self.output_dir).resolve()
+            wanted = _text(entry.get("pdf_sha256"))
+            self.operation.read_source(path, wanted)
+            if self.source_context is not None:
+                info = self.source_context["pdfs"][_text(entry.get("pdf_name"))]
+                if info.get("pdf_sha256") != wanted or Path(info["pdf"]).resolve() != path:
+                    raise ValueError("SOURCE_CONTEXT_SELECTION_MISMATCH")
+            self.paths[key], self.entries[key] = path, copy.deepcopy(entry)
+        return self.paths[key]
+
+    def recheck(self):
+        if self.output_dir is not None:
+            import standalone_proofread as sp
+            manifest = sp.json_load_strict(self.output_dir / "校對工作階段.json")
+            sp.validate_manifest_integrity(manifest)
+            if manifest["manifest_integrity_sha256"] != self.manifest_seal:
+                raise ValueError("SOURCE_CONTEXT_SESSION_CHANGED_DURING_OPERATION")
+        for key, entry in self.entries.items():
+            if _resolve_pdf_path(entry, self.output_dir).resolve() != self.paths[key]:
+                raise ValueError("SOURCE_SELECTION_CHANGED_DURING_OPERATION")
+        self.operation.recheck_sources()
 
 
 def _confirmed_render_location(entry: Mapping[str, Any], output_dir: Path | None = None) -> tuple:
@@ -2617,9 +2691,10 @@ def _apply_verified_actual_group_with_sources(
 
     from actual_source_visual_safety import source_visual_operation
     with source_visual_operation():
-        checked_safety = [require_actual_visual_target(member) for member in verified_entries]
+        output_dir = _actual_project_output(root)
+        checked_safety = [require_actual_visual_target(member, output_dir) for member in verified_entries]
         can_propagate = len(members) <= 1 or len(verified_entries) >= 2
-        peer_safety = ([actual_visual_source_safety(member) for member in members
+        peer_safety = ([actual_visual_source_safety(member, output_dir) for member in members
                        if _text(member.get("occurrence_id")) not in checked] if can_propagate else [])
         # No missing proof/paint-altered peer may receive a glyph-wide override.
         # Local-only evidence never enters the raw glyph learning row, even after
@@ -2831,6 +2906,7 @@ def _apply_direct_visual_actual_batch_with_sources(
     apply_function = apply_function or apply_verified_actual_group
     prepared = []
     all_intents = []
+    bindings = _ActualSourceBindings(root, decisions, source_context)
     with _DirectVisualPDFSnapshot(source_context) as pdf_snapshot:
         for decision in decisions:
             group = decision["group"]
@@ -2843,25 +2919,31 @@ def _apply_direct_visual_actual_batch_with_sources(
                 if _text(member.get("occurrence_id")) not in checked:
                     continue
                 if source_context is not None:
+                    bindings.path_for(member)
                     _pdf_key, _seal, document = pdf_snapshot.source(source_context, member)
                     safety = source_visual_safety(member, document=document)
                     if not safety["location_readable"]:
                         raise ValueError("actual prepared source target 不可靠；未寫入：" + safety["reason"])
                 else:
-                    require_actual_visual_target(member)
+                    require_actual_visual_target(member, bindings.output_dir)
+            identity = canonical_actual_group_identity(group.get("kind"), group.get("exact_key"), group.get("style_group", ""))
+            if any(actual_source_consistency_errors(member)
+                   or actual_group_match_key(actual_group_identity(member)) != actual_group_match_key(identity)
+                   for member in group.get("members") or []):
+                raise ValueError("actual member 來源或 exact identity 矛盾；禁止寫入")
             intents, admissions = direct_visual_intents(group, reading, checked, source_context, _snapshot=pdf_snapshot)
             all_intents.extend(intents)
             prepared.append((decision, reading, checked, admissions))
     results = []
     from actual_source_visual_safety import recheck_current_sources
-    recheck_current_sources()
+    bindings.recheck()
     with direct_visual_project_transaction(root) as bind_recovery_plan:
         if prewrite_guard is not None:
             prewrite_guard()
         if initialize_evidence is not None:
-            recheck_current_sources()
+            bindings.recheck()
             initialize_evidence()
-        state = _PreparedActualCSV(root, source_context=source_context)
+        state = _PreparedActualCSV(root, source_bindings=bindings)
         token = _prepared_actual_csv.set(state)
         try:
             for decision, reading, checked, admissions in prepared:
@@ -2881,15 +2963,18 @@ def _apply_direct_visual_actual_batch_with_sources(
             _prepared_actual_csv.reset(token)
         if prewrite_guard is not None:
             prewrite_guard()
+        bindings.recheck()
         state.flush()
         bind_recovery_plan(post_commit_recovery_plan_from_results(results))
         enqueue_promotion_intents(root, all_intents)
         if prewrite_guard is not None:
             prewrite_guard()
+        bindings.recheck()
         state.verify_published()
         acknowledgement = acknowledge() if acknowledge else {}
         if prewrite_guard is not None:
             prewrite_guard()
+        bindings.recheck()
         state.verify_published()
     return {
         "group_results": results, "acknowledgement": acknowledgement,

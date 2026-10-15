@@ -205,17 +205,19 @@ def _serialized_user_project_entry(operation):
 def _global_direct_source_context(output_dir, manifest):
     # Called only after the controller validates the sealed manifest/artifacts.
     # No expected fields cross this boundary.
-    infos = {str(info.get("pdf_name") or ""): {
-        "pdf": str(info.get("pdf") or ""), "pdf_sha256": info.get("pdf_sha256"),
-    } for info in manifest.get("pdfs", [])}
-    if any(not Path(info["pdf"]).is_file() for info in infos.values()):
-        try:
-            for pdf in _resolve_session_pdfs(output_dir, manifest):
-                if pdf.name in infos:
-                    infos[pdf.name]["pdf"] = str(pdf)
-        except (OSError, ValueError):
-            # Missing bytes produce explicit per-occurrence ineligibility below.
-            pass
+    from actual_source_visual_safety import source_visual_operation
+    infos = {}
+    with source_visual_operation() as operation:
+        for info in manifest.get("pdfs", []):
+            name = str(info.get("pdf_name") or "")
+            records = [entry for entry in manifest.get("records", []) if entry.get("pdf_name") == name]
+            entry = records[0] if records else info
+            path = _resolve_pdf_path(entry, output_dir)
+            wanted = info.get("pdf_sha256")
+            if entry.get("pdf_sha256") != wanted:
+                raise ValueError("SOURCE_CONTEXT_PDF_SEAL_MISMATCH")
+            operation.read_source(path, wanted)
+            infos[name] = {"pdf": str(path), "pdf_sha256": wanted}
     return {"session_id": manifest.get("session_id"), "pdfs": infos}
 
 

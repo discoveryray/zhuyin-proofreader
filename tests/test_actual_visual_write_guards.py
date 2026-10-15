@@ -232,6 +232,142 @@ def context_for(rows):
         row["pdf_name"]: {"pdf": row["pdf"], "pdf_sha256": row["pdf_sha256"]} for row in rows}}
 
 
+@pytest.mark.parametrize("entrypoint", ["public", "supplied_context"])
+def test_staged_ambiguous_source_refuses_before_transaction_and_preserves_every_file(tmp_path, monkeypatch, entrypoint):
+    from tests.test_staged_review_navigation_v580 import create_staged_navigation_fixture
+    from review_save_service import ReviewSaveService
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "g"))
+    output = tmp_path / "p"
+    manifest = create_staged_navigation_fixture(output, same_exact_peers=True)
+    entry = manifest["records"][0]
+    # Refusal must protect existing decisions, rather than only empty files.
+    # Both seed decisions pass the real public source/save gates first.
+    retained = manifest["records"][3]
+    root = pipeline.project_actual_evidence_root(output)
+    prior_actual = actual.apply_verified_actual_group(root,
+        actual.build_actual_group_for_entry(manifest["records"], retained), "ㄆ",
+        checked_occurrence_ids=[retained["occurrence_id"]], source="prior isolated visual check")
+    assert prior_actual["target_occurrence_ids"] == [retained["occurrence_id"]]
+    assert actual.has_direct_occurrence_actual(root, retained, "ㄆ")
+    peer = manifest["records"][4]
+    saved = ReviewSaveService(output).save_event(peer["review_id"],
+        pipeline.build_manual_expected_event(peer, operation="ENTER_EXPECTED", expected_set="ㄆ"))
+    assert saved.db["events"][peer["review_id"]]["expected_set"] == ["ㄆ"]
+    assert csv_rows(root, actual.OCCURRENCE_OVERRIDE_FILE)
+    assert csv_rows(root, actual.GLYPH_PROVENANCE_FILE)
+    pipeline.stage_manual_actual_correction(output, entry["review_id"], "ㄅ")
+    original = Path(entry["pdf"])
+    raw = original.read_bytes()
+    candidates = []
+    for name in ("a", "b"):
+        path = output / name / original.name
+        path.parent.mkdir()
+        path.write_bytes(raw)
+        candidates.append(path)
+    original.unlink()
+    assert all(hashlib.sha256(p.read_bytes()).hexdigest() == entry["pdf_sha256"] for p in candidates)
+    with pytest.raises(FileNotFoundError):
+        actual._resolve_pdf_path(entry, output)
+    snapshot = lambda: {str(p.relative_to(output)): p.read_bytes()
+                        for p in output.rglob("*") if p.is_file()}
+    before = snapshot()
+    writes = []
+    real_delivery = promotion.library.deliver_global_direct_evidence
+    def delivery(*args, **kwargs):
+        writes.append(1)
+        return real_delivery(*args, **kwargs)
+    monkeypatch.setattr(promotion.library, "deliver_global_direct_evidence", delivery)
+    with pytest.raises((ValueError, FileNotFoundError), match="找不到現版 PDF|SOURCE_CONTEXT"):
+        if entrypoint == "public":
+            pipeline.apply_staged_manual_actual_corrections(output)
+        else:
+            # One supplied path cannot erase the public selection ambiguity.
+            group = actual.build_actual_group_for_entry(manifest["records"], entry)
+            context = {"session_id": manifest["session_id"], "pdfs": {entry["pdf_name"]: {
+                "pdf": str(candidates[0]), "pdf_sha256": entry["pdf_sha256"]}}}
+            actual.apply_staged_manual_actual_batch(pipeline.project_actual_evidence_root(output),
+                                                    [group], source_context=context)
+    assert snapshot() == before and writes == []
+    root = pipeline.project_actual_evidence_root(output)
+    assert actual.load_manual_actual_staging(root)["staged_groups"]
+    assert not (root / promotion.PROJECT_TRANSACTION_FILE).exists()
+    assert not (root / promotion.GLOBAL_PROMOTION_OUTBOX_FILE).exists()
+    assert not list((tmp_path / "g").rglob("*.sqlite*"))
+
+
+def test_source_selection_rechecks_new_ambiguity_before_first_transaction(tmp_path, monkeypatch):
+    from tests.test_staged_review_navigation_v580 import create_staged_navigation_fixture
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "g"))
+    output = tmp_path / "p"
+    manifest = create_staged_navigation_fixture(output, same_exact_peers=True)
+    entry = manifest["records"][0]
+    pipeline.stage_manual_actual_correction(output, entry["review_id"], "ㄅ")
+    original = Path(entry["pdf"])
+    first = output / "a" / original.name; first.parent.mkdir()
+    original.rename(first)
+    baseline = {str(p.relative_to(output)): p.read_bytes() for p in output.rglob("*") if p.is_file()}
+    real_intents = actual.direct_visual_intents
+    second = output / "b" / first.name
+    def append_candidate(*args, **kwargs):
+        result = real_intents(*args, **kwargs)
+        second.parent.mkdir()
+        second.write_bytes(first.read_bytes())
+        return result
+    monkeypatch.setattr(actual, "direct_visual_intents", append_candidate)
+    with pytest.raises(FileNotFoundError, match="找不到現版 PDF"):
+        pipeline.apply_staged_manual_actual_corrections(output)
+    after = {str(p.relative_to(output)): p.read_bytes() for p in output.rglob("*") if p.is_file()}
+    assert after.pop(str(second.relative_to(output))) == first.read_bytes()
+    assert after == baseline
+    assert not (pipeline.project_actual_evidence_root(output) / promotion.PROJECT_TRANSACTION_FILE).exists()
+
+
+def test_unique_automatic_move_and_return_public_save_preserve_expected_and_a_only(tmp_path, monkeypatch):
+    from tests.test_pdf_portability_integration import _pdfs, _synthetic_unresolved_decode
+    from review_save_service import ReviewSaveService
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "g"))
+    original, _ = _pdfs(tmp_path)
+    output = tmp_path / "p"
+    # Real pipeline and refresh; only the existing deterministic decoder data
+    # producer is substituted. In particular no source or save success mock.
+    monkeypatch.setattr(pipeline, "decode", _synthetic_unresolved_decode)
+    monkeypatch.setattr(pipeline, "actual_workbook_global_exact_dependencies", lambda *_args: ())
+    monkeypatch.setattr(__import__("check_pronunciation_candidates"),
+                        "actual_workbook_global_exact_dependencies", lambda *_args: ())
+    pipeline.run_pipeline_pdfs([original], output, defer_excel_reports=True)
+    manifest = pipeline.json_load_strict(output / "校對工作階段.json")
+    entry = manifest["records"][0]
+    before = copy.deepcopy(manifest["records"])
+    pipeline.stage_manual_actual_correction(output, entry["review_id"], "ㄐㄩㄝˊ")
+    moved = output / "a" / original.name; moved.parent.mkdir()
+    original.rename(moved)
+    assert display.occurrence_preview(entry, output_dir=output, display_width=200)[1] is not None
+    result = pipeline.apply_staged_manual_actual_corrections(output)
+    assert result["applied_group_count"] == 1
+    current = pipeline.json_load_strict(output / "校對工作階段.json")
+    db = pipeline.json_load_strict(output / "人工判定資料庫.json")
+    ledger = pipeline.materialize_ledger(current, db)
+    assert ledger[0]["actual"] == "ㄐㄩㄝˊ"
+    assert [r["actual"] for r in ledger[1:]] == [r["actual"] for r in before[1:]]
+    assert [(r["expected_set"], r["expected_evidence"]) for r in ledger] == [
+        (r["expected_set"], r["expected_evidence"]) for r in before]
+    assert actual.load_manual_actual_staging(pipeline.project_actual_evidence_root(output))["staged_groups"] == []
+    moved.rename(original)
+    # Additional copies do not invalidate an existing explicit source location.
+    for name in ("b", "c"):
+        child = output / name; child.mkdir(); (child / original.name).write_bytes(original.read_bytes())
+    assert display.occurrence_preview(ledger[0], output_dir=output, display_width=200)[1] is not None
+    service = ReviewSaveService(output)
+    snapshot = service.load_resume_snapshot()
+    peer = snapshot.ledger[1]
+    event = pipeline.build_manual_expected_event(peer, operation="ENTER_EXPECTED", expected_set="ㄆ")
+    saved = service.save_event(peer["review_id"], event)
+    assert saved.db["events"][peer["review_id"]]["expected_set"] == ["ㄆ"]
+    reopened = ReviewSaveService(output).load_resume_snapshot()
+    assert reopened.ledger[0]["actual"] == "ㄐㄩㄝˊ"
+    assert reopened.ledger[1]["actual"] == before[1]["actual"]
+
+
 def csv_rows(root, name):
     with (root / name).open(encoding="utf-8-sig", newline="") as stream:
         return list(csv.DictReader(stream))
