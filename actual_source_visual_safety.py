@@ -1032,7 +1032,11 @@ def _tuple(entry):
         if value is not None and other is not None and value != other:
             raise ValueError("SOURCE_TUPLE_CONTRADICTION:" + key)
         values[key] = value if value is not None else other
-    for key in ("pdf", "pdf_name", "font", "zhuyin_component_id"):
+    # pdf is a location hint: collect_manifest can retain the original path in
+    # source_record while binding the entry to a moved copy. Only the validated
+    # source SHA plus read_source/_seal_bytes below can prove its content. Keep
+    # every identity claim (including pdf_name) independently contradictory.
+    for key in ("pdf_name", "font", "zhuyin_component_id"):
         value, other = entry.get(key), source.get(aliases.get(key, key))
         if key == "zhuyin_component_id":
             # Legacy workbook/export absence is None or empty text. This only
@@ -1140,9 +1144,10 @@ def _source_visual_safety(operation, entry, *, pdf=None, document=None, page=Non
     elif document is not None:
         raw = _document_bytes(document)
     else:
-        path = entry.get("pdf") or source.get("pdf")
-        if not path:
+        if not (entry.get("pdf") or source.get("pdf")):
             raise ValueError("SOURCE_PDF_MISSING")
+        from actual_review import _resolve_pdf_path
+        path = _resolve_pdf_path(entry) if entry.get("pdf") else source["pdf"]
         raw = operation.read_source(path, values["pdf_sha256"])
     raw = operation._seal_bytes(raw, values["pdf_sha256"])
     if document is not None and _document_bytes(document) != raw:
@@ -1154,7 +1159,9 @@ def _source_visual_safety(operation, entry, *, pdf=None, document=None, page=Non
         from actual_render_geometry import EXACT_VERTICAL_CFF_PDF, exact_vertical_cff_location
         if values["pdf_sha256"] != EXACT_VERTICAL_CFF_PDF:
             raise ValueError("SOURCE_BBOX_EMPTY")
-        path = pdf if isinstance(pdf, (str, Path)) else entry.get("pdf")
+        from actual_review import _resolve_pdf_path
+        path = (pdf if isinstance(pdf, (str, Path)) else
+                _resolve_pdf_path({**entry, "pdf": entry.get("pdf") or source.get("pdf")}))
         target = fitz.Rect(exact_vertical_cff_location(Path(path), entry, digest=values["pdf_sha256"])["whole"])
     if not page.rect.contains(target):
         raise ValueError("SOURCE_BBOX_OUTSIDE_PAGE")

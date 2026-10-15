@@ -1545,6 +1545,19 @@ def _resolve_pdf_path(entry: Mapping[str, Any], output_dir: Path | None = None) 
             return adjacent
     if stored.exists():
         return stored
+    # A saved producer record may still carry both relocation paths. If the
+    # entry's location is gone (including a move back), the retained original
+    # location is a finite candidate, never identity or authorization. Require
+    # the sealed content before returning it; visual callers still validate all
+    # duplicate SHA/identity claims and register bytes for prewrite rechecks.
+    source = entry.get("source_record") or {}
+    original = source.get("pdf") if isinstance(source, Mapping) else None
+    if original and wanted:
+        candidate = Path(original)
+        if candidate.is_file():
+            if _sha256_file(candidate) != wanted:
+                raise ValueError("來源 PDF SHA 與 occurrence 來源不符")
+            return candidate
     if output_dir and name:
         candidates = []
         for base in [Path(output_dir).parent, Path(output_dir)]:

@@ -189,7 +189,7 @@ def _occurrence_preview(entry, *, padding, scale, output_dir, display_width, ret
     Invalid geometry displays the page with an explicit message, never a guess.
     """
     pdf = entry.get("pdf")
-    if output_dir is not None:
+    if output_dir is not None or entry.get("char") or entry.get("source_record"):
         # Preserve the actual dialog's existing unambiguous relocation lookup.
         from actual_review import _resolve_pdf_path
         pdf = _resolve_pdf_path(entry, output_dir)
