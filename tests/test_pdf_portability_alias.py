@@ -379,3 +379,48 @@ def test_import_cannot_reuse_a_foreign_closed_content_binding(tmp_path, monkeypa
         p.import_project_decisions(source, target, source_pdf_aliases=[binding],
                                    _source_pdf_bindings=closed_binding)
     assert (_state(source), _state(target), alias.read_bytes()) == before
+
+
+@pytest.mark.parametrize("state", ["PREPARED", "COMMITTED"])
+def test_valid_source_transaction_rejects_import_before_alias_or_native_reads(tmp_path, monkeypatch, state):
+    import global_glyph_promotion as promotion
+    source, local, alias, binding, manifest = _case(tmp_path, monkeypatch, proof_kind="missing")
+    target = tmp_path / "target"
+    project(target, local, session="target", genuine_source=True)
+    root = sp.project_actual_evidence_root(source)
+    group = ar.build_actual_group_for_entry(manifest["records"], manifest["records"][0])
+    plan = promotion.post_commit_recovery_plan_from_results([{
+        "group_id": group["group_id"], "verified_occurrence_ids": [manifest["records"][0]["occurrence_id"]],
+        "reading": "ㄐㄩㄝˊ",
+    }])
+    journal = root / promotion.PROJECT_TRANSACTION_FILE
+    reads = []
+    original_bindings, original_preflight = p._SourcePdfBindings, p._preflight_actual_source_overrides
+    def bindings(*args, **kwargs):
+        reads.append("alias")
+        return original_bindings(*args, **kwargs)
+    def preflight(*args, **kwargs):
+        reads.append("native/dynamic")
+        return original_preflight(*args, **kwargs)
+    def refused():
+        # Genuine producer output must pass the unchanged journal validator
+        # before it is used to test the transfer-admission contract.
+        validated = promotion._validated_project_journal(journal.read_bytes())
+        assert validated["state"] == state
+        if state == "COMMITTED":
+            assert validated["recovery_plan"] == plan
+        before = _state(source), _state(target), alias.read_bytes(), local.read_bytes()
+        with monkeypatch.context() as patch:
+            patch.setattr(p, "_SourcePdfBindings", bindings)
+            patch.setattr(p, "_preflight_actual_source_overrides", preflight)
+            with pytest.raises(ValueError, match="交易尚待原專案恢復"):
+                p.import_project_decisions(source, target, source_pdf_aliases=[binding])
+        assert reads == []
+        assert (_state(source), _state(target), alias.read_bytes(), local.read_bytes()) == before
+        assert journal.exists() and promotion._validated_project_journal(journal.read_bytes()) == validated
+    with promotion.direct_visual_project_transaction(root) as bind_plan:
+        bind_plan(plan)
+        if state == "PREPARED":
+            refused()
+    if state == "COMMITTED":
+        refused()

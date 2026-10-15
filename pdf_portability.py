@@ -3550,6 +3550,7 @@ def _import_project_decisions_with_visual_sources(source_dir: Path, target_dir: 
             raise ValueError("內部接續缺少明確 owner；未匯入")
         _assert_actual_marker_owner(target_dir / INCOMPLETE_FILE, _target_marker_sha)
     source_manifest, source_db = _load_project(source_dir)
+    source_actual = _actual_transfer_state(source_dir, source_manifest)
     if _source_pdf_bindings is None:
         source_pdfs = _SourcePdfBindings([source_dir], source_pdf_aliases)
     else:
@@ -3566,7 +3567,6 @@ def _import_project_decisions_with_visual_sources(source_dir: Path, target_dir: 
     target_manifest, _ = _load_project(target_dir, allow_incomplete=_allow_incomplete_target)
     source_current = {entry["review_id"]: entry for entry in
                       sp.materialize_ledger(source_manifest, source_db)}
-    source_actual = _actual_transfer_state(source_dir, source_manifest)
     _actual_transfer_state(target_dir, target_manifest)
     if _selected_local_pdf is None:
         proof = _load_proof(source_dir, source_manifest, source_pdfs=source_pdfs)
