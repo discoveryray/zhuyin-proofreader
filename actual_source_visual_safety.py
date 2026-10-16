@@ -239,9 +239,10 @@ def _record_native_paint(name, callback):
 
 class _NativeContours(_native_pdf.mupdf.FzPathWalker2):
     """Split the native outline only; never interpret PDF content operators."""
-    def __init__(self):
+    def __init__(self, *, record_commands=False):
         super().__init__()
         self.paths, self.current, self.failure = [], None, None
+        self.commands = [] if record_commands else None
         # Optional compressed path operators are expanded by the native walker
         # to these four required operations, as in the vendor's own Walker.
         for name in ("moveto", "lineto", "curveto", "closepath"):
@@ -249,6 +250,14 @@ class _NativeContours(_native_pdf.mupdf.FzPathWalker2):
 
     def _call(self, name, *args):
         try:
+            if self.commands is not None:
+                if self.failure is not None:
+                    return
+                if len(self.commands) >= 2048 or len(self.paths) >= 256:
+                    self.failure = "SOURCE_NATIVE_BOUNDARY_CAPTURE_LIMIT"
+                    self.current = None
+                    return
+                self.commands.append((name, args))
             if name == "moveto":
                 self.finish()
                 self.current = _native_pdf.mupdf.FzPath()
@@ -281,6 +290,94 @@ def _native_contours(outline, stroke, ctm):
     return [(path, bounds) for path in walker.paths
             if (bounds := _native_rect(native.ll_fz_bound_path(
                 path.m_internal, stroke, ctm), allow_empty=True)) is not None]
+
+
+def _native_boundaries(path, ctm, stroke=None):
+    """Bound closed native line/cubic boundaries, never parse PDF operators.
+
+    A cubic stays in its control-point convex hull. A chord is homotopic to
+    that curve without crossing any rectangle disjoint from the entire hull.
+    The native stroke expansion includes caps/joins/miter and the real CTM.
+    Unknown/open/excessive geometry remains unsupported, rather than empty.
+    """
+    native = _native_pdf.mupdf
+    walker = _NativeContours(record_commands=True)
+    kept = native.FzPath(native.ll_fz_keep_path(path))
+    native.fz_walk_path(kept, walker, walker.m_internal)
+    walker.finish()
+    if walker.failure is not None or not walker.commands or len(walker.commands) > 2048:
+        return None
+    current = start = None
+    boundaries, subpaths = [], 0
+    for name, points in walker.commands:
+        if name == "moveto":
+            if current is not None:
+                return None
+            current = start = tuple(points)
+            subpaths += 1
+            if subpaths > 256:
+                return None
+            continue
+        if current is None or name not in {"lineto", "curveto", "closepath"}:
+            return None
+        controls = ([current, start] if name == "closepath" else
+                    [current, *zip(points[::2], points[1::2])])
+        if not all(type(value) in (int, float) and math.isfinite(value)
+                   for point in controls for value in point):
+            return None
+        transformed = [native.fz_transform_point(native.fz_make_point(*point), native.FzMatrix(ctm))
+                       for point in controls]
+        box = (min(p.x for p in transformed), min(p.y for p in transformed),
+               max(p.x for p in transformed), max(p.y for p in transformed))
+        if not all(math.isfinite(value) for value in box):
+            return None
+        if stroke is not None:
+            bound = native.ll_fz_adjust_rect_for_stroke(native.FzRect(*box).internal(), stroke, ctm)
+            box = _native_rect(bound)
+        boundaries.append({"start": (transformed[0].x, transformed[0].y),
+                           "end": (transformed[-1].x, transformed[-1].y), "bounds": box})
+        current = None if name == "closepath" else controls[-1]
+    return tuple(boundaries) if current is None and boundaries else None
+
+
+def _boundary_disjoint(bounds, rectangle):
+    # Strict separation: touching or numeric uncertainty never proves safety.
+    return (bounds[2] < rectangle.x0 or bounds[0] > rectangle.x1
+            or bounds[3] < rectangle.y0 or bounds[1] > rectangle.y1)
+
+
+def _boundary_contains(boundaries, even_odd, rectangle):
+    if type(even_odd) is not int or even_odd not in (0, 1) or not boundaries:
+        return False
+    if any(not _boundary_disjoint(part["bounds"], rectangle) for part in boundaries):
+        return False
+    # Since each full curve hull misses the rectangle, replacing it by its
+    # chord preserves winding for every point of the connected rectangle.
+    # A crossing chord's hull is strictly to one side: no division/epsilon.
+    y, winding = (rectangle.y0 + rectangle.y1) / 2, 0
+    for part in boundaries:
+        a, b = part["start"], part["end"]
+        if part["bounds"][0] <= rectangle.x1:
+            continue
+        if a[1] <= y < b[1]:
+            winding += 1
+        elif b[1] <= y < a[1]:
+            winding -= 1
+    return bool(winding % 2) if even_odd else winding != 0
+
+
+def _native_group_colorspace(colorspace):
+    if colorspace is None:
+        return "inherited-null"
+    native = _native_pdf.mupdf
+    fields = tuple(getattr(native, "ll_fz_colorspace_" + name)(colorspace)
+                   for name in ("is_device", "is_device_cmyk", "type", "n"))
+    builtin_type = native.ll_fz_colorspace_type(native.fz_device_cmyk().m_internal)
+    # Explicit native builtin CMYK only. Names/ICC/DeviceN/RGB do not qualify.
+    if (all(type(value) is int for value in (*fields, builtin_type))
+            and fields == (1, 1, builtin_type, 4)):
+        return "builtin-device-cmyk"
+    return "unsupported"
 
 
 class _CurrentClipTrace(_native_pdf.JM_new_texttrace_device):
@@ -328,8 +425,10 @@ class _CurrentClipTrace(_native_pdf.JM_new_texttrace_device):
                                      center[2]-margin, center[3]-margin)
                     if margin >= 0 and not safe.is_empty:
                         inner = tuple(safe)
+        boundaries = _native_boundaries(path, ctm, stroke) if stroke is not None and bounds is not None else None
         self.footprints.append({"seqno": self.seqno, "bounds": bounds,
-                                "empty": bounds is None, "inner": inner})
+                                "empty": bounds is None, "inner": inner,
+                                "stroke_boundaries": boundaries})
         self.paint_calls.append((self.seqno, name))
         getattr(_native_pdf.JM_new_texttrace_device, name)(self, *args)
 
@@ -345,9 +444,14 @@ class _CurrentClipTrace(_native_pdf.JM_new_texttrace_device):
 
     @_captured_native_callback
     def fill_shade(self, ctx, shade, ctm, alpha, params):
-        bound = _native_rect(_native_pdf.mupdf.ll_fz_bound_shade(shade, ctm), allow_empty=True)
+        native = _native_pdf.mupdf
+        raw = native.ll_fz_bound_shade(shade, ctm)
+        infinite = native.ll_fz_is_infinite_rect(raw)
+        if type(infinite) is not int or infinite not in (0, 1):
+            raise ValueError("SOURCE_NATIVE_SHADE_BOUNDS_UNPROVABLE")
+        bound = None if infinite else _native_rect(raw, allow_empty=True)
         self.footprints.append({"seqno": self.seqno, "bounds": bound,
-                                "empty": bound is None, "inner": None})
+                                "empty": bound is None and not infinite, "inner": None})
         self.paint_calls.append((self.seqno, "fill_shade"))
         super().fill_shade(ctx, shade, ctm, alpha, params)
 
@@ -390,9 +494,9 @@ class _CurrentClipTrace(_native_pdf.JM_new_texttrace_device):
                 bounds = _native_rect(bound)
                 self.active_clips.append({"kind": "rectangle", "bounds": bounds})
         else:
-            # Nonrectangular paths, multiple subpaths/holes and skewed quads
-            # cannot become a visible-source proof from a bounding rectangle.
-            self.active_clips.append({"kind": "unknown-path"})
+            boundaries = _native_boundaries(path, ctm)
+            self.active_clips.append({"kind": "bounded-path" if boundaries else "unknown-path",
+                                      "boundaries": boundaries, "even_odd": even_odd})
 
     @_captured_native_callback
     def clip_stroke_path(self, *args): self.active_clips.append({"kind": "stroke-path"})
@@ -412,7 +516,8 @@ class _CurrentClipTrace(_native_pdf.JM_new_texttrace_device):
     @_captured_native_callback
     def begin_group(self, ctx, area, colorspace, isolated, knockout, blendmode, alpha):
         self.groups.append({"kind": "group", "bounds": _native_rect(area),
-                            "colorspace_null": colorspace is None, "isolated": isolated,
+                            "colorspace_null": colorspace is None,
+                            "colorspace_proof": _native_group_colorspace(colorspace), "isolated": isolated,
                             "knockout": knockout, "blendmode": blendmode, "alpha": alpha})
 
     @_captured_native_callback
@@ -503,7 +608,7 @@ class _CurrentClipTrace(_native_pdf.JM_new_texttrace_device):
         # A separate space-only text operation may have legitimate empty ink.
         # Still run the vendor callback and retain its exact paint sequence;
         # an empty target operation itself can never certify visibility.
-        ink = _native_rect(_native_pdf.mupdf.ll_fz_bound_text(text, stroke, ctm), allow_empty=True)
+        text_bounds = _native_rect(native.ll_fz_bound_text(text, stroke, ctm), allow_empty=True)
         callback(self, *args)
         operation = self.out[before:]
         if len(glyph_spans) != len(operation):
@@ -518,9 +623,18 @@ class _CurrentClipTrace(_native_pdf.JM_new_texttrace_device):
                     raise ValueError("SOURCE_NATIVE_GLYPH_ITEM_BINDING_MISMATCH")
                 glyph_records.append({"span": traced_span, "char": char, "ink": glyph["ink"],
                                       "render_bounds": glyph["render_bounds"], "contours": glyph["contours"]})
+        # Containment uses ALL exact-bound glyph outlines in this operation.
+        # bound_text adds raster padding and may include the font maximum box;
+        # retain it for audit without treating that padding as painted ink.
+        # Genuine empty outlines (e.g. spaces) add no ink. Unknown outlines
+        # already failed above; they cannot disappear from this union.
+        painted = [glyph["ink"] for glyph in glyph_records if glyph["ink"] is not None]
+        ink = (min(bounds[0] for bounds in painted), min(bounds[1] for bounds in painted),
+               max(bounds[2] for bounds in painted), max(bounds[3] for bounds in painted)) if painted else None
         # Plain values only. Native glyph ink includes annotation/tone contours
         # beyond layout metrics/advance; stroke uses its actual stroke state.
         self.draws.append({"seqno": seqno, "trace": operation, "ink": ink,
+                           "text_bounds": text_bounds,
                            "glyphs": glyph_records,
                            "clips": tuple(dict(item) for item in self.active_clips),
                            "groups": tuple(dict(item) for item in self.groups),
@@ -617,16 +731,21 @@ def _native_clip_proof(analysis, seqno, source_span, source_char):
     if draw["mask_definitions"]:
         raise ValueError("SOURCE_ACTIVE_MASK_UNPROVABLE")
     for clip in draw["clips"]:
+        if clip["kind"] == "bounded-path":
+            if not _boundary_contains(clip["boundaries"], clip["even_odd"], ink):
+                raise ValueError("SOURCE_ACTIVE_CLIP_UNPROVABLE")
+            continue
         if clip["kind"] != "rectangle":
             raise ValueError("SOURCE_ACTIVE_CLIP_UNPROVABLE")
         if not fitz.Rect(clip["bounds"]).contains(ink):
             raise ValueError("SOURCE_PAINT_CLIPPED")
     for group in draw["groups"]:
-        # Explicit, finite opaque isolated Normal-group proof: null group
-        # colorspace, no knockout, alpha 1, opaque source and full ink in
+        # Explicit, finite opaque isolated Normal-group proof: inherited-null
+        # or native builtin DeviceCMYK, no knockout, alpha 1, full ink in
         # its area. Other/missing/unknown group attributes never default
         # compatible. Form BBox clips use the same native rectangle proof.
-        if (group["kind"] != "group" or not group["colorspace_null"]
+        if (group["kind"] != "group"
+                or group["colorspace_proof"] not in {"inherited-null", "builtin-device-cmyk"}
                 or type(group["isolated"]) is not int or group["isolated"] != 1
                 or type(group["knockout"]) is not int or group["knockout"] != 0
                 or type(group["blendmode"]) is not int
@@ -903,6 +1022,12 @@ def _later_ink_may_touch(analysis, seqno, ordinal, source):
         if paint["seqno"] <= seqno or paint["empty"]:
             continue
         if paint["bounds"] is None:
+            return True
+        boundaries = paint.get("stroke_boundaries")
+        if boundaries is not None:
+            if all(_boundary_disjoint(part["bounds"], bounds)
+                   for part in boundaries for bounds in contours):
+                continue
             return True
         inner = fitz.Rect(paint["inner"]) if paint["inner"] is not None else None
         for bounds in contours:
