@@ -872,8 +872,8 @@ class TTFWorkbookReadReuseIntegrationTests(unittest.TestCase):
                 _absent_snapshot(),
                 name="absent",
             )
-            self.assertEqual(absent_actual["實際注音"], "ㄇ")
-            self.assertEqual(absent_actual["解碼依據"], "精確字型對照")
+            self.assertFalse(absent_actual["實際注音"])
+            self.assertIn("僅候選", absent_actual["解碼依據"])
             self.assertEqual(absent_audit, [])
 
             verified_actual, verified_audit = self._decode_fixture(
@@ -891,13 +891,13 @@ class TTFWorkbookReadReuseIntegrationTests(unittest.TestCase):
                 _snapshot(quarantined=(_record(identity, conflict=("ㄅ", "ㄆ")),)),
                 name="conflict",
             )
-            self.assertEqual(conflict_actual["實際注音"], "ㄇ")
-            self.assertEqual(conflict_actual["解碼依據"], "精確字型對照")
+            self.assertFalse(conflict_actual["實際注音"])
+            self.assertIn("僅候選", conflict_actual["解碼依據"])
             self.assertEqual(
                 conflict_audit[0]["處置"],
                 decoder.GLOBAL_EXACT_RUNTIME_CONFLICT_LABEL,
             )
-            self.assertEqual(conflict_audit[0]["已由獨立fallback解碼筆數"], 1)
+            self.assertEqual(conflict_audit[0]["已由獨立fallback解碼筆數"], 0)
 
     def test_occurrence_override_remains_highest_authority_during_global_conflict(self):
         identity = _identity(SHA_A)
@@ -908,7 +908,7 @@ class TTFWorkbookReadReuseIntegrationTests(unittest.TestCase):
                 occurrence_override="ㄈ",
                 name="override",
             )
-        self.assertEqual(actual["自動解碼原值"], "ㄇ")
+        self.assertFalse(actual["自動解碼原值"])
         self.assertEqual(actual["實際注音"], "ㄈ")
         self.assertEqual(actual["解碼依據"], "使用者原頁人工覆核（出現位置限定）")
         self.assertEqual(audit[0]["處置"], decoder.GLOBAL_EXACT_RUNTIME_CONFLICT_LABEL)
@@ -960,7 +960,7 @@ class Phase3ArchitectureTests(unittest.TestCase):
         self.assertNotIn("library.sqlite3", (ROOT / "runtime_asset_manifest.json").read_text(encoding="utf-8"))
 
     def test_epochs_and_expected_fingerprint_contract_remain_unchanged(self):
-        self.assertEqual(cross_version_compat.ACTUAL_DECODER_SEMANTICS_EPOCH, "1")
+        self.assertEqual(cross_version_compat.ACTUAL_DECODER_SEMANTICS_EPOCH, "2")
         self.assertEqual(cross_version_compat.EXPECTED_RESOLVER_SEMANTICS_EPOCH, "1")
         self.assertEqual(runtime_source_validation.EXPECTED_FINGERPRINT_SCHEMA_VERSION, "2.7.0")
         self.assertEqual(

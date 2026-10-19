@@ -151,7 +151,7 @@ def test_reuse_fingerprint_payload_contains_schema_policy_and_epoch_but_not_audi
     actual = compat.fingerprint_contract_components(actual_components(), chain="actual")
     assert actual["fingerprint_schema_version"] == "3.0.0"
     assert actual["reuse_policy"] == "evidence_assets_with_global_exact_v1"
-    assert actual["actual_decoder_semantics_epoch"] == "1"
+    assert actual["actual_decoder_semantics_epoch"] == "2"
     assert "decoder_version" not in actual
     assert "actual_decoder_source_hashes" not in actual
 

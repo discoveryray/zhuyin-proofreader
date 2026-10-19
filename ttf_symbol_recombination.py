@@ -10,8 +10,8 @@ signature from a pre-validated static template table.
 Safety constraints:
 - no Chinese-character text, dictionary, or sentence context is accepted;
 - no fuzzy distance or nearest-neighbour lookup;
-- templates are conflict-free and require either >=2 distinct verified source keys
-  or an explicitly admitted direct isolated-symbol visual verification;
+- templates are conflict-free and have an explicitly admitted direct visual
+  truth root; legacy automatic support/CV counts alone are audit-only;
 - every target xref variant must independently produce the same full reading;
 - unknown / ambiguous geometry remains unknown.
 """
@@ -19,6 +19,8 @@ Safety constraints:
 from dataclasses import dataclass
 from pathlib import Path
 import csv
+import hashlib
+import json
 
 from ttf_zhuyin_shape_decoder import contour_bbox, contour_group_signature, compose_reading
 
@@ -98,6 +100,7 @@ class SymbolTemplate:
     source_examples: str = ""
     validation: str = ""
     notes: str = ""
+    evidence_ref: str = ""
 
 
 class ExactSymbolRecombinationModel:
@@ -105,7 +108,18 @@ class ExactSymbolRecombinationModel:
         self.symbols = {}
         self.tones = {}
         self.neutral = {}
-        self.templates = list(templates)
+        candidates = {}
+        conflicts = set()
+        for t in templates:
+            key = (t.template_type, t.signature)
+            if key in conflicts:
+                continue
+            if key in candidates and candidates[key].label != t.label:
+                candidates.pop(key)
+                conflicts.add(key)
+            else:
+                candidates[key] = t
+        self.templates = list(candidates.values())
         for t in self.templates:
             if t.template_type == "symbol":
                 self.symbols[t.signature] = t
@@ -132,25 +146,27 @@ class ExactSymbolRecombinationModel:
                     continue
                 if typ not in {"symbol", "tone", "neutral"} or not sig or not label:
                     continue
-                # Runtime table is fail-closed even if the CSV is accidentally
-                # edited. Automated research templates require >=2 distinct
-                # verified full-glyph source keys. A symbol-only exception is
-                # allowed only when the CSV explicitly records a direct isolated
-                # visual verification. This exception is still exact-signature
-                # only and never uses Han text, context, dictionary, fuzzy
-                # similarity, or nearest-neighbour inference.
+                # Preserve the existing direct visual exception under its own
+                # exact-signature contract. It never uses Han text, context,
+                # dictionary, fuzzy similarity or nearest-neighbour inference.
                 validation = (row.get("validation") or "").strip()
                 direct_visual = (
                     typ in {"symbol", "tone", "neutral"} and
                     validation.lower().startswith(("direct_isolated_visual_", "direct_whole_glyph_visual_truth_"))
                 )
-                if support_keys < 2 and not direct_visual:
+                # The legacy automatic rows contain counts/examples, not a
+                # complete independent truth-root roster. LOO/CV cannot turn
+                # their historical labels into fresh evidence. Keep them out
+                # of the model until a bound surviving source contract exists.
+                if not direct_visual:
                     continue
+                claim = hashlib.sha256(json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
                 templates.append(SymbolTemplate(
                     typ, sig, label, support_keys, support_fonts,
                     (row.get("source_examples") or "").strip(),
                     (row.get("validation") or "").strip(),
                     (row.get("notes") or "").strip(),
+                    f"{path.name}:asset-sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}:row-sha256:{claim}",
                 ))
         return cls(templates)
 
@@ -171,7 +187,7 @@ class ExactSymbolRecombinationModel:
             evidence.append({
                 "type": "neutral", "signature": first_sig,
                 "label": "neutral", "support_keys": neutral_template.support_keys,
-                "support_fonts": neutral_template.support_fonts,
+                "support_fonts": neutral_template.support_fonts, "evidence_ref": neutral_template.evidence_ref,
             })
             groups = groups[1:]
             if not groups:
@@ -188,7 +204,7 @@ class ExactSymbolRecombinationModel:
             evidence.append({
                 "type": "tone", "signature": tone_sig,
                 "label": tone, "support_keys": tone_template.support_keys,
-                "support_fonts": tone_template.support_fonts,
+                "support_fonts": tone_template.support_fonts, "evidence_ref": tone_template.evidence_ref,
             })
 
         # Fast path: each vertical band is already one complete Bopomofo symbol.
@@ -208,7 +224,7 @@ class ExactSymbolRecombinationModel:
                 direct_evidence.append({
                     "type": "symbol", "signature": sig,
                     "label": template.label, "support_keys": template.support_keys,
-                    "support_fonts": template.support_fonts,
+                    "support_fonts": template.support_fonts, "evidence_ref": template.evidence_ref,
                 })
             if direct_ok:
                 base = "".join(symbols)
@@ -279,7 +295,7 @@ class ExactSymbolRecombinationModel:
                     part_evidence.append({
                         "type": "symbol", "signature": sig,
                         "label": template.label, "support_keys": template.support_keys,
-                        "support_fonts": template.support_fonts,
+                        "support_fonts": template.support_fonts, "evidence_ref": template.evidence_ref,
                         "partition_bands": len(part),
                     })
                 if valid:
@@ -369,7 +385,7 @@ class ExactSymbolRecombinationModel:
             if t is None:
                 return {"reading": "", "reason": "nested_unknown_tone_signature", "tone_signature": items[i]["sig"], "geometry_mode": "nested_components"}
             tone = t.label
-            evidence.append({"type": "tone", "signature": items[i]["sig"], "label": tone, "support_keys": t.support_keys, "support_fonts": t.support_fonts})
+            evidence.append({"type": "tone", "signature": items[i]["sig"], "label": tone, "support_keys": t.support_keys, "support_fonts": t.support_fonts, "evidence_ref": t.evidence_ref})
             base.remove(i)
 
         base.sort(key=lambda i: -items[i]["y"])
@@ -379,7 +395,7 @@ class ExactSymbolRecombinationModel:
                 if tone != "1":
                     return {"reading": "", "reason": "nested_neutral_plus_right_tone", "geometry_mode": "nested_components"}
                 tone = "neutral"
-                evidence.append({"type": "neutral", "signature": items[base[0]]["sig"], "label": "neutral", "support_keys": n.support_keys, "support_fonts": n.support_fonts})
+                evidence.append({"type": "neutral", "signature": items[base[0]]["sig"], "label": "neutral", "support_keys": n.support_keys, "support_fonts": n.support_fonts, "evidence_ref": n.evidence_ref})
                 base = base[1:]
 
         if not base or len(base) > 3:
@@ -390,7 +406,7 @@ class ExactSymbolRecombinationModel:
             if t is None:
                 return {"reading": "", "reason": "nested_unknown_symbol_signature", "symbol_signature": items[i]["sig"], "geometry_mode": "nested_components", "evidence": evidence}
             symbols.append(t.label)
-            evidence.append({"type": "symbol", "signature": items[i]["sig"], "label": t.label, "support_keys": t.support_keys, "support_fonts": t.support_fonts})
+            evidence.append({"type": "symbol", "signature": items[i]["sig"], "label": t.label, "support_keys": t.support_keys, "support_fonts": t.support_fonts, "evidence_ref": t.evidence_ref})
         reading = compose_reading("".join(symbols), tone)
         return {
             "reading": reading, "reason": "ok", "base": "".join(symbols), "tone": tone,
@@ -407,6 +423,6 @@ def evidence_text(decoded):
     for e in decoded.get("evidence") or []:
         parts.append(
             f"{e.get('type')}:{e.get('label')}:{e.get('signature')}"
-            f"[keys={e.get('support_keys')},fonts={e.get('support_fonts')}]"
+            f"[keys={e.get('support_keys')},fonts={e.get('support_fonts')},root={e.get('evidence_ref', '')}]"
         )
     return " | ".join(parts)

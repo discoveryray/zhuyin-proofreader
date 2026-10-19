@@ -17,6 +17,7 @@ from actual_review import dynamic_actual_hashes, ValidatedDynamicActualSnapshot
 from cross_version_compat import (
     ACTUAL_DECODER_SEMANTICS_EPOCH,
     EXPECTED_RESOLVER_SEMANTICS_EPOCH,
+    FINGERPRINT_COMPATIBILITY_REQUIRED_KEYS,
     fingerprint_contract_components,
 )
 from global_exact_glyph_library import canonical_global_exact_glyph_evidence_hashes
@@ -541,6 +542,34 @@ def rewrite_actual_workbook_fingerprint(path: Path, fingerprint_payload: Mapping
         if "v5.2中繼資料" not in wb.sheetnames:
             raise ValueError(f"{path.name} 缺少 v5.2中繼資料")
         ws = wb["v5.2中繼資料"]
+        metadata = {str(row[0].value or ""): row[1].value for row in ws.iter_rows(min_row=1, max_col=2)}
+        try:
+            stored_components = json.loads(str(metadata.get("actual_asset_fingerprint_components") or "{}"))
+        except (TypeError, ValueError):
+            raise ValueError(f"{path.name} invalid actual fingerprint components")
+        target_components = fingerprint_payload.get("components") or {}
+        # An epoch marker alone does not record which evidence produced rows.
+        # Optional-fingerprint decoder output stays unsealed; it cannot later
+        # be relabelled with a newly fabricated static/PDF contract.
+        if not isinstance(stored_components, dict) or not isinstance(target_components, dict):
+            raise ValueError(f"{path.name} actual fingerprint contract must be a mapping")
+        fingerprint_contract_components(stored_components, chain="actual")
+        fingerprint_contract_components(target_components, chain="actual")
+        # Dependency sealing is not a migration/re-decoding operation. Only a
+        # workbook actually produced by the current decoder may be resealed;
+        # rewriting an old fingerprint must never bless old pronunciation rows.
+        if (str(metadata.get("actual_decoder_semantics_epoch") or "") != ACTUAL_DECODER_SEMANTICS_EPOCH
+                or str(stored_components.get("actual_decoder_semantics_epoch") or "") != ACTUAL_DECODER_SEMANTICS_EPOCH
+                or str(target_components.get("actual_decoder_semantics_epoch") or "") != ACTUAL_DECODER_SEMANTICS_EPOCH):
+            raise ValueError(f"{path.name} actual epoch requires fresh decoding before fingerprint sealing")
+        # Sealing may narrow dynamic dependencies discovered during this run.
+        # It cannot bless cached labels after changing a static truth asset,
+        # PDF or other required contract field (including a revoked root).
+        scoped_keys = {"dynamic_actual_evidence_hashes", "global_exact_glyph_evidence_hashes"}
+        changed = [key for key in FINGERPRINT_COMPATIBILITY_REQUIRED_KEYS["actual"]
+                   if key not in scoped_keys and stored_components.get(key) != target_components.get(key)]
+        if changed:
+            raise ValueError(f"{path.name} actual contract changed; fresh decoding required: {changed}")
         wanted = {
             "actual_asset_fingerprint": str(fingerprint_payload.get("fingerprint") or ""),
             "actual_asset_fingerprint_components": json.dumps(

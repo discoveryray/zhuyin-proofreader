@@ -155,15 +155,20 @@ class ReleaseEvidenceTests(unittest.TestCase):
                     self.assertIn(target, included)
 
     def test_runtime_assets_and_manifest_other_fields_unchanged_from_baseline(self):
-        original = json.loads(package.git(ROOT, "show", BASELINE + ":runtime_asset_manifest.json"))
-        current = json.loads((ROOT / "runtime_asset_manifest.json").read_text(encoding="utf-8"))
+        from tests.actual_candidate_history_projection import project_current_actual_assets
+        original_raw = package.git(ROOT, "show", BASELINE + ":runtime_asset_manifest.json")
+        original = json.loads(original_raw)
+        assets = {asset["path"]: (ROOT / asset["path"]).read_bytes() for asset in original["assets"]}
+        projected_manifest, projected_assets = project_current_actual_assets(
+            (ROOT / "runtime_asset_manifest.json").read_bytes(), original_raw, assets)
+        current = json.loads(projected_manifest)
         self.assertEqual(current["tool_version"], "5.8.0")
         current["tool_version"] = original["tool_version"]
         self.assertEqual(current, original)
         self.assertEqual(len(original["assets"]), 20)
         for asset in original["assets"]:
             with self.subTest(path=asset["path"]):
-                self.assertEqual((ROOT / asset["path"]).read_bytes(), package.git(ROOT, "show", BASELINE + ":" + asset["path"]))
+                self.assertEqual(projected_assets[asset["path"]], package.git(ROOT, "show", BASELINE + ":" + asset["path"]))
 
     def test_release_runtime_lock_is_exact_ci_subset_without_test_tools(self):
         def pins(name):

@@ -1,0 +1,103 @@
+{
+  "labels_sha256": "68976dbe4bec387a63e290e2e8a6c8237548721ead68cfc2959c22c705d7a63c",
+  "all_labels_set_before_legacy_comparison": true,
+  "independence_note": "Different observations of same underlying glyph are not distinct Global truth sources. Values are AI direct graphic readings, not human confirmation. No dictionary/Han/expected supplied labels.",
+  "legacy_differences": [
+    {
+      "visual_id": 26,
+      "glyph_sha256": "0791bc5a96f05182987eba39bdf084ac3eb4d34ac4d2ed4467386889ac255db5",
+      "font": "ZhuYinNREG-Md",
+      "component_id": 14243,
+      "legacy": "ㄆㄥˊ",
+      "direct": "ㄨㄥˊ"
+    },
+    {
+      "visual_id": 77,
+      "glyph_sha256": "18755c73bc3143a3949944b42ad4b0bef8cb7105329f370f298fead20e749a5a",
+      "font": "DFPBiaoKai-W5-ZhuIn-BFW",
+      "component_id": 14598,
+      "legacy": "ㄨㄟˊ",
+      "direct": "ㄊㄨㄣˊ"
+    },
+    {
+      "visual_id": 118,
+      "glyph_sha256": "2bf31aec21692c7bdf23228f591368293e2abd200929c3882eeae39106fd3099",
+      "font": "DFPBiaoKai-W5-ZhuIn-BFW",
+      "component_id": 14674,
+      "legacy": "ㄉㄢˇ",
+      "direct": "ㄌㄚˋ"
+    },
+    {
+      "visual_id": 209,
+      "glyph_sha256": "4e15b0ac1507d2bf82e94e1baddaf287e773ef2f0cf1f4b9ced1b24aa56a84da",
+      "font": "DFPBiaoKai-W5-ZhuIn-BFW",
+      "component_id": 15284,
+      "legacy": "ㄕㄡˊ",
+      "direct": "ㄖㄜˋ"
+    },
+    {
+      "visual_id": 239,
+      "glyph_sha256": "561d2f4284367be7f77a3ef68e65deaa6187640c074b83c1c18bf580c857e922",
+      "font": "YenRoundZuinnEG-Bd",
+      "component_id": 14670,
+      "legacy": "ㄌㄨˋ",
+      "direct": "ㄌㄩㄝˋ"
+    },
+    {
+      "visual_id": 315,
+      "glyph_sha256": "6b912c83c1d9d44971955db9dda45402f94436b42241e88a296d91bf99ef8b08",
+      "font": "DFPBiaoKai-W5-ZhuIn-BFW",
+      "component_id": 14732,
+      "legacy": "ㄐㄧㄣˋ",
+      "direct": "ㄌㄨˊ"
+    },
+    {
+      "visual_id": 318,
+      "glyph_sha256": "6c6587c75515a0f9c24a99b04aee6de8b5f59c6ffe0e17625adbae4dee764f58",
+      "font": "YenRoundZuinnEG-Md",
+      "component_id": 14266,
+      "legacy": "ㄆㄞˊ",
+      "direct": "ㄆㄧˊ"
+    },
+    {
+      "visual_id": 392,
+      "glyph_sha256": "8047b9159ccd718a6e7629be3cec341eff263967aeab9e50f104325150ac2dba",
+      "font": "DFPBiaoKai-W5-ZhuIn-BFW",
+      "component_id": 14761,
+      "legacy": "ㄍㄜˋ",
+      "direct": "˙ㄍㄜ"
+    },
+    {
+      "visual_id": 431,
+      "glyph_sha256": "8b824cafc14a655e2ff073a6a9972ae3bffb810716406f0ac518c62a8559d11d",
+      "font": "DFPBiaoKai-W5-PoIn1-BFW",
+      "component_id": 14128,
+      "legacy": "ㄛ",
+      "direct": "ㄜ"
+    },
+    {
+      "visual_id": 622,
+      "glyph_sha256": "da0095289f1198745d5acfb9c29987823ba5a4c624e0e3696ee037e3ed585646",
+      "font": "DFPBiaoKai-W5-ZhuIn-BFW",
+      "component_id": 14241,
+      "legacy": "ㄩㄝ",
+      "direct": "ㄩㄝˋ"
+    },
+    {
+      "visual_id": 634,
+      "glyph_sha256": "dd4fe134c076bd60fdcf99f07efa6ad4d81f74697ec76977a50c4bae59335080",
+      "font": "DFPBiaoKai-W5-ZhuIn-BFW",
+      "component_id": 14794,
+      "legacy": "ㄎㄨㄛˋ",
+      "direct": "ㄍㄨㄚ"
+    }
+  ],
+  "existing_correction_conflicts": [],
+  "prior_graphic_conflicts": [],
+  "doubt_review_resolutions": {
+    "26": "ㄨㄥˊ, explicit ㄥ shape and visible page; do not substitute text-layer 文 reading",
+    "245": "ㄑㄧˊ, enlarged tone slash",
+    "276": "˙ㄇㄜ, vertical stroke through top horizontal distinguishes ㄜ",
+    "352": "˙ㄇㄜ, same explicit ㄜ stroke relation"
+  }
+}

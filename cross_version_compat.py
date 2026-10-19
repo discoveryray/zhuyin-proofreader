@@ -14,7 +14,7 @@ from global_exact_glyph_library import (
 # algorithms.  They are not tool versions, source hashes, or release counters.
 # Bump only when the same inputs may produce different pronunciation results;
 # the initial value represents the existing v5.6.2 semantics.
-ACTUAL_DECODER_SEMANTICS_EPOCH = "1"
+ACTUAL_DECODER_SEMANTICS_EPOCH = "2"
 EXPECTED_RESOLVER_SEMANTICS_EPOCH = "1"
 
 

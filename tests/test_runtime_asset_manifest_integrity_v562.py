@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import csv
+import io
 import unittest
 from pathlib import Path
 
@@ -70,6 +72,74 @@ class RuntimeAssetManifestIntegrityV562Tests(unittest.TestCase):
                 self.assertNotIn(b"\n", payload.replace(b"\r\n", b""))
                 self.assertEqual(hashlib.sha256(payload).hexdigest(), spec["sha256"])
                 normalized = payload.replace(b"\r\n", b"\n")
+                if relative == "zhuyin_component_map.csv" and "legacy_bopomofo" in spec["required_columns"]:
+                    # The explicitly authorized candidate calibration adds
+                    # target-scoped evidence and explicitly withdraws shared
+                    # labels in the finite calibration ledger.
+                    # Preserve the original historical constraint byte for
+                    # byte through its lossless five-column legacy projection;
+                    # do not replace the historical digest with a new one.
+                    rows = list(csv.DictReader(io.StringIO(normalized.decode("utf-8-sig"))))
+                    self.assertEqual(len(rows), 1384)
+                    ledger = json.loads((ROOT / "docs/evidence/legacy-map-calibration-20261019.json").read_text(encoding="utf-8"))
+                    self.assertEqual(ledger["schema"], "bounded-legacy-map-calibration/1")
+                    self.assertEqual(ledger["baseline"], "02ac4331e49a25feba3cd43884219ee2402d6e17")
+                    self.assertEqual(ledger["legacy_map_sha256"], "53a5369e96f60a552aeae6503b1b2584741bf3930facedf1f4d273048c90b291")
+                    declared = {(row["font"], str(row["component_id"])): row for row in ledger["rows"]}
+                    self.assertEqual(len(declared), 1384)
+                    self.assertEqual(set(declared), {(row["font"], row["zhuyin_component_id"]) for row in rows})
+                    withdrawn = set()
+                    for row in rows:
+                        key = (row["font"], row["zhuyin_component_id"])
+                        claim = declared[key]
+                        self.assertEqual(row["legacy_bopomofo"], claim["old_common_reading"])
+                        self.assertEqual(row["bopomofo"], claim["new_common_reading"])
+                        self.assertEqual(row["calibration_status"], claim["status"])
+                        self.assertEqual(json.loads(row["target_bindings"]), claim["target_bindings"])
+                        self.assertIs(claim["withdrawn_common_reading"], not bool(row["bopomofo"]))
+                        if claim["withdrawn_common_reading"]:
+                            withdrawn.add(key)
+                    self.assertEqual(len(withdrawn), ledger["common_readings_withdrawn"])
+                    legacy = io.StringIO(newline="")
+                    columns = ("font", "zhuyin_component_id", "bopomofo", "verification", "notes")
+                    writer = csv.DictWriter(legacy, fieldnames=columns, lineterminator="\n")
+                    writer.writeheader()
+                    for row in rows:
+                        writer.writerow({name: row["legacy_bopomofo"] if name == "bopomofo" else row[name] for name in columns})
+                    normalized = ("\ufeff" + legacy.getvalue()).encode("utf-8")
+                elif relative == "ttf_verified_outline_signatures.csv" and "legacy_verification" in spec["required_columns"]:
+                    # One graphically disproved exact assertion is withdrawn;
+                    # all six original fields remain losslessly reconstructible.
+                    rows = list(csv.DictReader(io.StringIO(normalized.decode("utf-8-sig"))))
+                    self.assertEqual(len(rows), 1563)
+                    changed = [row for row in rows if row["verification"] != row["legacy_verification"]]
+                    self.assertEqual(len(changed), 1)
+                    claim = changed[0]
+                    self.assertEqual(claim["outline_signature"], "933a88e37c44fa4a622044499c61b8c03ba344b1")
+                    self.assertEqual(claim["verification"], "REVOKED_TARGET_COUNTEREXAMPLE_V1")
+                    self.assertEqual(claim["bopomofo"], "ㄏㄢˋ")
+                    evidence = json.loads(claim["revocation_evidence"])
+                    self.assertEqual(evidence["counterexample_ref"], "docs/evidence/map-glyph-review-20261019/outline-counterexample.json")
+                    self.assertEqual(evidence["target_glyph_sha256"], "88e08b18d4dd1f3e705d5d57daefa4e361d734e8e22940a7e5fb46557128d88f")
+                    self.assertEqual(evidence["withdrawn_claim_reading"], "ㄏㄢˋ")
+                    self.assertEqual(evidence["observed_reading"], "ㄧㄢˋ")
+                    proof = json.loads((ROOT / evidence["counterexample_ref"]).read_text(encoding="utf-8"))
+                    self.assertEqual(proof["normalized_signature"], claim["outline_signature"])
+                    self.assertEqual(proof["target"]["identity"], ["TTF", evidence["target_glyph_sha256"]])
+                    self.assertEqual(proof["graphic_reading"], evidence["observed_reading"])
+                    self.assertEqual(proof["automatic_reading"], claim["bopomofo"])
+                    columns = ("outline_signature", "bopomofo", "source_count", "source_examples", "verification", "notes")
+                    original = {name: claim["legacy_verification"] if name == "verification" else claim[name] for name in columns}
+                    self.assertEqual(proof["matched_rows"], [{"line": 1429, "row": original}])
+                    self.assertTrue(all(not row["revocation_evidence"] for row in rows if row not in changed))
+                    from export_zhuyin_readings import load_verified_outline_signatures
+                    self.assertNotIn(claim["outline_signature"], load_verified_outline_signatures(ROOT / relative))
+                    legacy = io.StringIO(newline="")
+                    writer = csv.DictWriter(legacy, fieldnames=columns, lineterminator="\n")
+                    writer.writeheader()
+                    for row in rows:
+                        writer.writerow({name: row["legacy_verification"] if name == "verification" else row[name] for name in columns})
+                    normalized = ("\ufeff" + legacy.getvalue()).encode("utf-8")
                 self.assertEqual(hashlib.sha256(normalized).hexdigest(), historical_lf_sha)
 
     def test_git_attributes_freeze_every_manifest_csv_as_raw_bytes(self):
@@ -86,7 +156,13 @@ class RuntimeAssetManifestIntegrityV562Tests(unittest.TestCase):
             for asset in self.manifest["assets"]
             if str(asset.get("kind") or "").lower() == "csv"
         }
-        self.assertEqual(pinned, manifest_csvs)
+        # The corrective2 decision files bind each other's original raw SHA;
+        # their one finite directory must also survive checkout unchanged.
+        # Keep exact equality for the CSV roster plus this explicit evidence
+        # pattern; arbitrary additional binary/text exclusions still fail.
+        frozen_graphic_evidence = "docs/evidence/map-glyph-review-20261019/corrective2/**"
+        self.assertTrue((ROOT / frozen_graphic_evidence.removesuffix("/**") / "claim-revisions.json").is_file())
+        self.assertEqual(pinned, manifest_csvs | {frozen_graphic_evidence})
 
     def test_manifest_chain_roster_is_unchanged(self):
         observed = {

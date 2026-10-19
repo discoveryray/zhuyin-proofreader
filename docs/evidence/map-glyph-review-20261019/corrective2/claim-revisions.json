@@ -1,0 +1,1865 @@
+{
+  "schema": "finite-original-graphic-claim-revisions/1",
+  "baseline": "02ac4331e49a25feba3cd43884219ee2402d6e17",
+  "source_head": "3c638b3b7d3492dc5d0dc0539aa8f5a5e8f78ece",
+  "corrective_round": 2,
+  "scope": "899 previously admitted new AI direct roots re-read by assigned reader; final nine differences cross-read. No original-ten relabelling, new glyph, heldout-derived truth, human confirmation or Global approval.",
+  "final_decisions_ref": "docs/evidence/map-glyph-review-20261019/corrective2/final-899-graphic-recheck.json",
+  "final_decisions_sha256": "75af7ec12d6e3f3fcbb0b18e6f94f2c38dfd6c25b96b6c0f5335239a341c492c",
+  "final_changes_sha256": "d4f19218d6d177b3233819182dca9b57b83fcfc7a6cc8e1d569768a14f71533c",
+  "prior_asset_hashes": {
+    "ttf_verified_mapping_corrections.csv": "80313cdc6113cfd93189c53183add12607617cf454a4373bf6e8eede23dd9d73",
+    "zhuyin_component_map.csv": "db4a8da66bf67df6267161cf5066751b94b3e1040f7199e6a679f8a2f43b3f6b",
+    "runtime_asset_manifest.json": "5dada0f5d489b0dbe76d1268313af03f637760f1569135f4dbbf208fc1bb72c5",
+    "docs/evidence/map-glyph-review-20261019/observations.json": "48fecdc090c26b39745632fe0879f6eba00e230af4a65ddc595bd1d53ecfcddc",
+    "docs/evidence/legacy-map-calibration-20261019.json": "8d4030022842b0293c1b7160b14402b604610e9d17ecc8926a318f0508dc8fea"
+  },
+  "revisions": [
+    {
+      "review_index": 31,
+      "root_key": [
+        "ZhuYinNREG-Md",
+        14243,
+        "0791bc5a96f05182987eba39bdf084ac3eb4d34ac4d2ed4467386889ac255db5"
+      ],
+      "withdrawn_reading": "ㄨㄥˊ",
+      "current_reading": "ㄆㄥˊ",
+      "withdrawal_scope": "Only the exact prior assertion and its explicit one-layer source_key dependants. No Han, pronunciation-wide or group-wide revocation.",
+      "withdrawn_truth_root_receipt": "ttf_verified_mapping_corrections.csv:asset-sha256:80313cdc6113cfd93189c53183add12607617cf454a4373bf6e8eede23dd9d73:row-sha256:a419208b28d6b9a5f9b3f16d850f8427d3b28f3d876627cd10e9f11bcfe25ded",
+      "original_source_decision": {
+        "index": 31,
+        "root_ref_sha256": "b4ee63cba63ce4dcde9e962b934c2f35e92ffbfcf9ec728c4a15d3bdca569090",
+        "root_key": [
+          "ZhuYinNREG-Md",
+          14243,
+          "0791bc5a96f05182987eba39bdf084ac3eb4d34ac4d2ed4467386889ac255db5"
+        ],
+        "csv_line": 52,
+        "family": "map735",
+        "original_reading": "ㄨㄥˊ",
+        "observation_visual_id": 1260,
+        "map_graphic_id": 26,
+        "group_graphic_id": null,
+        "cohort_graphic_id": null,
+        "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_綜合_教材資源_課本PDF_課本PDF_全年級\\單檔\\01-115國小綜合3上課本成書-目次(115f197887).pdf",
+        "pdf_sha256": "85d8227bfdf8e35113b21c7e36659f8e58031f30b695bf8db07b2530bda1bd9d",
+        "page": 1,
+        "whole_occurrence_bbox": [
+          296.663,
+          134.995,
+          318.809,
+          179.287
+        ],
+        "annotation_physical_clip": [
+          298.9653313495219,
+          144.43831057846546,
+          317.5019259005785,
+          172.1445886902511
+        ],
+        "source_font_xref": 405,
+        "font_program_sha256": "0318c72d6ac84206eb65a91395440f6bf18b0e0fe7dba26c40b350d6a82e6a51",
+        "component_id": 14243,
+        "glyph_sha256": "0791bc5a96f05182987eba39bdf084ac3eb4d34ac4d2ed4467386889ac255db5",
+        "source_crop": "docs/evidence/map-glyph-review-20261019/map-026-original-page.png",
+        "source_crop_sha256": "cec4ab35916981dc781f3d3548423a9fe1614965e54ff937f03b5e94a387130f",
+        "source_svg": "docs/evidence/map-glyph-review-20261019/map-026-annotation.svg",
+        "source_svg_sha256": "979a6278d73fcf9df132cec6a74b81a9ab24b341268d15302ce352bfd615c0d7",
+        "dependent_aliases": [
+          {
+            "csv_line": 978,
+            "target_key": [
+              "StdKaiZuinnEG-Md",
+              14243,
+              "0791bc5a96f05182987eba39bdf084ac3eb4d34ac4d2ed4467386889ac255db5"
+            ]
+          }
+        ],
+        "final_reading": "ㄆㄥˊ",
+        "assigned_reader": "reviewer",
+        "changed_from_3c638b3": true
+      },
+      "prior_rows": [
+        {
+          "csv_line": 52,
+          "row": {
+            "font": "ZhuYinNREG-Md",
+            "component_id": "14243",
+            "glyph_sha256": "0791bc5a96f05182987eba39bdf084ac3eb4d34ac4d2ed4467386889ac255db5",
+            "old_reading": "ㄆㄥˊ",
+            "new_reading": "ㄨㄥˊ",
+            "source_book": "01-115國小綜合3上課本成書-目次(115f197887).pdf",
+            "evidence": "docs/evidence/map-glyph-review-20261019/observations.json#visual_id=1260",
+            "verification": "AI_DIRECT_PAGE_AND_ISOLATED_GLYPH_AUDIT_V1; not human confirmation; not Global approval",
+            "notes": "PDF_SHA256=85d8227bfdf8e35113b21c7e36659f8e58031f30b695bf8db07b2530bda1bd9d; page=1; font_SHA256=0318c72d6ac84206eb65a91395440f6bf18b0e0fe7dba26c40b350d6a82e6a51; original_crop_SHA256=cec4ab35916981dc781f3d3548423a9fe1614965e54ff937f03b5e94a387130f; SVG_SHA256=979a6278d73fcf9df132cec6a74b81a9ab24b341268d15302ce352bfd615c0d7; same-source graphic audit, not new Global independent evidence; preserve font/GID/SHA scope; no cross-font donation"
+          },
+          "claim_ref": "ttf_verified_mapping_corrections.csv:asset-sha256:80313cdc6113cfd93189c53183add12607617cf454a4373bf6e8eede23dd9d73:row-sha256:a419208b28d6b9a5f9b3f16d850f8427d3b28f3d876627cd10e9f11bcfe25ded"
+        },
+        {
+          "csv_line": 978,
+          "row": {
+            "font": "StdKaiZuinnEG-Md",
+            "component_id": "14243",
+            "glyph_sha256": "0791bc5a96f05182987eba39bdf084ac3eb4d34ac4d2ed4467386889ac255db5",
+            "old_reading": "",
+            "new_reading": "ㄨㄥˊ",
+            "source_book": "01-115國小綜合3上課本成書-目次(115f197887).pdf",
+            "evidence": "{\"kind\":\"SCOPED_CORRECTION_ALIAS_V1\",\"source_key\":[\"ZhuYinNREG-Md\",14243,\"0791bc5a96f05182987eba39bdf084ac3eb4d34ac4d2ed4467386889ac255db5\"],\"target_proof\":\"docs/evidence/map-glyph-review-20261019/observations.json#visual_id=20006\"}",
+            "verification": "SCOPED_CORRECTION_ALIAS_V1; same graphic truth root; not human confirmation; not Global approval",
+            "notes": "Explicit target shape checked; existing graphic truth dependency retained below. No new human/Global approval or independent source; no cross-font donation.; source truth is live source_key, not this target row; alias is invalid when source direct claim is absent, conflicted, revoked or changed."
+          },
+          "claim_ref": "ttf_verified_mapping_corrections.csv:asset-sha256:80313cdc6113cfd93189c53183add12607617cf454a4373bf6e8eede23dd9d73:row-sha256:e0ca7dc1a1548db081edc467e6898b17244b85e8fccf0f0079c7a5392250f761"
+        }
+      ],
+      "current_target_keys": [
+        [
+          "ZhuYinNREG-Md",
+          14243,
+          "0791bc5a96f05182987eba39bdf084ac3eb4d34ac4d2ed4467386889ac255db5"
+        ],
+        [
+          "StdKaiZuinnEG-Md",
+          14243,
+          "0791bc5a96f05182987eba39bdf084ac3eb4d34ac4d2ed4467386889ac255db5"
+        ]
+      ],
+      "graphic_evidence": {
+        "original_annotation_png": {
+          "path": "docs/evidence/map-glyph-review-20261019/corrective2/original-annotation/031.png",
+          "sha256": "3047667452b0f43724885d9047ed6d9d699b8aa54e9c157ad62d9edc2392a427",
+          "source_work_file": "C:\\Users\\E04069\\Documents\\Codex\\2026-10-19\\c-users-e04069-desktop-github2-zhuyin\\work\\corrective2\\graphic-recheck\\original-annotation\\031.png"
+        },
+        "isolated_png": {
+          "path": "docs/evidence/map-glyph-review-20261019/corrective2/isolated/031.png",
+          "sha256": "bdbfd322a62e8d51b3bb9f3ab5311d4179fde152d036ce19bfd5cbeaabca93a9",
+          "source_work_file": "C:\\Users\\E04069\\Documents\\Codex\\2026-10-19\\c-users-e04069-desktop-github2-zhuyin\\work\\corrective2\\graphic-recheck\\isolated\\031.png"
+        }
+      },
+      "source_glyph_record": {
+        "encoding": "base64",
+        "raw_glyf": "AAMAOwAvAdwCpABZAIEAlQAAEwYHBhUUMzY3NjcWFxYXFhcyJyYnJicmJzY3Njc2NTQnJicmBwYHBgcGMSY3Njc2NzYnNCcmJyIHBgcGBwYVFBcWFxY3Njc2NzIXFgcGByInJicmIwYXFhcGBwYHBgcGBxQXFhcWNzY3NjcyNzQnJgcGBwYHIic0NzY3NjU2JyYHBhcGBwYXFhcWMzI3Njc2JyYHBgcGpjEuBggqMw8QEw8ZDwwMCQIBBQQNFSwVExMMBgoKBQQJFRYhLAcBAwkKDAUEAQgGBQMEBgoKEQYEBAYGChIlMBEJAgEFGCIBASslBwMBBSofBAgVLRsFBgEEAwYGCww+SzYMAQkNCxYmJEoGAQJbBgMBCAkHBq4GAQEEBAsEBAMEPSwDAwYEHCYiAeUtFgMCAQkjDA0NCxMODQIVCQkGCAwWFhobDwQIBAoJAgEBBAMECAEBAwoPEAUEBQQGAwEIDw4PEgcDBAYHAQEEBwUHAQYHCSQjARYNAQEEGRUE4DRTLgYEBQQHBgMDAwMEBAEHBgkMBAQEAwUDAwOdBQQIBgkJAgEJAwQDBgcHAwZGOQQDAQMfIRwAAA==",
+        "glyph_sha256": "0791bc5a96f05182987eba39bdf084ac3eb4d34ac4d2ed4467386889ac255db5",
+        "complete_record_identity": {
+          "status": "CANONICAL_EXACT_IDENTITY",
+          "kind": "TTF_GLYF_SHA256",
+          "style_group": "",
+          "glyph_sha256": "0791bc5a96f05182987eba39bdf084ac3eb4d34ac4d2ed4467386889ac255db5",
+          "eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1",
+          "reason": ""
+        },
+        "exact_outline_signature": "b1f75384c3d03b1a601b7a3b5eca494bd63303d7",
+        "purpose": "Exact original source record fixture for regression of all shipped independent exact entrances; not an additional truth source."
+      }
+    },
+    {
+      "review_index": 108,
+      "root_key": [
+        "YenRoundZuinnEG-Md",
+        15522,
+        "20c764d666ff10977c520c1c2012558a06d907fd5057bc3fca140f3415bf144e"
+      ],
+      "withdrawn_reading": "ㄩㄝˋ",
+      "current_reading": "ㄩㄝ",
+      "withdrawal_scope": "Only the exact prior assertion and its explicit one-layer source_key dependants. No Han, pronunciation-wide or group-wide revocation.",
+      "withdrawn_truth_root_receipt": "ttf_verified_mapping_corrections.csv:asset-sha256:80313cdc6113cfd93189c53183add12607617cf454a4373bf6e8eede23dd9d73:row-sha256:5c15d093d5f365ca94a1dc4816f9f87e80a5133078f3c44b1f3e384d62a4a7ca",
+      "original_source_decision": {
+        "index": 108,
+        "root_ref_sha256": "e61084d90598ebd3fc7021a3154b5f1b2db47efeb58626c937a7766b81fb602a",
+        "root_key": [
+          "YenRoundZuinnEG-Md",
+          15522,
+          "20c764d666ff10977c520c1c2012558a06d907fd5057bc3fca140f3415bf144e"
+        ],
+        "csv_line": 789,
+        "family": "group152",
+        "original_reading": "ㄩㄝˋ",
+        "observation_visual_id": 10160,
+        "map_graphic_id": null,
+        "group_graphic_id": 16,
+        "cohort_graphic_id": null,
+        "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_綜合_教材資源_課本PDF_課本PDF_全年級\\單檔\\02-115國小綜合4上課本-成書內頁-L01(115f197900).pdf",
+        "pdf_sha256": "43900075b51eb0bd9826710c7b8d18e4d1f4ac4e42b20343494ad5677ee5b151",
+        "page": 24,
+        "whole_occurrence_bbox": [
+          247.325,
+          416.364,
+          266.459,
+          429.12
+        ],
+        "annotation_physical_clip": [
+          260.44138913974166,
+          418.23622035235167,
+          264.36709950864315,
+          426.1980403922498
+        ],
+        "source_font_xref": 933,
+        "font_program_sha256": "bdc1bda7811659d5405c6a83797b64449842fa1f3710b25ddbb567b532110bcd",
+        "component_id": 15522,
+        "glyph_sha256": "20c764d666ff10977c520c1c2012558a06d907fd5057bc3fca140f3415bf144e",
+        "source_crop": "docs/evidence/map-glyph-review-20261019/group-016-original-page.png",
+        "source_crop_sha256": "7e8fbb112b1176f0a97cf5fc53a1d10a7cb90113667b7eea594d15fb1822319f",
+        "source_svg": "docs/evidence/map-glyph-review-20261019/group-016-annotation.svg",
+        "source_svg_sha256": "03ff8e8d22f8c30889716f6ed4a31a5edcffe7c9d0632fd733882021426a5c5c",
+        "dependent_aliases": [],
+        "final_reading": "ㄩㄝ",
+        "assigned_reader": "reviewer",
+        "changed_from_3c638b3": true
+      },
+      "prior_rows": [
+        {
+          "csv_line": 789,
+          "row": {
+            "font": "YenRoundZuinnEG-Md",
+            "component_id": "15522",
+            "glyph_sha256": "20c764d666ff10977c520c1c2012558a06d907fd5057bc3fca140f3415bf144e",
+            "old_reading": "",
+            "new_reading": "ㄩㄝˋ",
+            "source_book": "02-115國小綜合4上課本-成書內頁-L01(115f197900).pdf",
+            "evidence": "docs/evidence/map-glyph-review-20261019/observations.json#visual_id=10160",
+            "verification": "AI_DIRECT_PAGE_AND_ISOLATED_GLYPH_AUDIT_V1; not human confirmation; not Global approval",
+            "notes": "PDF_SHA256=43900075b51eb0bd9826710c7b8d18e4d1f4ac4e42b20343494ad5677ee5b151; page=24; font_SHA256=bdc1bda7811659d5405c6a83797b64449842fa1f3710b25ddbb567b532110bcd; original_crop_SHA256=7e8fbb112b1176f0a97cf5fc53a1d10a7cb90113667b7eea594d15fb1822319f; SVG_SHA256=03ff8e8d22f8c30889716f6ed4a31a5edcffe7c9d0632fd733882021426a5c5c; same-source graphic audit, not new Global independent evidence; preserve font/GID/SHA scope; no cross-font donation"
+          },
+          "claim_ref": "ttf_verified_mapping_corrections.csv:asset-sha256:80313cdc6113cfd93189c53183add12607617cf454a4373bf6e8eede23dd9d73:row-sha256:5c15d093d5f365ca94a1dc4816f9f87e80a5133078f3c44b1f3e384d62a4a7ca"
+        }
+      ],
+      "current_target_keys": [
+        [
+          "YenRoundZuinnEG-Md",
+          15522,
+          "20c764d666ff10977c520c1c2012558a06d907fd5057bc3fca140f3415bf144e"
+        ]
+      ],
+      "graphic_evidence": {
+        "original_annotation_png": {
+          "path": "docs/evidence/map-glyph-review-20261019/corrective2/original-annotation/108.png",
+          "sha256": "fc23dc73fe957d14e881746571a89c46200fee32bdbce258042d3defca8c3348",
+          "source_work_file": "C:\\Users\\E04069\\Documents\\Codex\\2026-10-19\\c-users-e04069-desktop-github2-zhuyin\\work\\corrective2\\graphic-recheck\\original-annotation\\108.png"
+        },
+        "isolated_png": {
+          "path": "docs/evidence/map-glyph-review-20261019/corrective2/isolated/108.png",
+          "sha256": "40176b7d4bb28583d47c27548fd7cbff682d7203efdb62e56e77f531ff84b114",
+          "source_work_file": "C:\\Users\\E04069\\Documents\\Codex\\2026-10-19\\c-users-e04069-desktop-github2-zhuyin\\work\\corrective2\\graphic-recheck\\isolated\\108.png"
+        }
+      },
+      "source_glyph_record": {
+        "encoding": "base64",
+        "raw_glyf": "AAIAMQAnAUQCfgA2AJQAABMWBwYHFAcGFxYXFhcyNzY3Njc2FxY3Njc2JyYnNCcmIyIHBhcWFxYPAQYnJjc2NzQnJicmBwYTNjc2NzYnJicmBwYHIicmJyYnNjc2NwYVBjMyNzY3NDE2FxY3NicmJyYHBiMiBzY3NicmJyYHBhcWFQYHBgc0NzYnJiMiBwYXFhcWFwYHJgcGFxYXFjc2NxYXFhcWVwMCAQEBAQIBCQkEAwcJDTk1BwkHCQQDAQEBAgYECgYGBAIGAQMBiQkBAwEDAwMDCQoFA1VnDAYBAQUEBgYIDFENBwcEBAEcJgoMAQEFBAYGBSQYCQQDBAQIBwoKEgYHAwUBBAQLCQYGAgQTGxgSAgEIBwsJAgMDAwIBASINCQIDBQYGBwkMEAEFBA4MAmAPIDQYCQMGAwQFBgEEBgEJAwEJCQIBCQYOB3MSBgYEBAkTGyUtEAECAQdSIQYEBAQDAwH9vQEGBAQEBgQDAwQEAgYEDxY6BAQBASElDAoPOQEBAwEGBgYHBAMBAwEfGgcKCgUEBAMILSMBAwMCHiQKBgcFBAgHFhgWAQEBBAYICQEDAgMDHCYiDg0AAA==",
+        "glyph_sha256": "20c764d666ff10977c520c1c2012558a06d907fd5057bc3fca140f3415bf144e",
+        "complete_record_identity": {
+          "status": "CANONICAL_EXACT_IDENTITY",
+          "kind": "TTF_GLYF_SHA256",
+          "style_group": "",
+          "glyph_sha256": "20c764d666ff10977c520c1c2012558a06d907fd5057bc3fca140f3415bf144e",
+          "eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1",
+          "reason": ""
+        },
+        "exact_outline_signature": "11032001e43b96f8eba7e9d268a0ae4b530cdca1",
+        "purpose": "Exact original source record fixture for regression of all shipped independent exact entrances; not an additional truth source."
+      }
+    },
+    {
+      "review_index": 217,
+      "root_key": [
+        "ZhuYinNREG-Md",
+        15203,
+        "4140284b771233ab94b97547519be51e625fdba7b002784f7eedba539345eaa7"
+      ],
+      "withdrawn_reading": "ㄕㄨㄞˇ",
+      "current_reading": "ㄕㄨㄟˇ",
+      "withdrawal_scope": "Only the exact prior assertion and its explicit one-layer source_key dependants. No Han, pronunciation-wide or group-wide revocation.",
+      "withdrawn_truth_root_receipt": "ttf_verified_mapping_corrections.csv:asset-sha256:80313cdc6113cfd93189c53183add12607617cf454a4373bf6e8eede23dd9d73:row-sha256:88d379e32b97f0687ecc2523f0cd1b307bf137d21130dd44d7c1201f3cd8234b",
+      "original_source_decision": {
+        "index": 217,
+        "root_ref_sha256": "4d7ee5d1dbc55204139e641385c97e050a137f064c4505d4193390a096464dc0",
+        "root_key": [
+          "ZhuYinNREG-Md",
+          15203,
+          "4140284b771233ab94b97547519be51e625fdba7b002784f7eedba539345eaa7"
+        ],
+        "csv_line": 821,
+        "family": "group152",
+        "original_reading": "ㄕㄨㄞˇ",
+        "observation_visual_id": 10390,
+        "map_graphic_id": null,
+        "group_graphic_id": 39,
+        "cohort_graphic_id": null,
+        "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_綜合_教材資源_課本PDF_課本PDF_全年級\\單檔\\01-115國小綜合4上課本-成書內頁-目次(115f197899).pdf",
+        "pdf_sha256": "a5d1535b2f47ffc1fd67dc6d7e6c3894b0021de7d15149973107b989790217ae",
+        "page": 3,
+        "whole_occurrence_bbox": [
+          435.585,
+          210.723,
+          438.268,
+          216.091
+        ],
+        "annotation_physical_clip": [
+          435.6123339300975,
+          210.9614060400054,
+          438.32973789051175,
+          215.78613007627428
+        ],
+        "source_font_xref": 398,
+        "font_program_sha256": "e438fd3b0c7d41f16fb8c0d8e56d50cdbb3e6c881d29aa832d7fbb68b68be413",
+        "component_id": 15203,
+        "glyph_sha256": "4140284b771233ab94b97547519be51e625fdba7b002784f7eedba539345eaa7",
+        "source_crop": "docs/evidence/map-glyph-review-20261019/group-039-original-page.png",
+        "source_crop_sha256": "74ac4e3e38a065fe430ebc6bf511d285952f8ce37490206098de55710c24057f",
+        "source_svg": "docs/evidence/map-glyph-review-20261019/group-039-annotation.svg",
+        "source_svg_sha256": "166d3c74bd710f542dd68f762be6dc95b83303c130c47a6a752ab98d8b9389c6",
+        "dependent_aliases": [],
+        "final_reading": "ㄕㄨㄟˇ",
+        "assigned_reader": "reviewer",
+        "changed_from_3c638b3": true
+      },
+      "prior_rows": [
+        {
+          "csv_line": 821,
+          "row": {
+            "font": "ZhuYinNREG-Md",
+            "component_id": "15203",
+            "glyph_sha256": "4140284b771233ab94b97547519be51e625fdba7b002784f7eedba539345eaa7",
+            "old_reading": "",
+            "new_reading": "ㄕㄨㄞˇ",
+            "source_book": "01-115國小綜合4上課本-成書內頁-目次(115f197899).pdf",
+            "evidence": "docs/evidence/map-glyph-review-20261019/observations.json#visual_id=10390",
+            "verification": "AI_DIRECT_PAGE_AND_ISOLATED_GLYPH_AUDIT_V1; not human confirmation; not Global approval",
+            "notes": "PDF_SHA256=a5d1535b2f47ffc1fd67dc6d7e6c3894b0021de7d15149973107b989790217ae; page=3; font_SHA256=e438fd3b0c7d41f16fb8c0d8e56d50cdbb3e6c881d29aa832d7fbb68b68be413; original_crop_SHA256=74ac4e3e38a065fe430ebc6bf511d285952f8ce37490206098de55710c24057f; SVG_SHA256=166d3c74bd710f542dd68f762be6dc95b83303c130c47a6a752ab98d8b9389c6; same-source graphic audit, not new Global independent evidence; preserve font/GID/SHA scope; no cross-font donation"
+          },
+          "claim_ref": "ttf_verified_mapping_corrections.csv:asset-sha256:80313cdc6113cfd93189c53183add12607617cf454a4373bf6e8eede23dd9d73:row-sha256:88d379e32b97f0687ecc2523f0cd1b307bf137d21130dd44d7c1201f3cd8234b"
+        }
+      ],
+      "current_target_keys": [
+        [
+          "ZhuYinNREG-Md",
+          15203,
+          "4140284b771233ab94b97547519be51e625fdba7b002784f7eedba539345eaa7"
+        ]
+      ],
+      "graphic_evidence": {
+        "original_annotation_png": {
+          "path": "docs/evidence/map-glyph-review-20261019/corrective2/original-annotation/217.png",
+          "sha256": "b2db16826b66e252d994710f5bc66fe7a9de46eb4b042ee180f270f5973dd790",
+          "source_work_file": "C:\\Users\\E04069\\Documents\\Codex\\2026-10-19\\c-users-e04069-desktop-github2-zhuyin\\work\\corrective2\\graphic-recheck\\original-annotation\\217.png"
+        },
+        "isolated_png": {
+          "path": "docs/evidence/map-glyph-review-20261019/corrective2/isolated/217.png",
+          "sha256": "e320b6bb659be00f2148d7fc47a22c737b1cb64ea9e4915e9c65b692f8450937",
+          "source_work_file": "C:\\Users\\E04069\\Documents\\Codex\\2026-10-19\\c-users-e04069-desktop-github2-zhuyin\\work\\corrective2\\graphic-recheck\\isolated\\217.png"
+        }
+      },
+      "source_glyph_record": {
+        "encoding": "base64",
+        "raw_glyf": "AAQANf/uAdwDJwA4AHAAlgCzAAATIgcGFxY3NjcyDwEUBwYHBiMiBwYVFAcGBwYXFDc2NzY3Njc2NzY3Mjc2JyY3Njc2JyYnJgcGBwYDNjc2NzY3FhcWFxY3Njc2JyYnJic2NzY3NicmIwYVBgcGBwYHJicmJyYHBhcWFwYHBgcGBwYVFBciBwYXFhcWNzY3NhcyFxYXFhcWNzY3MjU0JyYnJicmJyYHBgcGNxYXFhcWFzI3Njc2NzYnJgcGBwYjJi8BJiciBwZyCQIDBwcKIWUGAQUGAwheDgwHBhAPFQMBBQwPDAgJBwkDPEINBgMBAwUEBgMCAQsHDQ86OT4fGRMWEg8TFhUNBgUGAQMFBAkeIRYHCQ0HCAcLCgEKCREDAwYIOhwEBAEDPx4NDRAZGBcEFAcCAQIDBwYJDxAGBAQBEBwZLwoODw4MB0UmJQoDBQQGBgkh8AkICQ4EBwQFBxweCAMEBgQQMgMDBAUeAwUEAgMDFgQECwwCBAYGIwkGBAEJBAMNMyglFAQBAQEGDAkPEBYYKgkDBwQLBhIZDwkICQUEBQQFBP4JBg4KFBIQFRkbDAYBAwwMCQcKHhseDRAXCgwMAQ0NFxUWAwQGBSsLAwIBAzQcDw4TExMLAQIDSgIBCgkFAwUJAwMCBjYxLjIMBAMCAwMELjk6NgYEBAMDAwobEBMVEQYBBgcxNxMGAQEFE00EAQkoBAIBAwAAAA==",
+        "glyph_sha256": "4140284b771233ab94b97547519be51e625fdba7b002784f7eedba539345eaa7",
+        "complete_record_identity": {
+          "status": "CANONICAL_EXACT_IDENTITY",
+          "kind": "TTF_GLYF_SHA256",
+          "style_group": "",
+          "glyph_sha256": "4140284b771233ab94b97547519be51e625fdba7b002784f7eedba539345eaa7",
+          "eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1",
+          "reason": ""
+        },
+        "exact_outline_signature": "afa2a5c10e56a26a15ab9ea52a6595782b3bbbeb",
+        "purpose": "Exact original source record fixture for regression of all shipped independent exact entrances; not an additional truth source."
+      }
+    },
+    {
+      "review_index": 325,
+      "root_key": [
+        "YenRoundZuinnEG-Bd",
+        14172,
+        "5c12025eca93a90047c025075665eddcd717d820c8373fb55f21f7adb2bf3755"
+      ],
+      "withdrawn_reading": "ㄅㄧㄢˋ",
+      "current_reading": "ㄅㄢˋ",
+      "withdrawal_scope": "Only the exact prior assertion and its explicit one-layer source_key dependants. No Han, pronunciation-wide or group-wide revocation.",
+      "withdrawn_truth_root_receipt": "ttf_verified_mapping_corrections.csv:asset-sha256:80313cdc6113cfd93189c53183add12607617cf454a4373bf6e8eede23dd9d73:row-sha256:3028025d49726ab8cbe9193baf5d48a71501a47be6981f43ea23852d7695c20a",
+      "original_source_decision": {
+        "index": 325,
+        "root_ref_sha256": "2e56092da74debbee769f85c8ffee4c64e1bb3d3d26dc24e0eecee25fdd1feed",
+        "root_key": [
+          "YenRoundZuinnEG-Bd",
+          14172,
+          "5c12025eca93a90047c025075665eddcd717d820c8373fb55f21f7adb2bf3755"
+        ],
+        "csv_line": 848,
+        "family": "group152",
+        "original_reading": "ㄅㄧㄢˋ",
+        "observation_visual_id": 10590,
+        "map_graphic_id": null,
+        "group_graphic_id": 59,
+        "cohort_graphic_id": null,
+        "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_綜合_教材資源_課本PDF_課本PDF_全年級\\單檔\\04-115國小綜合4上課本-成書內頁-L03(115f197902).pdf",
+        "pdf_sha256": "50533ddeb797a656b01da098993f55713b072ba37aca0895eccafb33a6f87721",
+        "page": 15,
+        "whole_occurrence_bbox": [
+          269.291,
+          59.58,
+          299.055,
+          79.422
+        ],
+        "annotation_physical_clip": [
+          290.1626105941832,
+          61.49154739826918,
+          298.78175882436335,
+          74.68377195857465
+        ],
+        "source_font_xref": 1187,
+        "font_program_sha256": "57d9163aea530525544decd2b393eaa5bddb392077292df6c58b631dda41ea65",
+        "component_id": 14172,
+        "glyph_sha256": "5c12025eca93a90047c025075665eddcd717d820c8373fb55f21f7adb2bf3755",
+        "source_crop": "docs/evidence/map-glyph-review-20261019/group-059-original-page.png",
+        "source_crop_sha256": "506ec32c04e83e6d9a4edce34d7ccf6c2119bdac48fad1eaac3a01f1dbf9c4fb",
+        "source_svg": "docs/evidence/map-glyph-review-20261019/group-059-annotation.svg",
+        "source_svg_sha256": "36b5296604fd6be43f89db7638195a3c3ee0bf58c664b2329c8203ef090edd8a",
+        "dependent_aliases": [],
+        "final_reading": "ㄅㄢˋ",
+        "assigned_reader": "reviewer",
+        "changed_from_3c638b3": true
+      },
+      "prior_rows": [
+        {
+          "csv_line": 848,
+          "row": {
+            "font": "YenRoundZuinnEG-Bd",
+            "component_id": "14172",
+            "glyph_sha256": "5c12025eca93a90047c025075665eddcd717d820c8373fb55f21f7adb2bf3755",
+            "old_reading": "",
+            "new_reading": "ㄅㄧㄢˋ",
+            "source_book": "04-115國小綜合4上課本-成書內頁-L03(115f197902).pdf",
+            "evidence": "docs/evidence/map-glyph-review-20261019/observations.json#visual_id=10590",
+            "verification": "AI_DIRECT_PAGE_AND_ISOLATED_GLYPH_AUDIT_V1; not human confirmation; not Global approval",
+            "notes": "PDF_SHA256=50533ddeb797a656b01da098993f55713b072ba37aca0895eccafb33a6f87721; page=15; font_SHA256=57d9163aea530525544decd2b393eaa5bddb392077292df6c58b631dda41ea65; original_crop_SHA256=506ec32c04e83e6d9a4edce34d7ccf6c2119bdac48fad1eaac3a01f1dbf9c4fb; SVG_SHA256=36b5296604fd6be43f89db7638195a3c3ee0bf58c664b2329c8203ef090edd8a; same-source graphic audit, not new Global independent evidence; preserve font/GID/SHA scope; no cross-font donation"
+          },
+          "claim_ref": "ttf_verified_mapping_corrections.csv:asset-sha256:80313cdc6113cfd93189c53183add12607617cf454a4373bf6e8eede23dd9d73:row-sha256:3028025d49726ab8cbe9193baf5d48a71501a47be6981f43ea23852d7695c20a"
+        }
+      ],
+      "current_target_keys": [
+        [
+          "YenRoundZuinnEG-Bd",
+          14172,
+          "5c12025eca93a90047c025075665eddcd717d820c8373fb55f21f7adb2bf3755"
+        ]
+      ],
+      "graphic_evidence": {
+        "original_annotation_png": {
+          "path": "docs/evidence/map-glyph-review-20261019/corrective2/original-annotation/325.png",
+          "sha256": "8e4b12bb3d60a92f27ba461caf53e63648da4765960b06c5d36c83f0a0c512d4",
+          "source_work_file": "C:\\Users\\E04069\\Documents\\Codex\\2026-10-19\\c-users-e04069-desktop-github2-zhuyin\\work\\corrective2\\graphic-recheck\\original-annotation\\325.png"
+        },
+        "isolated_png": {
+          "path": "docs/evidence/map-glyph-review-20261019/corrective2/isolated/325.png",
+          "sha256": "3605f1fddf951bb9feb004d983574327df3e75b5c97187c78973583b1ede8019",
+          "source_work_file": "C:\\Users\\E04069\\Documents\\Codex\\2026-10-19\\c-users-e04069-desktop-github2-zhuyin\\work\\corrective2\\graphic-recheck\\isolated\\325.png"
+        }
+      },
+      "source_glyph_record": {
+        "encoding": "base64",
+        "raw_glyf": "AAQAQgAVAeUCpABDAGsAnQCvAAATBgcGBwYVBhcWFxYzNjc2NzYXFgcGBwYHIicmIzAXFhcWFzI3Njc2NzY3NicmJyYnJiMGBwYHIicmNzY3NicmJyYjIgMiBwYXFhcWNzY3NhcWFQYHBhcWNzY3Njc2NzY3NicmJyYnJgcGBwYHBgcGFxQXFhcWNzY3NhcWBwYHBhcWNzY3Njc2NSYnJiciBwYHBicmNzY3NicmJyYjIjcWFxYXFjc2JyYnJgciBwYHFH0KDw0LBgECAQUEBhIwPyoHBAQBCSEWFgoeAwEBEwUEDhMVFhMQBgcEBAIBCQcFBAUSHCRGBwIBAhwOAQEBCgcEAzIJAQEHBgkGCzM/BwMBAxQDAgEGAwMDERMHBgQDAwMKCgYGChMrMQoQCwYBAwMFBAoVbRYHBgUlJQMCAwgPFx4gBAENDAYGDTpJBAMDAgMRAQMDBQYEA+4WIicfBAUDAyhBBgMECwoBAp4bFhMJBAQGBQQEAQMGBgQBBAQHKzUlARABAhYKDAEQEiciFhUKBwQECwkDAQMCAQkCAwMhGAYCBAUE/ngEBAYGAwMCCggBAwEFDygGAwEDAwMEFBYGBAYDBQYHBwEBAwcFBiFFCwcEBgQEAgMECQsEBwQLSS0EBAEDChwkMAkHBwsKAgEKBwECAQUKLQQFBAQDUQwdISIDAgMGM0sGAQoMAwMAAA==",
+        "glyph_sha256": "5c12025eca93a90047c025075665eddcd717d820c8373fb55f21f7adb2bf3755",
+        "complete_record_identity": {
+          "status": "CANONICAL_EXACT_IDENTITY",
+          "kind": "TTF_GLYF_SHA256",
+          "style_group": "",
+          "glyph_sha256": "5c12025eca93a90047c025075665eddcd717d820c8373fb55f21f7adb2bf3755",
+          "eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1",
+          "reason": ""
+        },
+        "exact_outline_signature": "37d7a3fb2c7e7b77144b6ca0fef2fda2421d8dc1",
+        "purpose": "Exact original source record fixture for regression of all shipped independent exact entrances; not an additional truth source."
+      }
+    },
+    {
+      "review_index": 518,
+      "root_key": [
+        "DFPBiaoKai-W5-PoIn1-BFW",
+        14128,
+        "8b824cafc14a655e2ff073a6a9972ae3bffb810716406f0ac518c62a8559d11d"
+      ],
+      "withdrawn_reading": "ㄜ",
+      "current_reading": "ㄛ",
+      "withdrawal_scope": "Only the exact prior assertion and its explicit one-layer source_key dependants. No Han, pronunciation-wide or group-wide revocation.",
+      "withdrawn_truth_root_receipt": "ttf_verified_mapping_corrections.csv:asset-sha256:80313cdc6113cfd93189c53183add12607617cf454a4373bf6e8eede23dd9d73:row-sha256:540535a14870836d614b6cc868c7bbfe7bc721ce993062b4cee8842f73b079cc",
+      "original_source_decision": {
+        "index": 518,
+        "root_ref_sha256": "efee5b6c56fb751117f9ed7285e264f28ea1c8d6b8162e296e3a9ab41b7991c7",
+        "root_key": [
+          "DFPBiaoKai-W5-PoIn1-BFW",
+          14128,
+          "8b824cafc14a655e2ff073a6a9972ae3bffb810716406f0ac518c62a8559d11d"
+        ],
+        "csv_line": 454,
+        "family": "map735",
+        "original_reading": "ㄜ",
+        "observation_visual_id": 5310,
+        "map_graphic_id": 431,
+        "group_graphic_id": null,
+        "cohort_graphic_id": null,
+        "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_數學_教材資源／PPT_備課教材_課本PDF_全年級\\單檔\\01-115國小數學1上課本-目次(115f233092).pdf",
+        "pdf_sha256": "84ce1c0c2206fe632c7a4026aeb8137f2e61de5c2e68c033e555d44790505629",
+        "page": 1,
+        "whole_occurrence_bbox": [
+          259.369,
+          270.836,
+          291.259,
+          292.096
+        ],
+        "annotation_physical_clip": [
+          280.73158130422235,
+          278.3781300969422,
+          287.5015613697469,
+          284.379933796823
+        ],
+        "source_font_xref": 189,
+        "font_program_sha256": "79edb59d4c16dffa3e905b7c5a64280dc7500c7a3ed9da9b1b747c6b94c3cc21",
+        "component_id": 14128,
+        "glyph_sha256": "8b824cafc14a655e2ff073a6a9972ae3bffb810716406f0ac518c62a8559d11d",
+        "source_crop": "docs/evidence/map-glyph-review-20261019/map-431-original-page.png",
+        "source_crop_sha256": "04695cb527b0705ae4e259f18c9b57841cd9e97f100f472eff75bf54fa5222d9",
+        "source_svg": "docs/evidence/map-glyph-review-20261019/map-431-annotation.svg",
+        "source_svg_sha256": "3ce9ed17d5e4c95a99c87df6b4003000310b87f15c69c9af62289a2dd5dd9e51",
+        "dependent_aliases": [
+          {
+            "csv_line": 1037,
+            "target_key": [
+              "DFPBiaoKai-W5-ZhuIn-BFW",
+              14128,
+              "8b824cafc14a655e2ff073a6a9972ae3bffb810716406f0ac518c62a8559d11d"
+            ]
+          }
+        ],
+        "final_reading": "ㄛ",
+        "assigned_reader": "coordinator",
+        "changed_from_3c638b3": true
+      },
+      "prior_rows": [
+        {
+          "csv_line": 454,
+          "row": {
+            "font": "DFPBiaoKai-W5-PoIn1-BFW",
+            "component_id": "14128",
+            "glyph_sha256": "8b824cafc14a655e2ff073a6a9972ae3bffb810716406f0ac518c62a8559d11d",
+            "old_reading": "ㄛ",
+            "new_reading": "ㄜ",
+            "source_book": "01-115國小數學1上課本-目次(115f233092).pdf",
+            "evidence": "docs/evidence/map-glyph-review-20261019/observations.json#visual_id=5310",
+            "verification": "AI_DIRECT_PAGE_AND_ISOLATED_GLYPH_AUDIT_V1; not human confirmation; not Global approval",
+            "notes": "PDF_SHA256=84ce1c0c2206fe632c7a4026aeb8137f2e61de5c2e68c033e555d44790505629; page=1; font_SHA256=79edb59d4c16dffa3e905b7c5a64280dc7500c7a3ed9da9b1b747c6b94c3cc21; original_crop_SHA256=04695cb527b0705ae4e259f18c9b57841cd9e97f100f472eff75bf54fa5222d9; SVG_SHA256=3ce9ed17d5e4c95a99c87df6b4003000310b87f15c69c9af62289a2dd5dd9e51; same-source graphic audit, not new Global independent evidence; preserve font/GID/SHA scope; no cross-font donation"
+          },
+          "claim_ref": "ttf_verified_mapping_corrections.csv:asset-sha256:80313cdc6113cfd93189c53183add12607617cf454a4373bf6e8eede23dd9d73:row-sha256:540535a14870836d614b6cc868c7bbfe7bc721ce993062b4cee8842f73b079cc"
+        },
+        {
+          "csv_line": 1037,
+          "row": {
+            "font": "DFPBiaoKai-W5-ZhuIn-BFW",
+            "component_id": "14128",
+            "glyph_sha256": "8b824cafc14a655e2ff073a6a9972ae3bffb810716406f0ac518c62a8559d11d",
+            "old_reading": "",
+            "new_reading": "ㄜ",
+            "source_book": "01-115國小數學1上課本-目次(115f233092).pdf",
+            "evidence": "{\"kind\":\"SCOPED_CORRECTION_ALIAS_V1\",\"source_key\":[\"DFPBiaoKai-W5-PoIn1-BFW\",14128,\"8b824cafc14a655e2ff073a6a9972ae3bffb810716406f0ac518c62a8559d11d\"],\"target_proof\":\"docs/evidence/map-glyph-review-20261019/observations.json#visual_id=20065\"}",
+            "verification": "SCOPED_CORRECTION_ALIAS_V1; same graphic truth root; not human confirmation; not Global approval",
+            "notes": "Explicit target shape checked; existing graphic truth dependency retained below. No new human/Global approval or independent source; no cross-font donation.; source truth is live source_key, not this target row; alias is invalid when source direct claim is absent, conflicted, revoked or changed."
+          },
+          "claim_ref": "ttf_verified_mapping_corrections.csv:asset-sha256:80313cdc6113cfd93189c53183add12607617cf454a4373bf6e8eede23dd9d73:row-sha256:289dcd64e7525aab3bfeb68092fa3680d907707421304a4a13f2da04c44e3868"
+        }
+      ],
+      "current_target_keys": [
+        [
+          "DFPBiaoKai-W5-PoIn1-BFW",
+          14128,
+          "8b824cafc14a655e2ff073a6a9972ae3bffb810716406f0ac518c62a8559d11d"
+        ],
+        [
+          "DFPBiaoKai-W5-ZhuIn-BFW",
+          14128,
+          "8b824cafc14a655e2ff073a6a9972ae3bffb810716406f0ac518c62a8559d11d"
+        ]
+      ],
+      "graphic_evidence": {
+        "original_annotation_png": {
+          "path": "docs/evidence/map-glyph-review-20261019/corrective2/original-annotation/518.png",
+          "sha256": "ae956156b378b33261bcfe3cb051fcc31f805e7c4b16ea1cb8713486ab29e03e",
+          "source_work_file": "C:\\Users\\E04069\\Documents\\Codex\\2026-10-19\\c-users-e04069-desktop-github2-zhuyin\\work\\corrective2\\graphic-recheck\\original-annotation\\518.png"
+        },
+        "isolated_png": {
+          "path": "docs/evidence/map-glyph-review-20261019/corrective2/isolated/518.png",
+          "sha256": "7343cb1f88bfcd52827c627e72567e847663c95fb1f666b7da2d39f1b264562d",
+          "source_work_file": "C:\\Users\\E04069\\Documents\\Codex\\2026-10-19\\c-users-e04069-desktop-github2-zhuyin\\work\\corrective2\\graphic-recheck\\isolated\\518.png"
+        }
+      },
+      "source_glyph_record": {
+        "encoding": "base64",
+        "raw_glyf": "AAEAHQC6AUsBwwA6AAATMzY3NjMyFRQHJiMiBxUGIyInJiMiBwYVFBcWMzI3NjMUFxQHBiMiJyY1NDc2Mxc2NTA1BgciJyY1NCUjkSwVEh8UJR8TEwINCw8RBSEQDB4ZPSI+CQUEMiYaRCYpFxgtGw08OgoNDAGvDAMFEAsFBAFYIAcFDg8SGBEQHwQBBxEUDhcaIBoZFAQCFEEFDAcJAwgA",
+        "glyph_sha256": "8b824cafc14a655e2ff073a6a9972ae3bffb810716406f0ac518c62a8559d11d",
+        "complete_record_identity": {
+          "status": "CANONICAL_EXACT_IDENTITY",
+          "kind": "TTF_GLYF_SHA256",
+          "style_group": "",
+          "glyph_sha256": "8b824cafc14a655e2ff073a6a9972ae3bffb810716406f0ac518c62a8559d11d",
+          "eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1",
+          "reason": ""
+        },
+        "exact_outline_signature": "27fc853f44142b115d0ba7cd8b037b3d24e95541",
+        "purpose": "Exact original source record fixture for regression of all shipped independent exact entrances; not an additional truth source."
+      }
+    },
+    {
+      "review_index": 583,
+      "root_key": [
+        "ZhuYinNREG-Md",
+        14846,
+        "9e50d0acddd4f440dc32cd76e7d1d8464bb6e6a78fcfaecaab6a50f9b2a26a88"
+      ],
+      "withdrawn_reading": "ㄏㄨㄞˊ",
+      "current_reading": "ㄏㄨㄢˊ",
+      "withdrawal_scope": "Only the exact prior assertion and its explicit one-layer source_key dependants. No Han, pronunciation-wide or group-wide revocation.",
+      "withdrawn_truth_root_receipt": "ttf_verified_mapping_corrections.csv:asset-sha256:80313cdc6113cfd93189c53183add12607617cf454a4373bf6e8eede23dd9d73:row-sha256:70d727f0473e05541f36d6d51f5ba8b8aeabd9bb97b501d24264aa1c8bafc8b6",
+      "original_source_decision": {
+        "index": 583,
+        "root_ref_sha256": "839e9a6cb54c5190a0c2cf6dd27091f0ab713c74a017df097d7d9f32df049a53",
+        "root_key": [
+          "ZhuYinNREG-Md",
+          14846,
+          "9e50d0acddd4f440dc32cd76e7d1d8464bb6e6a78fcfaecaab6a50f9b2a26a88"
+        ],
+        "csv_line": 896,
+        "family": "group152",
+        "original_reading": "ㄏㄨㄞˊ",
+        "observation_visual_id": 10940,
+        "map_graphic_id": null,
+        "group_graphic_id": 94,
+        "cohort_graphic_id": null,
+        "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_綜合_教材資源_課本PDF_課本PDF_全年級\\單檔\\05-115國小綜合3上課本成書-L04(115f197891).pdf",
+        "pdf_sha256": "90be524186818ec93d0c36838f28ee77e2d57562935274e9008e3a3e162285e1",
+        "page": 25,
+        "whole_occurrence_bbox": [
+          344.107,
+          154.559,
+          353.276,
+          168.098
+        ],
+        "annotation_physical_clip": [
+          344.7072666641742,
+          155.98458822446355,
+          352.84114997056275,
+          167.24258875269854
+        ],
+        "source_font_xref": 1250,
+        "font_program_sha256": "f3c04bf1653c5c0a05d66cd77fd59730833e8ed1dcb7fab1b571d740b252a782",
+        "component_id": 14846,
+        "glyph_sha256": "9e50d0acddd4f440dc32cd76e7d1d8464bb6e6a78fcfaecaab6a50f9b2a26a88",
+        "source_crop": "docs/evidence/map-glyph-review-20261019/group-094-original-page.png",
+        "source_crop_sha256": "b31c0ea69f91dc6bb8d1e6bd0024159097c001a535401f1aea4fd60ddb7e1217",
+        "source_svg": "docs/evidence/map-glyph-review-20261019/group-094-annotation.svg",
+        "source_svg_sha256": "c550eaa9544929f12015fab11656701618fb2e1a70646818f4b1463e62628f89",
+        "dependent_aliases": [
+          {
+            "csv_line": 897,
+            "target_key": [
+              "YenRoundZuinnEG-Bd",
+              14846,
+              "9e50d0acddd4f440dc32cd76e7d1d8464bb6e6a78fcfaecaab6a50f9b2a26a88"
+            ]
+          }
+        ],
+        "final_reading": "ㄏㄨㄢˊ",
+        "assigned_reader": "coordinator",
+        "changed_from_3c638b3": true
+      },
+      "prior_rows": [
+        {
+          "csv_line": 896,
+          "row": {
+            "font": "ZhuYinNREG-Md",
+            "component_id": "14846",
+            "glyph_sha256": "9e50d0acddd4f440dc32cd76e7d1d8464bb6e6a78fcfaecaab6a50f9b2a26a88",
+            "old_reading": "",
+            "new_reading": "ㄏㄨㄞˊ",
+            "source_book": "05-115國小綜合3上課本成書-L04(115f197891).pdf",
+            "evidence": "docs/evidence/map-glyph-review-20261019/observations.json#visual_id=10940",
+            "verification": "AI_DIRECT_PAGE_AND_ISOLATED_GLYPH_AUDIT_V1; not human confirmation; not Global approval",
+            "notes": "PDF_SHA256=90be524186818ec93d0c36838f28ee77e2d57562935274e9008e3a3e162285e1; page=25; font_SHA256=f3c04bf1653c5c0a05d66cd77fd59730833e8ed1dcb7fab1b571d740b252a782; original_crop_SHA256=b31c0ea69f91dc6bb8d1e6bd0024159097c001a535401f1aea4fd60ddb7e1217; SVG_SHA256=c550eaa9544929f12015fab11656701618fb2e1a70646818f4b1463e62628f89; same-source graphic audit, not new Global independent evidence; preserve font/GID/SHA scope; no cross-font donation"
+          },
+          "claim_ref": "ttf_verified_mapping_corrections.csv:asset-sha256:80313cdc6113cfd93189c53183add12607617cf454a4373bf6e8eede23dd9d73:row-sha256:70d727f0473e05541f36d6d51f5ba8b8aeabd9bb97b501d24264aa1c8bafc8b6"
+        },
+        {
+          "csv_line": 897,
+          "row": {
+            "font": "YenRoundZuinnEG-Bd",
+            "component_id": "14846",
+            "glyph_sha256": "9e50d0acddd4f440dc32cd76e7d1d8464bb6e6a78fcfaecaab6a50f9b2a26a88",
+            "old_reading": "",
+            "new_reading": "ㄏㄨㄞˊ",
+            "source_book": "05-115國小綜合3上課本成書-L04(115f197891).pdf",
+            "evidence": "{\"kind\":\"SCOPED_CORRECTION_ALIAS_V1\",\"source_key\":[\"ZhuYinNREG-Md\",14846,\"9e50d0acddd4f440dc32cd76e7d1d8464bb6e6a78fcfaecaab6a50f9b2a26a88\"],\"target_proof\":\"docs/evidence/map-glyph-review-20261019/observations.json#visual_id=10941\"}",
+            "verification": "SCOPED_CORRECTION_ALIAS_V1; same graphic truth root; not human confirmation; not Global approval",
+            "notes": "PDF_SHA256=90be524186818ec93d0c36838f28ee77e2d57562935274e9008e3a3e162285e1; page=25; font_SHA256=644528c8d7b2918a7002ca87a6253ae6400e51ea1c6de2dd0b230d7f17086471; original_crop_SHA256=b31c0ea69f91dc6bb8d1e6bd0024159097c001a535401f1aea4fd60ddb7e1217; SVG_SHA256=c550eaa9544929f12015fab11656701618fb2e1a70646818f4b1463e62628f89; same-source graphic audit, not new Global independent evidence; preserve font/GID/SHA scope; no cross-font donation; source truth is live source_key, not this target row; alias is invalid when source direct claim is absent, conflicted, revoked or changed."
+          },
+          "claim_ref": "ttf_verified_mapping_corrections.csv:asset-sha256:80313cdc6113cfd93189c53183add12607617cf454a4373bf6e8eede23dd9d73:row-sha256:406d7b4d0dc125150ab1e506a425787b056d01db08a944e1529d23276dee19d5"
+        }
+      ],
+      "current_target_keys": [
+        [
+          "ZhuYinNREG-Md",
+          14846,
+          "9e50d0acddd4f440dc32cd76e7d1d8464bb6e6a78fcfaecaab6a50f9b2a26a88"
+        ],
+        [
+          "YenRoundZuinnEG-Bd",
+          14846,
+          "9e50d0acddd4f440dc32cd76e7d1d8464bb6e6a78fcfaecaab6a50f9b2a26a88"
+        ]
+      ],
+      "graphic_evidence": {
+        "original_annotation_png": {
+          "path": "docs/evidence/map-glyph-review-20261019/corrective2/original-annotation/583.png",
+          "sha256": "4832fc90614224b0255a01ce31f53383bf0632af7b44feab14d13f68376069b7",
+          "source_work_file": "C:\\Users\\E04069\\Documents\\Codex\\2026-10-19\\c-users-e04069-desktop-github2-zhuyin\\work\\corrective2\\graphic-recheck\\original-annotation\\583.png"
+        },
+        "isolated_png": {
+          "path": "docs/evidence/map-glyph-review-20261019/corrective2/isolated/583.png",
+          "sha256": "776e0272f1c4616000c13f61f1d1bfb95609d4ba98ba55ea6c40e3354c4ed7be",
+          "source_work_file": "C:\\Users\\E04069\\Documents\\Codex\\2026-10-19\\c-users-e04069-desktop-github2-zhuyin\\work\\corrective2\\graphic-recheck\\isolated\\583.png"
+        }
+      },
+      "source_glyph_record": {
+        "encoding": "base64",
+        "raw_glyf": "AAUAJf/ZAdwC/gAnAF8AhwC5AM0AAAEGIyYHBhcWFxYHBgcGBwYHBhcWNzY3Njc2NzY3Njc2MzI3MjU0JyYDNjc2NzY3FhcWFxY3Njc2JyYnJic2NzY3NicmIwYVBgcGBwYHJicmJyYHBhcWFwYHBgcGBwYVFBciBwYXFhcWNzY3NhcWFQYHBhcWNzY3Njc2NzY3NicmJyYnJgcGBwYHBgcGFxQXFhcWNzY3NhcWBwYHBhcWNzY3Njc2NSYnJiciBwYHBicmNzY3NicmJyYjIhcGBwYXFhcWMzI3Njc2JyYHBgcGAR+RJQwBAQIBAQEBAwYGCwoTAwEBAxMNDQkMBQYEHB8hHh4ZCgQG5h8ZExYSDxMWFQ0GBQYBAwUECR4hFgcJDQcIBwsKAQoJEQMDBgg6HAQEAQM/Hg0NEBkYFwQOCQEBBwYJBgszPwcDAQMUAwIBBgMDAxETBwYEAwMDCgoGBgoTKzEKEAsGAQMDBQQKFW0WBwYFJSUDAgMIDxceIAQBDQwGBg06SQQDAwIDEQEDAwUGBAPpBgEBBAQLBAQDBD0sAwMGBBwmIgL8DQEJCQMBBB4eHBwYFBIXAwEBAQYNDBAWGx9NBAMDAgoHBgb+IAYOChQSEBUZGwwGAQMMDAkHCh4bHg0QFwoMDAENDRcVFgMEBgUrCwMCAQM0HA8OExMTCwECAz0EBAYGAwMCCggBAwEFDygGAwEDAwMEFBYGBAYDBQYHBwEBAwcFBiFFCwcEBgQEAgMECQsEBwQLSS0EBAEDChwkMAkHBwsKAgEKBwECAQUKLQQFBAQDBgMEAwYHBwMGRjkEAwEDHyEc",
+        "glyph_sha256": "9e50d0acddd4f440dc32cd76e7d1d8464bb6e6a78fcfaecaab6a50f9b2a26a88",
+        "complete_record_identity": {
+          "status": "CANONICAL_EXACT_IDENTITY",
+          "kind": "TTF_GLYF_SHA256",
+          "style_group": "",
+          "glyph_sha256": "9e50d0acddd4f440dc32cd76e7d1d8464bb6e6a78fcfaecaab6a50f9b2a26a88",
+          "eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1",
+          "reason": ""
+        },
+        "exact_outline_signature": "d74ac808dd49fe1826d519591964bd501db116f9",
+        "purpose": "Exact original source record fixture for regression of all shipped independent exact entrances; not an additional truth source."
+      }
+    },
+    {
+      "review_index": 765,
+      "root_key": [
+        "DFPBiaoKai-W5-ZhuIn-BFW",
+        14241,
+        "da0095289f1198745d5acfb9c29987823ba5a4c624e0e3696ee037e3ed585646"
+      ],
+      "withdrawn_reading": "ㄩㄝˋ",
+      "current_reading": "ㄩㄝ",
+      "withdrawal_scope": "Only the exact prior assertion and its explicit one-layer source_key dependants. No Han, pronunciation-wide or group-wide revocation.",
+      "withdrawn_truth_root_receipt": "ttf_verified_mapping_corrections.csv:asset-sha256:80313cdc6113cfd93189c53183add12607617cf454a4373bf6e8eede23dd9d73:row-sha256:6ce3a56d09116e60a8eb83b241b3cf5c74cf7e2fbdd02918bb715bafde5a64a4",
+      "original_source_decision": {
+        "index": 765,
+        "root_ref_sha256": "0bc26abe70ac36dc7681c1a6fca9c6c9e47095749796955930c7bf2936c8030a",
+        "root_key": [
+          "DFPBiaoKai-W5-ZhuIn-BFW",
+          14241,
+          "da0095289f1198745d5acfb9c29987823ba5a4c624e0e3696ee037e3ed585646"
+        ],
+        "csv_line": 651,
+        "family": "map735",
+        "original_reading": "ㄩㄝˋ",
+        "observation_visual_id": 7220,
+        "map_graphic_id": 622,
+        "group_graphic_id": null,
+        "cohort_graphic_id": null,
+        "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_數學_教材資源／PPT_備課教材_課本PDF_全年級\\單檔\\04-115國小數學2上課本-L03(115f233175).pdf",
+        "pdf_sha256": "0b54d750f18f5cefc4161611fa753713546089b1d3fc3235699ba8959a6e7bc7",
+        "page": 9,
+        "whole_occurrence_bbox": [
+          408.898,
+          517.071,
+          436.535,
+          535.496
+        ],
+        "annotation_physical_clip": [
+          427.0367957986891,
+          520.7312534172088,
+          433.7984846942127,
+          531.8653285242617
+        ],
+        "source_font_xref": 1123,
+        "font_program_sha256": "cb4ab0c24fcf56f505af312fdc33a2a3e3acd29fd26940d014ff72ccda11cd3e",
+        "component_id": 14241,
+        "glyph_sha256": "da0095289f1198745d5acfb9c29987823ba5a4c624e0e3696ee037e3ed585646",
+        "source_crop": "docs/evidence/map-glyph-review-20261019/map-622-original-page.png",
+        "source_crop_sha256": "86e878a81bbebe3104240dda4325ebc90e98ae6e6fa0c8aa28d7ba9a903eebed",
+        "source_svg": "docs/evidence/map-glyph-review-20261019/map-622-annotation.svg",
+        "source_svg_sha256": "b4afdaecee84ea6e555aa1206556264865132baa4948fd1f8da60fed31005738",
+        "dependent_aliases": [],
+        "final_reading": "ㄩㄝ",
+        "assigned_reader": "coordinator",
+        "changed_from_3c638b3": true
+      },
+      "prior_rows": [
+        {
+          "csv_line": 651,
+          "row": {
+            "font": "DFPBiaoKai-W5-ZhuIn-BFW",
+            "component_id": "14241",
+            "glyph_sha256": "da0095289f1198745d5acfb9c29987823ba5a4c624e0e3696ee037e3ed585646",
+            "old_reading": "ㄩㄝ",
+            "new_reading": "ㄩㄝˋ",
+            "source_book": "04-115國小數學2上課本-L03(115f233175).pdf",
+            "evidence": "docs/evidence/map-glyph-review-20261019/observations.json#visual_id=7220",
+            "verification": "AI_DIRECT_PAGE_AND_ISOLATED_GLYPH_AUDIT_V1; not human confirmation; not Global approval",
+            "notes": "PDF_SHA256=0b54d750f18f5cefc4161611fa753713546089b1d3fc3235699ba8959a6e7bc7; page=9; font_SHA256=cb4ab0c24fcf56f505af312fdc33a2a3e3acd29fd26940d014ff72ccda11cd3e; original_crop_SHA256=86e878a81bbebe3104240dda4325ebc90e98ae6e6fa0c8aa28d7ba9a903eebed; SVG_SHA256=b4afdaecee84ea6e555aa1206556264865132baa4948fd1f8da60fed31005738; same-source graphic audit, not new Global independent evidence; preserve font/GID/SHA scope; no cross-font donation"
+          },
+          "claim_ref": "ttf_verified_mapping_corrections.csv:asset-sha256:80313cdc6113cfd93189c53183add12607617cf454a4373bf6e8eede23dd9d73:row-sha256:6ce3a56d09116e60a8eb83b241b3cf5c74cf7e2fbdd02918bb715bafde5a64a4"
+        }
+      ],
+      "current_target_keys": [
+        [
+          "DFPBiaoKai-W5-ZhuIn-BFW",
+          14241,
+          "da0095289f1198745d5acfb9c29987823ba5a4c624e0e3696ee037e3ed585646"
+        ]
+      ],
+      "graphic_evidence": {
+        "original_annotation_png": {
+          "path": "docs/evidence/map-glyph-review-20261019/corrective2/original-annotation/765.png",
+          "sha256": "5681202dced59002f4c279c052f3ffc109b8b4c79ae8470a29a626a2ad36d3c0",
+          "source_work_file": "C:\\Users\\E04069\\Documents\\Codex\\2026-10-19\\c-users-e04069-desktop-github2-zhuyin\\work\\corrective2\\graphic-recheck\\original-annotation\\765.png"
+        },
+        "isolated_png": {
+          "path": "docs/evidence/map-glyph-review-20261019/corrective2/isolated/765.png",
+          "sha256": "49a0d3d3dc3669aeee29be043fd2f33740f06177e834a748703fd5b14fe475d9",
+          "source_work_file": "C:\\Users\\E04069\\Documents\\Codex\\2026-10-19\\c-users-e04069-desktop-github2-zhuyin\\work\\corrective2\\graphic-recheck\\isolated\\765.png"
+        }
+      },
+      "source_glyph_record": {
+        "encoding": "base64",
+        "raw_glyf": "AAIACgASAWYCYQAoAHMAABMyFxYVFAcUFzY3NjU0JyYnNDMyFxYVBxYVFCMmJwYHIicmNTY1Jic2EzIXFhUGBxQXNjc2NTQnNDMyFxYVBgcGBzY3MhcGIyciBwYHBiMiJzY3BgcWFxYzNjcyFQYjIyInJicGByInJjU0Mxc2NyYnJic0SAcHCQ8MQ2oDBQQODAMMEAQMDA4Gej4NBwgQAgYCJQwNEgMFAi4nBwgMBhIPCwUDAyUhJQICFTgSEQ0LCgELAQ0IKCkBAgIoLRkTBygkOQsFAyQjCgwJAxQoJgEBAhQCXQYICRCMEQMHBA4UHSs2GAgFAw8UhCQXAxACDQoJFDVbERYE/r8GCBEEFBEnBAMmFxEODAYHChQcEQ4CAQsQBAE1GRQIMyYCBh8qKQQIEg4tGzoFCAoLBgQEBQQYHBYbDAA=",
+        "glyph_sha256": "da0095289f1198745d5acfb9c29987823ba5a4c624e0e3696ee037e3ed585646",
+        "complete_record_identity": {
+          "status": "CANONICAL_EXACT_IDENTITY",
+          "kind": "TTF_GLYF_SHA256",
+          "style_group": "",
+          "glyph_sha256": "da0095289f1198745d5acfb9c29987823ba5a4c624e0e3696ee037e3ed585646",
+          "eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1",
+          "reason": ""
+        },
+        "exact_outline_signature": "e54156b402b82d34fbfcc5f5e5503f520e4de0b7",
+        "purpose": "Exact original source record fixture for regression of all shipped independent exact entrances; not an additional truth source."
+      }
+    },
+    {
+      "review_index": 775,
+      "root_key": [
+        "ZhuYinNREG-Md",
+        15526,
+        "dbe1dac52f994e9082564a8fa42984a5e4513da891386636ea6224be218e2fa4"
+      ],
+      "withdrawn_reading": "ㄐㄩㄢˇ",
+      "current_reading": "ㄩㄢˇ",
+      "withdrawal_scope": "Only the exact prior assertion and its explicit one-layer source_key dependants. No Han, pronunciation-wide or group-wide revocation.",
+      "withdrawn_truth_root_receipt": "ttf_verified_mapping_corrections.csv:asset-sha256:80313cdc6113cfd93189c53183add12607617cf454a4373bf6e8eede23dd9d73:row-sha256:130a7ca581b05851d9f72bcde957dd9a6683175a1ee7e7a317e76b98f8e345cb",
+      "original_source_decision": {
+        "index": 775,
+        "root_ref_sha256": "6a90110b9c67e1673929403b80ee8fa51e7b36643e8a94d50f1d586d279d45f5",
+        "root_key": [
+          "ZhuYinNREG-Md",
+          15526,
+          "dbe1dac52f994e9082564a8fa42984a5e4513da891386636ea6224be218e2fa4"
+        ],
+        "csv_line": 948,
+        "family": "group152",
+        "original_reading": "ㄐㄩㄢˇ",
+        "observation_visual_id": 11320,
+        "map_graphic_id": null,
+        "group_graphic_id": 132,
+        "cohort_graphic_id": null,
+        "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_綜合_教材資源_課本PDF_課本PDF_全年級\\單檔\\05-115國小綜合3上課本成書-L04(115f197891).pdf",
+        "pdf_sha256": "90be524186818ec93d0c36838f28ee77e2d57562935274e9008e3a3e162285e1",
+        "page": 25,
+        "whole_occurrence_bbox": [
+          337.322,
+          182.299,
+          345.591,
+          194.51
+        ],
+        "annotation_physical_clip": [
+          338.5043687474012,
+          184.90635829263556,
+          345.054360815255,
+          193.04986622585625
+        ],
+        "source_font_xref": 1250,
+        "font_program_sha256": "f3c04bf1653c5c0a05d66cd77fd59730833e8ed1dcb7fab1b571d740b252a782",
+        "component_id": 15526,
+        "glyph_sha256": "dbe1dac52f994e9082564a8fa42984a5e4513da891386636ea6224be218e2fa4",
+        "source_crop": "docs/evidence/map-glyph-review-20261019/group-132-original-page.png",
+        "source_crop_sha256": "db8ce27a537242515c8c010c00107683c9b15ca64e951f1aa24a1e832d16503b",
+        "source_svg": "docs/evidence/map-glyph-review-20261019/group-132-annotation.svg",
+        "source_svg_sha256": "5587f4bbabbdfa271cb4773fbcd7f94fa718e6852b62e79ee6deb0f0d2f13deb",
+        "dependent_aliases": [],
+        "final_reading": "ㄩㄢˇ",
+        "assigned_reader": "coordinator",
+        "changed_from_3c638b3": true
+      },
+      "prior_rows": [
+        {
+          "csv_line": 948,
+          "row": {
+            "font": "ZhuYinNREG-Md",
+            "component_id": "15526",
+            "glyph_sha256": "dbe1dac52f994e9082564a8fa42984a5e4513da891386636ea6224be218e2fa4",
+            "old_reading": "",
+            "new_reading": "ㄐㄩㄢˇ",
+            "source_book": "05-115國小綜合3上課本成書-L04(115f197891).pdf",
+            "evidence": "docs/evidence/map-glyph-review-20261019/observations.json#visual_id=11320",
+            "verification": "AI_DIRECT_PAGE_AND_ISOLATED_GLYPH_AUDIT_V1; not human confirmation; not Global approval",
+            "notes": "PDF_SHA256=90be524186818ec93d0c36838f28ee77e2d57562935274e9008e3a3e162285e1; page=25; font_SHA256=f3c04bf1653c5c0a05d66cd77fd59730833e8ed1dcb7fab1b571d740b252a782; original_crop_SHA256=db8ce27a537242515c8c010c00107683c9b15ca64e951f1aa24a1e832d16503b; SVG_SHA256=5587f4bbabbdfa271cb4773fbcd7f94fa718e6852b62e79ee6deb0f0d2f13deb; same-source graphic audit, not new Global independent evidence; preserve font/GID/SHA scope; no cross-font donation"
+          },
+          "claim_ref": "ttf_verified_mapping_corrections.csv:asset-sha256:80313cdc6113cfd93189c53183add12607617cf454a4373bf6e8eede23dd9d73:row-sha256:130a7ca581b05851d9f72bcde957dd9a6683175a1ee7e7a317e76b98f8e345cb"
+        }
+      ],
+      "current_target_keys": [
+        [
+          "ZhuYinNREG-Md",
+          15526,
+          "dbe1dac52f994e9082564a8fa42984a5e4513da891386636ea6224be218e2fa4"
+        ]
+      ],
+      "graphic_evidence": {
+        "original_annotation_png": {
+          "path": "docs/evidence/map-glyph-review-20261019/corrective2/original-annotation/775.png",
+          "sha256": "b8fc3b19adda3fcb1586f5da399fe00f28bb331ab1e05c18573681716d975d61",
+          "source_work_file": "C:\\Users\\E04069\\Documents\\Codex\\2026-10-19\\c-users-e04069-desktop-github2-zhuyin\\work\\corrective2\\graphic-recheck\\original-annotation\\775.png"
+        },
+        "isolated_png": {
+          "path": "docs/evidence/map-glyph-review-20261019/corrective2/isolated/775.png",
+          "sha256": "2cb3e80a7cd33b6d54ed2c0ed3828c423314c9dc0a8b956d2c86140bbadd0162",
+          "source_work_file": "C:\\Users\\E04069\\Documents\\Codex\\2026-10-19\\c-users-e04069-desktop-github2-zhuyin\\work\\corrective2\\graphic-recheck\\isolated\\775.png"
+        }
+      },
+      "source_glyph_record": {
+        "encoding": "base64",
+        "raw_glyf": "AAQAQgAVAdwCfgA2AF4AkACtAAATFgcGBxQHBhcWFxYXMjc2NzY3NhcWNzY3NicmJzQnJiMiBwYXFhcWDwEGJyY3Njc0JyYnJgcGAyIHBhcWFxY3Njc2FxYVBgcGFxY3Njc2NzY3Njc2JyYnJicmBwYHBgcGBwYXFBcWFxY3Njc2FxYHBgcGFxY3Njc2NzY1JicmJyIHBgcGJyY3Njc2JyYnJiMiNxYXFhcWFzI3Njc2NzYnJgcGBwYjJi8BJiciBwZXAwIBAQEBAgEJCQQDBwkNOTUHCQcJBAMBAQECBgQKBgYEAgYBAwGJCQEDAQMDAwMJCgUDCQkBAQcGCQYLMz8HAwEDFAMCAQYDAwMREwcGBAMDAwoKBgYKEysxChALBgEDAwUEChVtFgcGBSUlAwIDCA8XHiAEAQ0MBgYNOkkEAwMCAxEBAwMFBgQD5wkICQ4EBwQFBxweCAMEBgQQMgMDBAUeAwUEAgMCYA8gNBgJAwYDBAUGAQQGAQkDAQkJAgEJBg4HcxIGBgQECRMbJS0QAQIBB1IhBgQEBAMDAf6yBAQGBgMDAgoIAQMBBQ8oBgMBAwMDBBQWBgQGAwUGBwcBAQMHBQYhRQsHBAYEBAIDBAkLBAcEC0ktBAQBAwocJDAJBwcLCgIBCgcBAgEFCi0EBQQEAz8QExURBgEGBzE3EwYBAQUTTQQBCSgEAgED",
+        "glyph_sha256": "dbe1dac52f994e9082564a8fa42984a5e4513da891386636ea6224be218e2fa4",
+        "complete_record_identity": {
+          "status": "CANONICAL_EXACT_IDENTITY",
+          "kind": "TTF_GLYF_SHA256",
+          "style_group": "",
+          "glyph_sha256": "dbe1dac52f994e9082564a8fa42984a5e4513da891386636ea6224be218e2fa4",
+          "eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1",
+          "reason": ""
+        },
+        "exact_outline_signature": "5be5853c9dcb1e567950282bba9900f610f62e62",
+        "purpose": "Exact original source record fixture for regression of all shipped independent exact entrances; not an additional truth source."
+      }
+    },
+    {
+      "review_index": 893,
+      "root_key": [
+        "YenRoundZuinnEG-Bd",
+        15174,
+        "fe80789a3b391aaf0d23332edd4aeab90b6a71c1a57bc2a9abcad9f897732ee1"
+      ],
+      "withdrawn_reading": "ㄕㄨˊ",
+      "current_reading": "ㄕㄡˊ",
+      "withdrawal_scope": "Only the exact prior assertion and its explicit one-layer source_key dependants. No Han, pronunciation-wide or group-wide revocation.",
+      "withdrawn_truth_root_receipt": "ttf_verified_mapping_corrections.csv:asset-sha256:80313cdc6113cfd93189c53183add12607617cf454a4373bf6e8eede23dd9d73:row-sha256:3d1a474979c70808c400298e4fd4e3113ba504b6a8aff1f2d53eaf6a0d1f18d6",
+      "original_source_decision": {
+        "index": 893,
+        "root_ref_sha256": "9d805f3d59811f0e70636096787cf18184eb4c2075ad8093b229f9a8ba0e89e2",
+        "root_key": [
+          "YenRoundZuinnEG-Bd",
+          15174,
+          "fe80789a3b391aaf0d23332edd4aeab90b6a71c1a57bc2a9abcad9f897732ee1"
+        ],
+        "csv_line": 970,
+        "family": "group152",
+        "original_reading": "ㄕㄨˊ",
+        "observation_visual_id": 11510,
+        "map_graphic_id": null,
+        "group_graphic_id": 151,
+        "cohort_graphic_id": null,
+        "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_社會_教材資源／PPT_備課教材_課本PDF_四年級\\單檔\\115國小社會4上課本成書-L06(115f283994).pdf",
+        "pdf_sha256": "d8c0d6ac3c958545ccb7019bf2d8168054bbcc716be64c31b3e85c4f96880e79",
+        "page": 6,
+        "whole_occurrence_bbox": [
+          155.728,
+          657.502,
+          173.268,
+          669.195
+        ],
+        "annotation_physical_clip": [
+          167.7763548400253,
+          658.4801178723574,
+          173.10652727633715,
+          666.4023686610162
+        ],
+        "source_font_xref": 935,
+        "font_program_sha256": "644528c8d7b2918a7002ca87a6253ae6400e51ea1c6de2dd0b230d7f17086471",
+        "component_id": 15174,
+        "glyph_sha256": "fe80789a3b391aaf0d23332edd4aeab90b6a71c1a57bc2a9abcad9f897732ee1",
+        "source_crop": "docs/evidence/map-glyph-review-20261019/group-151-original-page.png",
+        "source_crop_sha256": "019071c6e29ed7d21a4dac6723b756b2b61e94d1b34be3729e9d3c8ccceb4170",
+        "source_svg": "docs/evidence/map-glyph-review-20261019/group-151-annotation.svg",
+        "source_svg_sha256": "83bb26089c06ec90a6c5550c84925fdd5bba10e97dc7aed745f089f211b12c09",
+        "dependent_aliases": [],
+        "final_reading": "ㄕㄡˊ",
+        "assigned_reader": "coordinator",
+        "changed_from_3c638b3": true
+      },
+      "prior_rows": [
+        {
+          "csv_line": 970,
+          "row": {
+            "font": "YenRoundZuinnEG-Bd",
+            "component_id": "15174",
+            "glyph_sha256": "fe80789a3b391aaf0d23332edd4aeab90b6a71c1a57bc2a9abcad9f897732ee1",
+            "old_reading": "",
+            "new_reading": "ㄕㄨˊ",
+            "source_book": "115國小社會4上課本成書-L06(115f283994).pdf",
+            "evidence": "docs/evidence/map-glyph-review-20261019/observations.json#visual_id=11510",
+            "verification": "AI_DIRECT_PAGE_AND_ISOLATED_GLYPH_AUDIT_V1; not human confirmation; not Global approval",
+            "notes": "PDF_SHA256=d8c0d6ac3c958545ccb7019bf2d8168054bbcc716be64c31b3e85c4f96880e79; page=6; font_SHA256=644528c8d7b2918a7002ca87a6253ae6400e51ea1c6de2dd0b230d7f17086471; original_crop_SHA256=019071c6e29ed7d21a4dac6723b756b2b61e94d1b34be3729e9d3c8ccceb4170; SVG_SHA256=83bb26089c06ec90a6c5550c84925fdd5bba10e97dc7aed745f089f211b12c09; same-source graphic audit, not new Global independent evidence; preserve font/GID/SHA scope; no cross-font donation"
+          },
+          "claim_ref": "ttf_verified_mapping_corrections.csv:asset-sha256:80313cdc6113cfd93189c53183add12607617cf454a4373bf6e8eede23dd9d73:row-sha256:3d1a474979c70808c400298e4fd4e3113ba504b6a8aff1f2d53eaf6a0d1f18d6"
+        }
+      ],
+      "current_target_keys": [
+        [
+          "YenRoundZuinnEG-Bd",
+          15174,
+          "fe80789a3b391aaf0d23332edd4aeab90b6a71c1a57bc2a9abcad9f897732ee1"
+        ]
+      ],
+      "graphic_evidence": {
+        "original_annotation_png": {
+          "path": "docs/evidence/map-glyph-review-20261019/corrective2/original-annotation/893.png",
+          "sha256": "4802df5233678e46cf092dd3a40d2dbfab2da2091cf17989a80f96c6bf285099",
+          "source_work_file": "C:\\Users\\E04069\\Documents\\Codex\\2026-10-19\\c-users-e04069-desktop-github2-zhuyin\\work\\corrective2\\graphic-recheck\\original-annotation\\893.png"
+        },
+        "isolated_png": {
+          "path": "docs/evidence/map-glyph-review-20261019/corrective2/isolated/893.png",
+          "sha256": "20c6193c1359395cbb7dd56ec804d39639b0eb23b27bdcd6c36409023bc65f8d",
+          "source_work_file": "C:\\Users\\E04069\\Documents\\Codex\\2026-10-19\\c-users-e04069-desktop-github2-zhuyin\\work\\corrective2\\graphic-recheck\\isolated\\893.png"
+        }
+      },
+      "source_glyph_record": {
+        "encoding": "base64",
+        "raw_glyf": "AAMANQAeAdwCqAA4AHwAkAAAEyIHBhcWNzY3Mg8BFAcGBwYjIgcGFRQHBgcGFxQ3Njc2NzY3Njc2NzI3NicmNzY3NicmJyYHBgcGEwYjJgcGFxQXFjc2NzIHBgcGByYnJiciBxQXFhcWFyIHBgcGBwYXFDc2NzY3FhcWFzInJicmJyYnNjc2NzY3NicmBwYXBgcGFxYXFjMyNzY3NicmBwYHBnIJAgMHBwohZQYBBQYDCF4ODAcGEA8VAwEFDA8MCAkHCQM8Qg0GAwEDBQQGAwIBCwcNDzo5X34IBgIDAQoJChxYCgEEDw0SJxAVCgQBBBA1AwMBARgeHB0HAQgqKBUbHzISCQkDAwQEQA0NGyEEBgQBAQwPCgpqBgEBBAQLBAQDBD0sAwMGBBwmIgKXBAQLDAIEBgYjCQYEAQkEAw0zKCUUBAEBAQYMCQ8QFhgqCQMHBAsGEhkPCQgJBQQFBAUE/oIKAQIDAwMIBwIHBgYVGRYZHAkMAQEBBAosAwMDHhgWEgMCAwEHIRAgHDQSARUPBwktCgklMwYDAQkJDA8EBAoDBAMGBwcDBkY5BAMBAx8hHA==",
+        "glyph_sha256": "fe80789a3b391aaf0d23332edd4aeab90b6a71c1a57bc2a9abcad9f897732ee1",
+        "complete_record_identity": {
+          "status": "CANONICAL_EXACT_IDENTITY",
+          "kind": "TTF_GLYF_SHA256",
+          "style_group": "",
+          "glyph_sha256": "fe80789a3b391aaf0d23332edd4aeab90b6a71c1a57bc2a9abcad9f897732ee1",
+          "eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1",
+          "reason": ""
+        },
+        "exact_outline_signature": "4d1a4d63e4459ce16e1610e666e60f765b45a3b9",
+        "purpose": "Exact original source record fixture for regression of all shipped independent exact entrances; not an additional truth source."
+      }
+    }
+  ],
+  "prior_observations": [
+    {
+      "visual_id": 1260,
+      "map_graphic_id": 26,
+      "reading": "ㄨㄥˊ",
+      "evidence_class": "AI_DIRECT_PAGE_AND_ISOLATED_GLYPH_AUDIT",
+      "method": "Direct original-page and isolated simple annotation glyph; labels recorded before comparing legacy values. Exact raw glyph reused only after checking each explicit target font/GID/program; no Han, dictionary, expected, OCR or model prediction supplied the reading.",
+      "human_confirmation": false,
+      "global_approval": false,
+      "new_global_independent_source": false,
+      "reading_not_copied_from_legacy_map": true,
+      "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_綜合_教材資源_課本PDF_課本PDF_全年級\\單檔\\01-115國小綜合3上課本成書-目次(115f197887).pdf",
+      "pdf_sha256": "85d8227bfdf8e35113b21c7e36659f8e58031f30b695bf8db07b2530bda1bd9d",
+      "page": 1,
+      "bbox": [
+        296.663,
+        134.995,
+        318.809,
+        179.287
+      ],
+      "font": "ZhuYinNREG-Md",
+      "source_font_xref": 405,
+      "font_program_sha256": "0318c72d6ac84206eb65a91395440f6bf18b0e0fe7dba26c40b350d6a82e6a51",
+      "component_id": 14243,
+      "glyph_sha256": "0791bc5a96f05182987eba39bdf084ac3eb4d34ac4d2ed4467386889ac255db5",
+      "record_contract": {
+        "status": "CANONICAL_EXACT_IDENTITY",
+        "kind": "TTF_GLYF_SHA256",
+        "style_group": "",
+        "glyph_sha256": "0791bc5a96f05182987eba39bdf084ac3eb4d34ac4d2ed4467386889ac255db5",
+        "eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1",
+        "reason": ""
+      },
+      "original_crop": "docs/evidence/map-glyph-review-20261019/map-026-original-page.png",
+      "original_crop_sha256": "cec4ab35916981dc781f3d3548423a9fe1614965e54ff937f03b5e94a387130f",
+      "isolated_svg": "docs/evidence/map-glyph-review-20261019/map-026-annotation.svg",
+      "isolated_svg_sha256": "979a6278d73fcf9df132cec6a74b81a9ab24b341268d15302ce352bfd615c0d7",
+      "glyph_label_sha256": "68976dbe4bec387a63e290e2e8a6c8237548721ead68cfc2959c22c705d7a63c",
+      "source_occurrence_id": "occ_4fcdc1c2f5244499be29140cedb854d01b69b1a31b2626542054499627fd73e6",
+      "existing_scoped_correction": false,
+      "scope": "Explicit font + component ID + exact raw complete simple glyf SHA-256; not cross-font donor",
+      "target_binding": {
+        "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_綜合_教材資源_課本PDF_課本PDF_全年級\\單檔\\01-115國小綜合3上課本成書-目次(115f197887).pdf",
+        "pdf_sha256": "85d8227bfdf8e35113b21c7e36659f8e58031f30b695bf8db07b2530bda1bd9d",
+        "font": "ZhuYinNREG-Md",
+        "font_xref": 405,
+        "component_id": 14243,
+        "font_program_sha256": "0318c72d6ac84206eb65a91395440f6bf18b0e0fe7dba26c40b350d6a82e6a51",
+        "glyph_sha256": "0791bc5a96f05182987eba39bdf084ac3eb4d34ac4d2ed4467386889ac255db5",
+        "record_contract": {
+          "status": "CANONICAL_EXACT_IDENTITY",
+          "kind": "TTF_GLYF_SHA256",
+          "style_group": "",
+          "glyph_sha256": "0791bc5a96f05182987eba39bdf084ac3eb4d34ac4d2ed4467386889ac255db5",
+          "eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1",
+          "reason": ""
+        },
+        "source_occurrence_id": "occ_4fcdc1c2f5244499be29140cedb854d01b69b1a31b2626542054499627fd73e6",
+        "session_id": "648546fd-43e0-4c92-a8ad-5852758227a1",
+        "graphic_is_same_source_not_independent_count": true
+      },
+      "source_truth_root_key": [
+        "ZhuYinNREG-Md",
+        14243,
+        "0791bc5a96f05182987eba39bdf084ac3eb4d34ac4d2ed4467386889ac255db5"
+      ]
+    },
+    {
+      "visual_id": 20006,
+      "map_graphic_id": 26,
+      "reading": "ㄨㄥˊ",
+      "evidence_class": "EXISTING_GRAPHIC_ROOT_TARGET_BINDING",
+      "method": "Existing direct graphic truth root plus this explicit original target font/GID/exact complete simple raw glyph binding. Not a new direct observation or independent truth.",
+      "human_confirmation": false,
+      "global_approval": false,
+      "new_global_independent_source": false,
+      "reading_not_copied_from_legacy_map": true,
+      "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_綜合_教材資源_課本PDF_課本PDF_全年級\\單檔\\01-115國小綜合3上課本成書-目次(115f197887).pdf",
+      "pdf_sha256": "85d8227bfdf8e35113b21c7e36659f8e58031f30b695bf8db07b2530bda1bd9d",
+      "page": 1,
+      "bbox": [
+        296.663,
+        134.995,
+        318.809,
+        179.287
+      ],
+      "font": "StdKaiZuinnEG-Md",
+      "source_font_xref": 405,
+      "font_program_sha256": "0318c72d6ac84206eb65a91395440f6bf18b0e0fe7dba26c40b350d6a82e6a51",
+      "component_id": 14243,
+      "glyph_sha256": "0791bc5a96f05182987eba39bdf084ac3eb4d34ac4d2ed4467386889ac255db5",
+      "record_contract": {
+        "status": "CANONICAL_EXACT_IDENTITY",
+        "kind": "TTF_GLYF_SHA256",
+        "style_group": "",
+        "glyph_sha256": "0791bc5a96f05182987eba39bdf084ac3eb4d34ac4d2ed4467386889ac255db5",
+        "eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1",
+        "reason": ""
+      },
+      "original_crop": "docs/evidence/map-glyph-review-20261019/map-026-original-page.png",
+      "original_crop_sha256": "cec4ab35916981dc781f3d3548423a9fe1614965e54ff937f03b5e94a387130f",
+      "isolated_svg": "docs/evidence/map-glyph-review-20261019/map-026-annotation.svg",
+      "isolated_svg_sha256": "979a6278d73fcf9df132cec6a74b81a9ab24b341268d15302ce352bfd615c0d7",
+      "glyph_label_sha256": "68976dbe4bec387a63e290e2e8a6c8237548721ead68cfc2959c22c705d7a63c",
+      "source_occurrence_id": "occ_4fcdc1c2f5244499be29140cedb854d01b69b1a31b2626542054499627fd73e6",
+      "existing_scoped_correction": false,
+      "scope": "Explicit font + component ID + exact raw complete simple glyf SHA-256; not cross-font donor",
+      "target_binding": {
+        "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_綜合_教材資源_課本PDF_課本PDF_全年級\\單檔\\01-115國小綜合3上課本成書-目次(115f197887).pdf",
+        "pdf_sha256": "85d8227bfdf8e35113b21c7e36659f8e58031f30b695bf8db07b2530bda1bd9d",
+        "font": "StdKaiZuinnEG-Md",
+        "font_xref": 410,
+        "component_id": 14243,
+        "font_program_sha256": "793462613a4e8b912795fdcae2e60d3399df3475563714bcf9f84e23f4bacb27",
+        "glyph_sha256": "0791bc5a96f05182987eba39bdf084ac3eb4d34ac4d2ed4467386889ac255db5",
+        "record_contract": {
+          "status": "CANONICAL_EXACT_IDENTITY",
+          "kind": "TTF_GLYF_SHA256",
+          "style_group": "",
+          "glyph_sha256": "0791bc5a96f05182987eba39bdf084ac3eb4d34ac4d2ed4467386889ac255db5",
+          "eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1",
+          "reason": ""
+        },
+        "source_occurrence_id": "occ_69b4a241a49651f161d70879cb0ad0a25a3409399a45efaed9789b6bd2304086",
+        "session_id": "648546fd-43e0-4c92-a8ad-5852758227a1",
+        "graphic_is_same_source_not_independent_count": true
+      },
+      "source_truth_root_key": [
+        "ZhuYinNREG-Md",
+        14243,
+        "0791bc5a96f05182987eba39bdf084ac3eb4d34ac4d2ed4467386889ac255db5"
+      ]
+    },
+    {
+      "visual_id": 10160,
+      "group_graphic_id": 16,
+      "reading": "ㄩㄝˋ",
+      "evidence_class": "AI_DIRECT_PAGE_AND_ISOLATED_GLYPH_AUDIT",
+      "method": "Direct original-page and isolated simple annotation glyph; labels recorded before comparing legacy values. Exact raw glyph reused only after checking each explicit target font/GID/program; no Han, dictionary, expected, OCR or model prediction supplied the reading.",
+      "human_confirmation": false,
+      "global_approval": false,
+      "new_global_independent_source": false,
+      "reading_not_copied_from_legacy_map": true,
+      "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_綜合_教材資源_課本PDF_課本PDF_全年級\\單檔\\02-115國小綜合4上課本-成書內頁-L01(115f197900).pdf",
+      "pdf_sha256": "43900075b51eb0bd9826710c7b8d18e4d1f4ac4e42b20343494ad5677ee5b151",
+      "page": 24,
+      "bbox": [
+        247.325,
+        416.364,
+        266.459,
+        429.12
+      ],
+      "font": "YenRoundZuinnEG-Md",
+      "source_font_xref": 933,
+      "font_program_sha256": "bdc1bda7811659d5405c6a83797b64449842fa1f3710b25ddbb567b532110bcd",
+      "component_id": 15522,
+      "glyph_sha256": "20c764d666ff10977c520c1c2012558a06d907fd5057bc3fca140f3415bf144e",
+      "record_contract": {
+        "status": "CANONICAL_EXACT_IDENTITY",
+        "kind": "TTF_GLYF_SHA256",
+        "style_group": "",
+        "glyph_sha256": "20c764d666ff10977c520c1c2012558a06d907fd5057bc3fca140f3415bf144e",
+        "eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1",
+        "reason": ""
+      },
+      "original_crop": "docs/evidence/map-glyph-review-20261019/group-016-original-page.png",
+      "original_crop_sha256": "7e8fbb112b1176f0a97cf5fc53a1d10a7cb90113667b7eea594d15fb1822319f",
+      "isolated_svg": "docs/evidence/map-glyph-review-20261019/group-016-annotation.svg",
+      "isolated_svg_sha256": "03ff8e8d22f8c30889716f6ed4a31a5edcffe7c9d0632fd733882021426a5c5c",
+      "glyph_label_sha256": "5c44a7e9eac02ecc0fbf933654b97b04796590d143667a5c5d7a20aaf15258f1",
+      "source_occurrence_id": "occ_702fc2aec8895c77fd01c1829438ee5c20909cc6d0ba793ba7b8cfe2bebae3a4",
+      "existing_scoped_correction": false,
+      "scope": "Explicit font + component ID + exact raw complete simple glyf SHA-256; not cross-font donor",
+      "target_binding": {
+        "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_綜合_教材資源_課本PDF_課本PDF_全年級\\單檔\\02-115國小綜合4上課本-成書內頁-L01(115f197900).pdf",
+        "pdf_sha256": "43900075b51eb0bd9826710c7b8d18e4d1f4ac4e42b20343494ad5677ee5b151",
+        "font": "YenRoundZuinnEG-Md",
+        "font_xref": 933,
+        "component_id": 15522,
+        "font_program_sha256": "bdc1bda7811659d5405c6a83797b64449842fa1f3710b25ddbb567b532110bcd",
+        "glyph_sha256": "20c764d666ff10977c520c1c2012558a06d907fd5057bc3fca140f3415bf144e",
+        "record_contract": {
+          "status": "CANONICAL_EXACT_IDENTITY",
+          "kind": "TTF_GLYF_SHA256",
+          "style_group": "",
+          "glyph_sha256": "20c764d666ff10977c520c1c2012558a06d907fd5057bc3fca140f3415bf144e",
+          "eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1",
+          "reason": ""
+        },
+        "source_occurrence_id": "occ_702fc2aec8895c77fd01c1829438ee5c20909cc6d0ba793ba7b8cfe2bebae3a4",
+        "session_id": "648546fd-43e0-4c92-a8ad-5852758227a1",
+        "graphic_is_same_source_not_independent_count": true
+      },
+      "source_truth_root_key": [
+        "YenRoundZuinnEG-Md",
+        15522,
+        "20c764d666ff10977c520c1c2012558a06d907fd5057bc3fca140f3415bf144e"
+      ]
+    },
+    {
+      "visual_id": 10390,
+      "group_graphic_id": 39,
+      "reading": "ㄕㄨㄞˇ",
+      "evidence_class": "AI_DIRECT_PAGE_AND_ISOLATED_GLYPH_AUDIT",
+      "method": "Direct original-page and isolated simple annotation glyph; labels recorded before comparing legacy values. Exact raw glyph reused only after checking each explicit target font/GID/program; no Han, dictionary, expected, OCR or model prediction supplied the reading.",
+      "human_confirmation": false,
+      "global_approval": false,
+      "new_global_independent_source": false,
+      "reading_not_copied_from_legacy_map": true,
+      "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_綜合_教材資源_課本PDF_課本PDF_全年級\\單檔\\01-115國小綜合4上課本-成書內頁-目次(115f197899).pdf",
+      "pdf_sha256": "a5d1535b2f47ffc1fd67dc6d7e6c3894b0021de7d15149973107b989790217ae",
+      "page": 3,
+      "bbox": [
+        435.585,
+        210.723,
+        438.268,
+        216.091
+      ],
+      "font": "ZhuYinNREG-Md",
+      "source_font_xref": 398,
+      "font_program_sha256": "e438fd3b0c7d41f16fb8c0d8e56d50cdbb3e6c881d29aa832d7fbb68b68be413",
+      "component_id": 15203,
+      "glyph_sha256": "4140284b771233ab94b97547519be51e625fdba7b002784f7eedba539345eaa7",
+      "record_contract": {
+        "status": "CANONICAL_EXACT_IDENTITY",
+        "kind": "TTF_GLYF_SHA256",
+        "style_group": "",
+        "glyph_sha256": "4140284b771233ab94b97547519be51e625fdba7b002784f7eedba539345eaa7",
+        "eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1",
+        "reason": ""
+      },
+      "original_crop": "docs/evidence/map-glyph-review-20261019/group-039-original-page.png",
+      "original_crop_sha256": "74ac4e3e38a065fe430ebc6bf511d285952f8ce37490206098de55710c24057f",
+      "isolated_svg": "docs/evidence/map-glyph-review-20261019/group-039-annotation.svg",
+      "isolated_svg_sha256": "166d3c74bd710f542dd68f762be6dc95b83303c130c47a6a752ab98d8b9389c6",
+      "glyph_label_sha256": "5c44a7e9eac02ecc0fbf933654b97b04796590d143667a5c5d7a20aaf15258f1",
+      "source_occurrence_id": "occ_8ab25e658fa78715f72df0acaab1bac628e9a7330911ed4f29747ce8736638d9",
+      "existing_scoped_correction": false,
+      "scope": "Explicit font + component ID + exact raw complete simple glyf SHA-256; not cross-font donor",
+      "target_binding": {
+        "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_綜合_教材資源_課本PDF_課本PDF_全年級\\單檔\\01-115國小綜合4上課本-成書內頁-目次(115f197899).pdf",
+        "pdf_sha256": "a5d1535b2f47ffc1fd67dc6d7e6c3894b0021de7d15149973107b989790217ae",
+        "font": "ZhuYinNREG-Md",
+        "font_xref": 398,
+        "component_id": 15203,
+        "font_program_sha256": "e438fd3b0c7d41f16fb8c0d8e56d50cdbb3e6c881d29aa832d7fbb68b68be413",
+        "glyph_sha256": "4140284b771233ab94b97547519be51e625fdba7b002784f7eedba539345eaa7",
+        "record_contract": {
+          "status": "CANONICAL_EXACT_IDENTITY",
+          "kind": "TTF_GLYF_SHA256",
+          "style_group": "",
+          "glyph_sha256": "4140284b771233ab94b97547519be51e625fdba7b002784f7eedba539345eaa7",
+          "eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1",
+          "reason": ""
+        },
+        "source_occurrence_id": "occ_8ab25e658fa78715f72df0acaab1bac628e9a7330911ed4f29747ce8736638d9",
+        "session_id": "648546fd-43e0-4c92-a8ad-5852758227a1",
+        "graphic_is_same_source_not_independent_count": true
+      },
+      "source_truth_root_key": [
+        "ZhuYinNREG-Md",
+        15203,
+        "4140284b771233ab94b97547519be51e625fdba7b002784f7eedba539345eaa7"
+      ]
+    },
+    {
+      "visual_id": 10590,
+      "group_graphic_id": 59,
+      "reading": "ㄅㄧㄢˋ",
+      "evidence_class": "AI_DIRECT_PAGE_AND_ISOLATED_GLYPH_AUDIT",
+      "method": "Direct original-page and isolated simple annotation glyph; labels recorded before comparing legacy values. Exact raw glyph reused only after checking each explicit target font/GID/program; no Han, dictionary, expected, OCR or model prediction supplied the reading.",
+      "human_confirmation": false,
+      "global_approval": false,
+      "new_global_independent_source": false,
+      "reading_not_copied_from_legacy_map": true,
+      "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_綜合_教材資源_課本PDF_課本PDF_全年級\\單檔\\04-115國小綜合4上課本-成書內頁-L03(115f197902).pdf",
+      "pdf_sha256": "50533ddeb797a656b01da098993f55713b072ba37aca0895eccafb33a6f87721",
+      "page": 15,
+      "bbox": [
+        269.291,
+        59.58,
+        299.055,
+        79.422
+      ],
+      "font": "YenRoundZuinnEG-Bd",
+      "source_font_xref": 1187,
+      "font_program_sha256": "57d9163aea530525544decd2b393eaa5bddb392077292df6c58b631dda41ea65",
+      "component_id": 14172,
+      "glyph_sha256": "5c12025eca93a90047c025075665eddcd717d820c8373fb55f21f7adb2bf3755",
+      "record_contract": {
+        "status": "CANONICAL_EXACT_IDENTITY",
+        "kind": "TTF_GLYF_SHA256",
+        "style_group": "",
+        "glyph_sha256": "5c12025eca93a90047c025075665eddcd717d820c8373fb55f21f7adb2bf3755",
+        "eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1",
+        "reason": ""
+      },
+      "original_crop": "docs/evidence/map-glyph-review-20261019/group-059-original-page.png",
+      "original_crop_sha256": "506ec32c04e83e6d9a4edce34d7ccf6c2119bdac48fad1eaac3a01f1dbf9c4fb",
+      "isolated_svg": "docs/evidence/map-glyph-review-20261019/group-059-annotation.svg",
+      "isolated_svg_sha256": "36b5296604fd6be43f89db7638195a3c3ee0bf58c664b2329c8203ef090edd8a",
+      "glyph_label_sha256": "5c44a7e9eac02ecc0fbf933654b97b04796590d143667a5c5d7a20aaf15258f1",
+      "source_occurrence_id": "occ_ffdec803f70800587b10c6e7592817b72e6ed00e25c2d4284f422e49e3e70c45",
+      "existing_scoped_correction": false,
+      "scope": "Explicit font + component ID + exact raw complete simple glyf SHA-256; not cross-font donor",
+      "target_binding": {
+        "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_綜合_教材資源_課本PDF_課本PDF_全年級\\單檔\\04-115國小綜合4上課本-成書內頁-L03(115f197902).pdf",
+        "pdf_sha256": "50533ddeb797a656b01da098993f55713b072ba37aca0895eccafb33a6f87721",
+        "font": "YenRoundZuinnEG-Bd",
+        "font_xref": 1187,
+        "component_id": 14172,
+        "font_program_sha256": "57d9163aea530525544decd2b393eaa5bddb392077292df6c58b631dda41ea65",
+        "glyph_sha256": "5c12025eca93a90047c025075665eddcd717d820c8373fb55f21f7adb2bf3755",
+        "record_contract": {
+          "status": "CANONICAL_EXACT_IDENTITY",
+          "kind": "TTF_GLYF_SHA256",
+          "style_group": "",
+          "glyph_sha256": "5c12025eca93a90047c025075665eddcd717d820c8373fb55f21f7adb2bf3755",
+          "eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1",
+          "reason": ""
+        },
+        "source_occurrence_id": "occ_ffdec803f70800587b10c6e7592817b72e6ed00e25c2d4284f422e49e3e70c45",
+        "session_id": "648546fd-43e0-4c92-a8ad-5852758227a1",
+        "graphic_is_same_source_not_independent_count": true
+      },
+      "source_truth_root_key": [
+        "YenRoundZuinnEG-Bd",
+        14172,
+        "5c12025eca93a90047c025075665eddcd717d820c8373fb55f21f7adb2bf3755"
+      ]
+    },
+    {
+      "visual_id": 5310,
+      "map_graphic_id": 431,
+      "reading": "ㄜ",
+      "evidence_class": "AI_DIRECT_PAGE_AND_ISOLATED_GLYPH_AUDIT",
+      "method": "Direct original-page and isolated simple annotation glyph; labels recorded before comparing legacy values. Exact raw glyph reused only after checking each explicit target font/GID/program; no Han, dictionary, expected, OCR or model prediction supplied the reading.",
+      "human_confirmation": false,
+      "global_approval": false,
+      "new_global_independent_source": false,
+      "reading_not_copied_from_legacy_map": true,
+      "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_數學_教材資源／PPT_備課教材_課本PDF_全年級\\單檔\\01-115國小數學1上課本-目次(115f233092).pdf",
+      "pdf_sha256": "84ce1c0c2206fe632c7a4026aeb8137f2e61de5c2e68c033e555d44790505629",
+      "page": 1,
+      "bbox": [
+        259.369,
+        270.836,
+        291.259,
+        292.096
+      ],
+      "font": "DFPBiaoKai-W5-PoIn1-BFW",
+      "source_font_xref": 189,
+      "font_program_sha256": "79edb59d4c16dffa3e905b7c5a64280dc7500c7a3ed9da9b1b747c6b94c3cc21",
+      "component_id": 14128,
+      "glyph_sha256": "8b824cafc14a655e2ff073a6a9972ae3bffb810716406f0ac518c62a8559d11d",
+      "record_contract": {
+        "status": "CANONICAL_EXACT_IDENTITY",
+        "kind": "TTF_GLYF_SHA256",
+        "style_group": "",
+        "glyph_sha256": "8b824cafc14a655e2ff073a6a9972ae3bffb810716406f0ac518c62a8559d11d",
+        "eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1",
+        "reason": ""
+      },
+      "original_crop": "docs/evidence/map-glyph-review-20261019/map-431-original-page.png",
+      "original_crop_sha256": "04695cb527b0705ae4e259f18c9b57841cd9e97f100f472eff75bf54fa5222d9",
+      "isolated_svg": "docs/evidence/map-glyph-review-20261019/map-431-annotation.svg",
+      "isolated_svg_sha256": "3ce9ed17d5e4c95a99c87df6b4003000310b87f15c69c9af62289a2dd5dd9e51",
+      "glyph_label_sha256": "68976dbe4bec387a63e290e2e8a6c8237548721ead68cfc2959c22c705d7a63c",
+      "source_occurrence_id": "occ_f8170f50d78d973452d33aefc6931b00f415c1d3c9bc10d3a9da38056a8efe4d",
+      "existing_scoped_correction": false,
+      "scope": "Explicit font + component ID + exact raw complete simple glyf SHA-256; not cross-font donor",
+      "target_binding": {
+        "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_數學_教材資源／PPT_備課教材_課本PDF_全年級\\單檔\\01-115國小數學1上課本-目次(115f233092).pdf",
+        "pdf_sha256": "84ce1c0c2206fe632c7a4026aeb8137f2e61de5c2e68c033e555d44790505629",
+        "font": "DFPBiaoKai-W5-PoIn1-BFW",
+        "font_xref": 189,
+        "component_id": 14128,
+        "font_program_sha256": "79edb59d4c16dffa3e905b7c5a64280dc7500c7a3ed9da9b1b747c6b94c3cc21",
+        "glyph_sha256": "8b824cafc14a655e2ff073a6a9972ae3bffb810716406f0ac518c62a8559d11d",
+        "record_contract": {
+          "status": "CANONICAL_EXACT_IDENTITY",
+          "kind": "TTF_GLYF_SHA256",
+          "style_group": "",
+          "glyph_sha256": "8b824cafc14a655e2ff073a6a9972ae3bffb810716406f0ac518c62a8559d11d",
+          "eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1",
+          "reason": ""
+        },
+        "source_occurrence_id": "occ_f8170f50d78d973452d33aefc6931b00f415c1d3c9bc10d3a9da38056a8efe4d",
+        "session_id": "6bfc12a0-152e-44e3-a9e7-1f3d866eb8eb",
+        "graphic_is_same_source_not_independent_count": true
+      },
+      "source_truth_root_key": [
+        "DFPBiaoKai-W5-PoIn1-BFW",
+        14128,
+        "8b824cafc14a655e2ff073a6a9972ae3bffb810716406f0ac518c62a8559d11d"
+      ]
+    },
+    {
+      "visual_id": 20065,
+      "map_graphic_id": 431,
+      "reading": "ㄜ",
+      "evidence_class": "EXISTING_GRAPHIC_ROOT_TARGET_BINDING",
+      "method": "Existing direct graphic truth root plus this explicit original target font/GID/exact complete simple raw glyph binding. Not a new direct observation or independent truth.",
+      "human_confirmation": false,
+      "global_approval": false,
+      "new_global_independent_source": false,
+      "reading_not_copied_from_legacy_map": true,
+      "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_數學_教材資源／PPT_備課教材_課本PDF_全年級\\單檔\\01-115國小數學1上課本-目次(115f233092).pdf",
+      "pdf_sha256": "84ce1c0c2206fe632c7a4026aeb8137f2e61de5c2e68c033e555d44790505629",
+      "page": 1,
+      "bbox": [
+        259.369,
+        270.836,
+        291.259,
+        292.096
+      ],
+      "font": "DFPBiaoKai-W5-ZhuIn-BFW",
+      "source_font_xref": 189,
+      "font_program_sha256": "79edb59d4c16dffa3e905b7c5a64280dc7500c7a3ed9da9b1b747c6b94c3cc21",
+      "component_id": 14128,
+      "glyph_sha256": "8b824cafc14a655e2ff073a6a9972ae3bffb810716406f0ac518c62a8559d11d",
+      "record_contract": {
+        "status": "CANONICAL_EXACT_IDENTITY",
+        "kind": "TTF_GLYF_SHA256",
+        "style_group": "",
+        "glyph_sha256": "8b824cafc14a655e2ff073a6a9972ae3bffb810716406f0ac518c62a8559d11d",
+        "eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1",
+        "reason": ""
+      },
+      "original_crop": "docs/evidence/map-glyph-review-20261019/map-431-original-page.png",
+      "original_crop_sha256": "04695cb527b0705ae4e259f18c9b57841cd9e97f100f472eff75bf54fa5222d9",
+      "isolated_svg": "docs/evidence/map-glyph-review-20261019/map-431-annotation.svg",
+      "isolated_svg_sha256": "3ce9ed17d5e4c95a99c87df6b4003000310b87f15c69c9af62289a2dd5dd9e51",
+      "glyph_label_sha256": "68976dbe4bec387a63e290e2e8a6c8237548721ead68cfc2959c22c705d7a63c",
+      "source_occurrence_id": "occ_f8170f50d78d973452d33aefc6931b00f415c1d3c9bc10d3a9da38056a8efe4d",
+      "existing_scoped_correction": false,
+      "scope": "Explicit font + component ID + exact raw complete simple glyf SHA-256; not cross-font donor",
+      "target_binding": {
+        "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_綜合_教材資源_課本PDF_課本PDF_全年級\\單檔\\01-115國小綜合4上課本-成書內頁-目次(115f197899).pdf",
+        "pdf_sha256": "a5d1535b2f47ffc1fd67dc6d7e6c3894b0021de7d15149973107b989790217ae",
+        "font": "DFPBiaoKai-W5-ZhuIn-BFW",
+        "font_xref": 425,
+        "component_id": 14128,
+        "font_program_sha256": "0b721f3d8b5bd68cd0fcc5949d57dac18d84ed3fb7b84e369d732d95940816f2",
+        "glyph_sha256": "8b824cafc14a655e2ff073a6a9972ae3bffb810716406f0ac518c62a8559d11d",
+        "record_contract": {
+          "status": "CANONICAL_EXACT_IDENTITY",
+          "kind": "TTF_GLYF_SHA256",
+          "style_group": "",
+          "glyph_sha256": "8b824cafc14a655e2ff073a6a9972ae3bffb810716406f0ac518c62a8559d11d",
+          "eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1",
+          "reason": ""
+        },
+        "source_occurrence_id": "occ_f40e7a2ade2590ee09b3cab987c6f664585b8f0fb3287db359c3a1d1acf206b7",
+        "session_id": "648546fd-43e0-4c92-a8ad-5852758227a1",
+        "graphic_is_same_source_not_independent_count": true
+      },
+      "source_truth_root_key": [
+        "DFPBiaoKai-W5-PoIn1-BFW",
+        14128,
+        "8b824cafc14a655e2ff073a6a9972ae3bffb810716406f0ac518c62a8559d11d"
+      ]
+    },
+    {
+      "visual_id": 10940,
+      "group_graphic_id": 94,
+      "reading": "ㄏㄨㄞˊ",
+      "evidence_class": "AI_DIRECT_PAGE_AND_ISOLATED_GLYPH_AUDIT",
+      "method": "Direct original-page and isolated simple annotation glyph; labels recorded before comparing legacy values. Exact raw glyph reused only after checking each explicit target font/GID/program; no Han, dictionary, expected, OCR or model prediction supplied the reading.",
+      "human_confirmation": false,
+      "global_approval": false,
+      "new_global_independent_source": false,
+      "reading_not_copied_from_legacy_map": true,
+      "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_綜合_教材資源_課本PDF_課本PDF_全年級\\單檔\\05-115國小綜合3上課本成書-L04(115f197891).pdf",
+      "pdf_sha256": "90be524186818ec93d0c36838f28ee77e2d57562935274e9008e3a3e162285e1",
+      "page": 25,
+      "bbox": [
+        344.107,
+        154.559,
+        353.276,
+        168.098
+      ],
+      "font": "ZhuYinNREG-Md",
+      "source_font_xref": 1250,
+      "font_program_sha256": "f3c04bf1653c5c0a05d66cd77fd59730833e8ed1dcb7fab1b571d740b252a782",
+      "component_id": 14846,
+      "glyph_sha256": "9e50d0acddd4f440dc32cd76e7d1d8464bb6e6a78fcfaecaab6a50f9b2a26a88",
+      "record_contract": {
+        "status": "CANONICAL_EXACT_IDENTITY",
+        "kind": "TTF_GLYF_SHA256",
+        "style_group": "",
+        "glyph_sha256": "9e50d0acddd4f440dc32cd76e7d1d8464bb6e6a78fcfaecaab6a50f9b2a26a88",
+        "eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1",
+        "reason": ""
+      },
+      "original_crop": "docs/evidence/map-glyph-review-20261019/group-094-original-page.png",
+      "original_crop_sha256": "b31c0ea69f91dc6bb8d1e6bd0024159097c001a535401f1aea4fd60ddb7e1217",
+      "isolated_svg": "docs/evidence/map-glyph-review-20261019/group-094-annotation.svg",
+      "isolated_svg_sha256": "c550eaa9544929f12015fab11656701618fb2e1a70646818f4b1463e62628f89",
+      "glyph_label_sha256": "5c44a7e9eac02ecc0fbf933654b97b04796590d143667a5c5d7a20aaf15258f1",
+      "source_occurrence_id": "occ_3dfada6487ab1bb88ccab0d9c1e86b2a7c33af1b5a7a3d88d583ad5da7b7cabe",
+      "existing_scoped_correction": false,
+      "scope": "Explicit font + component ID + exact raw complete simple glyf SHA-256; not cross-font donor",
+      "target_binding": {
+        "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_綜合_教材資源_課本PDF_課本PDF_全年級\\單檔\\05-115國小綜合3上課本成書-L04(115f197891).pdf",
+        "pdf_sha256": "90be524186818ec93d0c36838f28ee77e2d57562935274e9008e3a3e162285e1",
+        "font": "ZhuYinNREG-Md",
+        "font_xref": 1250,
+        "component_id": 14846,
+        "font_program_sha256": "f3c04bf1653c5c0a05d66cd77fd59730833e8ed1dcb7fab1b571d740b252a782",
+        "glyph_sha256": "9e50d0acddd4f440dc32cd76e7d1d8464bb6e6a78fcfaecaab6a50f9b2a26a88",
+        "record_contract": {
+          "status": "CANONICAL_EXACT_IDENTITY",
+          "kind": "TTF_GLYF_SHA256",
+          "style_group": "",
+          "glyph_sha256": "9e50d0acddd4f440dc32cd76e7d1d8464bb6e6a78fcfaecaab6a50f9b2a26a88",
+          "eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1",
+          "reason": ""
+        },
+        "source_occurrence_id": "occ_3dfada6487ab1bb88ccab0d9c1e86b2a7c33af1b5a7a3d88d583ad5da7b7cabe",
+        "session_id": "648546fd-43e0-4c92-a8ad-5852758227a1",
+        "graphic_is_same_source_not_independent_count": true
+      },
+      "source_truth_root_key": [
+        "ZhuYinNREG-Md",
+        14846,
+        "9e50d0acddd4f440dc32cd76e7d1d8464bb6e6a78fcfaecaab6a50f9b2a26a88"
+      ]
+    },
+    {
+      "visual_id": 10941,
+      "group_graphic_id": 94,
+      "reading": "ㄏㄨㄞˊ",
+      "evidence_class": "EXISTING_GRAPHIC_ROOT_TARGET_BINDING",
+      "method": "Existing direct graphic truth root plus this explicit original target font/GID/exact complete simple raw glyph binding. Not a new direct observation or independent truth.",
+      "human_confirmation": false,
+      "global_approval": false,
+      "new_global_independent_source": false,
+      "reading_not_copied_from_legacy_map": true,
+      "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_綜合_教材資源_課本PDF_課本PDF_全年級\\單檔\\05-115國小綜合3上課本成書-L04(115f197891).pdf",
+      "pdf_sha256": "90be524186818ec93d0c36838f28ee77e2d57562935274e9008e3a3e162285e1",
+      "page": 25,
+      "bbox": [
+        344.107,
+        154.559,
+        353.276,
+        168.098
+      ],
+      "font": "YenRoundZuinnEG-Bd",
+      "source_font_xref": 1250,
+      "font_program_sha256": "f3c04bf1653c5c0a05d66cd77fd59730833e8ed1dcb7fab1b571d740b252a782",
+      "component_id": 14846,
+      "glyph_sha256": "9e50d0acddd4f440dc32cd76e7d1d8464bb6e6a78fcfaecaab6a50f9b2a26a88",
+      "record_contract": {
+        "status": "CANONICAL_EXACT_IDENTITY",
+        "kind": "TTF_GLYF_SHA256",
+        "style_group": "",
+        "glyph_sha256": "9e50d0acddd4f440dc32cd76e7d1d8464bb6e6a78fcfaecaab6a50f9b2a26a88",
+        "eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1",
+        "reason": ""
+      },
+      "original_crop": "docs/evidence/map-glyph-review-20261019/group-094-original-page.png",
+      "original_crop_sha256": "b31c0ea69f91dc6bb8d1e6bd0024159097c001a535401f1aea4fd60ddb7e1217",
+      "isolated_svg": "docs/evidence/map-glyph-review-20261019/group-094-annotation.svg",
+      "isolated_svg_sha256": "c550eaa9544929f12015fab11656701618fb2e1a70646818f4b1463e62628f89",
+      "glyph_label_sha256": "5c44a7e9eac02ecc0fbf933654b97b04796590d143667a5c5d7a20aaf15258f1",
+      "source_occurrence_id": "occ_3dfada6487ab1bb88ccab0d9c1e86b2a7c33af1b5a7a3d88d583ad5da7b7cabe",
+      "existing_scoped_correction": false,
+      "scope": "Explicit font + component ID + exact raw complete simple glyf SHA-256; not cross-font donor",
+      "target_binding": {
+        "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_社會_教材資源／PPT_備課教材_課本PDF_四年級\\單檔\\115國小社會4上課本成書-L06(115f283994).pdf",
+        "pdf_sha256": "d8c0d6ac3c958545ccb7019bf2d8168054bbcc716be64c31b3e85c4f96880e79",
+        "font": "YenRoundZuinnEG-Bd",
+        "font_xref": 935,
+        "component_id": 14846,
+        "font_program_sha256": "644528c8d7b2918a7002ca87a6253ae6400e51ea1c6de2dd0b230d7f17086471",
+        "glyph_sha256": "9e50d0acddd4f440dc32cd76e7d1d8464bb6e6a78fcfaecaab6a50f9b2a26a88",
+        "record_contract": {
+          "status": "CANONICAL_EXACT_IDENTITY",
+          "kind": "TTF_GLYF_SHA256",
+          "style_group": "",
+          "glyph_sha256": "9e50d0acddd4f440dc32cd76e7d1d8464bb6e6a78fcfaecaab6a50f9b2a26a88",
+          "eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1",
+          "reason": ""
+        },
+        "source_occurrence_id": "occ_f0af96d6ecfa165955f7a82c57bff196ad1c73af68899e351bfa532d13dbbdba",
+        "session_id": "25e6e143-7411-46e4-8c44-f1ab28cd2cdb",
+        "graphic_is_same_source_not_independent_count": true
+      },
+      "source_truth_root_key": [
+        "ZhuYinNREG-Md",
+        14846,
+        "9e50d0acddd4f440dc32cd76e7d1d8464bb6e6a78fcfaecaab6a50f9b2a26a88"
+      ]
+    },
+    {
+      "visual_id": 7220,
+      "map_graphic_id": 622,
+      "reading": "ㄩㄝˋ",
+      "evidence_class": "AI_DIRECT_PAGE_AND_ISOLATED_GLYPH_AUDIT",
+      "method": "Direct original-page and isolated simple annotation glyph; labels recorded before comparing legacy values. Exact raw glyph reused only after checking each explicit target font/GID/program; no Han, dictionary, expected, OCR or model prediction supplied the reading.",
+      "human_confirmation": false,
+      "global_approval": false,
+      "new_global_independent_source": false,
+      "reading_not_copied_from_legacy_map": true,
+      "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_數學_教材資源／PPT_備課教材_課本PDF_全年級\\單檔\\04-115國小數學2上課本-L03(115f233175).pdf",
+      "pdf_sha256": "0b54d750f18f5cefc4161611fa753713546089b1d3fc3235699ba8959a6e7bc7",
+      "page": 9,
+      "bbox": [
+        408.898,
+        517.071,
+        436.535,
+        535.496
+      ],
+      "font": "DFPBiaoKai-W5-ZhuIn-BFW",
+      "source_font_xref": 1123,
+      "font_program_sha256": "cb4ab0c24fcf56f505af312fdc33a2a3e3acd29fd26940d014ff72ccda11cd3e",
+      "component_id": 14241,
+      "glyph_sha256": "da0095289f1198745d5acfb9c29987823ba5a4c624e0e3696ee037e3ed585646",
+      "record_contract": {
+        "status": "CANONICAL_EXACT_IDENTITY",
+        "kind": "TTF_GLYF_SHA256",
+        "style_group": "",
+        "glyph_sha256": "da0095289f1198745d5acfb9c29987823ba5a4c624e0e3696ee037e3ed585646",
+        "eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1",
+        "reason": ""
+      },
+      "original_crop": "docs/evidence/map-glyph-review-20261019/map-622-original-page.png",
+      "original_crop_sha256": "86e878a81bbebe3104240dda4325ebc90e98ae6e6fa0c8aa28d7ba9a903eebed",
+      "isolated_svg": "docs/evidence/map-glyph-review-20261019/map-622-annotation.svg",
+      "isolated_svg_sha256": "b4afdaecee84ea6e555aa1206556264865132baa4948fd1f8da60fed31005738",
+      "glyph_label_sha256": "68976dbe4bec387a63e290e2e8a6c8237548721ead68cfc2959c22c705d7a63c",
+      "source_occurrence_id": "occ_579c0a09a4bc18b45a9d714bd3b53a590b8ff06208f3216df76cc56006d14647",
+      "existing_scoped_correction": false,
+      "scope": "Explicit font + component ID + exact raw complete simple glyf SHA-256; not cross-font donor",
+      "target_binding": {
+        "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_數學_教材資源／PPT_備課教材_課本PDF_全年級\\單檔\\04-115國小數學2上課本-L03(115f233175).pdf",
+        "pdf_sha256": "0b54d750f18f5cefc4161611fa753713546089b1d3fc3235699ba8959a6e7bc7",
+        "font": "DFPBiaoKai-W5-ZhuIn-BFW",
+        "font_xref": 1123,
+        "component_id": 14241,
+        "font_program_sha256": "cb4ab0c24fcf56f505af312fdc33a2a3e3acd29fd26940d014ff72ccda11cd3e",
+        "glyph_sha256": "da0095289f1198745d5acfb9c29987823ba5a4c624e0e3696ee037e3ed585646",
+        "record_contract": {
+          "status": "CANONICAL_EXACT_IDENTITY",
+          "kind": "TTF_GLYF_SHA256",
+          "style_group": "",
+          "glyph_sha256": "da0095289f1198745d5acfb9c29987823ba5a4c624e0e3696ee037e3ed585646",
+          "eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1",
+          "reason": ""
+        },
+        "source_occurrence_id": "occ_579c0a09a4bc18b45a9d714bd3b53a590b8ff06208f3216df76cc56006d14647",
+        "session_id": "6bfc12a0-152e-44e3-a9e7-1f3d866eb8eb",
+        "graphic_is_same_source_not_independent_count": true
+      },
+      "source_truth_root_key": [
+        "DFPBiaoKai-W5-ZhuIn-BFW",
+        14241,
+        "da0095289f1198745d5acfb9c29987823ba5a4c624e0e3696ee037e3ed585646"
+      ]
+    },
+    {
+      "visual_id": 11320,
+      "group_graphic_id": 132,
+      "reading": "ㄐㄩㄢˇ",
+      "evidence_class": "AI_DIRECT_PAGE_AND_ISOLATED_GLYPH_AUDIT",
+      "method": "Direct original-page and isolated simple annotation glyph; labels recorded before comparing legacy values. Exact raw glyph reused only after checking each explicit target font/GID/program; no Han, dictionary, expected, OCR or model prediction supplied the reading.",
+      "human_confirmation": false,
+      "global_approval": false,
+      "new_global_independent_source": false,
+      "reading_not_copied_from_legacy_map": true,
+      "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_綜合_教材資源_課本PDF_課本PDF_全年級\\單檔\\05-115國小綜合3上課本成書-L04(115f197891).pdf",
+      "pdf_sha256": "90be524186818ec93d0c36838f28ee77e2d57562935274e9008e3a3e162285e1",
+      "page": 25,
+      "bbox": [
+        337.322,
+        182.299,
+        345.591,
+        194.51
+      ],
+      "font": "ZhuYinNREG-Md",
+      "source_font_xref": 1250,
+      "font_program_sha256": "f3c04bf1653c5c0a05d66cd77fd59730833e8ed1dcb7fab1b571d740b252a782",
+      "component_id": 15526,
+      "glyph_sha256": "dbe1dac52f994e9082564a8fa42984a5e4513da891386636ea6224be218e2fa4",
+      "record_contract": {
+        "status": "CANONICAL_EXACT_IDENTITY",
+        "kind": "TTF_GLYF_SHA256",
+        "style_group": "",
+        "glyph_sha256": "dbe1dac52f994e9082564a8fa42984a5e4513da891386636ea6224be218e2fa4",
+        "eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1",
+        "reason": ""
+      },
+      "original_crop": "docs/evidence/map-glyph-review-20261019/group-132-original-page.png",
+      "original_crop_sha256": "db8ce27a537242515c8c010c00107683c9b15ca64e951f1aa24a1e832d16503b",
+      "isolated_svg": "docs/evidence/map-glyph-review-20261019/group-132-annotation.svg",
+      "isolated_svg_sha256": "5587f4bbabbdfa271cb4773fbcd7f94fa718e6852b62e79ee6deb0f0d2f13deb",
+      "glyph_label_sha256": "5c44a7e9eac02ecc0fbf933654b97b04796590d143667a5c5d7a20aaf15258f1",
+      "source_occurrence_id": "occ_52e07e70450a1361491ecc403f876903d0f9217d279b2b1f226b3a0ef5093101",
+      "existing_scoped_correction": false,
+      "scope": "Explicit font + component ID + exact raw complete simple glyf SHA-256; not cross-font donor",
+      "target_binding": {
+        "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_綜合_教材資源_課本PDF_課本PDF_全年級\\單檔\\05-115國小綜合3上課本成書-L04(115f197891).pdf",
+        "pdf_sha256": "90be524186818ec93d0c36838f28ee77e2d57562935274e9008e3a3e162285e1",
+        "font": "ZhuYinNREG-Md",
+        "font_xref": 1250,
+        "component_id": 15526,
+        "font_program_sha256": "f3c04bf1653c5c0a05d66cd77fd59730833e8ed1dcb7fab1b571d740b252a782",
+        "glyph_sha256": "dbe1dac52f994e9082564a8fa42984a5e4513da891386636ea6224be218e2fa4",
+        "record_contract": {
+          "status": "CANONICAL_EXACT_IDENTITY",
+          "kind": "TTF_GLYF_SHA256",
+          "style_group": "",
+          "glyph_sha256": "dbe1dac52f994e9082564a8fa42984a5e4513da891386636ea6224be218e2fa4",
+          "eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1",
+          "reason": ""
+        },
+        "source_occurrence_id": "occ_52e07e70450a1361491ecc403f876903d0f9217d279b2b1f226b3a0ef5093101",
+        "session_id": "648546fd-43e0-4c92-a8ad-5852758227a1",
+        "graphic_is_same_source_not_independent_count": true
+      },
+      "source_truth_root_key": [
+        "ZhuYinNREG-Md",
+        15526,
+        "dbe1dac52f994e9082564a8fa42984a5e4513da891386636ea6224be218e2fa4"
+      ]
+    },
+    {
+      "visual_id": 11510,
+      "group_graphic_id": 151,
+      "reading": "ㄕㄨˊ",
+      "evidence_class": "AI_DIRECT_PAGE_AND_ISOLATED_GLYPH_AUDIT",
+      "method": "Direct original-page and isolated simple annotation glyph; labels recorded before comparing legacy values. Exact raw glyph reused only after checking each explicit target font/GID/program; no Han, dictionary, expected, OCR or model prediction supplied the reading.",
+      "human_confirmation": false,
+      "global_approval": false,
+      "new_global_independent_source": false,
+      "reading_not_copied_from_legacy_map": true,
+      "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_社會_教材資源／PPT_備課教材_課本PDF_四年級\\單檔\\115國小社會4上課本成書-L06(115f283994).pdf",
+      "pdf_sha256": "d8c0d6ac3c958545ccb7019bf2d8168054bbcc716be64c31b3e85c4f96880e79",
+      "page": 6,
+      "bbox": [
+        155.728,
+        657.502,
+        173.268,
+        669.195
+      ],
+      "font": "YenRoundZuinnEG-Bd",
+      "source_font_xref": 935,
+      "font_program_sha256": "644528c8d7b2918a7002ca87a6253ae6400e51ea1c6de2dd0b230d7f17086471",
+      "component_id": 15174,
+      "glyph_sha256": "fe80789a3b391aaf0d23332edd4aeab90b6a71c1a57bc2a9abcad9f897732ee1",
+      "record_contract": {
+        "status": "CANONICAL_EXACT_IDENTITY",
+        "kind": "TTF_GLYF_SHA256",
+        "style_group": "",
+        "glyph_sha256": "fe80789a3b391aaf0d23332edd4aeab90b6a71c1a57bc2a9abcad9f897732ee1",
+        "eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1",
+        "reason": ""
+      },
+      "original_crop": "docs/evidence/map-glyph-review-20261019/group-151-original-page.png",
+      "original_crop_sha256": "019071c6e29ed7d21a4dac6723b756b2b61e94d1b34be3729e9d3c8ccceb4170",
+      "isolated_svg": "docs/evidence/map-glyph-review-20261019/group-151-annotation.svg",
+      "isolated_svg_sha256": "83bb26089c06ec90a6c5550c84925fdd5bba10e97dc7aed745f089f211b12c09",
+      "glyph_label_sha256": "5c44a7e9eac02ecc0fbf933654b97b04796590d143667a5c5d7a20aaf15258f1",
+      "source_occurrence_id": "occ_5fcf07ce4feca6eb5c58634260951939359e4bb18f37054d05925c9187c68a82",
+      "existing_scoped_correction": false,
+      "scope": "Explicit font + component ID + exact raw complete simple glyf SHA-256; not cross-font donor",
+      "target_binding": {
+        "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_社會_教材資源／PPT_備課教材_課本PDF_四年級\\單檔\\115國小社會4上課本成書-L06(115f283994).pdf",
+        "pdf_sha256": "d8c0d6ac3c958545ccb7019bf2d8168054bbcc716be64c31b3e85c4f96880e79",
+        "font": "YenRoundZuinnEG-Bd",
+        "font_xref": 935,
+        "component_id": 15174,
+        "font_program_sha256": "644528c8d7b2918a7002ca87a6253ae6400e51ea1c6de2dd0b230d7f17086471",
+        "glyph_sha256": "fe80789a3b391aaf0d23332edd4aeab90b6a71c1a57bc2a9abcad9f897732ee1",
+        "record_contract": {
+          "status": "CANONICAL_EXACT_IDENTITY",
+          "kind": "TTF_GLYF_SHA256",
+          "style_group": "",
+          "glyph_sha256": "fe80789a3b391aaf0d23332edd4aeab90b6a71c1a57bc2a9abcad9f897732ee1",
+          "eligibility": "GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1",
+          "reason": ""
+        },
+        "source_occurrence_id": "occ_5fcf07ce4feca6eb5c58634260951939359e4bb18f37054d05925c9187c68a82",
+        "session_id": "25e6e143-7411-46e4-8c44-f1ab28cd2cdb",
+        "graphic_is_same_source_not_independent_count": true
+      },
+      "source_truth_root_key": [
+        "YenRoundZuinnEG-Bd",
+        15174,
+        "fe80789a3b391aaf0d23332edd4aeab90b6a71c1a57bc2a9abcad9f897732ee1"
+      ]
+    }
+  ],
+  "changed_direct_roots": 9,
+  "changed_dependent_aliases": 3,
+  "independent_sources_added": 0,
+  "cross_font_donation_eligible": false,
+  "cache_action": "Existing actual static-asset fingerprint contract changes; cached rows cannot be resealed across changed actual_asset_hashes. Fresh decode is required, expected epoch1 and valid project occurrence decisions retained.",
+  "new_runtime_asset_hashes": {
+    "ttf_verified_mapping_corrections": "dd5827bce2d7d5f08723e8613d4a52419fde79ef434ce59fd840edfc6732691a",
+    "zhuyin_component_map": "2e4d3a9bf454e2653f2b7caed42ca7c82aa5cd77a845cc919bda28adf83a9998"
+  },
+  "audit_only": true,
+  "runtime_enforcement": "This ledger and frozen label JSON are not read by the runtime and do not execute revocation. Before parsing corrections for a decode, the current module deployment manifest must validate the canonical correction asset; the actual selected file bytes must match its digest. The current finite direct root reading and one-layer aliases supply qualification; changed/missing/revoked source or stale alias reading fails. Exact byte copies retain the same canonical root. Legacy proposals/transform copies cannot become truth; training and bridge donors retain roots and scope; changed static asset hashes reject prior actual caches. Independent valid decoders and occurrence overrides remain under their own contracts. A separately running old module with its original coherent deployment is historical evidence, not a current candidate endorsement."
+}
