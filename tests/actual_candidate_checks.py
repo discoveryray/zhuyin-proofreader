@@ -4,6 +4,9 @@ from __future__ import annotations
 import csv
 import json
 import hashlib
+import base64
+import io
+import shutil
 from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
@@ -150,6 +153,284 @@ def check_scoped_aliases_inherit_only_current_direct_truth_and_require_target_bi
     assert load([direct, other, target_direct, conflicting_alias])[target_key]["is_alias"] is False
 
 
+def check_revised_graphic_claims_do_not_revive_withdrawn_truth(tmp_path):
+    root = Path(decoder.__file__).resolve().parent
+    relative = "docs/evidence/map-glyph-review-20261019/corrective2/claim-revisions.json"
+    proof_path = root / relative
+    evidence = json.loads(proof_path.read_text(encoding="utf-8"))
+    assert evidence["schema"] == "finite-original-graphic-claim-revisions/1"
+    assert evidence["source_head"] == "3c638b3b7d3492dc5d0dc0539aa8f5a5e8f78ece"
+    assert evidence["changed_direct_roots"] == len(evidence["revisions"]) == 9
+    assert evidence["changed_dependent_aliases"] == 3
+    assert evidence["independent_sources_added"] == 0
+    frozen = json.loads((root / evidence["final_decisions_ref"]).read_text(encoding="utf-8"))
+    assert hashlib.sha256((root / evidence["final_decisions_ref"]).read_bytes()).hexdigest() == evidence["final_decisions_sha256"]
+    assert len(frozen["records"]) == 899
+    for name, digest in frozen["source_frozen_files"].items():
+        assert hashlib.sha256((proof_path.parent / name).read_bytes()).hexdigest() == digest
+    assert "/docs/evidence/map-glyph-review-20261019/corrective2/** -text" in (root / ".gitattributes").read_text(encoding="utf-8")
+    rows = list(csv.DictReader(decoder.DEFAULT_MAPPING_CORRECTIONS.open(encoding="utf-8-sig")))
+    key = lambda r: (r["font"], int(r["component_id"]), r["glyph_sha256"])
+    current = decoder.load_verified_mapping_corrections(decoder.DEFAULT_MAPPING_CORRECTIONS)
+    bykey = {key(r): r for r in rows}
+    root_keys = {tuple(r["root_key"]) for r in evidence["revisions"]}
+    targets = {tuple(k) for r in evidence["revisions"] for k in r["current_target_keys"]}
+    assert len(targets) == 12
+    fingerprints = decoder.load_verified_glyf_fingerprints(decoder.DEFAULT_FINGERPRINTS)
+    outlines = decoder.load_verified_outline_signatures(decoder.DEFAULT_OUTLINE_SIGNATURES)
+    symbols = ExactSymbolRecombinationModel.load_csv(decoder.DEFAULT_SYMBOL_TEMPLATES)
+    legacy_rows = []
+    from exact_glyph_identity import classify_ttf_glyf_record
+    for revision in evidence["revisions"]:
+        source_key = tuple(revision["root_key"])
+        reading, withdrawn = revision["current_reading"], revision["withdrawn_reading"]
+        assert reading != withdrawn
+        assert current[source_key]["bopomofo"] == reading
+        assert current[source_key]["donation_eligible"] is False
+        for prior in revision["prior_rows"]:
+            old = prior["row"]
+            assert old["new_reading"] == withdrawn
+            assert decoder._row_claim_ref(decoder.DEFAULT_MAPPING_CORRECTIONS, old,
+                    asset_sha256=evidence["prior_asset_hashes"]["ttf_verified_mapping_corrections.csv"]) == prior["claim_ref"]
+            assert all(bykey[key(old)][column] == value for column, value in old.items() if column != "new_reading")
+        for target_key in revision["current_target_keys"]:
+            rec = current[tuple(target_key)]
+            assert rec["bopomofo"] == reading
+            assert rec["evidence_roots"] == current[source_key]["evidence_roots"]
+            assert revision["withdrawn_truth_root_receipt"] not in rec["evidence_roots"]
+        for graphic in revision["graphic_evidence"].values():
+            assert hashlib.sha256((root / graphic["path"]).read_bytes()).hexdigest() == graphic["sha256"]
+        # Exact raw source bytes permit independent entrance regression in CI
+        # without the private original PDF or a guessed replacement geometry.
+        record = revision["source_glyph_record"]
+        raw = base64.b64decode(record["raw_glyf"], validate=True)
+        assert hashlib.sha256(raw).hexdigest() == source_key[2] == record["glyph_sha256"]
+        assert classify_ttf_glyf_record(raw)["eligibility"] == decoder.GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1
+        inspector = decoder.TrueTypeGlyphInspector.__new__(decoder.TrueTypeGlyphInspector)
+        inspector.data, inspector.num_glyphs, inspector.glyf_off, inspector.loca = raw, 1, 0, [0, len(raw)]
+        contours = inspector.simple_contours(0)
+        signature = contour_group_signature(contours)
+        assert signature == record["exact_outline_signature"]
+        for result in (fingerprints.get(source_key[2], {}).get("bopomofo", ""),
+                       outlines.get(signature, {}).get("bopomofo", ""),
+                       symbols.decode(contours).get("reading", "")):
+            assert result in ("", reading)
+        assert all(rec["bopomofo"] != withdrawn for k, rec in current.items() if k[2] == source_key[2])
+        legacy_rows.append({"font": source_key[0], "zhuyin_component_id": source_key[1], "bopomofo": withdrawn})
+    # A label copied into a legacy proposal/transform never re-acquires roots.
+    proposals = decoder.load_map(csv_file(tmp_path / "legacy.csv", list(legacy_rows[0]), legacy_rows))
+    for revision in evidence["revisions"]:
+        font, gid, sha = revision["root_key"]
+        rec = proposals[(font, gid)]
+        assert rec["candidate_only"] and not rec.get("evidence_roots")
+        assert not decoder.training_reading([{"initial_bopomofo": rec["bopomofo"], **rec}])
+        transform = {(font + "-target", gid): {"source_font": font, "source_gid": gid,
+                     "target_hashes": (sha,), "bopomofo": revision["withdrawn_reading"]}}
+        assert decoder.lookup_verified_transform(font + "-target", gid, transform, proposals, sha) is None
+    # Withdrawn or missing exact source assertions remove only their explicit
+    # dependants; unaffected independent claims retain their own qualification.
+    for missing in (False, True):
+        changed = [({**r, "verification": "REVOKED_CORRECTIVE2_EXACT_CLAIM"} if key(r) in root_keys else r)
+                   for r in rows if not missing or key(r) not in root_keys]
+        after = decoder.load_verified_mapping_corrections(csv_file(tmp_path / f"withdrawn-{missing}.csv", list(rows[0]), changed))
+        assert not targets.intersection(after)
+        assert set(after) == set(current) - targets
+        assert all(rec["bopomofo"] == current[k]["bopomofo"] for k, rec in after.items())
+    stale_values = {tuple(k): r["withdrawn_reading"] for r in evidence["revisions"]
+                    for k in r["current_target_keys"] if tuple(k) != tuple(r["root_key"])}
+    stale = [{**r, "new_reading": stale_values[key(r)]} if key(r) in stale_values else r for r in rows]
+    after = decoder.load_verified_mapping_corrections(csv_file(tmp_path / "stale-alias.csv", list(rows[0]), stale))
+    assert set(after) == set(current) - set(stale_values)
+    assert root_keys.issubset(after)
+    # Reconstruct the exact prior direct/alias asset bytes from the preserved
+    # claims. The low-level parser can inspect this historical file, but the
+    # current official manifest must not admit it as a current runtime asset.
+    prior_rows = {key(p["row"]): p["row"] for r in evidence["revisions"] for p in r["prior_rows"]}
+    prior = [prior_rows.get(key(r), r) for r in rows]
+    buffer = io.StringIO(newline="")
+    current_raw = decoder.DEFAULT_MAPPING_CORRECTIONS.read_bytes()
+    writer = csv.DictWriter(buffer, fieldnames=list(rows[0]),
+                            lineterminator="\r\n" if b"\r\n" in current_raw else "\n")
+    writer.writeheader()
+    writer.writerows(prior)
+    prior_raw = (b"\xef\xbb\xbf" if current_raw.startswith(b"\xef\xbb\xbf") else b"") + buffer.getvalue().encode("utf-8")
+    old_asset_sha = evidence["prior_asset_hashes"]["ttf_verified_mapping_corrections.csv"]
+    assert hashlib.sha256(prior_raw).hexdigest() == old_asset_sha
+    runtime = tmp_path / "runtime"
+    runtime.mkdir()
+    manifest_path = root / "runtime_asset_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    shutil.copyfile(manifest_path, runtime / manifest_path.name)
+    for asset in manifest["assets"]:
+        destination = runtime / asset["path"]
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(root / asset["path"], destination)
+    assert source.validate_asset_manifest(runtime)["ok"]
+    (runtime / decoder.DEFAULT_MAPPING_CORRECTIONS.name).write_bytes(prior_raw)
+    report = source.validate_asset_manifest(runtime)
+    assert not source.source_chain_ok(report, "actual")
+    assert source.source_chain_ok(report, "expected")
+    assert any(a["name"] == "ttf_verified_mapping_corrections" and not a["ok"] for a in report["assets"])
+    # A prior epoch2 receipt cannot be rebound to corrected static evidence.
+    # Refusal preserves the entire workbook, including unrelated/manual data.
+    from tests.test_semantics_epoch_contract import actual_components, compatible
+    old_components = actual_components(actual_asset_hashes={"ttf_verified_mapping_corrections": old_asset_sha})
+    new_components = actual_components(actual_asset_hashes={"ttf_verified_mapping_corrections": hashlib.sha256(decoder.DEFAULT_MAPPING_CORRECTIONS.read_bytes()).hexdigest()})
+    assert not compatible(old_components, new_components, chain="actual")
+    workbook = tmp_path / "stale-direct-receipt.xlsx"
+    wb = Workbook()
+    meta = wb.active
+    meta.title = "v5.2中繼資料"
+    meta.append(["actual_decoder_semantics_epoch", "2"])
+    meta.append(["actual_asset_fingerprint_components", json.dumps(old_components)])
+    wb.create_sheet("historical_manual_expected").append(["unchanged evidence"])
+    wb.save(workbook)
+    before = workbook.read_bytes()
+    with pytest.raises(ValueError, match="actual contract changed"):
+        source.rewrite_actual_workbook_fingerprint(workbook, {"fingerprint": "current", "components": new_components})
+    assert workbook.read_bytes() == before
+    # Official single-file CLI refuses custom static corrections before PDF
+    # acquisition, model training or any Global repository access can occur.
+    pdf = tmp_path / "source.pdf"
+    pdf.write_bytes(b"path admission fixture, never opened")
+    custom = runtime / decoder.DEFAULT_MAPPING_CORRECTIONS.name
+    with patch("sys.argv", ["decoder", str(pdf), "--mapping-corrections", str(custom)]), \
+            patch.object(decoder, "notify"), \
+            patch.object(decoder, "decode", side_effect=AssertionError("custom old asset reached decoder")), \
+            patch.object(decoder.GlobalExactGlyphRepository, "resolved", side_effect=AssertionError("custom old asset reached Global repository")):
+        assert decoder.main() == 1
+    _check_current_correction_acquisition_boundary(tmp_path, evidence, current, prior_raw, runtime)
+
+
+def _check_current_correction_acquisition_boundary(tmp_path, evidence, current, prior_raw, runtime):
+    copy_path = tmp_path / "renamed-current-copy.csv"
+    copy_path.write_bytes(decoder.DEFAULT_MAPPING_CORRECTIONS.read_bytes())
+    current_sha = hashlib.sha256(copy_path.read_bytes()).hexdigest()
+    official = decoder.load_verified_mapping_corrections(decoder.DEFAULT_MAPPING_CORRECTIONS,
+                                                         expected_asset_sha256=current_sha)
+    copied = decoder.load_verified_mapping_corrections(copy_path, expected_asset_sha256=current_sha)
+    assert all(copied[k]["evidence_roots"] == official[k]["evidence_roots"] for k in official)
+    old = tmp_path / "renamed-stale-copy.csv"
+    old.write_bytes(prior_raw)
+    historical = decoder.load_verified_mapping_corrections(old)  # Inspection is allowed.
+    for revision in evidence["revisions"]:
+        assert historical[tuple(revision["root_key"])]["bopomofo"] == revision["withdrawn_reading"]
+    with pytest.raises(ValueError, match="current correction asset binding mismatch"):
+        decoder.load_verified_mapping_corrections(old, expected_asset_sha256=current_sha)
+    # A valid old manifest next to a selected old copy is not the current
+    # deployed module's source authority. No PDF/model/output is touched.
+    manifest_path = runtime / "runtime_asset_manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    for asset in manifest["assets"]:
+        if asset["name"] == "ttf_verified_mapping_corrections":
+            asset["sha256"] = hashlib.sha256(prior_raw).hexdigest()
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    assert source.validate_asset_manifest(runtime)["ok"]
+    for index, payload in enumerate((None, {}, {"components": {"actual_decoder_semantics_epoch": "2",
+                               "actual_asset_hashes": {"ttf_verified_mapping_corrections": current_sha}},
+                               "fingerprint": "claimed-current"})):
+        output = tmp_path / f"stale-{index}.xlsx"
+        with patch.object(decoder.fitz, "open", side_effect=AssertionError("stale source reached PDF")), \
+                patch.object(decoder, "cross_validate_font", side_effect=AssertionError("stale source reached OOF")), \
+                patch.object(decoder, "train_model", side_effect=AssertionError("stale source reached training")):
+            with pytest.raises(ValueError, match="current correction asset binding mismatch"):
+                decoder.decode(tmp_path / "source.pdf", output, decoder.DEFAULT_MAP, decoder.DEFAULT_GROUPS,
+                               mapping_corrections_path=(old if index != 1 else runtime / decoder.DEFAULT_MAPPING_CORRECTIONS.name),
+                               actual_asset_fingerprint=payload, dynamic_evidence_root=tmp_path / f"not-created-{index}",
+                               global_snapshot=_absent_snapshot())
+        assert not output.exists()
+        assert not (tmp_path / f"not-created-{index}").exists()
+    # Simulate replacing the selected default path after validation, without
+    # ever modifying an installed source file. The loader checks its own read.
+    read_bytes = Path.read_bytes
+    def replaced_after_validation(path):
+        return prior_raw if path.resolve() == decoder.DEFAULT_MAPPING_CORRECTIONS.resolve() else read_bytes(path)
+    with patch.object(Path, "read_bytes", replaced_after_validation), \
+            patch.object(decoder.fitz, "open", side_effect=AssertionError("changed source reached PDF")):
+        with pytest.raises(ValueError, match="current correction asset binding mismatch"):
+            decoder.decode(tmp_path / "source.pdf", tmp_path / "replaced.xlsx", decoder.DEFAULT_MAP,
+                           decoder.DEFAULT_GROUPS, global_snapshot=_absent_snapshot())
+    # Missing optional fingerprint remains supported. A bytematch copy and the
+    # deployed file each feed only the corrected real glyph label into OOF.
+    revision = evidence["revisions"][0]
+    font, gid, sha = revision["root_key"]
+    raw = base64.b64decode(revision["source_glyph_record"]["raw_glyf"])
+    source_inspector = decoder.TrueTypeGlyphInspector.__new__(decoder.TrueTypeGlyphInspector)
+    source_inspector.data, source_inspector.num_glyphs, source_inspector.glyf_off, source_inspector.loca = raw, 1, 0, [0, len(raw)]
+    contours = source_inspector.simple_contours(0)
+    class Inspector(_DecodeTrueTypeInspector):
+        def components(self, glyph_id):
+            return [{"gid": 1, "x": 0, "y": 0, "flags": 0}, {"gid": gid, "x": 1024, "y": 0, "flags": 0}]
+        def glyph_sha256(self, glyph_id):
+            return sha
+        def global_exact_identity(self, glyph_id):
+            return {"eligibility": decoder.GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1, "glyph_sha256": sha}
+        def simple_contours(self, glyph_id):
+            return contours
+    validate = decoder.cross_validate_font
+    for index, path in enumerate((decoder.DEFAULT_MAPPING_CORRECTIONS, copy_path)):
+        isolated = tmp_path / f"accepted-{index}"
+        isolated.mkdir()
+        document = _DecodeDocument()
+        document.page.get_fonts = lambda full=True: [(10, "ttf", "TrueType", font, "F1", "Identity-H", 0)]
+        document.page.get_texttrace = lambda: [{"font": font, "size": 12, "opacity": 1, "seqno": 1,
+                                             "chars": ((ord("字"), 5, (10, 10), (10, 10, 20, 20)),)}]
+        training = []
+        def observe(current_font, events):
+            training.extend(events)
+            return validate(current_font, events)
+        _, (actual, _) = run_ttf_fixture(isolated, document=document, inspector=Inspector,
+                                         corrections_path=path, observe_training=observe)
+        assert actual["實際注音"] == revision["current_reading"]
+        assert actual["解碼依據"] == "SHA綁定字形真值修正"
+        assert len(training) == 1 and training[0].reading == revision["current_reading"]
+        assert current[tuple(revision["root_key"])]["donation_eligible"] is False
+    # The acquisition guard reads only manifest metadata and the correction
+    # body. Real corrupted expected XLSX bytes must not block independent actual.
+    root = Path(decoder.DEFAULT_MAPPING_CORRECTIONS).parent
+    current_manifest = json.loads((root / "runtime_asset_manifest.json").read_text(encoding="utf-8"))
+    manifest_path.write_text(json.dumps(current_manifest), encoding="utf-8")
+    (runtime / decoder.DEFAULT_MAPPING_CORRECTIONS.name).write_bytes(copy_path.read_bytes())
+    expected_paths = {(runtime / a["path"]).resolve() for a in current_manifest["assets"] if a["chain"] == "expected"}
+    expected_xlsx = next(runtime / a["path"] for a in current_manifest["assets"] if a["chain"] == "expected" and a["kind"] == "xlsx")
+    expected_xlsx.write_bytes(b"corrupted XLSX body: not a ZIP")
+    open_path = Path.open
+    def forbid_expected_body(path, *args, **kwargs):
+        assert path.resolve() not in expected_paths, "actual correction guard read expected asset body"
+        return open_path(path, *args, **kwargs)
+    isolated = tmp_path / "actual-independent-of-expected"
+    isolated.mkdir()
+    with patch.object(decoder, "__file__", str(runtime / "export_zhuyin_readings.py")), \
+            patch.object(Path, "open", forbid_expected_body):
+        _, (actual, _) = run_ttf_fixture(isolated, document=document, inspector=Inspector,
+                                         corrections_path=copy_path, observe_training=observe)
+    assert actual["實際注音"] == revision["current_reading"]
+    # Structural metadata and the one selected asset remain strict. These
+    # are acquisition failures, never fallbacks to an old/self-issued digest.
+    variants = []
+    for change in ({"schema_version": "999.0"},):
+        variants.append({**current_manifest, **change})
+    for field, value in (("chain", "expected"), ("path", "../outside.csv"),
+                         ("kind", "json"), ("sha256", "0" * 64)):
+        variant = json.loads(json.dumps(current_manifest))
+        next(a for a in variant["assets"] if a["name"] == "ttf_verified_mapping_corrections")[field] = value
+        variants.append(variant)
+    duplicate = json.loads(json.dumps(current_manifest))
+    duplicate["assets"].append(duplicate["assets"][0])
+    variants.extend((duplicate, [], {**current_manifest, "assets": [None]}))
+    for variant in variants:
+        manifest_path.write_text(json.dumps(variant), encoding="utf-8")
+        with pytest.raises(ValueError, match="current correction asset manifest"):
+            decoder._current_mapping_correction_asset_sha(runtime)
+    manifest_path.write_text('{"schema_version":"1.0","schema_version":"1.0"}', encoding="utf-8")
+    with pytest.raises(ValueError):
+        decoder._current_mapping_correction_asset_sha(runtime)
+    manifest_path.write_text(json.dumps(current_manifest), encoding="utf-8")
+    (runtime / decoder.DEFAULT_MAPPING_CORRECTIONS.name).write_bytes(prior_raw)
+    with pytest.raises(ValueError, match="current correction asset manifest binding"):
+        decoder._current_mapping_correction_asset_sha(runtime)
+
+
 def check_same_name_gid_other_variant_and_local_override_cannot_train():
     admitted = {"initial_bopomofo": "ㄅ", "training_eligible": True, "evidence_roots": ("direct:sha-A",)}
     assert decoder.training_reading([admitted]) == "ㄅ"
@@ -204,7 +485,8 @@ def check_unbound_automatic_outline_and_templates_are_excluded_before_model_load
 
 
 def run_ttf_fixture(tmp_path, *, snapshot=None, static=None, symbol_model=None, document=None,
-                    inspector=_DecodeTrueTypeInspector, observe_training=None, allow_training=False, fingerprint=None):
+                    inspector=_DecodeTrueTypeInspector, observe_training=None, allow_training=False, fingerprint=None,
+                    corrections_path=None):
     pdf = tmp_path / "sample.pdf"
     pdf.write_bytes(b"isolated acquisition fixture")
     out = tmp_path / "actual.xlsx"
@@ -226,7 +508,8 @@ def run_ttf_fixture(tmp_path, *, snapshot=None, static=None, symbol_model=None, 
         if symbol_model:
             stack.enter_context(patch.object(decoder.ExactSymbolRecombinationModel, "load_csv", return_value=symbol_model))
         decoder.decode(pdf, out, mapping, tmp_path / "groups.csv", dynamic_evidence_root=tmp_path / "dynamic",
-                       global_snapshot=snapshot or _absent_snapshot(), actual_asset_fingerprint=fingerprint)
+                       global_snapshot=snapshot or _absent_snapshot(), actual_asset_fingerprint=fingerprint,
+                       mapping_corrections_path=corrections_path)
     return out, _read_actual_and_audit(out)
 
 
@@ -410,11 +693,24 @@ def check_independent_symbol_fallback_can_succeed_without_clearing_global_quaran
     ])
     model = ExactSymbolRecombinationModel.load_csv(path)
     with patch.object(_DecodeTrueTypeInspector, "simple_contours", return_value=contours):
-        _, (actual, audit) = run_ttf_fixture(tmp_path, snapshot=snapshot, symbol_model=model)
+        output, (actual, audit) = run_ttf_fixture(tmp_path, snapshot=snapshot, symbol_model=model)
     assert actual["實際注音"] == "ㄈ"
     assert actual["解碼依據"] == "TTF exact注音符號重組"
     assert audit[0]["處置"] == decoder.GLOBAL_EXACT_RUNTIME_CONFLICT_LABEL
     assert snapshot.quarantined_identities
+    # The produced audit must describe the actual direct-role admission gate,
+    # retaining support counts as metadata rather than a truth certificate.
+    with closing(load_workbook(output, read_only=True)) as wb:
+        symbol_rows = list(wb["TTF符號重組稽核"].values)
+        record = dict(zip(symbol_rows[0], symbol_rows[1]))
+        assert record["最小來源鍵支持"] == 1
+        assert "來源支持數僅供稽核" in record["安全說明"]
+        assert "direct_isolated_visual_" in record["安全說明"]
+        key_rows = list(wb["注音鍵彙整"].values)
+        assert "direct visual truth role only" in key_rows[1][11]
+        summary = dict(wb["摘要"].values)
+        assert "來源支持數僅供稽核" in summary["v4.2符號重組原則"]
+        assert "support>=2" not in summary["v4.2符號重組原則"]
 
 
 def check_old_actual_cannot_be_resealed_and_fresh_epoch_two_can(tmp_path):
@@ -494,6 +790,7 @@ def run_admission_checks(tmp_path):
         check_project_readers_consume_one_validated_snapshot,
         check_calibrated_graphics_keep_original_claims_and_scoped_roles,
         check_scoped_aliases_inherit_only_current_direct_truth_and_require_target_binding,
+        check_revised_graphic_claims_do_not_revive_withdrawn_truth,
         check_same_glyph_copies_do_not_inflate_shape_training,
         check_mixed_variants_fill_only_independently_decoded_pending_rows,
         check_derived_oof_disagreement_does_not_revoke_qualified_direct_truth,

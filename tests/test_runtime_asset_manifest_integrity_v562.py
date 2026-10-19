@@ -156,7 +156,13 @@ class RuntimeAssetManifestIntegrityV562Tests(unittest.TestCase):
             for asset in self.manifest["assets"]
             if str(asset.get("kind") or "").lower() == "csv"
         }
-        self.assertEqual(pinned, manifest_csvs)
+        # The corrective2 decision files bind each other's original raw SHA;
+        # their one finite directory must also survive checkout unchanged.
+        # Keep exact equality for the CSV roster plus this explicit evidence
+        # pattern; arbitrary additional binary/text exclusions still fail.
+        frozen_graphic_evidence = "docs/evidence/map-glyph-review-20261019/corrective2/**"
+        self.assertTrue((ROOT / frozen_graphic_evidence.removesuffix("/**") / "claim-revisions.json").is_file())
+        self.assertEqual(pinned, manifest_csvs | {frozen_graphic_evidence})
 
     def test_manifest_chain_roster_is_unchanged(self):
         observed = {

@@ -72,8 +72,12 @@ from cff_unseen_family_bootstrap import (
 from ttf_zhuyin_shape_decoder import ShapeEvent, cross_validate_font, train_model, contour_group_signature
 from ttf_symbol_recombination import ExactSymbolRecombinationModel, evidence_text as symbol_evidence_text
 from occurrence_ledger import LEDGER_SCHEMA_VERSION, WORKBOOK_SCHEMA_VERSION, prepare_occurrence_rows
-from cross_version_compat import ACTUAL_DECODER_SEMANTICS_EPOCH
-from runtime_source_validation import compute_actual_asset_fingerprint, rewrite_actual_workbook_fingerprint, source_chain_ok, validate_asset_manifest
+from cross_version_compat import ACTUAL_DECODER_SEMANTICS_EPOCH, schema_compatible
+from runtime_source_validation import (
+    ASSET_MANIFEST_SCHEMA_VERSION, REQUIRED_ASSET_CHAINS, _json_without_duplicate_keys,
+    compute_actual_asset_fingerprint, rewrite_actual_workbook_fingerprint,
+    source_chain_ok, validate_asset_manifest, validate_csv_schema, sha256_file,
+)
 from exact_glyph_identity import CFF_GLYPH_SHA256, GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1, TTF_GLYF_SHA256
 from global_exact_glyph_library import (
     ABSENT,
@@ -560,20 +564,61 @@ def load_verified_outline_signatures(path: Path):
 
 
 
-def load_verified_mapping_corrections(path: Path):
-    """Load finite direct glyph claims and one-level explicit target bindings.
+def _current_mapping_correction_asset_sha(root: Path) -> str:
+    """Validate deployment metadata and this one actual asset, never expected bodies."""
+    manifest = _json_without_duplicate_keys((root / "runtime_asset_manifest.json").read_text(encoding="utf-8"))
+    if (not isinstance(manifest, dict)
+            or not schema_compatible(manifest.get("schema_version"), ASSET_MANIFEST_SCHEMA_VERSION)):
+        raise ValueError("current correction asset manifest binding invalid")
+    assets = manifest.get("assets")
+    if (not isinstance(assets, list) or not assets
+            or not all(isinstance(item, dict) and all(isinstance(item.get(field), str) and item[field]
+                       for field in ("name", "path", "chain")) for item in assets)):
+        raise ValueError("current correction asset manifest roster invalid")
+    names = [str(item.get("name") or "") for item in assets]
+    paths = [str(item.get("path") or "") for item in assets]
+    chains = {item.get("name"): item.get("chain") for item in assets}
+    if (not all(names) or not all(paths) or len(set(names)) != len(names)
+            or len(set(paths)) != len(paths) or chains != REQUIRED_ASSET_CHAINS
+            or any(not (root / path).resolve().is_relative_to(root.resolve()) for path in paths)):
+        raise ValueError("current correction asset manifest roster invalid")
+    spec = next(item for item in assets if item["name"] == "ttf_verified_mapping_corrections")
+    expected = str(spec.get("sha256") or "").lower()
+    path = root / DEFAULT_MAPPING_CORRECTIONS.name
+    if (spec["path"] != DEFAULT_MAPPING_CORRECTIONS.name
+            or str(spec.get("kind") or "").lower() != "csv"
+            or not re.fullmatch(r"[0-9a-f]{64}", expected)
+            or not path.is_file() or sha256_file(path) != expected
+            or not validate_csv_schema(path, spec).get("ok")):
+        raise ValueError("current correction asset manifest binding invalid")
+    return expected
+
+
+def load_verified_mapping_corrections(path: Path, *, expected_asset_sha256: str | None = None):
+    """Parse finite claims, optionally bound to validated current asset bytes.
 
     Shared font/GID labels are never truth. A derived binding must reference
     a current, non-conflicting direct correction with identical SHA/reading;
     neither copies nor their receipts create a new independent truth root.
+    Without ``expected_asset_sha256`` this is historical inspection only, not
+    authority to feed the returned assertions into actual or model training.
+    The decoder supplies the deployed manifest's validated correction digest.
     """
     out = {}
     conflicts = set()
     aliases = []
     if not path.exists():
+        if expected_asset_sha256 is not None:
+            raise ValueError("current correction asset binding unavailable")
         return out
     raw = path.read_bytes()
     asset_sha = hashlib.sha256(raw).hexdigest()
+    if expected_asset_sha256 is not None:
+        if not re.fullmatch(r"[0-9a-f]{64}", str(expected_asset_sha256)) or asset_sha != expected_asset_sha256:
+            raise ValueError("current correction asset binding mismatch; historical/custom claims are inspection only")
+    # An exact byte copy retains the same deployed assertion identity rather
+    # than acquiring a fresh truth root from the copy's name or directory.
+    claim_path = DEFAULT_MAPPING_CORRECTIONS if expected_asset_sha256 is not None else path
     rows = list(csv.DictReader(io.StringIO(raw.decode("utf-8-sig"), newline="")))
     for row in rows:
         font = (row.get("font") or "").strip()
@@ -597,7 +642,7 @@ def load_verified_mapping_corrections(path: Path):
             "evidence": evidence,
             "source_book": (row.get("source_book") or "").strip(),
             "source_font": f"SHA-CORRECTION:{font}#{gid}",
-            "evidence_roots": (_row_claim_ref(path, row, asset_sha256=asset_sha),),
+            "evidence_roots": (_row_claim_ref(claim_path, row, asset_sha256=asset_sha),),
             "donation_eligible": False,
             "is_alias": False,
         }
@@ -841,6 +886,17 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
       side of each whole Han glyph.  No Han-character semantics are used to fill
       an unknown CFF symbol.
     """
+    # This API is also called directly: the outer CLI's path/manifest check
+    # cannot be the only gate before historical correction labels reach a
+    # training event. Bind this lane to the current deployed asset, independent
+    # of an optional or caller-supplied fingerprint. Other evidence lanes do
+    # not inherit a Global or expected-asset eligibility requirement.
+    root = Path(__file__).resolve().parent
+    correction_sha = _current_mapping_correction_asset_sha(root)
+    mapping_corrections_path = Path(mapping_corrections_path) if mapping_corrections_path else DEFAULT_MAPPING_CORRECTIONS
+    verified_mapping_corrections = load_verified_mapping_corrections(
+        mapping_corrections_path, expected_asset_sha256=correction_sha,
+    )
     exact_map = load_map(map_path)
     groups = load_compatibility_groups(groups_path)
     group_map, group_conflicts = build_group_map(exact_map, groups)
@@ -857,7 +913,6 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
     # User-confirmed exact glyph truths are a separate dynamic evidence chain.
     # They are accepted only after promotion to VERIFIED_EXACT_GLYPH and are
     # merged exact-only; conflicts with built-in verified truths fail closed.
-    root = Path(__file__).resolve().parent
     # v5.5.0: user-maintained actual evidence belongs to the proofreading
     # project, not to the program installation directory.  Keeping this lane
     # project-scoped prevents upgrades/hotfix folder changes from silently
@@ -898,8 +953,6 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
     }
     outline_signatures_path = Path(outline_signatures_path) if outline_signatures_path else DEFAULT_OUTLINE_SIGNATURES
     verified_outline_signatures = load_verified_outline_signatures(outline_signatures_path)
-    mapping_corrections_path = Path(mapping_corrections_path) if mapping_corrections_path else DEFAULT_MAPPING_CORRECTIONS
-    verified_mapping_corrections = load_verified_mapping_corrections(mapping_corrections_path)
     symbol_templates_path = Path(symbol_templates_path) if symbol_templates_path else DEFAULT_SYMBOL_TEMPLATES
     symbol_model = ExactSymbolRecombinationModel.load_csv(symbol_templates_path)
     actual_overrides_path = (
@@ -2289,7 +2342,7 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
             source_text = f"STATIC-SYMBOL-TEMPLATES:{symbol_templates_path.name}"
             rec = {
                 "bopomofo": prediction,
-                "verification": "exact Bopomofo symbol recombination; template admitted by support>=2 verified keys or explicit direct isolated-symbol visual verification; all target xref variants agree",
+                "verification": "exact Bopomofo symbol recombination; direct visual truth role only; support counts are audit metadata; all target xref variants agree",
                 "notes": evidence[:2500],
                 "evidence_roots": tuple(sorted({e["evidence_ref"] for d in decoded_variants for e in d.get("evidence", []) if e.get("evidence_ref")})),
             }
@@ -2325,7 +2378,7 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
             font, zh_id, len(items), chars, pages, current_text, prediction, action,
             "Y" if prediction else ("N" if seen_xrefs else ""),
             min_support_keys, min_support_fonts, evidence[:4000],
-            "執行期只接受預先驗證 static exact symbol/tone/neutral signatures；每個模板須有至少2個驗證來源鍵，或為明確標記的 isolated-symbol 人工視覺驗證；所有xref變體須一致；禁止中文字/句境/字典反填；不啟用fuzzy/nearest-neighbour。",
+            "執行期只接受 static exact symbol/tone/neutral signatures，且模板須具明確 direct_isolated_visual_ 或 direct_whole_glyph_visual_truth_ 角色；來源支持數僅供稽核，不能單獨取得真值資格；所有xref變體須一致；禁止中文字/句境/字典反填；不啟用fuzzy/nearest-neighbour。",
         ])
 
     # ------------------------------------------------------------------
@@ -2587,7 +2640,7 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
         ("CFF v3.4補強原則", "跨冊幾何距離只作離線候選排序；新增符號須再直接檢視字形確認；執行期仍只以已驗證 exact CFF signature 解碼，不啟用模糊最近鄰。"),
         ("v4.0結構偵測原則", "TTF 以 shifted component 結構偵測注音；已直接視覺證明為漢字部件、且原頁沒有可見注音的來源限定假陽性可列入排除清單，排除需保留 glyph/座標稽核證據。"),
         ("TTF exact輪廓簽名原則", "只接受 translation-invariant exact normalized outline signature；來源 signature 若曾對應多個讀音即排除；禁止 fuzzy/nearest-neighbour。"),
-        ("v4.2符號重組原則", "將注音元件依垂直幾何拆成獨立注音符號群與聲調；執行期只接受 exact signature。模板來源分為：support>=2 的無衝突自驗模板，或直接將 isolated 注音子符號單獨渲染後人工確認的 exact 模板；nested composite 也只依 exact child signature 與相對幾何重組。禁止 fuzzy/nearest-neighbour、中文字、詞境或字典反填。"),
+        ("v4.2符號重組原則", "將注音元件依垂直幾何拆成獨立注音符號群與聲調；執行期只接受 exact signature，且模板須具明確 direct_isolated_visual_ 或 direct_whole_glyph_visual_truth_ 角色；來源支持數僅供稽核，舊自驗／LOO／holdout 不構成獨立真值。nested composite 也只依 exact child signature 與相對幾何重組。禁止 fuzzy/nearest-neighbour、中文字、詞境或字典反填。"),
         ("v4.2符號重組驗證", "v3.8 基礎模板先通過靜態已知鍵與跨冊 holdout 自驗；v3.9 再加入 isolated 直接字形模板，且每次新增後以單音一致、完整詞境差異、跨冊回歸作負向稽核。研究過程曾發現並撤回多個誤標模板；最終另修正 DFYuan signature 4a098a...：ㄎ→ㄅ，修正由 isolated 字形與標準注音字形對照決定。"),
         ("安全原則", "實際注音只由 PDF 可見字形證據決定；自動解碼維持 exact/fail-closed。使用者人工確認的辨識錯誤只能以來源+頁碼+字元+穩定鍵+座標限定的 occurrence override 修正，保留自動原值且禁止回灌全域字型鍵；禁止用中文字、詞義或字典預期讀音反填。"),
         ("診斷核心", f"TTF 沿用 {DIAG_PROGRAM} v{DIAG_VERSION}；CFF 使用整字輪廓解析。"),

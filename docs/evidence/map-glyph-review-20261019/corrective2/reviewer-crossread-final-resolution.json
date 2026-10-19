@@ -1,0 +1,352 @@
+{
+  "reader": "review_graphic_calibration",
+  "method": "Append-only after individual enlargement of remaining apparent differences; preserve first crossread records.",
+  "corrections_to_own_crossread": [
+    {
+      "index": 811,
+      "prior": "ㄉㄨㄥˋ",
+      "reading": "ㄉㄨㄣˋ",
+      "why": "Bottom has ㄣ right-curved descending stem, not the simple corner ㄥ."
+    },
+    {
+      "index": 507,
+      "prior": "˙ㄌㄜ",
+      "reading": "˙ㄉㄜ",
+      "why": "Zoom shows ㄉ inner descending stroke."
+    },
+    {
+      "index": 813,
+      "prior": "˙ㄌㄜ",
+      "reading": "˙ㄉㄜ",
+      "why": "Zoom shows ㄉ inner descending stroke."
+    }
+  ],
+  "coordinator_differences_final": [
+    {
+      "index": 462,
+      "reading": "ㄉㄨㄟˋ"
+    },
+    {
+      "index": 464,
+      "reading": "ㄅㄠˇ"
+    },
+    {
+      "index": 465,
+      "reading": "ㄅㄠˋ"
+    },
+    {
+      "index": 466,
+      "reading": "ㄋㄨㄢˇ"
+    },
+    {
+      "index": 484,
+      "reading": "ㄉㄡˋ"
+    },
+    {
+      "index": 503,
+      "reading": "ㄔㄨㄥ"
+    },
+    {
+      "index": 508,
+      "reading": "ㄧㄢˋ"
+    },
+    {
+      "index": 518,
+      "reading": "ㄛ"
+    },
+    {
+      "index": 529,
+      "reading": "ㄉㄧㄠˋ"
+    },
+    {
+      "index": 543,
+      "reading": "ㄉㄥ"
+    },
+    {
+      "index": 560,
+      "reading": "ㄉㄧˋ"
+    },
+    {
+      "index": 579,
+      "reading": "ㄞˋ"
+    },
+    {
+      "index": 583,
+      "reading": "ㄏㄨㄢˊ"
+    },
+    {
+      "index": 594,
+      "reading": "ㄅㄧㄢˋ"
+    },
+    {
+      "index": 598,
+      "reading": "ㄉㄢ"
+    },
+    {
+      "index": 608,
+      "reading": "ㄒㄧㄢ"
+    },
+    {
+      "index": 656,
+      "reading": "ㄉㄧㄥˋ"
+    },
+    {
+      "index": 662,
+      "reading": "ㄉㄥ"
+    },
+    {
+      "index": 679,
+      "reading": "ㄉㄠˇ"
+    },
+    {
+      "index": 682,
+      "reading": "ㄉㄨㄛ"
+    },
+    {
+      "index": 706,
+      "reading": "ㄉㄨㄟ"
+    },
+    {
+      "index": 710,
+      "reading": "ㄉㄥˇ"
+    },
+    {
+      "index": 712,
+      "reading": "ㄉㄨㄥ"
+    },
+    {
+      "index": 724,
+      "reading": "ㄉㄨˋ"
+    },
+    {
+      "index": 726,
+      "reading": "ㄌㄧㄢˋ"
+    },
+    {
+      "index": 740,
+      "reading": "ㄉㄢˋ"
+    },
+    {
+      "index": 741,
+      "reading": "ㄉㄧㄥˋ"
+    },
+    {
+      "index": 765,
+      "reading": "ㄩㄝ"
+    },
+    {
+      "index": 774,
+      "reading": "ㄉㄤˇ"
+    },
+    {
+      "index": 775,
+      "reading": "ㄩㄢˇ"
+    },
+    {
+      "index": 780,
+      "reading": "ㄉㄨㄢ"
+    },
+    {
+      "index": 786,
+      "reading": "ㄉㄧㄠˋ"
+    },
+    {
+      "index": 790,
+      "reading": "˙ㄌㄜ"
+    },
+    {
+      "index": 794,
+      "reading": "ㄉㄧˇ"
+    },
+    {
+      "index": 800,
+      "reading": "ㄉㄚˇ"
+    },
+    {
+      "index": 811,
+      "reading": "ㄉㄨㄣˋ"
+    },
+    {
+      "index": 816,
+      "reading": "ㄉㄜˊ"
+    },
+    {
+      "index": 822,
+      "reading": "ㄉㄧㄢˋ"
+    },
+    {
+      "index": 830,
+      "reading": "ㄉㄧ"
+    },
+    {
+      "index": 840,
+      "reading": "ㄐㄧㄢˋ"
+    },
+    {
+      "index": 867,
+      "reading": "ㄉㄧㄢˇ"
+    },
+    {
+      "index": 887,
+      "reading": "ㄉㄚˋ"
+    },
+    {
+      "index": 893,
+      "reading": "ㄕㄡˊ"
+    },
+    {
+      "index": 896,
+      "reading": "ㄙㄞˋ"
+    }
+  ],
+  "o_e_risk_final": [
+    {
+      "index": 460,
+      "reading": "ㄘㄜˋ"
+    },
+    {
+      "index": 468,
+      "reading": "ㄍㄜˋ"
+    },
+    {
+      "index": 473,
+      "reading": "˙ㄍㄜ"
+    },
+    {
+      "index": 501,
+      "reading": "ㄓㄜˋ"
+    },
+    {
+      "index": 506,
+      "reading": "ㄏㄨㄛˇ"
+    },
+    {
+      "index": 507,
+      "reading": "˙ㄉㄜ"
+    },
+    {
+      "index": 518,
+      "reading": "ㄛ"
+    },
+    {
+      "index": 522,
+      "reading": "ㄎㄜˋ"
+    },
+    {
+      "index": 524,
+      "reading": "ㄉㄨㄛˇ"
+    },
+    {
+      "index": 538,
+      "reading": "ㄍㄜˊ"
+    },
+    {
+      "index": 564,
+      "reading": "ㄍㄨㄛ"
+    },
+    {
+      "index": 567,
+      "reading": "ㄎㄜˇ"
+    },
+    {
+      "index": 571,
+      "reading": "ㄘㄜˋ"
+    },
+    {
+      "index": 578,
+      "reading": "ㄛ"
+    },
+    {
+      "index": 604,
+      "reading": "ㄊㄨㄛ"
+    },
+    {
+      "index": 643,
+      "reading": "ㄎㄜˋ"
+    },
+    {
+      "index": 645,
+      "reading": "ㄙㄨㄛ"
+    },
+    {
+      "index": 682,
+      "reading": "ㄉㄨㄛ"
+    },
+    {
+      "index": 702,
+      "reading": "ㄕㄨㄛ"
+    },
+    {
+      "index": 717,
+      "reading": "ㄓㄨㄛˊ"
+    },
+    {
+      "index": 754,
+      "reading": "ㄓㄨㄛ"
+    },
+    {
+      "index": 758,
+      "reading": "ㄓㄨㄛ"
+    },
+    {
+      "index": 772,
+      "reading": "ㄓㄜˇ"
+    },
+    {
+      "index": 783,
+      "reading": "ㄎㄜˇ"
+    },
+    {
+      "index": 790,
+      "reading": "˙ㄌㄜ"
+    },
+    {
+      "index": 805,
+      "reading": "ㄅㄛ"
+    },
+    {
+      "index": 813,
+      "reading": "˙ㄉㄜ"
+    },
+    {
+      "index": 816,
+      "reading": "ㄉㄜˊ"
+    },
+    {
+      "index": 825,
+      "reading": "ㄘㄨㄛˋ"
+    },
+    {
+      "index": 837,
+      "reading": "ㄏㄨㄛˊ"
+    },
+    {
+      "index": 839,
+      "reading": "˙ㄓㄜ"
+    },
+    {
+      "index": 847,
+      "reading": "ㄏㄜˊ"
+    },
+    {
+      "index": 848,
+      "reading": "ㄎㄜ"
+    },
+    {
+      "index": 856,
+      "reading": "ㄌㄨㄛˋ"
+    },
+    {
+      "index": 874,
+      "reading": "˙ㄍㄜ"
+    },
+    {
+      "index": 875,
+      "reading": "ㄇㄛ"
+    },
+    {
+      "index": 885,
+      "reading": "ㄍㄨㄛˇ"
+    }
+  ]
+}

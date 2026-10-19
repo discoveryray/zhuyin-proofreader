@@ -1,0 +1,126 @@
+{
+  "reader": "review_graphic_calibration",
+  "method": "Append-only enlargement after blind freeze and comparison. Original initial readings remain unchanged. No Han/expected used. All 22 own-half differences plus requested 481/704 cross-read. Not a final dual-reader consensus.",
+  "records": [
+    {
+      "index": 31,
+      "resolved_reading": "ㄆㄥˊ",
+      "why": "Upper glyph includes the separate up-left cap and cross diagonal of ㄆ, not the plain crossed two strokes of ㄨ. Original PDF turquoise painting agrees."
+    },
+    {
+      "index": 35,
+      "resolved_reading": "ㄕㄨˋ",
+      "why": "Right mark descends to the right: fourth tone."
+    },
+    {
+      "index": 44,
+      "resolved_reading": "ㄉㄠˇ",
+      "why": "One left upstroke plus additional downward diagonal below horizontal identifies ㄉ; ㄌ would have two upper stems."
+    },
+    {
+      "index": 76,
+      "resolved_reading": "ㄍㄥˋ",
+      "why": "Descending fourth-tone mark is present at right."
+    },
+    {
+      "index": 95,
+      "resolved_reading": "ㄇㄧㄣˇ",
+      "why": "Separate horizontal ㄧ is present between ㄇ and ㄣ."
+    },
+    {
+      "index": 108,
+      "resolved_reading": "ㄩㄝ",
+      "why": "Both original painting and isolated SVG have only ㄩ and ㄝ, no fourth-tone mark."
+    },
+    {
+      "index": 124,
+      "resolved_reading": "ㄉㄤˋ",
+      "why": "Upper component has the inner descending stroke of ㄉ, not ㄌ."
+    },
+    {
+      "index": 147,
+      "resolved_reading": "ㄉㄧˋ",
+      "why": "Upper component has the inner descending stroke of ㄉ, not ㄌ."
+    },
+    {
+      "index": 172,
+      "resolved_reading": "ㄓㄨ",
+      "why": "No tone mark outside ㄓ and ㄨ."
+    },
+    {
+      "index": 189,
+      "resolved_reading": "ㄉㄧㄢˋ",
+      "why": "Upper component is ㄉ, followed by visible ㄧ and ㄢ and fourth tone."
+    },
+    {
+      "index": 216,
+      "resolved_reading": "ㄉㄞˋ",
+      "why": "Upper component is ㄉ, not ㄌ."
+    },
+    {
+      "index": 217,
+      "resolved_reading": "ㄕㄨㄟˇ",
+      "why": "Bottom is the single-bent descending ㄟ (U+311F), not the divided multi-stroke ㄞ (U+311E). Original PDF red annotation agrees."
+    },
+    {
+      "index": 262,
+      "resolved_reading": "ㄏㄢˊ",
+      "why": "Bottom bowl shape is ㄢ, not divided ㄞ."
+    },
+    {
+      "index": 274,
+      "resolved_reading": "ㄉㄢ",
+      "why": "Upper component is ㄉ, not ㄌ."
+    },
+    {
+      "index": 290,
+      "resolved_reading": "ㄎㄠˇ",
+      "why": "Upper stroke extends left/right across the bent ㄎ, unlike ㄋ."
+    },
+    {
+      "index": 317,
+      "resolved_reading": "ㄉㄞˋ",
+      "why": "Upper component is ㄉ, not ㄌ."
+    },
+    {
+      "index": 322,
+      "resolved_reading": "ㄉㄨˊ",
+      "why": "Upper component is ㄉ, not ㄌ."
+    },
+    {
+      "index": 325,
+      "resolved_reading": "ㄅㄢˋ",
+      "why": "Original PDF and SVG show ㄅ plus ㄢ plus fourth tone, no independent ㄧ horizontal."
+    },
+    {
+      "index": 380,
+      "resolved_reading": "ㄉㄡ",
+      "why": "Upper component is ㄉ, not ㄌ."
+    },
+    {
+      "index": 386,
+      "resolved_reading": "ㄅㄞˊ",
+      "why": "Bottom divided strokes are ㄞ, not the bowl ㄢ."
+    },
+    {
+      "index": 421,
+      "resolved_reading": "ㄉㄨㄢˋ",
+      "why": "Upper component is ㄉ, not ㄌ."
+    },
+    {
+      "index": 432,
+      "resolved_reading": "ㄑㄩㄢ",
+      "why": "No tone mark outside ㄑ, ㄩ, ㄢ."
+    },
+    {
+      "index": 481,
+      "resolved_reading": "ㄅㄧㄠˇ",
+      "why": "One upper left stroke identifies ㄅ; lower ㄧ/ㄠ/third tone visible. PAGE painting agrees."
+    },
+    {
+      "index": 704,
+      "resolved_reading": "ㄧㄥˇ",
+      "why": "Independent top horizontal ㄧ is above ㄥ and third-tone mark. PAGE painting agrees."
+    }
+  ]
+}

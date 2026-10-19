@@ -324,7 +324,7 @@
       "chain": "actual",
       "path": "zhuyin_component_map.csv",
       "kind": "csv",
-      "sha256": "db4a8da66bf67df6267161cf5066751b94b3e1040f7199e6a679f8a2f43b3f6b",
+      "sha256": "2e4d3a9bf454e2653f2b7caed42ca7c82aa5cd77a845cc919bda28adf83a9998",
       "required_columns": [
         "font",
         "zhuyin_component_id",
@@ -577,7 +577,7 @@
       "chain": "actual",
       "path": "ttf_verified_mapping_corrections.csv",
       "kind": "csv",
-      "sha256": "80313cdc6113cfd93189c53183add12607617cf454a4373bf6e8eede23dd9d73",
+      "sha256": "dd5827bce2d7d5f08723e8613d4a52419fde79ef434ce59fd840edfc6732691a",
       "required_columns": [
         "font",
         "component_id",

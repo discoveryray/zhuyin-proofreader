@@ -2267,9 +2267,9 @@
     {
       "visual_id": 1260,
       "map_graphic_id": 26,
-      "reading": "ㄨㄥˊ",
+      "reading": "ㄆㄥˊ",
       "evidence_class": "AI_DIRECT_PAGE_AND_ISOLATED_GLYPH_AUDIT",
-      "method": "Direct original-page and isolated simple annotation glyph; labels recorded before comparing legacy values. Exact raw glyph reused only after checking each explicit target font/GID/program; no Han, dictionary, expected, OCR or model prediction supplied the reading.",
+      "method": "Corrective2 original-page plus isolated-graphic reinspection replaces the prior AI visual label; initial and enlarged/cross-reader decisions are separately frozen. This is not human confirmation or Global approval, and not a heldout-derived truth.",
       "human_confirmation": false,
       "global_approval": false,
       "new_global_independent_source": false,
@@ -2300,7 +2300,6 @@
       "original_crop_sha256": "cec4ab35916981dc781f3d3548423a9fe1614965e54ff937f03b5e94a387130f",
       "isolated_svg": "docs/evidence/map-glyph-review-20261019/map-026-annotation.svg",
       "isolated_svg_sha256": "979a6278d73fcf9df132cec6a74b81a9ab24b341268d15302ce352bfd615c0d7",
-      "glyph_label_sha256": "68976dbe4bec387a63e290e2e8a6c8237548721ead68cfc2959c22c705d7a63c",
       "source_occurrence_id": "occ_4fcdc1c2f5244499be29140cedb854d01b69b1a31b2626542054499627fd73e6",
       "existing_scoped_correction": false,
       "scope": "Explicit font + component ID + exact raw complete simple glyf SHA-256; not cross-font donor",
@@ -2328,7 +2327,22 @@
         "ZhuYinNREG-Md",
         14243,
         "0791bc5a96f05182987eba39bdf084ac3eb4d34ac4d2ed4467386889ac255db5"
-      ]
+      ],
+      "legacy_glyph_label_sha256": "68976dbe4bec387a63e290e2e8a6c8237548721ead68cfc2959c22c705d7a63c",
+      "glyph_label_sha256": "75af7ec12d6e3f3fcbb0b18e6f94f2c38dfd6c25b96b6c0f5335239a341c492c",
+      "reading_revision": {
+        "ref": "docs/evidence/map-glyph-review-20261019/corrective2/claim-revisions.json",
+        "sha256": "9eb058f040cb9d984d6ff8b9536c62626a66ff542bff395ff5125ddb3b67c131",
+        "review_index": 31,
+        "source_root_key": [
+          "ZhuYinNREG-Md",
+          14243,
+          "0791bc5a96f05182987eba39bdf084ac3eb4d34ac4d2ed4467386889ac255db5"
+        ],
+        "withdrawn_reading": "ㄨㄥˊ",
+        "new_independent_source": false,
+        "dependent_alias": false
+      }
     },
     {
       "visual_id": 1270,
@@ -28799,9 +28813,9 @@
     {
       "visual_id": 5310,
       "map_graphic_id": 431,
-      "reading": "ㄜ",
+      "reading": "ㄛ",
       "evidence_class": "AI_DIRECT_PAGE_AND_ISOLATED_GLYPH_AUDIT",
-      "method": "Direct original-page and isolated simple annotation glyph; labels recorded before comparing legacy values. Exact raw glyph reused only after checking each explicit target font/GID/program; no Han, dictionary, expected, OCR or model prediction supplied the reading.",
+      "method": "Corrective2 original-page plus isolated-graphic reinspection replaces the prior AI visual label; initial and enlarged/cross-reader decisions are separately frozen. This is not human confirmation or Global approval, and not a heldout-derived truth.",
       "human_confirmation": false,
       "global_approval": false,
       "new_global_independent_source": false,
@@ -28832,7 +28846,6 @@
       "original_crop_sha256": "04695cb527b0705ae4e259f18c9b57841cd9e97f100f472eff75bf54fa5222d9",
       "isolated_svg": "docs/evidence/map-glyph-review-20261019/map-431-annotation.svg",
       "isolated_svg_sha256": "3ce9ed17d5e4c95a99c87df6b4003000310b87f15c69c9af62289a2dd5dd9e51",
-      "glyph_label_sha256": "68976dbe4bec387a63e290e2e8a6c8237548721ead68cfc2959c22c705d7a63c",
       "source_occurrence_id": "occ_f8170f50d78d973452d33aefc6931b00f415c1d3c9bc10d3a9da38056a8efe4d",
       "existing_scoped_correction": false,
       "scope": "Explicit font + component ID + exact raw complete simple glyf SHA-256; not cross-font donor",
@@ -28860,7 +28873,22 @@
         "DFPBiaoKai-W5-PoIn1-BFW",
         14128,
         "8b824cafc14a655e2ff073a6a9972ae3bffb810716406f0ac518c62a8559d11d"
-      ]
+      ],
+      "legacy_glyph_label_sha256": "68976dbe4bec387a63e290e2e8a6c8237548721ead68cfc2959c22c705d7a63c",
+      "glyph_label_sha256": "75af7ec12d6e3f3fcbb0b18e6f94f2c38dfd6c25b96b6c0f5335239a341c492c",
+      "reading_revision": {
+        "ref": "docs/evidence/map-glyph-review-20261019/corrective2/claim-revisions.json",
+        "sha256": "9eb058f040cb9d984d6ff8b9536c62626a66ff542bff395ff5125ddb3b67c131",
+        "review_index": 518,
+        "source_root_key": [
+          "DFPBiaoKai-W5-PoIn1-BFW",
+          14128,
+          "8b824cafc14a655e2ff073a6a9972ae3bffb810716406f0ac518c62a8559d11d"
+        ],
+        "withdrawn_reading": "ㄜ",
+        "new_independent_source": false,
+        "dependent_alias": false
+      }
     },
     {
       "visual_id": 5320,
@@ -41801,9 +41829,9 @@
     {
       "visual_id": 7220,
       "map_graphic_id": 622,
-      "reading": "ㄩㄝˋ",
+      "reading": "ㄩㄝ",
       "evidence_class": "AI_DIRECT_PAGE_AND_ISOLATED_GLYPH_AUDIT",
-      "method": "Direct original-page and isolated simple annotation glyph; labels recorded before comparing legacy values. Exact raw glyph reused only after checking each explicit target font/GID/program; no Han, dictionary, expected, OCR or model prediction supplied the reading.",
+      "method": "Corrective2 original-page plus isolated-graphic reinspection replaces the prior AI visual label; initial and enlarged/cross-reader decisions are separately frozen. This is not human confirmation or Global approval, and not a heldout-derived truth.",
       "human_confirmation": false,
       "global_approval": false,
       "new_global_independent_source": false,
@@ -41834,7 +41862,6 @@
       "original_crop_sha256": "86e878a81bbebe3104240dda4325ebc90e98ae6e6fa0c8aa28d7ba9a903eebed",
       "isolated_svg": "docs/evidence/map-glyph-review-20261019/map-622-annotation.svg",
       "isolated_svg_sha256": "b4afdaecee84ea6e555aa1206556264865132baa4948fd1f8da60fed31005738",
-      "glyph_label_sha256": "68976dbe4bec387a63e290e2e8a6c8237548721ead68cfc2959c22c705d7a63c",
       "source_occurrence_id": "occ_579c0a09a4bc18b45a9d714bd3b53a590b8ff06208f3216df76cc56006d14647",
       "existing_scoped_correction": false,
       "scope": "Explicit font + component ID + exact raw complete simple glyf SHA-256; not cross-font donor",
@@ -41862,7 +41889,22 @@
         "DFPBiaoKai-W5-ZhuIn-BFW",
         14241,
         "da0095289f1198745d5acfb9c29987823ba5a4c624e0e3696ee037e3ed585646"
-      ]
+      ],
+      "legacy_glyph_label_sha256": "68976dbe4bec387a63e290e2e8a6c8237548721ead68cfc2959c22c705d7a63c",
+      "glyph_label_sha256": "75af7ec12d6e3f3fcbb0b18e6f94f2c38dfd6c25b96b6c0f5335239a341c492c",
+      "reading_revision": {
+        "ref": "docs/evidence/map-glyph-review-20261019/corrective2/claim-revisions.json",
+        "sha256": "9eb058f040cb9d984d6ff8b9536c62626a66ff542bff395ff5125ddb3b67c131",
+        "review_index": 765,
+        "source_root_key": [
+          "DFPBiaoKai-W5-ZhuIn-BFW",
+          14241,
+          "da0095289f1198745d5acfb9c29987823ba5a4c624e0e3696ee037e3ed585646"
+        ],
+        "withdrawn_reading": "ㄩㄝˋ",
+        "new_independent_source": false,
+        "dependent_alias": false
+      }
     },
     {
       "visual_id": 7230,
@@ -50909,9 +50951,9 @@
     {
       "visual_id": 10160,
       "group_graphic_id": 16,
-      "reading": "ㄩㄝˋ",
+      "reading": "ㄩㄝ",
       "evidence_class": "AI_DIRECT_PAGE_AND_ISOLATED_GLYPH_AUDIT",
-      "method": "Direct original-page and isolated simple annotation glyph; labels recorded before comparing legacy values. Exact raw glyph reused only after checking each explicit target font/GID/program; no Han, dictionary, expected, OCR or model prediction supplied the reading.",
+      "method": "Corrective2 original-page plus isolated-graphic reinspection replaces the prior AI visual label; initial and enlarged/cross-reader decisions are separately frozen. This is not human confirmation or Global approval, and not a heldout-derived truth.",
       "human_confirmation": false,
       "global_approval": false,
       "new_global_independent_source": false,
@@ -50942,7 +50984,6 @@
       "original_crop_sha256": "7e8fbb112b1176f0a97cf5fc53a1d10a7cb90113667b7eea594d15fb1822319f",
       "isolated_svg": "docs/evidence/map-glyph-review-20261019/group-016-annotation.svg",
       "isolated_svg_sha256": "03ff8e8d22f8c30889716f6ed4a31a5edcffe7c9d0632fd733882021426a5c5c",
-      "glyph_label_sha256": "5c44a7e9eac02ecc0fbf933654b97b04796590d143667a5c5d7a20aaf15258f1",
       "source_occurrence_id": "occ_702fc2aec8895c77fd01c1829438ee5c20909cc6d0ba793ba7b8cfe2bebae3a4",
       "existing_scoped_correction": false,
       "scope": "Explicit font + component ID + exact raw complete simple glyf SHA-256; not cross-font donor",
@@ -50970,7 +51011,22 @@
         "YenRoundZuinnEG-Md",
         15522,
         "20c764d666ff10977c520c1c2012558a06d907fd5057bc3fca140f3415bf144e"
-      ]
+      ],
+      "legacy_glyph_label_sha256": "5c44a7e9eac02ecc0fbf933654b97b04796590d143667a5c5d7a20aaf15258f1",
+      "glyph_label_sha256": "75af7ec12d6e3f3fcbb0b18e6f94f2c38dfd6c25b96b6c0f5335239a341c492c",
+      "reading_revision": {
+        "ref": "docs/evidence/map-glyph-review-20261019/corrective2/claim-revisions.json",
+        "sha256": "9eb058f040cb9d984d6ff8b9536c62626a66ff542bff395ff5125ddb3b67c131",
+        "review_index": 108,
+        "source_root_key": [
+          "YenRoundZuinnEG-Md",
+          15522,
+          "20c764d666ff10977c520c1c2012558a06d907fd5057bc3fca140f3415bf144e"
+        ],
+        "withdrawn_reading": "ㄩㄝˋ",
+        "new_independent_source": false,
+        "dependent_alias": false
+      }
     },
     {
       "visual_id": 10170,
@@ -53021,9 +53077,9 @@
     {
       "visual_id": 10390,
       "group_graphic_id": 39,
-      "reading": "ㄕㄨㄞˇ",
+      "reading": "ㄕㄨㄟˇ",
       "evidence_class": "AI_DIRECT_PAGE_AND_ISOLATED_GLYPH_AUDIT",
-      "method": "Direct original-page and isolated simple annotation glyph; labels recorded before comparing legacy values. Exact raw glyph reused only after checking each explicit target font/GID/program; no Han, dictionary, expected, OCR or model prediction supplied the reading.",
+      "method": "Corrective2 original-page plus isolated-graphic reinspection replaces the prior AI visual label; initial and enlarged/cross-reader decisions are separately frozen. This is not human confirmation or Global approval, and not a heldout-derived truth.",
       "human_confirmation": false,
       "global_approval": false,
       "new_global_independent_source": false,
@@ -53054,7 +53110,6 @@
       "original_crop_sha256": "74ac4e3e38a065fe430ebc6bf511d285952f8ce37490206098de55710c24057f",
       "isolated_svg": "docs/evidence/map-glyph-review-20261019/group-039-annotation.svg",
       "isolated_svg_sha256": "166d3c74bd710f542dd68f762be6dc95b83303c130c47a6a752ab98d8b9389c6",
-      "glyph_label_sha256": "5c44a7e9eac02ecc0fbf933654b97b04796590d143667a5c5d7a20aaf15258f1",
       "source_occurrence_id": "occ_8ab25e658fa78715f72df0acaab1bac628e9a7330911ed4f29747ce8736638d9",
       "existing_scoped_correction": false,
       "scope": "Explicit font + component ID + exact raw complete simple glyf SHA-256; not cross-font donor",
@@ -53082,7 +53137,22 @@
         "ZhuYinNREG-Md",
         15203,
         "4140284b771233ab94b97547519be51e625fdba7b002784f7eedba539345eaa7"
-      ]
+      ],
+      "legacy_glyph_label_sha256": "5c44a7e9eac02ecc0fbf933654b97b04796590d143667a5c5d7a20aaf15258f1",
+      "glyph_label_sha256": "75af7ec12d6e3f3fcbb0b18e6f94f2c38dfd6c25b96b6c0f5335239a341c492c",
+      "reading_revision": {
+        "ref": "docs/evidence/map-glyph-review-20261019/corrective2/claim-revisions.json",
+        "sha256": "9eb058f040cb9d984d6ff8b9536c62626a66ff542bff395ff5125ddb3b67c131",
+        "review_index": 217,
+        "source_root_key": [
+          "ZhuYinNREG-Md",
+          15203,
+          "4140284b771233ab94b97547519be51e625fdba7b002784f7eedba539345eaa7"
+        ],
+        "withdrawn_reading": "ㄕㄨㄞˇ",
+        "new_independent_source": false,
+        "dependent_alias": false
+      }
     },
     {
       "visual_id": 10400,
@@ -54803,9 +54873,9 @@
     {
       "visual_id": 10590,
       "group_graphic_id": 59,
-      "reading": "ㄅㄧㄢˋ",
+      "reading": "ㄅㄢˋ",
       "evidence_class": "AI_DIRECT_PAGE_AND_ISOLATED_GLYPH_AUDIT",
-      "method": "Direct original-page and isolated simple annotation glyph; labels recorded before comparing legacy values. Exact raw glyph reused only after checking each explicit target font/GID/program; no Han, dictionary, expected, OCR or model prediction supplied the reading.",
+      "method": "Corrective2 original-page plus isolated-graphic reinspection replaces the prior AI visual label; initial and enlarged/cross-reader decisions are separately frozen. This is not human confirmation or Global approval, and not a heldout-derived truth.",
       "human_confirmation": false,
       "global_approval": false,
       "new_global_independent_source": false,
@@ -54836,7 +54906,6 @@
       "original_crop_sha256": "506ec32c04e83e6d9a4edce34d7ccf6c2119bdac48fad1eaac3a01f1dbf9c4fb",
       "isolated_svg": "docs/evidence/map-glyph-review-20261019/group-059-annotation.svg",
       "isolated_svg_sha256": "36b5296604fd6be43f89db7638195a3c3ee0bf58c664b2329c8203ef090edd8a",
-      "glyph_label_sha256": "5c44a7e9eac02ecc0fbf933654b97b04796590d143667a5c5d7a20aaf15258f1",
       "source_occurrence_id": "occ_ffdec803f70800587b10c6e7592817b72e6ed00e25c2d4284f422e49e3e70c45",
       "existing_scoped_correction": false,
       "scope": "Explicit font + component ID + exact raw complete simple glyf SHA-256; not cross-font donor",
@@ -54864,7 +54933,22 @@
         "YenRoundZuinnEG-Bd",
         14172,
         "5c12025eca93a90047c025075665eddcd717d820c8373fb55f21f7adb2bf3755"
-      ]
+      ],
+      "legacy_glyph_label_sha256": "5c44a7e9eac02ecc0fbf933654b97b04796590d143667a5c5d7a20aaf15258f1",
+      "glyph_label_sha256": "75af7ec12d6e3f3fcbb0b18e6f94f2c38dfd6c25b96b6c0f5335239a341c492c",
+      "reading_revision": {
+        "ref": "docs/evidence/map-glyph-review-20261019/corrective2/claim-revisions.json",
+        "sha256": "9eb058f040cb9d984d6ff8b9536c62626a66ff542bff395ff5125ddb3b67c131",
+        "review_index": 325,
+        "source_root_key": [
+          "YenRoundZuinnEG-Bd",
+          14172,
+          "5c12025eca93a90047c025075665eddcd717d820c8373fb55f21f7adb2bf3755"
+        ],
+        "withdrawn_reading": "ㄅㄧㄢˋ",
+        "new_independent_source": false,
+        "dependent_alias": false
+      }
     },
     {
       "visual_id": 10600,
@@ -57971,9 +58055,9 @@
     {
       "visual_id": 10940,
       "group_graphic_id": 94,
-      "reading": "ㄏㄨㄞˊ",
+      "reading": "ㄏㄨㄢˊ",
       "evidence_class": "AI_DIRECT_PAGE_AND_ISOLATED_GLYPH_AUDIT",
-      "method": "Direct original-page and isolated simple annotation glyph; labels recorded before comparing legacy values. Exact raw glyph reused only after checking each explicit target font/GID/program; no Han, dictionary, expected, OCR or model prediction supplied the reading.",
+      "method": "Corrective2 original-page plus isolated-graphic reinspection replaces the prior AI visual label; initial and enlarged/cross-reader decisions are separately frozen. This is not human confirmation or Global approval, and not a heldout-derived truth.",
       "human_confirmation": false,
       "global_approval": false,
       "new_global_independent_source": false,
@@ -58004,7 +58088,6 @@
       "original_crop_sha256": "b31c0ea69f91dc6bb8d1e6bd0024159097c001a535401f1aea4fd60ddb7e1217",
       "isolated_svg": "docs/evidence/map-glyph-review-20261019/group-094-annotation.svg",
       "isolated_svg_sha256": "c550eaa9544929f12015fab11656701618fb2e1a70646818f4b1463e62628f89",
-      "glyph_label_sha256": "5c44a7e9eac02ecc0fbf933654b97b04796590d143667a5c5d7a20aaf15258f1",
       "source_occurrence_id": "occ_3dfada6487ab1bb88ccab0d9c1e86b2a7c33af1b5a7a3d88d583ad5da7b7cabe",
       "existing_scoped_correction": false,
       "scope": "Explicit font + component ID + exact raw complete simple glyf SHA-256; not cross-font donor",
@@ -58032,14 +58115,29 @@
         "ZhuYinNREG-Md",
         14846,
         "9e50d0acddd4f440dc32cd76e7d1d8464bb6e6a78fcfaecaab6a50f9b2a26a88"
-      ]
+      ],
+      "legacy_glyph_label_sha256": "5c44a7e9eac02ecc0fbf933654b97b04796590d143667a5c5d7a20aaf15258f1",
+      "glyph_label_sha256": "75af7ec12d6e3f3fcbb0b18e6f94f2c38dfd6c25b96b6c0f5335239a341c492c",
+      "reading_revision": {
+        "ref": "docs/evidence/map-glyph-review-20261019/corrective2/claim-revisions.json",
+        "sha256": "9eb058f040cb9d984d6ff8b9536c62626a66ff542bff395ff5125ddb3b67c131",
+        "review_index": 583,
+        "source_root_key": [
+          "ZhuYinNREG-Md",
+          14846,
+          "9e50d0acddd4f440dc32cd76e7d1d8464bb6e6a78fcfaecaab6a50f9b2a26a88"
+        ],
+        "withdrawn_reading": "ㄏㄨㄞˊ",
+        "new_independent_source": false,
+        "dependent_alias": false
+      }
     },
     {
       "visual_id": 10941,
       "group_graphic_id": 94,
-      "reading": "ㄏㄨㄞˊ",
+      "reading": "ㄏㄨㄢˊ",
       "evidence_class": "EXISTING_GRAPHIC_ROOT_TARGET_BINDING",
-      "method": "Existing direct graphic truth root plus this explicit original target font/GID/exact complete simple raw glyph binding. Not a new direct observation or independent truth.",
+      "method": "Existing direct source root corrected by original-page plus isolated-graphic reinspection; this target retains its already checked exact font/GID/SHA binding, and adds no direct or independent truth.",
       "human_confirmation": false,
       "global_approval": false,
       "new_global_independent_source": false,
@@ -58070,7 +58168,6 @@
       "original_crop_sha256": "b31c0ea69f91dc6bb8d1e6bd0024159097c001a535401f1aea4fd60ddb7e1217",
       "isolated_svg": "docs/evidence/map-glyph-review-20261019/group-094-annotation.svg",
       "isolated_svg_sha256": "c550eaa9544929f12015fab11656701618fb2e1a70646818f4b1463e62628f89",
-      "glyph_label_sha256": "5c44a7e9eac02ecc0fbf933654b97b04796590d143667a5c5d7a20aaf15258f1",
       "source_occurrence_id": "occ_3dfada6487ab1bb88ccab0d9c1e86b2a7c33af1b5a7a3d88d583ad5da7b7cabe",
       "existing_scoped_correction": false,
       "scope": "Explicit font + component ID + exact raw complete simple glyf SHA-256; not cross-font donor",
@@ -58098,7 +58195,22 @@
         "ZhuYinNREG-Md",
         14846,
         "9e50d0acddd4f440dc32cd76e7d1d8464bb6e6a78fcfaecaab6a50f9b2a26a88"
-      ]
+      ],
+      "legacy_glyph_label_sha256": "5c44a7e9eac02ecc0fbf933654b97b04796590d143667a5c5d7a20aaf15258f1",
+      "glyph_label_sha256": "75af7ec12d6e3f3fcbb0b18e6f94f2c38dfd6c25b96b6c0f5335239a341c492c",
+      "reading_revision": {
+        "ref": "docs/evidence/map-glyph-review-20261019/corrective2/claim-revisions.json",
+        "sha256": "9eb058f040cb9d984d6ff8b9536c62626a66ff542bff395ff5125ddb3b67c131",
+        "review_index": 583,
+        "source_root_key": [
+          "ZhuYinNREG-Md",
+          14846,
+          "9e50d0acddd4f440dc32cd76e7d1d8464bb6e6a78fcfaecaab6a50f9b2a26a88"
+        ],
+        "withdrawn_reading": "ㄏㄨㄞˊ",
+        "new_independent_source": false,
+        "dependent_alias": true
+      }
     },
     {
       "visual_id": 10950,
@@ -61403,9 +61515,9 @@
     {
       "visual_id": 11320,
       "group_graphic_id": 132,
-      "reading": "ㄐㄩㄢˇ",
+      "reading": "ㄩㄢˇ",
       "evidence_class": "AI_DIRECT_PAGE_AND_ISOLATED_GLYPH_AUDIT",
-      "method": "Direct original-page and isolated simple annotation glyph; labels recorded before comparing legacy values. Exact raw glyph reused only after checking each explicit target font/GID/program; no Han, dictionary, expected, OCR or model prediction supplied the reading.",
+      "method": "Corrective2 original-page plus isolated-graphic reinspection replaces the prior AI visual label; initial and enlarged/cross-reader decisions are separately frozen. This is not human confirmation or Global approval, and not a heldout-derived truth.",
       "human_confirmation": false,
       "global_approval": false,
       "new_global_independent_source": false,
@@ -61436,7 +61548,6 @@
       "original_crop_sha256": "db8ce27a537242515c8c010c00107683c9b15ca64e951f1aa24a1e832d16503b",
       "isolated_svg": "docs/evidence/map-glyph-review-20261019/group-132-annotation.svg",
       "isolated_svg_sha256": "5587f4bbabbdfa271cb4773fbcd7f94fa718e6852b62e79ee6deb0f0d2f13deb",
-      "glyph_label_sha256": "5c44a7e9eac02ecc0fbf933654b97b04796590d143667a5c5d7a20aaf15258f1",
       "source_occurrence_id": "occ_52e07e70450a1361491ecc403f876903d0f9217d279b2b1f226b3a0ef5093101",
       "existing_scoped_correction": false,
       "scope": "Explicit font + component ID + exact raw complete simple glyf SHA-256; not cross-font donor",
@@ -61464,7 +61575,22 @@
         "ZhuYinNREG-Md",
         15526,
         "dbe1dac52f994e9082564a8fa42984a5e4513da891386636ea6224be218e2fa4"
-      ]
+      ],
+      "legacy_glyph_label_sha256": "5c44a7e9eac02ecc0fbf933654b97b04796590d143667a5c5d7a20aaf15258f1",
+      "glyph_label_sha256": "75af7ec12d6e3f3fcbb0b18e6f94f2c38dfd6c25b96b6c0f5335239a341c492c",
+      "reading_revision": {
+        "ref": "docs/evidence/map-glyph-review-20261019/corrective2/claim-revisions.json",
+        "sha256": "9eb058f040cb9d984d6ff8b9536c62626a66ff542bff395ff5125ddb3b67c131",
+        "review_index": 775,
+        "source_root_key": [
+          "ZhuYinNREG-Md",
+          15526,
+          "dbe1dac52f994e9082564a8fa42984a5e4513da891386636ea6224be218e2fa4"
+        ],
+        "withdrawn_reading": "ㄐㄩㄢˇ",
+        "new_independent_source": false,
+        "dependent_alias": false
+      }
     },
     {
       "visual_id": 11330,
@@ -62855,9 +62981,9 @@
     {
       "visual_id": 11510,
       "group_graphic_id": 151,
-      "reading": "ㄕㄨˊ",
+      "reading": "ㄕㄡˊ",
       "evidence_class": "AI_DIRECT_PAGE_AND_ISOLATED_GLYPH_AUDIT",
-      "method": "Direct original-page and isolated simple annotation glyph; labels recorded before comparing legacy values. Exact raw glyph reused only after checking each explicit target font/GID/program; no Han, dictionary, expected, OCR or model prediction supplied the reading.",
+      "method": "Corrective2 original-page plus isolated-graphic reinspection replaces the prior AI visual label; initial and enlarged/cross-reader decisions are separately frozen. This is not human confirmation or Global approval, and not a heldout-derived truth.",
       "human_confirmation": false,
       "global_approval": false,
       "new_global_independent_source": false,
@@ -62888,7 +63014,6 @@
       "original_crop_sha256": "019071c6e29ed7d21a4dac6723b756b2b61e94d1b34be3729e9d3c8ccceb4170",
       "isolated_svg": "docs/evidence/map-glyph-review-20261019/group-151-annotation.svg",
       "isolated_svg_sha256": "83bb26089c06ec90a6c5550c84925fdd5bba10e97dc7aed745f089f211b12c09",
-      "glyph_label_sha256": "5c44a7e9eac02ecc0fbf933654b97b04796590d143667a5c5d7a20aaf15258f1",
       "source_occurrence_id": "occ_5fcf07ce4feca6eb5c58634260951939359e4bb18f37054d05925c9187c68a82",
       "existing_scoped_correction": false,
       "scope": "Explicit font + component ID + exact raw complete simple glyf SHA-256; not cross-font donor",
@@ -62916,7 +63041,22 @@
         "YenRoundZuinnEG-Bd",
         15174,
         "fe80789a3b391aaf0d23332edd4aeab90b6a71c1a57bc2a9abcad9f897732ee1"
-      ]
+      ],
+      "legacy_glyph_label_sha256": "5c44a7e9eac02ecc0fbf933654b97b04796590d143667a5c5d7a20aaf15258f1",
+      "glyph_label_sha256": "75af7ec12d6e3f3fcbb0b18e6f94f2c38dfd6c25b96b6c0f5335239a341c492c",
+      "reading_revision": {
+        "ref": "docs/evidence/map-glyph-review-20261019/corrective2/claim-revisions.json",
+        "sha256": "9eb058f040cb9d984d6ff8b9536c62626a66ff542bff395ff5125ddb3b67c131",
+        "review_index": 893,
+        "source_root_key": [
+          "YenRoundZuinnEG-Bd",
+          15174,
+          "fe80789a3b391aaf0d23332edd4aeab90b6a71c1a57bc2a9abcad9f897732ee1"
+        ],
+        "withdrawn_reading": "ㄕㄨˊ",
+        "new_independent_source": false,
+        "dependent_alias": false
+      }
     },
     {
       "visual_id": 11520,
@@ -63383,9 +63523,9 @@
     {
       "visual_id": 20006,
       "map_graphic_id": 26,
-      "reading": "ㄨㄥˊ",
+      "reading": "ㄆㄥˊ",
       "evidence_class": "EXISTING_GRAPHIC_ROOT_TARGET_BINDING",
-      "method": "Existing direct graphic truth root plus this explicit original target font/GID/exact complete simple raw glyph binding. Not a new direct observation or independent truth.",
+      "method": "Existing direct source root corrected by original-page plus isolated-graphic reinspection; this target retains its already checked exact font/GID/SHA binding, and adds no direct or independent truth.",
       "human_confirmation": false,
       "global_approval": false,
       "new_global_independent_source": false,
@@ -63416,7 +63556,6 @@
       "original_crop_sha256": "cec4ab35916981dc781f3d3548423a9fe1614965e54ff937f03b5e94a387130f",
       "isolated_svg": "docs/evidence/map-glyph-review-20261019/map-026-annotation.svg",
       "isolated_svg_sha256": "979a6278d73fcf9df132cec6a74b81a9ab24b341268d15302ce352bfd615c0d7",
-      "glyph_label_sha256": "68976dbe4bec387a63e290e2e8a6c8237548721ead68cfc2959c22c705d7a63c",
       "source_occurrence_id": "occ_4fcdc1c2f5244499be29140cedb854d01b69b1a31b2626542054499627fd73e6",
       "existing_scoped_correction": false,
       "scope": "Explicit font + component ID + exact raw complete simple glyf SHA-256; not cross-font donor",
@@ -63444,7 +63583,22 @@
         "ZhuYinNREG-Md",
         14243,
         "0791bc5a96f05182987eba39bdf084ac3eb4d34ac4d2ed4467386889ac255db5"
-      ]
+      ],
+      "legacy_glyph_label_sha256": "68976dbe4bec387a63e290e2e8a6c8237548721ead68cfc2959c22c705d7a63c",
+      "glyph_label_sha256": "75af7ec12d6e3f3fcbb0b18e6f94f2c38dfd6c25b96b6c0f5335239a341c492c",
+      "reading_revision": {
+        "ref": "docs/evidence/map-glyph-review-20261019/corrective2/claim-revisions.json",
+        "sha256": "9eb058f040cb9d984d6ff8b9536c62626a66ff542bff395ff5125ddb3b67c131",
+        "review_index": 31,
+        "source_root_key": [
+          "ZhuYinNREG-Md",
+          14243,
+          "0791bc5a96f05182987eba39bdf084ac3eb4d34ac4d2ed4467386889ac255db5"
+        ],
+        "withdrawn_reading": "ㄨㄥˊ",
+        "new_independent_source": false,
+        "dependent_alias": true
+      }
     },
     {
       "visual_id": 20007,
@@ -67277,9 +67431,9 @@
     {
       "visual_id": 20065,
       "map_graphic_id": 431,
-      "reading": "ㄜ",
+      "reading": "ㄛ",
       "evidence_class": "EXISTING_GRAPHIC_ROOT_TARGET_BINDING",
-      "method": "Existing direct graphic truth root plus this explicit original target font/GID/exact complete simple raw glyph binding. Not a new direct observation or independent truth.",
+      "method": "Existing direct source root corrected by original-page plus isolated-graphic reinspection; this target retains its already checked exact font/GID/SHA binding, and adds no direct or independent truth.",
       "human_confirmation": false,
       "global_approval": false,
       "new_global_independent_source": false,
@@ -67310,7 +67464,6 @@
       "original_crop_sha256": "04695cb527b0705ae4e259f18c9b57841cd9e97f100f472eff75bf54fa5222d9",
       "isolated_svg": "docs/evidence/map-glyph-review-20261019/map-431-annotation.svg",
       "isolated_svg_sha256": "3ce9ed17d5e4c95a99c87df6b4003000310b87f15c69c9af62289a2dd5dd9e51",
-      "glyph_label_sha256": "68976dbe4bec387a63e290e2e8a6c8237548721ead68cfc2959c22c705d7a63c",
       "source_occurrence_id": "occ_f8170f50d78d973452d33aefc6931b00f415c1d3c9bc10d3a9da38056a8efe4d",
       "existing_scoped_correction": false,
       "scope": "Explicit font + component ID + exact raw complete simple glyf SHA-256; not cross-font donor",
@@ -67338,7 +67491,22 @@
         "DFPBiaoKai-W5-PoIn1-BFW",
         14128,
         "8b824cafc14a655e2ff073a6a9972ae3bffb810716406f0ac518c62a8559d11d"
-      ]
+      ],
+      "legacy_glyph_label_sha256": "68976dbe4bec387a63e290e2e8a6c8237548721ead68cfc2959c22c705d7a63c",
+      "glyph_label_sha256": "75af7ec12d6e3f3fcbb0b18e6f94f2c38dfd6c25b96b6c0f5335239a341c492c",
+      "reading_revision": {
+        "ref": "docs/evidence/map-glyph-review-20261019/corrective2/claim-revisions.json",
+        "sha256": "9eb058f040cb9d984d6ff8b9536c62626a66ff542bff395ff5125ddb3b67c131",
+        "review_index": 518,
+        "source_root_key": [
+          "DFPBiaoKai-W5-PoIn1-BFW",
+          14128,
+          "8b824cafc14a655e2ff073a6a9972ae3bffb810716406f0ac518c62a8559d11d"
+        ],
+        "withdrawn_reading": "ㄜ",
+        "new_independent_source": false,
+        "dependent_alias": true
+      }
     },
     {
       "visual_id": 20066,
@@ -76383,5 +76551,13 @@
   "final_acceptance_direct_rows": 13,
   "cohort_graphic_labels_sha256": "9aafab4c16315eb41b9909e9a67f0b110b95557d1f1001f0311d7613071a6fc0",
   "cohort_target_bindings_complete": true,
-  "graphic_label_correction_ref": "graphic143-label-correction.json"
+  "graphic_label_correction_ref": "graphic143-label-correction.json",
+  "corrective2_reading_revisions": {
+    "ref": "docs/evidence/map-glyph-review-20261019/corrective2/claim-revisions.json",
+    "sha256": "9eb058f040cb9d984d6ff8b9536c62626a66ff542bff395ff5125ddb3b67c131",
+    "direct_roots_changed": 9,
+    "dependent_aliases_changed": 3,
+    "original10_preserved": true,
+    "historical_initial_label_files_unchanged": true
+  }
 }
