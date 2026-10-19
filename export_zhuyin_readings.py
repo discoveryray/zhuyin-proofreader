@@ -4,6 +4,7 @@ import argparse
 import csv
 import hashlib
 import json
+import io
 import re
 from collections import Counter, defaultdict
 from datetime import datetime
@@ -560,55 +561,119 @@ def load_verified_outline_signatures(path: Path):
 
 
 def load_verified_mapping_corrections(path: Path):
-    """Load SHA-bound corrections for previously mislabeled TTF glyph keys.
+    """Load finite direct glyph claims and one-level explicit target bindings.
 
-    A correction is never selected by Chinese text or lexical expectation.  It
-    applies only when font, component ID *and* raw glyf SHA-256 all match the
-    isolated-glyph evidence captured during the v3.8 self-audit.
+    Shared font/GID labels are never truth. A derived binding must reference
+    a current, non-conflicting direct correction with identical SHA/reading;
+    neither copies nor their receipts create a new independent truth root.
     """
     out = {}
     conflicts = set()
+    aliases = []
     if not path.exists():
         return out
-    with path.open("r", encoding="utf-8-sig", newline="") as f:
-        for row in csv.DictReader(f):
-            font = (row.get("font") or "").strip()
-            sha = (row.get("glyph_sha256") or "").strip().lower()
+    raw = path.read_bytes()
+    asset_sha = hashlib.sha256(raw).hexdigest()
+    rows = list(csv.DictReader(io.StringIO(raw.decode("utf-8-sig"), newline="")))
+    for row in rows:
+        font = (row.get("font") or "").strip()
+        sha = (row.get("glyph_sha256") or "").strip().lower()
+        try:
+            gid = int(row.get("component_id") or "")
+        except (TypeError, ValueError):
+            continue
+        reading = (row.get("new_reading") or "").strip()
+        verification = (row.get("verification") or "").strip()
+        evidence = (row.get("evidence") or "").strip()
+        role = verification.split(";", 1)[0].strip()
+        if not font or not re.fullmatch(r"[0-9a-f]{64}", sha) or not reading:
+            continue
+        key = (font, gid, sha)
+        record = {
+            "bopomofo": reading,
+            "old_reading": (row.get("old_reading") or "").strip(),
+            "verification": verification,
+            "notes": (row.get("notes") or "").strip(),
+            "evidence": evidence,
+            "source_book": (row.get("source_book") or "").strip(),
+            "source_font": f"SHA-CORRECTION:{font}#{gid}",
+            "evidence_roots": (_row_claim_ref(path, row, asset_sha256=asset_sha),),
+            "donation_eligible": False,
+            "is_alias": False,
+        }
+        if role == "SCOPED_CORRECTION_ALIAS_V1":
             try:
-                gid = int(row.get("component_id") or "")
-            except Exception:
+                binding = json.loads(evidence)
+            except (TypeError, ValueError):
                 continue
-            new_reading = (row.get("new_reading") or "").strip()
-            if not font or not re.fullmatch(r"[0-9a-f]{64}", sha) or not new_reading:
+            if (not isinstance(binding, dict)
+                    or set(binding) != {"kind", "source_key", "target_proof"}
+                    or binding["kind"] != "SCOPED_CORRECTION_ALIAS_V1"):
                 continue
-            key = (font, gid, sha)
-            if key in conflicts:
-                continue
-            if key in out and out[key]["bopomofo"] != new_reading:
-                out.pop(key)
-                conflicts.add(key)
-                continue
-            out[key] = {
-                "bopomofo": new_reading,
-                "old_reading": (row.get("old_reading") or "").strip(),
-                "verification": (row.get("verification") or "").strip(),
-                "notes": (row.get("notes") or "").strip(),
-                "evidence": (row.get("evidence") or "").strip(),
-                "source_book": (row.get("source_book") or "").strip(),
-                "source_font": f"SHA-CORRECTION:{font}#{gid}",
-                "evidence_roots": (_row_claim_ref(path, row),),
-                # This assertion binds one font/GID/SHA. It is not a license
-                # to broadcast the correction into another font or group.
-                "donation_eligible": False,
-            }
+            aliases.append((key, record, binding))
+            continue
+        # Keep the original ten visual claims and the explicitly authorized
+        # graphic-audit role. Unknown/future/revoked roles cannot be promoted.
+        if (role not in {"isolated glyph visual + SHA256 exact gate", "AI_DIRECT_PAGE_AND_ISOLATED_GLYPH_AUDIT_V1"}
+                or evidence.startswith("{")):
+            continue
+        if key in conflicts:
+            continue
+        if key in out and out[key]["bopomofo"] != reading:
+            out.pop(key)
+            conflicts.add(key)
+            continue
+        out.setdefault(key, record)
+
+    # Freeze the valid direct lane before considering any borrowed binding.
+    # An alias cannot become another alias's source, including cycles.
+    direct = dict(out)
+    alias_conflicts = set()
+    for key, record, binding in aliases:
+        source_key = binding["source_key"]
+        target_proof = binding["target_proof"]
+        if (not isinstance(source_key, list) or len(source_key) != 3
+                or not isinstance(source_key[0], str) or not source_key[0].strip()
+                or type(source_key[1]) is not int or source_key[1] < 0
+                or not isinstance(source_key[2], str)
+                or not re.fullmatch(r"[0-9a-f]{64}", source_key[2])
+                or not isinstance(target_proof, str) or not target_proof.strip()):
+            continue
+        source_key = (source_key[0].strip(), source_key[1], source_key[2])
+        source = direct.get(source_key)
+        if (source is None or source_key[2] != key[2]
+                or source["bopomofo"] != record["bopomofo"]
+                or key in direct or key in conflicts or key in alias_conflicts):
+            continue
+        record["is_alias"] = True
+        record["source_key"] = source_key
+        target_claim_refs = record["evidence_roots"]
+        record["evidence_roots"] = source["evidence_roots"]
+        record["binding_refs"] = (*target_claim_refs, target_proof.strip())
+        record["source_font"] = f"SHA-CORRECTION-ALIAS:{key[0]}#{key[1]}"
+        if key in out and out[key]["bopomofo"] != record["bopomofo"]:
+            out.pop(key)
+            alias_conflicts.add(key)
+            continue
+        out.setdefault(key, record)
     return out
 
 
-def lookup_verified_mapping_correction(font: str, gid: int, glyph_sha256: str, corrections):
+def lookup_verified_mapping_correction(font: str, gid: int, glyph_sha256: str, corrections, *, target_identity_result=None):
     sha = str(glyph_sha256 or "").strip().lower()
     if not sha:
         return None
-    return corrections.get((str(font or ""), int(gid), sha))
+    record = corrections.get((str(font or ""), int(gid), sha))
+    if record and record.get("is_alias"):
+        # This adapter crosses font bindings by complete simple record equality.
+        # A composite raw record does not bind its referenced children. This is
+        # only the alias contract, not a Global quorum/approval gate on actual.
+        if (not isinstance(target_identity_result, dict)
+                or target_identity_result.get("eligibility") != GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1
+                or target_identity_result.get("glyph_sha256") != sha):
+            return None
+    return record
+
 
 def is_han_char(c: str) -> bool:
     return bool(c) and any(("\u3400" <= ch <= "\u9fff") or ("\uf900" <= ch <= "\ufaff") for ch in str(c))
@@ -1351,7 +1416,8 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
                     if xref_rec is None:
                         xref_rec = xref_overrides.get((None, int(xref), font, zh_id))
                 correction_rec = None if xref_rec else lookup_verified_mapping_correction(
-                    font, zh_id, target_glyph_hash, verified_mapping_corrections
+                    font, zh_id, target_glyph_hash, verified_mapping_corrections,
+                    target_identity_result=global_identity_result,
                 )
                 global_exact_selected = bool(
                     ttf_exact_decision is not None
@@ -1508,6 +1574,7 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
                     "training_eligible": bool(bop and rec and rec.get("evidence_roots") and not rec.get("occurrence_scoped")),
                     "donation_eligible": bool(bop and rec and rec.get("evidence_roots") and not rec.get("occurrence_scoped") and rec.get("donation_eligible", True)),
                     "evidence_roots": tuple(rec.get("evidence_roots") or ()) if rec else (),
+                    "binding_refs": tuple(rec.get("binding_refs") or ()) if rec else (),
                     "initial_basis": decode_basis, "char": c, "page_no": page_no,
                     "global_identity": global_identity_result,
                     "exact_reuse_decision": ttf_exact_decision,
@@ -1517,7 +1584,7 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
                         page_no, font, xref, zh_id, target_glyph_hash, bop, decode_basis,
                         json.dumps(rec.get("evidence_roots") or (), ensure_ascii=False),
                         "Y" if shape_rows[-1]["training_eligible"] else "N",
-                        "PDF/page/xref scope" if rec.get("occurrence_scoped") else (outline_sig or target_glyph_hash),
+                        "PDF/page/xref scope" if rec.get("occurrence_scoped") else (json.dumps(rec["binding_refs"], ensure_ascii=False) if rec.get("binding_refs") else (outline_sig or target_glyph_hash)),
                     ])
                 remember_key(stable_key, page_no, c, {
                     "font": font, "zh_id": zh_id, "rec": rec, "decode_basis": decode_basis,
@@ -1641,6 +1708,7 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
     shape_events_by_font = defaultdict(dict)
     shape_model_roots = defaultdict(set)
     shape_root_observations = defaultdict(set)
+    shape_glyph_observations = defaultdict(set)
     shape_model_donation_allowed = {}
     for (font, zh_id), items in shape_group_rows.items():
         reading = training_reading(items)
@@ -1651,9 +1719,11 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
         roots = tuple(sorted({root for item in items for root in item["evidence_roots"]}))
         # Aliases/subsets/copies of the same admitted observation are not new
         # independent training labels or held-out truth.
-        if roots in shape_root_observations[font]:
+        glyphs = {x.get("glyph_sha256", "") for x in items}
+        if not glyphs or "" in glyphs or roots in shape_root_observations[font] or glyphs & shape_glyph_observations[font]:
             continue
         shape_root_observations[font].add(roots)
+        shape_glyph_observations[font].update(glyphs)
         shape_model_donation_allowed[font] = shape_model_donation_allowed.get(font, True) and all(x.get("donation_eligible") for x in items)
         shape_model_roots[font].update(root for item in items for root in item["evidence_roots"])
         shape_events_by_font[font][(font, zh_id)] = ShapeEvent(
@@ -1710,6 +1780,7 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
         model = shape_models.get(font)
         cv_text = _shape_cv_text(validation)
         initial_readings = {x.get("initial_bopomofo", "") for x in items if x.get("initial_bopomofo", "")}
+        pending_items = [x for x in items if not str(ws.cell(x["row"], 6).value or "")]
         initial_text = next(iter(initial_readings)) if len(initial_readings) == 1 else (" / ".join(sorted(initial_readings)) if initial_readings else "")
         oof_prediction = validation.oof_predictions.get((font, zh_id), "") if validation else ""
 
@@ -1718,7 +1789,7 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
         xref_hash_map = {}
         variant_complete = False
         if model:
-            if initial_readings:
+            if not pending_items:
                 # Existing mapping audit uses the representative outline.  The
                 # independent evidence is the key-level OOF prediction; the full
                 # model prediction here is only supplementary.
@@ -1770,34 +1841,26 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
         self_state = ""
         final_prediction = oof_prediction or shape_prediction
 
-        # Independent OOF disagreement means the static mapping can no longer be
-        # trusted blindly.  Fail closed: remove the reading and surface a conflict
-        # instead of choosing either side automatically.
+        # OOF is derived from admitted truth, not a higher-priority truth root.
+        # Report disagreement without deleting a claim admitted by its own
+        # direct contract; do not let the disagreeing model donate onward.
         if training_reading(items) and validation and validation.ready and oof_prediction and len(initial_readings) == 1 and oof_prediction != initial_text:
-            action = "既有對照與OOF字形自驗衝突；保守停用"
-            self_state = "衝突-停用"
+            action = "合格真值保留；OOF字形自驗衝突僅稽核，停用模型供體"
+            self_state = "OOF衝突-真值保留"
+            shape_model_donation_allowed[font] = False
             shape_conflict_keys.add((font, zh_id))
             shape_conflict_occurrences += len(items)
             for item in items:
                 row_no = item["row"]
-                write_text_value(ws, row_no, 6, "")
-                write_text_value(ws, row_no, 7, "字形自驗衝突")
-                write_text_value(ws, row_no, 8, "既有對照與TTF字形OOF自驗衝突（保守停用）")
                 write_text_value(ws, row_no, 31, oof_prediction)
                 write_text_value(ws, row_no, 32, self_state)
                 write_text_value(ws, row_no, 33, cv_text)
                 write_text_value(ws, row_no, 34, evidence)
-                sk = item["stable_key"]
-                if sk in key_meta:
-                    key_meta[sk]["rec"] = None
-                    key_meta[sk]["decode_basis"] = "既有對照與TTF字形OOF自驗衝突（保守停用）"
-                    key_meta[sk]["source_font"] = ""
-
-        elif not initial_readings and validation and validation.ready and shape_prediction:
+        elif pending_items and validation and validation.ready and shape_prediction:
             action = "以TTF字形分解新增解碼"
             self_state = "自動泛化-已解碼"
             shape_auto_keys.add((font, zh_id))
-            shape_auto_occurrences += len(items)
+            shape_auto_occurrences += len(pending_items)
             rec = {
                 "bopomofo": shape_prediction,
                 "verification": (
@@ -1808,14 +1871,14 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
                 "evidence_roots": tuple(sorted(shape_model_roots[font])),
             }
             safe_hashes = {h for h in variant_hashes if h}
-            if safe_hashes and shape_model_donation_allowed.get(font, False):
+            if safe_hashes and not initial_readings and shape_model_donation_allowed.get(font, False):
                 shape_auto_donor_hashes[(font, zh_id)] = {
                     "reading": shape_prediction,
                     "hashes": safe_hashes,
                     "cv": cv_text,
                     "evidence_roots": tuple(sorted(shape_model_roots[font])),
                 }
-            for item in items:
+            for item in pending_items:
                 row_no = item["row"]
                 ws_admission.append([
                     item["page_no"], font, item["xref"], zh_id, item["glyph_sha256"],
@@ -1941,7 +2004,7 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
     # act as exact bridge donors without introducing fuzzy matching.
     for (src_font, src_gid), info in shape_auto_donor_hashes.items():
         src_reading = info.get("reading", "")
-        if not src_reading or not info.get("evidence_roots"):
+        if not src_reading or not info.get("evidence_roots") or not shape_model_donation_allowed.get(src_font, False):
             continue
         for sha in info.get("hashes", set()):
             if sha and sha not in quarantined_ttf:
@@ -2004,9 +2067,8 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
     for (font, zh_id), items in sorted(shape_group_rows.items(), key=lambda kv: (kv[0][0], kv[0][1])):
         # Only bridge keys that are still unresolved after v3.3 self-audit and
         # same-font shape auto-decomposition.
-        current_readings = {str(ws.cell(item["row"], 6).value or "") for item in items}
-        current_readings.discard("")
-        if current_readings:
+        pending_items = [item for item in items if not str(ws.cell(item["row"], 6).value or "")]
+        if not pending_items:
             continue
 
         target_hashes = []
@@ -2054,7 +2116,7 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
 
         bridge_reading = next(iter(target_readings))
         bridge_keys.add((font, zh_id))
-        bridge_occurrences += len(items)
+        bridge_occurrences += len(pending_items)
         source_text = "; ".join(f"{sf}#{sg}" for sf, sg in sorted(target_sources))
         hash_text = ",".join(dict.fromkeys(target_hashes))
         global_decisions = [
@@ -2081,7 +2143,7 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
             "notes": f"source={source_text}; sha256={hash_text}",
             "evidence_roots": tuple(sorted({root for sha in target_hashes for root in fp_roots[sha][bridge_reading]})),
         }
-        for item in items:
+        for item in pending_items:
             row_no = item["row"]
             ws_admission.append([
                 item["page_no"], font, item["xref"], zh_id, item["glyph_sha256"],
@@ -2120,7 +2182,7 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
         chars = "、".join(dict.fromkeys(x.get("char", "") for x in items if x.get("char")))
         pages = ",".join(str(x) for x in sorted({x.get("page_no") for x in items if x.get("page_no")}))
         ws_bridge.append([
-            font, zh_id, len(items), chars, pages, bridge_reading, hash_text[:1000],
+            font, zh_id, len(pending_items), chars, pages, bridge_reading, hash_text[:1000],
             source_text, ",".join(sorted({sf for sf, _ in target_sources})), bridge_reading,
             "已橋接",
             "目標 raw glyf SHA-256 與安全來源完全一致；來源限 OOF 靜態鍵、OOF-ready shape-auto exact 鍵或 isolated 人工驗證指紋；目標所有 xref 變體須一致；禁止中文字/句境/字典反填。",
@@ -2172,6 +2234,7 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
     for (font, zh_id), items in sorted(shape_group_rows.items(), key=lambda kv: (kv[0][0], kv[0][1])):
         current_readings = {str(ws.cell(item["row"], 6).value or "") for item in items}
         current_readings.discard("")
+        pending_items = [item for item in items if not str(ws.cell(item["row"], 6).value or "")]
         decoded_variants = []
         seen_xrefs = set()
         complete = True
@@ -2209,18 +2272,20 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
                 else:
                     action = "既有解碼與符號重組衝突（只報告，不自動覆寫）"
                     symbol_audit_conflict_keys.add((font, zh_id))
-                    symbol_audit_conflict_occurrences += len(items)
+                    symbol_audit_conflict_occurrences += len(items) - len(pending_items)
                     for item in items:
+                        if item in pending_items:
+                            continue
                         row_no = item["row"]
                         write_text_value(ws, row_no, 32, "符號重組稽核衝突")
                         write_text_value(ws, row_no, 33, "exact symbol recombination disagrees with current decode")
                         write_text_value(ws, row_no, 34, f"current={current}; recombined={prediction}; {evidence}")
             elif len(current_readings) > 1:
                 action = "既有同鍵多讀音，略過自驗"
-        elif prediction:
-            action = "新增解碼"
+        if pending_items and prediction:
+            action = "待解位置新增解碼" if current_readings else "新增解碼"
             symbol_recomb_keys.add((font, zh_id))
-            symbol_recomb_occurrences += len(items)
+            symbol_recomb_occurrences += len(pending_items)
             source_text = f"STATIC-SYMBOL-TEMPLATES:{symbol_templates_path.name}"
             rec = {
                 "bopomofo": prediction,
@@ -2228,7 +2293,7 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
                 "notes": evidence[:2500],
                 "evidence_roots": tuple(sorted({e["evidence_ref"] for d in decoded_variants for e in d.get("evidence", []) if e.get("evidence_ref")})),
             }
-            for item in items:
+            for item in pending_items:
                 row_no = item["row"]
                 ws_admission.append([
                     item["page_no"], font, item["xref"], zh_id, item["glyph_sha256"],
