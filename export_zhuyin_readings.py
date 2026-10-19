@@ -52,6 +52,7 @@ ACTUAL_DECODER_SOURCE_FILES = [
     "global_glyph_promotion.py",
 ]
 GLOBAL_TTF_SOURCE_LABEL = "Global exact TTF glyf SHA-256"
+PROJECT_STATIC_TTF_SOURCE_LABEL = "Project/static exact TTF glyf SHA-256"
 GLOBAL_CFF_SOURCE_LABEL = "Global exact CFF（樣式群組 + 完整字形 SHA-256）"
 PROJECT_GLOBAL_AGREEMENT_LABEL = "Project exact + Global exact agreement"
 GLOBAL_EXACT_RUNTIME_CONFLICT_LABEL = "GLOBAL_EXACT_RUNTIME_CONFLICT"
@@ -60,6 +61,7 @@ from cff_zhuyin_decoder import CFFZhuyinInspector, cff_style_group, load_cff_sym
 from actual_review import (
     USER_GLYF_FILE, USER_CFF_FILE, OCCURRENCE_OVERRIDE_FILE,
     load_user_verified_glyf, load_user_verified_cff, load_glyph_truth_quarantine, ensure_user_evidence_files,
+    load_dynamic_actual_snapshot,
     actual_workbook_dynamic_dependencies, actual_workbook_global_exact_dependencies,
 )
 from cff_unseen_family_bootstrap import (
@@ -69,6 +71,7 @@ from cff_unseen_family_bootstrap import (
 from ttf_zhuyin_shape_decoder import ShapeEvent, cross_validate_font, train_model, contour_group_signature
 from ttf_symbol_recombination import ExactSymbolRecombinationModel, evidence_text as symbol_evidence_text
 from occurrence_ledger import LEDGER_SCHEMA_VERSION, WORKBOOK_SCHEMA_VERSION, prepare_occurrence_rows
+from cross_version_compat import ACTUAL_DECODER_SEMANTICS_EPOCH
 from runtime_source_validation import compute_actual_asset_fingerprint, rewrite_actual_workbook_fingerprint, source_chain_ok, validate_asset_manifest
 from exact_glyph_identity import CFF_GLYPH_SHA256, GLOBAL_ELIGIBLE_SIMPLE_GLYF_V1, TTF_GLYF_SHA256
 from global_exact_glyph_library import (
@@ -154,7 +157,9 @@ def style_sheet(ws):
 
 
 def load_map(path: Path):
+    """Load historical proposals, never reusable truth from a font/GID alone."""
     mapping = {}
+    conflicts = set()
     if not path.exists():
         return mapping
     with path.open("r", encoding="utf-8-sig", newline="") as f:
@@ -164,14 +169,25 @@ def load_map(path: Path):
                 gid = int(row.get("zhuyin_component_id") or "")
             except Exception:
                 continue
-            bop = (row.get("bopomofo") or "").strip()
+            bop = (row.get("bopomofo") or row.get("legacy_bopomofo") or "").strip()
             if not font or not bop:
                 continue
-            mapping[(font, gid)] = {
+            key = (font, gid)
+            if key in conflicts:
+                continue
+            if key in mapping and mapping[key]["bopomofo"] != bop:
+                mapping.pop(key)
+                conflicts.add(key)
+                continue
+            mapping[key] = {
                 "bopomofo": bop,
                 "verification": (row.get("verification") or "").strip(),
                 "notes": (row.get("notes") or "").strip(),
                 "source_font": font,
+                "candidate_only": True,
+                "claim_ref": _row_claim_ref(path, row),
+                "calibration_status": (row.get("calibration_status") or "LEGACY_UNBOUND").strip(),
+                "target_binding_proposals": (row.get("target_bindings") or "").strip(),
             }
     return mapping
 
@@ -210,37 +226,48 @@ def load_xref_overrides(path: Path, pdf_path: Path):
                 "notes": (row.get("notes") or "").strip(),
                 "source_font": f"{font}@xref{xref}" + (f"@p{page_scope}" if page_scope else ""),
                 "page_scope": page_scope or "",
+                "evidence_roots": (_row_claim_ref(path, row),),
+                "occurrence_scoped": True,
             }
     return mapping
 
 
-def load_actual_occurrence_overrides(path: Path | None, pdf_path: Path):
-    """Load user-verified actual-pronunciation corrections at one exact occurrence.
+def load_actual_occurrence_overrides(path: Path | None, pdf_path: Path, *, snapshot=None):
+    """Load local visual actual corrections; never model or reusable truth.
 
-    These rows are deliberately occurrence-scoped and must never be promoted to
-    a global font/component mapping.  They are applied only after all automatic
-    glyph decoders have run, preserving the original automatic value for audit.
+    The default project source is read from the validated immutable snapshot.
+    An explicitly selected external file retains its own PDF/location scope.
     """
-    out=[]
-    if not path or not path.exists():
+    out = []
+    if not path:
         return out
-    stem=pdf_path.stem
-    with path.open("r",encoding="utf-8-sig",newline="") as f:
-        for row in csv.DictReader(f):
-            scope=(row.get("pdf_contains") or "").strip()
-            if scope and scope not in stem:
+    path = Path(path)
+    if snapshot is not None:
+        snapshot.assert_current(path.parent)
+        if path.name != OCCURRENCE_OVERRIDE_FILE:
+            raise ValueError("foreign occurrence override snapshot file")
+        rows = snapshot.rows(OCCURRENCE_OVERRIDE_FILE)
+    else:
+        if not path.exists():
+            return out
+        with path.open("r", encoding="utf-8-sig", newline="") as f:
+            rows = list(csv.DictReader(f))
+    stem = pdf_path.stem
+    for row in rows:
+        scope = (row.get("pdf_contains") or "").strip()
+        if scope and scope not in stem:
+            continue
+        excludes = (row.get("pdf_excludes") or "").strip()
+        if excludes:
+            parts = [x.strip() for x in re.split(r"[|;,]", excludes) if x.strip()]
+            if any(x in stem for x in parts):
                 continue
-            excludes=(row.get("pdf_excludes") or "").strip()
-            if excludes:
-                parts=[x.strip() for x in re.split(r"[|;,]", excludes) if x.strip()]
-                if any(x in stem for x in parts):
-                    continue
-            try:
-                row["x0"]=float(row.get("x0") or 0)
-                row["y0"]=float(row.get("y0") or 0)
-            except Exception:
-                continue
-            out.append(row)
+        try:
+            row["x0"] = float(row.get("x0") or 0)
+            row["y0"] = float(row.get("y0") or 0)
+        except Exception:
+            continue
+        out.append(row)
     return out
 
 
@@ -403,7 +430,12 @@ def lookup_verified_transform(font: str, gid: int, transform_map, exact_map, tar
     if not current_hash or current_hash not in allowed_hashes:
         return None
     source = exact_map.get((rec["source_font"], rec["source_gid"]))
-    if not source or source.get("bopomofo") != rec.get("bopomofo"):
+    # Equality to a historical label is not truth evidence. The shipped
+    # transform table has no source glyph identity/root binding, so it cannot
+    # certify an old proposal merely by copying it to a target SHA.
+    if (not source or source.get("candidate_only", True)
+            or not source.get("evidence_roots")
+            or source.get("bopomofo") != rec.get("bopomofo")):
         return None
     merged = dict(rec)
     merged["source_font"] = f"{rec['source_font']}#{rec['source_gid']}"
@@ -449,13 +481,25 @@ def load_verified_glyf_fingerprints(path: Path):
     a target raw ``glyf`` SHA-256 must equal a stored fingerprint byte-for-byte.
     """
     out = {}
+    conflicts = set()
     if not path.exists():
         return out
     with path.open("r", encoding="utf-8-sig", newline="") as f:
         for row in csv.DictReader(f):
             sha = (row.get("glyph_sha256") or "").strip().lower()
             bop = (row.get("bopomofo") or "").strip()
-            if not sha or not bop:
+            verification = (row.get("verification") or "").strip()
+            # This adapter admits the existing finite direct-visual asset
+            # contracts; a project snapshot, AI proposal or future role is not
+            # turned into an independent static observation by its filename.
+            if (not re.fullmatch(r"[0-9a-f]{64}", sha) or not bop
+                    or not verification.startswith(("v3.4 ", "v3.5 ", "v4.2 ", "v4.9 "))):
+                continue
+            if sha in conflicts:
+                continue
+            if sha in out and out[sha]["bopomofo"] != bop:
+                out[sha] = {"bopomofo": "", "conflict_readings": (out[sha]["bopomofo"], bop)}
+                conflicts.add(sha)
                 continue
             try:
                 gid = int(row.get("source_gid") or "")
@@ -467,6 +511,7 @@ def load_verified_glyf_fingerprints(path: Path):
                 "source_gid": gid,
                 "verification": (row.get("verification") or "").strip(),
                 "notes": (row.get("notes") or "").strip(),
+                "evidence_roots": (_row_claim_ref(path, row),),
             }
     return out
 
@@ -475,13 +520,32 @@ def load_verified_glyf_fingerprints(path: Path):
 def load_verified_outline_signatures(path: Path):
     """Load conflict-free exact normalized TTF outline signatures."""
     out = {}
+    conflicts = set()
     if not path.exists():
         return out
     with path.open("r", encoding="utf-8-sig", newline="") as f:
         for row in csv.DictReader(f):
+            verification = (row.get("verification") or "").strip()
+            # The finite direct-visual lanes have independent truth evidence.
+            # v3.7 decoded labels and v4.4 rank1 bridges have no surviving
+            # source identity/label lineage; consistency does not admit them.
+            direct_visual = (
+                verification == "v4.9 一上解碼漏失修正：原 PDF 可見注音字形直接覆核後凍結 exact normalized outline signature"
+                or (verification.startswith("v4.4 TTF residual exact-outline convergence:")
+                    and "same-family same-GID rank1 structural bridge=0" in verification
+                    and re.search(r"direct isolated visual=[1-9][0-9]*", verification))
+            )
+            if not direct_visual:
+                continue
             sig = (row.get("outline_signature") or "").strip().lower()
             bop = (row.get("bopomofo") or "").strip()
-            if not sig or not bop:
+            if not re.fullmatch(r"[0-9a-f]{40}", sig) or not bop:
+                continue
+            if sig in conflicts:
+                continue
+            if sig in out and out[sig]["bopomofo"] != bop:
+                out.pop(sig)
+                conflicts.add(sig)
                 continue
             out[sig] = {
                 "bopomofo": bop,
@@ -489,6 +553,7 @@ def load_verified_outline_signatures(path: Path):
                 "source_examples": (row.get("source_examples") or "").strip(),
                 "verification": (row.get("verification") or "").strip(),
                 "notes": (row.get("notes") or "").strip(),
+                "evidence_roots": (_row_claim_ref(path, row),),
             }
     return out
 
@@ -502,6 +567,7 @@ def load_verified_mapping_corrections(path: Path):
     isolated-glyph evidence captured during the v3.8 self-audit.
     """
     out = {}
+    conflicts = set()
     if not path.exists():
         return out
     with path.open("r", encoding="utf-8-sig", newline="") as f:
@@ -513,9 +579,16 @@ def load_verified_mapping_corrections(path: Path):
             except Exception:
                 continue
             new_reading = (row.get("new_reading") or "").strip()
-            if not font or not sha or not new_reading:
+            if not font or not re.fullmatch(r"[0-9a-f]{64}", sha) or not new_reading:
                 continue
-            out[(font, gid, sha)] = {
+            key = (font, gid, sha)
+            if key in conflicts:
+                continue
+            if key in out and out[key]["bopomofo"] != new_reading:
+                out.pop(key)
+                conflicts.add(key)
+                continue
+            out[key] = {
                 "bopomofo": new_reading,
                 "old_reading": (row.get("old_reading") or "").strip(),
                 "verification": (row.get("verification") or "").strip(),
@@ -523,6 +596,10 @@ def load_verified_mapping_corrections(path: Path):
                 "evidence": (row.get("evidence") or "").strip(),
                 "source_book": (row.get("source_book") or "").strip(),
                 "source_font": f"SHA-CORRECTION:{font}#{gid}",
+                "evidence_roots": (_row_claim_ref(path, row),),
+                # This assertion binds one font/GID/SHA. It is not a license
+                # to broadcast the correction into another font or group.
+                "donation_eligible": False,
             }
     return out
 
@@ -554,10 +631,12 @@ def build_group_map(exact_map, groups):
     for key, recs in candidates.items():
         readings = {r["bopomofo"] for r in recs if r.get("bopomofo")}
         if len(readings) == 1:
-            # Prefer a record with the strongest/most specific note, while keeping sources.
-            chosen = max(recs, key=lambda r: len(r.get("verification", "")) + len(r.get("notes", "")))
+            # Table agreement is only a proposal, not independent correctness.
+            chosen = recs[0]
             merged = dict(chosen)
             merged["source_fonts"] = sorted({r.get("source_font", "") for r in recs if r.get("source_font")})
+            merged["candidate_only"] = True
+            merged["claim_refs"] = tuple(sorted({r.get("claim_ref", "") for r in recs}))
             group_map[key] = merged
         elif len(readings) > 1:
             conflicts[key] = sorted(readings)
@@ -586,6 +665,24 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _row_claim_ref(path: Path, row: dict, *, asset_sha256: str = "") -> str:
+    """Identify a static assertion, without using Han text or a font/GID as ID."""
+    canonical = json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return f"{Path(path).name}:asset-sha256:{asset_sha256 or _sha256_file(path)}:row-sha256:{hashlib.sha256(canonical.encode('utf-8')).hexdigest()}"
+
+
+def training_reading(items):
+    """Admit a key only if every observed target variant has bound truth.
+
+    Occurrence/xref-scoped overrides cannot donate their local reading. A
+    trusted label for one same-name/GID subset cannot label another subset.
+    """
+    if not items or not all(x.get("training_eligible") and x.get("evidence_roots") for x in items):
+        return ""
+    readings = {x.get("initial_bopomofo", "") for x in items}
+    return next(iter(readings)) if len(readings) == 1 and "" not in readings else ""
 
 
 def resolve_ttf_exact_reuse(
@@ -703,8 +800,10 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
     dynamic_root = Path(dynamic_evidence_root).resolve() if dynamic_evidence_root else root
     dynamic_root.mkdir(parents=True, exist_ok=True)
     ensure_user_evidence_files(dynamic_root)
-    quarantine = load_glyph_truth_quarantine(dynamic_root)
+    dynamic_snapshot = load_dynamic_actual_snapshot(dynamic_root, read_only=True)
+    quarantine = load_glyph_truth_quarantine(dynamic_root, snapshot=dynamic_snapshot)
     quarantined_ttf = set(quarantine.get("ttf") or set())
+    quarantined_ttf.update(sha for sha, rec in static_verified_fingerprints.items() if rec.get("conflict_readings"))
     quarantined_cff = set(quarantine.get("cff") or set())
     # A contradictory exact SHA is not a decoder failure.  It is an explicit
     # reason to stop global SHA reuse while occurrence-local visual overrides
@@ -714,8 +813,9 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
     for sha in list(verified_fingerprints):
         if sha in quarantined_ttf:
             verified_fingerprints.pop(sha, None)
-    user_verified_fingerprints = load_user_verified_glyf(dynamic_root / USER_GLYF_FILE)
+    user_verified_fingerprints = load_user_verified_glyf(dynamic_root / USER_GLYF_FILE, snapshot=dynamic_snapshot)
     for sha, urec in user_verified_fingerprints.items():
+        urec["evidence_roots"] = (_row_claim_ref(dynamic_root / USER_GLYF_FILE, {"glyph_sha256": sha, **urec}, asset_sha256=dict(dynamic_snapshot.hashes)[USER_GLYF_FILE]),)
         if sha in quarantined_ttf:
             continue
         existing = verified_fingerprints.get(sha)
@@ -728,7 +828,7 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
             continue
         verified_fingerprints[sha] = urec
     user_verified_cff = {
-        key: rec for key, rec in load_user_verified_cff(dynamic_root / USER_CFF_FILE).items()
+        key: rec for key, rec in load_user_verified_cff(dynamic_root / USER_CFF_FILE, snapshot=dynamic_snapshot).items()
         if key not in quarantined_cff
     }
     outline_signatures_path = Path(outline_signatures_path) if outline_signatures_path else DEFAULT_OUTLINE_SIGNATURES
@@ -741,7 +841,13 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
         Path(actual_overrides_path) if actual_overrides_path
         else (dynamic_root / OCCURRENCE_OVERRIDE_FILE if dynamic_evidence_root else DEFAULT_ACTUAL_OVERRIDES)
     )
-    actual_overrides = load_actual_occurrence_overrides(actual_overrides_path, pdf_path)
+    override_uses_project_snapshot = actual_overrides_path.resolve() == (dynamic_root / OCCURRENCE_OVERRIDE_FILE).resolve()
+    external_override_hash = (
+        _sha256_file(actual_overrides_path) if not override_uses_project_snapshot and actual_overrides_path.exists() else "ABSENT"
+    )
+    actual_overrides = load_actual_occurrence_overrides(
+        actual_overrides_path, pdf_path, snapshot=dynamic_snapshot if override_uses_project_snapshot else None,
+    )
     structural_exclusions_path = Path(structural_exclusions_path) if structural_exclusions_path else DEFAULT_STRUCTURAL_EXCLUSIONS
     structural_exclusions = load_structural_exclusions(structural_exclusions_path, pdf_path)
 
@@ -758,6 +864,26 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
     ws_symbol = wb.create_sheet("TTF符號重組稽核")
     ws_struct = wb.create_sheet("結構注音偵測")
     ws_actual_override = wb.create_sheet("人工實際注音覆寫")
+    ws_candidates = wb.create_sheet("舊對照候選稽核")
+    ws_candidates.append(["實體頁碼", "字型", "font_xref", "部件ID", "glyph_sha256", "候選讀音", "原命中方法", "claim_refs", "拒絕原因", "calibration_status", "target_binding_proposals"])
+    ws_admission = wb.create_sheet("TTF證據准入")
+    ws_admission.append(["實體頁碼", "字型", "font_xref", "部件ID", "glyph_sha256", "讀音", "採信方法", "truth_roots", "可訓練", "target_binding"])
+    ws_roots = wb.create_sheet("TTF衍生證據根")
+    ws_roots.append(["root_set_ref", "original_truth_root"])
+    recorded_root_sets = set()
+
+    def remember_ttf_roots(roots):
+        # Audit indirection keeps a large model's full original root roster
+        # lossless, without exceeding Excel's per-cell text limit. The model
+        # or OOF receipt is a dependency, never a new independent truth root.
+        roots = tuple(sorted(set(roots)))
+        digest = hashlib.sha256(json.dumps(roots, ensure_ascii=False).encode("utf-8")).hexdigest()
+        ref = f"TTF-ROOT-SET:{digest}"
+        if ref not in recorded_root_sets:
+            recorded_root_sets.add(ref)
+            for root in roots:
+                ws_roots.append([ref, root])
+        return ref
     ws_struct_excl = wb.create_sheet("結構偵測排除")
     ws_cff_bootstrap = wb.create_sheet("CFF零對照自舉稽核")
     ws_global_exact = wb.create_sheet("Global exact reuse 稽核")
@@ -1231,27 +1357,44 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
                     ttf_exact_decision is not None
                     and not ttf_exact_decision.conflict
                     and ttf_exact_decision.reading
-                    and "GLOBAL_VERIFIED_EXACT" in ttf_exact_decision.sources
                 )
-                if global_exact_selected:
+                local_exact_rec = (
+                    verified_fingerprints.get(target_glyph_hash)
+                    if ttf_exact_decision is None and target_glyph_hash not in quarantined_ttf
+                    else None
+                )
+                if global_exact_selected or local_exact_rec:
                     stable_key = f"{font}#{zh_id}"
                     project_global_agreement = (
-                        "PROJECT_VERIFIED_EXACT" in ttf_exact_decision.sources
+                        ttf_exact_decision is not None
+                        and "PROJECT_VERIFIED_EXACT" in ttf_exact_decision.sources
+                        and "GLOBAL_VERIFIED_EXACT" in ttf_exact_decision.sources
                     )
                     decode_basis = (
                         PROJECT_GLOBAL_AGREEMENT_LABEL
                         if project_global_agreement
-                        else GLOBAL_TTF_SOURCE_LABEL
+                        else (GLOBAL_TTF_SOURCE_LABEL
+                              if ttf_exact_decision is not None and "GLOBAL_VERIFIED_EXACT" in ttf_exact_decision.sources
+                              else PROJECT_STATIC_TTF_SOURCE_LABEL)
                     )
                     source_font = decode_basis
                     gid_group = "GLYF-SHA256"
                     rec = {
-                        "bopomofo": ttf_exact_decision.reading,
+                        "bopomofo": ttf_exact_decision.reading if ttf_exact_decision is not None else local_exact_rec["bopomofo"],
                         "verification": decode_basis,
                         "notes": (
-                            f"exact sources={'+'.join(ttf_exact_decision.sources)}; "
+                            f"exact sources={'+'.join(ttf_exact_decision.sources) if ttf_exact_decision is not None else 'PROJECT_LOCAL_OR_STATIC_EXACT'}; "
                             f"sha256={target_glyph_hash}"
                         ),
+                        "evidence_roots": tuple(sorted(set(
+                            (user_verified_fingerprints.get(target_glyph_hash) or {}).get("evidence_roots", ())
+                            + (static_verified_fingerprints.get(target_glyph_hash) or {}).get("evidence_roots", ())
+                            + tuple(
+                                f"GLOBAL_VERIFIED_EXACT:{target_glyph_hash}:{record.active_reading}:revision={record.revision}"
+                                for record in global_snapshot.trusted_identities
+                                if record.identity.glyph_sha256 == target_glyph_hash
+                            )
+                        ))),
                     }
                 elif xref_rec:
                     stable_key = f"{font}@xref{xref}#{zh_id}"
@@ -1270,6 +1413,16 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
                     rec, decode_basis, gid_group, source_font = lookup_reading(
                         font, zh_id, exact_map, group_map, groups
                     )
+                    if rec is not None:
+                        ws_candidates.append([
+                            page_no, font, xref, zh_id, target_glyph_hash,
+                            rec.get("bopomofo", ""), decode_basis,
+                            json.dumps(rec.get("claim_refs") or [rec.get("claim_ref", "")], ensure_ascii=False),
+                            "UNBOUND_TRUTH_AND_TARGET: font/GID or group agreement is proposal only",
+                            rec.get("calibration_status", ""), rec.get("target_binding_proposals", ""),
+                        ])
+                        rec = None
+                        decode_basis = "舊對照僅候選：缺真值／目標綁定"
                     if rec is None:
                         # Preserve v3.2 performance: the SHA-256 transform gate
                         # is evaluated only when a transform lookup is actually
@@ -1294,6 +1447,7 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
                                 "bopomofo": outline_rec.get("bopomofo", ""),
                                 "verification": outline_rec.get("verification", ""),
                                 "notes": outline_rec.get("notes", ""),
+                                "evidence_roots": outline_rec.get("evidence_roots", ()),
                             }
                             decode_basis = "TTF跨字型exact正規化輪廓簽名"
                             gid_group = "OUTLINE-SIGNATURE"
@@ -1309,6 +1463,7 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
                         "PDF字型子集精確覆寫",
                         "SHA綁定字形真值修正",
                         GLOBAL_TTF_SOURCE_LABEL,
+                        PROJECT_STATIC_TTF_SOURCE_LABEL,
                         PROJECT_GLOBAL_AGREEMENT_LABEL,
                     ):
                         exact_mapped += 1
@@ -1350,10 +1505,20 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
                     "row": ws._current_row, "font": font, "xref": xref, "zh_id": zh_id,
                     "stable_key": stable_key, "glyph_sha256": target_glyph_hash,
                     "contours": shape_contours, "initial_bopomofo": bop,
+                    "training_eligible": bool(bop and rec and rec.get("evidence_roots") and not rec.get("occurrence_scoped")),
+                    "donation_eligible": bool(bop and rec and rec.get("evidence_roots") and not rec.get("occurrence_scoped") and rec.get("donation_eligible", True)),
+                    "evidence_roots": tuple(rec.get("evidence_roots") or ()) if rec else (),
                     "initial_basis": decode_basis, "char": c, "page_no": page_no,
                     "global_identity": global_identity_result,
                     "exact_reuse_decision": ttf_exact_decision,
                 })
+                if rec:
+                    ws_admission.append([
+                        page_no, font, xref, zh_id, target_glyph_hash, bop, decode_basis,
+                        json.dumps(rec.get("evidence_roots") or (), ensure_ascii=False),
+                        "Y" if shape_rows[-1]["training_eligible"] else "N",
+                        "PDF/page/xref scope" if rec.get("occurrence_scoped") else (outline_sig or target_glyph_hash),
+                    ])
                 remember_key(stable_key, page_no, c, {
                     "font": font, "zh_id": zh_id, "rec": rec, "decode_basis": decode_basis,
                     "gid_group": gid_group, "source_font": source_font, "group_key": group_key,
@@ -1472,14 +1637,25 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
             "contours": [], "glyph_sha256": "", "xref": None
         }
 
+    dynamic_snapshot.assert_current(dynamic_root)
     shape_events_by_font = defaultdict(dict)
+    shape_model_roots = defaultdict(set)
+    shape_root_observations = defaultdict(set)
+    shape_model_donation_allowed = {}
     for (font, zh_id), items in shape_group_rows.items():
-        readings = {x.get("initial_bopomofo", "") for x in items if x.get("initial_bopomofo", "")}
+        reading = training_reading(items)
         rep = shape_representatives.get((font, zh_id)) or {}
         contours = rep.get("contours") or []
-        if len(readings) != 1 or not contours:
+        if not reading or not contours:
             continue
-        reading = next(iter(readings))
+        roots = tuple(sorted({root for item in items for root in item["evidence_roots"]}))
+        # Aliases/subsets/copies of the same admitted observation are not new
+        # independent training labels or held-out truth.
+        if roots in shape_root_observations[font]:
+            continue
+        shape_root_observations[font].add(roots)
+        shape_model_donation_allowed[font] = shape_model_donation_allowed.get(font, True) and all(x.get("donation_eligible") for x in items)
+        shape_model_roots[font].update(root for item in items for root in item["evidence_roots"])
         shape_events_by_font[font][(font, zh_id)] = ShapeEvent(
             key=(font, zh_id), contours=contours, reading=reading
         )
@@ -1597,7 +1773,7 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
         # Independent OOF disagreement means the static mapping can no longer be
         # trusted blindly.  Fail closed: remove the reading and surface a conflict
         # instead of choosing either side automatically.
-        if initial_readings and validation and validation.ready and oof_prediction and len(initial_readings) == 1 and oof_prediction != initial_text:
+        if training_reading(items) and validation and validation.ready and oof_prediction and len(initial_readings) == 1 and oof_prediction != initial_text:
             action = "既有對照與OOF字形自驗衝突；保守停用"
             self_state = "衝突-停用"
             shape_conflict_keys.add((font, zh_id))
@@ -1629,16 +1805,23 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
                     f"{cv_text}"
                 ),
                 "notes": evidence,
+                "evidence_roots": tuple(sorted(shape_model_roots[font])),
             }
             safe_hashes = {h for h in variant_hashes if h}
-            if safe_hashes:
+            if safe_hashes and shape_model_donation_allowed.get(font, False):
                 shape_auto_donor_hashes[(font, zh_id)] = {
                     "reading": shape_prediction,
                     "hashes": safe_hashes,
                     "cv": cv_text,
+                    "evidence_roots": tuple(sorted(shape_model_roots[font])),
                 }
             for item in items:
                 row_no = item["row"]
+                ws_admission.append([
+                    item["page_no"], font, item["xref"], zh_id, item["glyph_sha256"],
+                    shape_prediction, "TTF字形分解自動泛化（OOF驗證模型）",
+                    remember_ttf_roots(rec["evidence_roots"]), "N", "all-xref exact decomposition",
+                ])
                 write_text_value(ws, row_no, 6, shape_prediction)
                 write_text_value(ws, row_no, 7, "已解碼")
                 write_text_value(ws, row_no, 8, "TTF字形分解自動泛化（OOF驗證模型）")
@@ -1717,16 +1900,18 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
     # itself is exact SHA-256 equality; no nearest-neighbour or fuzzy threshold
     # is used.
     # ------------------------------------------------------------------
+    dynamic_snapshot.assert_current(dynamic_root)
     fp_sources = defaultdict(lambda: defaultdict(set))
+    fp_roots = defaultdict(lambda: defaultdict(set))
     source_key_oof = {}
     for (src_font, src_gid), items in shape_group_rows.items():
         validation = shape_validation.get(src_font)
         if not validation or not validation.ready:
             continue
-        src_readings = {x.get("initial_bopomofo", "") for x in items if x.get("initial_bopomofo", "")}
-        if len(src_readings) != 1:
+        src_reading = training_reading(items)
+        if (not src_reading or not all(x.get("donation_eligible") for x in items)
+                or not shape_model_donation_allowed.get(src_font, False)):
             continue
-        src_reading = next(iter(src_readings))
         oof = validation.oof_predictions.get((src_font, src_gid), "")
         if not oof or oof != src_reading:
             continue
@@ -1746,6 +1931,8 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
                 sha = ""
             if sha and sha not in quarantined_ttf:
                 fp_sources[sha][src_reading].add((src_font, src_gid))
+                fp_roots[sha][src_reading].update(shape_model_roots[src_font])
+                fp_roots[sha][src_reading].update(root for item in items for root in item["evidence_roots"])
 
     # Same-font shape-auto keys are a second safe source class.  They are not
     # themselves held out during OOF; instead the font model has passed strict
@@ -1754,11 +1941,12 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
     # act as exact bridge donors without introducing fuzzy matching.
     for (src_font, src_gid), info in shape_auto_donor_hashes.items():
         src_reading = info.get("reading", "")
-        if not src_reading:
+        if not src_reading or not info.get("evidence_roots"):
             continue
         for sha in info.get("hashes", set()):
             if sha and sha not in quarantined_ttf:
                 fp_sources[sha][src_reading].add((f"SHAPE-AUTO:{src_font}", src_gid))
+                fp_roots[sha][src_reading].update(info["evidence_roots"])
 
     # Directly verified full-glyph fingerprints are a third, independent safe
     # source for signatures that the OOF decomposition model could not cover.
@@ -1782,6 +1970,13 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
                 source_records.add((record.get("source_font", "MANUAL-GLYF") or "MANUAL-GLYF", record.get("source_gid", -1)))
         if source_records:
             fp_sources[sha][decision.reading].update(source_records)
+            fp_roots[sha][decision.reading].update((user_verified_fingerprints.get(sha) or {}).get("evidence_roots", ()))
+            fp_roots[sha][decision.reading].update((static_verified_fingerprints.get(sha) or {}).get("evidence_roots", ()))
+            fp_roots[sha][decision.reading].update(
+                f"GLOBAL_VERIFIED_EXACT:{sha}:{record.active_reading}:revision={record.revision}"
+                for record in global_snapshot.trusted_identities
+                if record.identity.glyph_sha256 == sha
+            )
         if "GLOBAL_VERIFIED_EXACT" in decision.sources:
             global_exact_ttf_safe_sources[sha] = decision
 
@@ -1793,9 +1988,10 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
         sf = rec.get("source_font", "MANUAL-GLYF") or "MANUAL-GLYF"
         sg = rec.get("source_gid", -1)
         fp_sources[sha][rec["bopomofo"]].add((sf, sg))
+        fp_roots[sha][rec["bopomofo"]].update(rec.get("evidence_roots", ()))
 
     fp_conflicts = {sha: by_reading for sha, by_reading in fp_sources.items() if len(by_reading) > 1}
-    fp_safe = {sha: next(iter(by_reading)) for sha, by_reading in fp_sources.items() if len(by_reading) == 1 and sha not in quarantined_ttf}
+    fp_safe = {sha: next(iter(by_reading)) for sha, by_reading in fp_sources.items() if len(by_reading) == 1 and sha not in quarantined_ttf and fp_roots[sha][next(iter(by_reading))]}
     # A non-conflicting VERIFIED_GLOBAL exact reading is above decoder-derived
     # bridge evidence.  Derived disagreement is audit evidence, not permission
     # to replace or suppress the validated exact reading.  Exact-source
@@ -1883,9 +2079,15 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
             "bopomofo": bridge_reading,
             "verification": "TTF raw glyf SHA-256 exact match to a conservative safe glyph source (OOF static / shape-auto exact / isolated manual)",
             "notes": f"source={source_text}; sha256={hash_text}",
+            "evidence_roots": tuple(sorted({root for sha in target_hashes for root in fp_roots[sha][bridge_reading]})),
         }
         for item in items:
             row_no = item["row"]
+            ws_admission.append([
+                item["page_no"], font, item["xref"], zh_id, item["glyph_sha256"],
+                bridge_reading, exact_basis, remember_ttf_roots(rec["evidence_roots"]),
+                "N", "all-xref raw SHA-256 equality",
+            ])
             write_text_value(ws, row_no, 6, bridge_reading)
             write_text_value(ws, row_no, 7, "已解碼")
             write_text_value(ws, row_no, 8, exact_basis)
@@ -2024,9 +2226,15 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
                 "bopomofo": prediction,
                 "verification": "exact Bopomofo symbol recombination; template admitted by support>=2 verified keys or explicit direct isolated-symbol visual verification; all target xref variants agree",
                 "notes": evidence[:2500],
+                "evidence_roots": tuple(sorted({e["evidence_ref"] for d in decoded_variants for e in d.get("evidence", []) if e.get("evidence_ref")})),
             }
             for item in items:
                 row_no = item["row"]
+                ws_admission.append([
+                    item["page_no"], font, item["xref"], zh_id, item["glyph_sha256"],
+                    prediction, "TTF exact注音符號重組", remember_ttf_roots(rec["evidence_roots"]),
+                    "N", "all-xref exact symbol signatures",
+                ])
                 write_text_value(ws, row_no, 6, prediction)
                 write_text_value(ws, row_no, 7, "已解碼")
                 write_text_value(ws, row_no, 8, "TTF exact注音符號重組")
@@ -2137,6 +2345,7 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
                 "精確字型對照",
                 "PDF字型子集精確覆寫",
                 GLOBAL_TTF_SOURCE_LABEL,
+                PROJECT_STATIC_TTF_SOURCE_LABEL,
                 PROJECT_GLOBAL_AGREEMENT_LABEL,
             ):
                 exact_mapped += 1
@@ -2191,8 +2400,30 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
             "TTF 由 shifted component 結構辨識；字型名稱只供稽核。" if detection != "known-CFF-family" else "既有 CFF family 輪廓偵測。",
         ])
 
+    final_key_rows = defaultdict(list)
+    for data_row in ws.iter_rows(min_row=2, values_only=True):
+        final_key_rows[str(data_row[10] or "")].append(data_row)
     for key, count in sorted(key_count.items(), key=lambda x: (-x[1], x[0])):
-        m = key_meta[key]
+        m = dict(key_meta[key])
+        final_rows = final_key_rows.get(key, [])
+        final_readings = {str(row[5] or "") for row in final_rows}
+        pending_count = sum(not row[5] for row in final_rows)
+        # A font/GID stable key can now hold a bound result for one glyph and
+        # an unbound proposal for another. Summaries must not promote one
+        # member's reading (including a local override) to every occurrence.
+        if len(final_readings) == 1 and "" not in final_readings:
+            reading = next(iter(final_readings))
+            prior = m.get("rec") or {}
+            m["rec"] = prior if prior.get("bopomofo") == reading else {
+                "bopomofo": reading, "verification": "final occurrence evidence; see source audit", "notes": "",
+            }
+            m["decode_basis"] = " / ".join(sorted({str(row[7] or "") for row in final_rows}))
+            m["source_font"] = " / ".join(sorted({str(row[9] or "") for row in final_rows}))
+        else:
+            m["rec"] = None
+            if len(final_readings) > 1:
+                m["decode_basis"] = "同穩定鍵有不同字形／位置結果；以出現位置證據為準"
+                m["source_font"] = ""
         rec = m["rec"]
         bop = rec.get("bopomofo", "") if rec else ""
         verification = rec.get("verification", "") if rec else ""
@@ -2204,13 +2435,13 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
             m["decode_basis"], m["source_font"], count, chars, pages, verification, notes,
             m["architecture"], m["cff_signatures"], m["cff_symbols"], m["tone_evidence"]
         ])
-        if not bop:
+        if not bop and pending_count:
             if m["architecture"] == "CFF整字注音":
                 next_step = "直接檢視未知 CFF 注音符號字形，新增『符號形狀→ㄅㄆㄇㄈ』對照；禁止用中文字預期讀音反填。"
             else:
                 next_step = "渲染此注音元件字形後加入對照表；若同群組已有相同ID但發生衝突，先人工確認。"
             ws_missing.append([
-                key, m["group_key"], m["font"], m["gid_group"], m["zh_id"], count, chars, pages,
+                key, m["group_key"], m["font"], m["gid_group"], m["zh_id"], pending_count, chars, pages,
                 next_step, m["architecture"], m["unknown"]
             ])
 
@@ -2317,6 +2548,7 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
         ("工具版本", VERSION),
         ("workbook_schema_version", WORKBOOK_SCHEMA_VERSION),
         ("ledger_schema_version", LEDGER_SCHEMA_VERSION),
+        ("actual_decoder_semantics_epoch", ACTUAL_DECODER_SEMANTICS_EPOCH),
         ("pdf_sha256", pdf_sha256),
         ("actual_asset_fingerprint", fingerprint_payload.get("fingerprint", "")),
         ("actual_asset_fingerprint_components", json.dumps(fingerprint_payload.get("components", {}), ensure_ascii=False, sort_keys=True)),
@@ -2334,6 +2566,9 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
     style_sheet(ws_symbol)
     style_sheet(ws_struct)
     style_sheet(ws_actual_override)
+    style_sheet(ws_candidates)
+    style_sheet(ws_admission)
+    style_sheet(ws_roots)
     style_sheet(ws_struct_excl)
     style_sheet(ws_cff_bootstrap)
     style_sheet(ws_global_exact)
@@ -2341,6 +2576,11 @@ def decode(pdf_path: Path, output_path: Path, map_path: Path, groups_path: Path,
     for row in ws_shape.iter_rows(min_row=2):
         row[13].number_format = "0.00%"
         row[14].number_format = "0.00%"
+    dynamic_snapshot.assert_current(dynamic_root)
+    if not override_uses_project_snapshot:
+        current_override_hash = _sha256_file(actual_overrides_path) if actual_overrides_path.exists() else "ABSENT"
+        if current_override_hash != external_override_hash:
+            raise ValueError("external occurrence override source changed during decoding")
     wb.save(output_path)
     doc.close()
     return {

@@ -541,6 +541,18 @@ def rewrite_actual_workbook_fingerprint(path: Path, fingerprint_payload: Mapping
         if "v5.2中繼資料" not in wb.sheetnames:
             raise ValueError(f"{path.name} 缺少 v5.2中繼資料")
         ws = wb["v5.2中繼資料"]
+        metadata = {str(row[0].value or ""): row[1].value for row in ws.iter_rows(min_row=1, max_col=2)}
+        try:
+            stored_components = json.loads(str(metadata.get("actual_asset_fingerprint_components") or "{}"))
+        except (TypeError, ValueError):
+            raise ValueError(f"{path.name} invalid actual fingerprint components")
+        # Dependency sealing is not a migration/re-decoding operation. Only a
+        # workbook actually produced by the current decoder may be resealed;
+        # rewriting an old fingerprint must never bless old pronunciation rows.
+        if (str(metadata.get("actual_decoder_semantics_epoch") or "") != ACTUAL_DECODER_SEMANTICS_EPOCH
+                or (stored_components and str(stored_components.get("actual_decoder_semantics_epoch") or "") != ACTUAL_DECODER_SEMANTICS_EPOCH)
+                or str((fingerprint_payload.get("components") or {}).get("actual_decoder_semantics_epoch") or "") != ACTUAL_DECODER_SEMANTICS_EPOCH):
+            raise ValueError(f"{path.name} actual epoch requires fresh decoding before fingerprint sealing")
         wanted = {
             "actual_asset_fingerprint": str(fingerprint_payload.get("fingerprint") or ""),
             "actual_asset_fingerprint_components": json.dumps(

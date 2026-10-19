@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import csv
+import io
 import unittest
 from pathlib import Path
 
@@ -70,6 +72,22 @@ class RuntimeAssetManifestIntegrityV562Tests(unittest.TestCase):
                 self.assertNotIn(b"\n", payload.replace(b"\r\n", b""))
                 self.assertEqual(hashlib.sha256(payload).hexdigest(), spec["sha256"])
                 normalized = payload.replace(b"\r\n", b"\n")
+                if relative == "zhuyin_component_map.csv" and "legacy_bopomofo" in spec["required_columns"]:
+                    # The explicitly authorized candidate calibration adds
+                    # target-scoped evidence and withdraws 14 shared labels.
+                    # Preserve the original historical constraint byte for
+                    # byte through its lossless five-column legacy projection;
+                    # do not replace the historical digest with a new one.
+                    rows = list(csv.DictReader(io.StringIO(normalized.decode("utf-8-sig"))))
+                    self.assertEqual(len(rows), 1384)
+                    self.assertEqual(sum(not row["bopomofo"] for row in rows), 14)
+                    legacy = io.StringIO(newline="")
+                    columns = ("font", "zhuyin_component_id", "bopomofo", "verification", "notes")
+                    writer = csv.DictWriter(legacy, fieldnames=columns, lineterminator="\n")
+                    writer.writeheader()
+                    for row in rows:
+                        writer.writerow({name: row["legacy_bopomofo"] if name == "bopomofo" else row[name] for name in columns})
+                    normalized = ("\ufeff" + legacy.getvalue()).encode("utf-8")
                 self.assertEqual(hashlib.sha256(normalized).hexdigest(), historical_lf_sha)
 
     def test_git_attributes_freeze_every_manifest_csv_as_raw_bytes(self):

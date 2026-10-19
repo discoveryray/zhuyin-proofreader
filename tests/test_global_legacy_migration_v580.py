@@ -873,7 +873,7 @@ class MigrationArchitectureTests(unittest.TestCase):
         self.assertEqual((lib.GLOBAL_LIBRARY_SCHEMA_VERSION, lib.GLOBAL_LIBRARY_SQLITE_USER_VERSION), ("1.0", 1))
         self.assertEqual(lib.GLOBAL_MIGRATION_IMPORT_CONTRACT_VERSION, "1.0")
         self.assertEqual(lib.GLOBAL_EXACT_DEPENDENCY_CONTRACT_VERSION, "1.0")
-        self.assertEqual(compatibility.ACTUAL_DECODER_SEMANTICS_EPOCH, "1")
+        self.assertEqual(compatibility.ACTUAL_DECODER_SEMANTICS_EPOCH, "2")
         self.assertEqual(compatibility.EXPECTED_RESOLVER_SEMANTICS_EPOCH, "1")
 
     @classmethod
