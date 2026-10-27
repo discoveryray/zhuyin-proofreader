@@ -59,6 +59,115 @@ def competing_pending(output,original):
     return other,raw
 
 
+@pytest.mark.parametrize('boundary',['initial-journal','after-body','plan-journal','commit-journal',
+    'body-error','commit-written','handoff','backup','publication','entry-prefix','ack-buffer','ack-unlink'])
+def test_surface_phase_preserves_injected_foreign_state(project,boundary):
+    output,original=project
+    root=sp.project_actual_evidence_root(output);local=root/promotion.PROJECT_TRANSACTION_FILE
+    stage(output,original)
+    other,_=competing_pending(output,original)
+    (output/'external-note.tmp').write_bytes(b'external data must survive; not our temporary')
+    lock=root/'.global_exact_glyph_delivery.lock';lock_raw=lock.read_bytes()
+    injected=[];own_temps=[];expected=[];ack_active=[]
+    sync=sp.os.fsync;atomic=sp._refresh_atomic_bytes;refresh=sp._surface_projection_refresh
+    move=sp._surface_phase_move;ack=sp._acknowledge_actual_refresh
+    unlink_ack=sp.acknowledge_project_refresh;read=Path.read_bytes;write=promotion._write_json
+    def vector():
+        result={str(p.relative_to(output)):p.read_bytes() for p in output.rglob('*')
+                if p.is_file() and p!=lock and p not in own_temps}
+        result[str(lock.relative_to(output))]=lock_raw
+        return result
+    def inject(raw=None,store=False,temporary=None):
+        if injected:return
+        if temporary is not None and temporary.is_relative_to(output):
+            own_temps.append(temporary)
+        if store:
+            path=root/surface.FILE;document=surface.parse(path.read_bytes())
+            document['revision']=100;document['pending']=[other]
+            surface.verify_sources(document,sp.json_load_strict(output/'校對工作階段.json'),output)
+            path.write_bytes(surface.bytes_for(document))
+        else:
+            journal=promotion._validated_project_journal(raw if raw is not None else local.read_bytes())
+            assert journal['transaction_id']!='f'*64
+            journal['transaction_id']='f'*64
+            local.write_bytes((promotion.library._canonical_json(journal)+'\n').encode('utf-8'))
+            promotion._validated_project_journal(local.read_bytes())
+        # Full admission must really accept the three local-journal/handoff
+        # witnesses. A publication tied to the old token correctly rejects a
+        # changed local journal; do not claim that incompatible pair is admitted.
+        if not (output/sp.ACTUAL_REFRESH_PUBLICATION).exists():
+            capture_project_write_admission(output,recovery=True).recheck()
+        injected.append(True);expected.append(vector())
+    def fault_sync(fd):
+        result=sync(fd);frame=inspect.currentframe().f_back
+        path=frame.f_locals.get('path')
+        if not injected and frame.f_code.co_name=='_atomic_bytes' and path==local:
+            value=promotion._validated_project_journal(frame.f_locals['raw'])
+            point='commit-journal' if value['state']=='COMMITTED' else 'plan-journal' if local.exists() else 'initial-journal'
+            if boundary==point:inject(frame.f_locals['raw'],temporary=frame.f_locals['temporary'])
+        if not injected and frame.f_code.co_name=='_refresh_atomic_bytes':
+            if boundary=='backup' and path is not None and path.parent.name=='previous':
+                inject(store=True,temporary=frame.f_locals['temporary'])
+            elif boundary=='publication' and path==output/sp.ACTUAL_REFRESH_PUBLICATION:
+                inject(store=True,temporary=frame.f_locals['temporary'])
+        return result
+    def after_body(path,raw,**kwargs):
+        result=atomic(path,raw,**kwargs)
+        if boundary in ('after-body','body-error') and path==root/surface.FILE and not injected:
+            inject()
+            if boundary=='body-error':raise OSError('isolated body failure after foreign journal')
+        return result
+    def before_refresh(*args,**kwargs):
+        if boundary=='handoff' and not injected:inject()
+        return refresh(*args,**kwargs)
+    def after_journal(path,value,**kwargs):
+        result=write(path,value,**kwargs)
+        if boundary=='commit-written' and path==local and value.get('state')=='COMMITTED' and not injected:
+            inject()
+            raise OSError('isolated failure after durable COMMITTED marker')
+        return result
+    move_count=[]
+    def before_move(source,target,phase):
+        if boundary=='entry-prefix' and len(move_count)==2 and not injected:inject(store=True)
+        result=move(source,target,phase);move_count.append(target)
+        return result
+    def during_ack(*args,**kwargs):
+        if boundary=='ack-buffer':
+            if not expected:expected.append(vector())
+            ack_active.append(True)
+        return ack(*args,**kwargs)
+    def temporary_ack_read(path):
+        if boundary=='ack-buffer' and ack_active and path==local and not injected:
+            original_raw=read(path);journal=promotion._validated_project_journal(original_raw)
+            journal['transaction_id']='f'*64
+            foreign=(promotion.library._canonical_json(journal)+'\n').encode('utf-8')
+            path.write_bytes(foreign)
+            try:
+                value=read(path);injected.append(True)
+                return value
+            finally:path.write_bytes(original_raw)
+        return read(path)
+    def before_ack_unlink(*args,**kwargs):
+        if boundary=='ack-unlink' and not injected:inject()
+        return unlink_ack(*args,**kwargs)
+    error=None;result=None
+    with patch.object(sp.os,'fsync',new=fault_sync),patch.object(sp,'_refresh_atomic_bytes',new=after_body), \
+            patch.object(sp,'_surface_projection_refresh',new=before_refresh), \
+            patch.object(promotion,'_write_json',new=after_journal), \
+            patch.object(sp,'_surface_phase_move',new=before_move), \
+            patch.object(sp,'_acknowledge_actual_refresh',new=during_ack), \
+            patch.object(sp,'acknowledge_project_refresh',new=before_ack_unlink), \
+            patch.object(Path,'read_bytes',new=temporary_ack_read):
+        try:result=sp.apply_staged_surface_actual_corrections(output)
+        except Exception as exc:error=exc
+    assert injected and error is not None and result is None
+    assert vector()==expected[0]
+    assert (output/'external-note.tmp').read_bytes()==b'external data must survive; not our temporary'
+    if boundary in ('commit-written','handoff','backup','publication','entry-prefix','ack-buffer','ack-unlink'):
+        assert isinstance(error,sp.ManualActualPostApplyError)
+        assert error.project_actual_commit=='COMMITTED'
+
+
 @pytest.mark.parametrize('operation',['stage','apply'])
 def test_locked_surface_snapshot_drift_preserves_competing_pending(project,operation):
     output,original=project
@@ -265,15 +374,15 @@ def test_surface_unwritten_abort_cannot_remove_changed_journal(project):
 def interrupted_surface_transaction(output):
     root=sp.project_actual_evidence_root(output)
     write=promotion._write_json;recover=promotion.recover_project_actual_transaction
-    def fail_after_store(path,document):
+    def fail_after_store(path,document,**kwargs):
         if (path==root/promotion.PROJECT_TRANSACTION_FILE and path.exists()
                 and document.get('state')=='PREPARED' and document.get('recovery_plan') is not None):
             raise OSError('isolated stop before plan/commit publication')
-        return write(path,document)
-    def preserve(actual_root):
+        return write(path,document,**kwargs)
+    def preserve(actual_root,**kwargs):
         if (root/promotion.PROJECT_TRANSACTION_FILE).exists():
             raise OSError('isolated process stop retaining owner journal')
-        return recover(actual_root)
+        return recover(actual_root,**kwargs)
     with patch.object(promotion,'_write_json',new=fail_after_store), \
             patch.object(promotion,'recover_project_actual_transaction',new=preserve):
         with pytest.raises(OSError,match='retaining owner journal'):
@@ -365,7 +474,8 @@ def test_surface_transaction_rejects_temporary_foreign_preimage_before_journal(p
     _,external=competing_pending(output,original)
     before=files(output);original_raw=path.read_bytes();read=Path.read_bytes;injected=[]
     def temporary_read(current):
-        if current==path and inspect.currentframe().f_back.f_code.co_name=='direct_visual_project_transaction' and not injected:
+        if (current==path and not injected and
+                any(frame.function=='direct_visual_project_transaction' for frame in inspect.stack())):
             path.write_bytes(external)
             try:
                 result=read(current);injected.append(result)
@@ -446,14 +556,14 @@ def test_local_prepared_surface_rollback_remains_bound_to_original_inputs(projec
     _,external=competing_pending(output,original)
     before=files(output)
     recover=promotion.recover_project_actual_transaction;write=promotion._write_json
-    def interrupt_plan(path,document):
+    def interrupt_plan(path,document,**kwargs):
         if path==root/promotion.PROJECT_TRANSACTION_FILE and path.exists() and document.get('recovery_plan') is not None:
             raise OSError('isolated interrupted PREPARED surface transaction')
-        return write(path,document)
-    def preserve_pending(actual_root):
+        return write(path,document,**kwargs)
+    def preserve_pending(actual_root,**kwargs):
         if (root/promotion.PROJECT_TRANSACTION_FILE).exists():
             raise OSError('isolated process stop before local owner rollback')
-        return recover(actual_root)
+        return recover(actual_root,**kwargs)
     with patch.object(promotion,'_write_json',new=interrupt_plan), \
             patch.object(promotion,'recover_project_actual_transaction',new=preserve_pending):
         with pytest.raises(OSError,match='process stop'):
@@ -462,8 +572,8 @@ def test_local_prepared_surface_rollback_remains_bound_to_original_inputs(projec
     assert journal['state']=='PREPARED' and journal['schema_version']=='2.0'
     capture_project_write_admission(output,recovery=True).recheck()
     injected=[]
-    def rollback_then_other_write(actual_root):
-        result=recover(actual_root)
+    def rollback_then_other_write(actual_root,**kwargs):
+        result=recover(actual_root,**kwargs)
         if result=='PREPARED' and external_drift and not injected:
             (root/surface.FILE).write_bytes(external);injected.append(True)
         return result

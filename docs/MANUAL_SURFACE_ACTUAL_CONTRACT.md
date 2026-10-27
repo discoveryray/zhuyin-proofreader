@@ -20,13 +20,13 @@ public surface/service 入口使用 `project_write_admission.capture_project_wri
 
 沿用 `ReviewSaveService` 的 capture、anchor、cache 與寫前完整比對。capture 包含整份 store 的 bytes；frozen anchor 只包含 applied record 的 logical digest，因此 pending-only 暫存不阻擋獨立 expected 保存。applied record 變動需經封印 publication 重新建立 anchor。expected resolver、expected fingerprint 與 identity 不變；壞 surface store 阻止 project 寫入，不是跳過 expected resolver 的理由。
 
-surface projection refresh 在讀取 manifest、來源及晚取的發布前像後，仍比較最初的同一份 receipt，且在建立 owned stage 前拒絕有效新封印或有效 CSV 的外部漂移；不把晚讀到的合法值當作新 baseline。原 publisher 的首個 guard 再比對此 receipt，早於 previous backup 與 project publication journal 寫入。合法 PREPARED publication 先驗 owner/preimages，鎖內比較原 receipt，再由既有 owner 回滾；只有其 owned entries 回到原 bytes、publication 消失且其他已捕捉來源完全不變，才明確 reload/re-capture。回滾後的旁支漂移不能被重新接納，自己的合法 publication 完成後也不再拿舊 receipt 比較。
+surface projection refresh 在讀取 manifest、來源及晚取的發布前像後，仍比較最初的同一份 receipt，且在建立 owned stage 前拒絕有效新封印或有效 CSV 的外部漂移；不把晚讀到的合法值當作新 baseline。原 publisher 的首個 guard 再比對此 receipt，早於 previous backup 與 project publication journal 寫入。合法 PREPARED publication 先驗 owner/preimages，鎖內比較原 receipt，再由既有 owner 回滾；只有其 owned entries 回到原 bytes、publication 消失且其他已捕捉來源完全不變，才以確定的自身 outputs 推進 phase。回滾後的旁支漂移不能被重新接納，自己的合法 publication 完成後也不再拿未更新的舊 receipt 比較。
 
 C16 保存 C15 R1 已確認的 stage post-read 漂移 BLOCKED 及原重現，不以先前35項短測追認通過。`load_snapshot` 將 document 與同一次讀取的原 bytes 一起回傳；stage/apply 讀取時立即與原 admission 的 store bytes 精確比對，不能只在最後比磁碟、卻已使用暫時漂移後又還原的另一份 document。dynamic capture 也使用此同源 snapshot，不再分別讀 document 與 physical bytes。projection publisher 驗證 caller document 等於已准入 store；明確轉換只允許該 session 的空初始 document。
 
 stage 在既有 atomic helper 建立 temporary file 前與 replace 前，均核原 receipt 及 expected store bytes；surface-only apply 在原 local transaction 第一筆 PREPARED journal 前核原 receipt 與其 captured store preimage，自己的 journal 寫入後仍保護其餘原資料及 store bytes。這是 project lock 下的 optimistic prewrite comparison 與 atomic replacement，並非作業系統提供 atomic compare-and-swap；不宣稱能排除非合作外部 writer 在最後比較與 replace 之間的無限小窗口。
 
-明確 opt-in 需接續 stage 時，由同一既有 publisher 在發布前保存自身確切 staged output bytes，完成後與原 receipt 加上這些 owned outputs 比對；recapture 的共同欄位也必須精確相同，前後均重核，不能在驗完自身轉換後無條件採納較晚外部狀態。local PREPARED 回滾亦只容許原 journal preimages 與 journal/staging 的指定狀態轉換，無關來源不變才可接續。原 `load` 的唯讀回傳契約、普通 transaction/atomic helper 缺省行為、schema/epochs/identity/expected/Global 均不變。
+明確 opt-in 需接續 stage 時，由同一既有 publisher 在發布前保存自身確切 staged output bytes，完成後與原 receipt 加上這些 owned outputs 比對；共同欄位必須精確相同，前後均重核，不能在驗完自身轉換後無條件採納較晚外部狀態。local PREPARED 回滾亦只容許原 journal preimages 與 journal/staging 的指定狀態轉換，無關來源不變才可接續。原 `load` 的唯讀回傳契約、普通 transaction/atomic helper 缺省行為、schema/epochs/identity/expected/Global 均不變。
 
 surface-only 的完整 pending→applied 純轉換由 producer 與恢復共用，沒有新 actor/time。有限歷史契約命名為 `surface-only-all-pending/1`：只適用 profile1、journal2、合法原 session/origin/owner、operation=surface-only、非空原 pending。新 writer 在第一筆 PREPARED journal 已保存完整 plan；affected OIDs、reading、group 必須精確對應原全部 pending，不能接受 subset。C15 原 producer 的 PREPARED/plan=None 窗口只在上述有限契約內讀取，不視為任意操作的授權。
 
@@ -46,6 +46,16 @@ dynamic actual snapshot 保存 store 的 physical bytes，per-PDF dependency 僅
 
 ## 驗收與停止條件
 
+C17 保留 C16 的四個已確認 lifecycle BLOCKED 原件：初次 PREPARED journal、body 後 journal、COMMITTED→publisher handoff，以及 publisher backup 後的合法外部漂移。C16 原服務驗收與短測不能清除這些 code findings。使用者後續限時授權延續 corrective 計數；以下 continuation 不修改儲存 schema、epoch、identity、expected 或 Global 契約。
+
+本次 surface lifecycle 使用原 `ProjectWriteAdmission` 的 in-memory `SurfaceWritePhase`：A 是原 store bytes，C 是由 A 全部 pending 唯一導出的輸出；J0、後續 PREPARED、COMMITTED journal 及 publication 各階段均由原 receipt 與已知自身序列化輸出推進。public entry 的原 receipt 傳入內部 service，不以較晚的有效 capture 替換。journal preimages、ordinary staging、backup、stage DB/status、ack copy 實際使用的 buffer 直接來自此已知 phase；讀到暫時 B 而磁碟又還原 A，不能使 B 成為後續輸出依據。
+
+原 atomic helpers 的 surface-only 可選 phase 在 temporary 寫入之前、fsync 後 replace 之前及 replace 後核對；初次及後續三次 local journal 寫入、store body、publication journal、previous backup、每筆 stage→project replace、ack copy、ack journal 與 unlink、owned cleanup 均延續同一 phase。成功的 local COMMITTED phase 直接交給 publisher 與 acknowledgement，不能在 handoff 重新接納另一個 transaction_id。冷恢復只在最初入口唯讀准入一次；PREPARED exact own rollback 後按確切已知 outputs 更新 phase，不重新 capture 外部資料。普通 helper caller 的缺省契約保留。
+
+失敗只接受整筆 planned write 的 exact before 或 exact after；foreign bytes 不 rollback、不 merge、不 rebaseline、不 acknowledge。store 已 durable COMMITTED 後的 publication／ack 失敗維持 COMMITTED 與 refresh 失敗／待恢復狀態，保留原 journal；不能報 SUCCESS 或假稱沒有提交。負控從注入當時比較完整檔案集合，只允許清除實際 helper 已知的自身 temporary，不泛排 `.tmp`。這仍是合作鎖與 optimistic precondition，不是 OS atomic CAS；最末比較與 replace/unlink 之間對非合作 writer 的窗口不宣稱消失。
+
+自身 COMMITTED replacement 已完成並推進 known phase 後，即使後續例外或 foreign journal 使原 transaction context 無法正常退出，結果仍以既有 `ManualActualPostApplyError` 回報 COMMITTED／refresh 未完成；不由目前磁碟或僅 attempted marker 猜測 durability。正常 publication／ack／rollback cleanup 繼續核完整 phase。若外部 project B 導致尚未發布的自身 stage 需要撤除，只有原 known publication 為 ABSENT、從未 attempt publication replacement、stage 完整檔案 roster/bytes 皆屬已知自身輸出且無 extra/links，才從這些原 bytes 與 publication ABSENT 導出窄 cleanup receipt。它只清自身未引用 stage，不觸碰 project B；曾發布後被外部刪 journal 不能套用此例外。
+
 必要定向回歸涵蓋原頁 proof/負向控制、blank human input、pending→expected save、apply→重開→refresh、其他位置／expected／DB 保全、required file 刪除／損壞／錯身分、語法有效寫前漂移、per-PDF cache、raw override 正常 refresh 分流、rollback、durable publication cleanup、pending recovery、重複保存與 provenance history。原 PDF/原九筆以隔離副本另驗；非視窗服務證據不能稱為人工 GUI 驗收。
 
-新候選仍須兩輪完整獨立審查、固定候選一次當前非視窗全集及必要當次原件／CI，不能用 C13/H13 PASS 或舊版執行失敗代替。本次沒有 C16 授權；新版寫前保全不足、未解交易／來源回歸、必須改 identity/expected/Global DB schema 或放寬傳播邊界時停止。generic gate 的真實結果與全部歷史原文保留。
+新候選仍須兩輪完整獨立審查、固定候選一次當前非視窗全集及必要當次原件／CI，不能用 C13/H13 PASS 或舊版執行失敗代替。C15 原「不授權 C16」停止及其 BLOCKED 保留於歷史，後續 C16／C17 依使用者另行限時授權執行，不追認舊 PASS。新版寫前保全不足、未解交易／來源回歸、必須改 identity/expected/Global DB schema 或放寬傳播邊界時停止；限時授權仍受其收尾與失效時間限制。generic gate 的真實結果與全部歷史原文保留。

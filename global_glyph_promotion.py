@@ -49,9 +49,13 @@ def _json(raw: bytes):
         raise library.GlobalLibraryValidationError("invalid operational JSON") from exc
 
 
-def _atomic_bytes(path: Path, raw: bytes, *, _prewrite_guard=None):
+def _atomic_bytes(path: Path, raw: bytes, *, _prewrite_guard=None, _phase=None):
+    if _phase is not None:
+        _phase.plan({path:raw})
     if _prewrite_guard is not None:
         _prewrite_guard()
+    if _phase is not None:
+        _phase.recheck()
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name("." + path.name + "." + uuid4().hex + ".tmp")
     try:
@@ -61,13 +65,20 @@ def _atomic_bytes(path: Path, raw: bytes, *, _prewrite_guard=None):
             os.fsync(handle.fileno())
         if _prewrite_guard is not None:
             _prewrite_guard()
+        if _phase is not None:
+            _phase.recheck()
+            _phase.attempting()
         os.replace(temporary, path)
+        if _phase is not None:
+            _phase.written()
     finally:
         temporary.unlink(missing_ok=True)
 
 
-def _write_json(path: Path, value):
-    _atomic_bytes(path, (library._canonical_json(value) + "\n").encode("utf-8"))
+def _write_json(path: Path, value, *, _prewrite_guard=None, _phase=None):
+    _atomic_bytes(path, (library._canonical_json(value) + "\n").encode("utf-8"),
+        **({'_prewrite_guard':_prewrite_guard} if _prewrite_guard is not None else {}),
+        **({'_phase':_phase} if _phase is not None else {}))
 
 
 @contextmanager
@@ -381,17 +392,20 @@ def _surface_rollback_preconditions(journal,manifest,current_files,staging_raw):
     return before,after
 
 
-def recover_project_actual_transaction(root: Path):
+def recover_project_actual_transaction(root: Path, *, _phase=None):
     root = Path(root)
     from project_write_admission import project_from_actual_root, capture_project_write_admission, has_surface_indicators
     project = project_from_actual_root(root)
     path = root / PROJECT_TRANSACTION_FILE
     if not path.exists():
         return
-    journal_raw = path.read_bytes()
+    if _phase is not None:
+        _phase.recheck()
+    journal_raw = _phase.expected_bytes(path) if _phase is not None else path.read_bytes()
     journal = _validated_project_journal(journal_raw)
     owned = project is not None and (has_surface_indicators(project) or journal['schema_version']=='2.0')
-    admission = capture_project_write_admission(project, recovery=True) if owned else None
+    admission = (_phase.receipt() if _phase is not None else
+                 capture_project_write_admission(project, recovery=True) if owned else None)
     if admission is not None and admission.expected_bytes(path)!=journal_raw:
         raise library.GlobalLibraryValidationError('surface rollback journal differs from original receipt')
     if journal['schema_version'] == '2.0':
@@ -426,15 +440,22 @@ def recover_project_actual_transaction(root: Path):
             if raw is None:
                 target.unlink(missing_ok=True)
             else:
-                _atomic_bytes(target, raw,**({'_prewrite_guard':admission.recheck} if surface_only else {}))
+                _atomic_bytes(target, raw,**({'_phase':_phase} if _phase is not None else
+                    {'_prewrite_guard':admission.recheck} if surface_only else {}))
         if not surface_only:
             _restore_staging(root, journal["staging"])
         else:
             from project_write_admission import ProjectWriteAdmission
             restored=dict(admission.files)
             restored[str((root/surface.FILE).resolve())]=before
-            ProjectWriteAdmission(admission.project,tuple(sorted(restored.items())),admission.profile).recheck()
-        path.unlink()
+            if _phase is None:
+                ProjectWriteAdmission(admission.project,tuple(sorted(restored.items())),admission.profile).recheck()
+            else:
+                _phase.recheck()
+        if _phase is not None:
+            _phase.plan({path:None});_phase.attempting();path.unlink();_phase.written()
+        else:
+            path.unlink()
     return state
 
 
@@ -473,19 +494,29 @@ def assert_project_actual_readable(root: Path):
     project_refresh_token(root)
 
 
-def acknowledge_project_refresh(root: Path, token):
+def acknowledge_project_refresh(root: Path, token, *, _phase=None):
     if token is None:
         return
     with project_delivery_lock(root):
-        if project_refresh_token(root) != token:
+        path=Path(root)/PROJECT_TRANSACTION_FILE
+        if _phase is not None:
+            _phase.recheck()
+            journal=_validated_project_journal(_phase.expected_bytes(path))
+            observed=journal['transaction_id'] if journal['state']=='COMMITTED' else None
+        else:
+            observed=project_refresh_token(root)
+        if observed != token:
             raise library.GlobalLibraryIntentConflictError("project refresh acknowledgement is stale")
-        (Path(root) / PROJECT_TRANSACTION_FILE).unlink()
+        if _phase is not None:
+            _phase.plan({path:None});_phase.attempting();path.unlink();_phase.written()
+        else:
+            path.unlink()
 
 
 @contextmanager
 def direct_visual_project_transaction(root: Path, *, operation='direct-visual',
                                       _prewrite_guard=None, _surface_preimage=None,
-                                      _surface_plan=None, _surface_origin_sha=None):
+                                      _surface_plan=None, _surface_origin_sha=None, _phase=None):
     """Durable undo journal for the six-file commit and staging acknowledgement.
 
     An interrupted PREPARED transaction is rolled back before any retry/delivery.
@@ -493,11 +524,23 @@ def direct_visual_project_transaction(root: Path, *, operation='direct-visual',
     No Global SQLite operation occurs inside this context.
     """
     root = Path(root)
-    with project_delivery_lock(root):
+    def check_transaction_inputs():
         if _prewrite_guard is not None:
-            _prewrite_guard()
-        recover_project_actual_transaction(root)
-        if project_refresh_token(root) is not None:
+            try:
+                _prewrite_guard()
+            except ValueError as exc:
+                # Preserve the original surface-preimage rejection API when
+                # the real receipt reader sees a transient foreign buffer.
+                message='PROJECT_WRITE_ADMISSION: source changed before write: '+str((root/'manual_surface_actual.json').resolve())
+                if _surface_preimage is not None and str(exc)==message:
+                    raise library.GlobalLibraryValidationError(
+                        'surface transaction preimage differs from admitted bytes') from exc
+                raise
+    with project_delivery_lock(root):
+        check_transaction_inputs()
+        recover_project_actual_transaction(root,**({'_phase':_phase} if _phase is not None else {}))
+        from_phase=_phase.expected_bytes(root/PROJECT_TRANSACTION_FILE) if _phase is not None else None
+        if (from_phase is not None if _phase is not None else project_refresh_token(root) is not None):
             raise library.GlobalLibraryValidationError("finish committed project recovery before a new actual transaction")
         load_promotion_outbox(root)  # malformed outbox fails before project writes
         surface_path = root/'manual_surface_actual.json'
@@ -506,14 +549,17 @@ def direct_visual_project_transaction(root: Path, *, operation='direct-visual',
             "schema_version": '2.0' if surface else '1.0', "state": "PREPARED",
             "transaction_id": hashlib.sha256(uuid4().bytes).hexdigest(),
             "recovery_plan": None,
-            "files": {name: _packed((root / name).read_bytes() if (root / name).exists() else None)
+            "files": {name: _packed(_phase.expected_bytes(root/name) if _phase is not None else
+                                    (root/name).read_bytes() if (root/name).exists() else None)
                       for name in (SURFACE_PROJECT_FILES if surface else PROJECT_FILES)},
-            "staging": _packed((root / STAGING_FILE).read_bytes() if (root / STAGING_FILE).exists() else None),
+            "staging": _packed(_phase.expected_bytes(root/STAGING_FILE) if _phase is not None else
+                               (root/STAGING_FILE).read_bytes() if (root/STAGING_FILE).exists() else None),
         }
         if surface:
             import standalone_proofread as sp
             project = root.resolve().parent.parent
-            manifest = sp.json_load_strict(project/'校對工作階段.json')
+            manifest = (sp.json_parse_strict(_phase.expected_bytes(project/'校對工作階段.json'),project/'校對工作階段.json')
+                        if _phase is not None else sp.json_load_strict(project/'校對工作階段.json'))
             journal['owner'] = {'project':str(project),'session_id':manifest['session_id'],
                                 'origin_manifest_sha256':manifest['manifest_integrity_sha256'],
                                 'operation':operation}
@@ -525,22 +571,22 @@ def direct_visual_project_transaction(root: Path, *, operation='direct-visual',
         if _surface_plan is not None:
             journal['recovery_plan']=validate_post_commit_recovery_plan(_surface_plan)
             _surface_transaction_images(journal,manifest)
-        if _prewrite_guard is not None:
-            _prewrite_guard()  # Before the first PREPARED journal write.
+        check_transaction_inputs()  # Before the first PREPARED journal write.
         path = root / PROJECT_TRANSACTION_FILE
         initial_journal_raw = (library._canonical_json(journal) + '\n').encode('utf-8')
-        _write_json(path, journal)
+        _write_json(path, journal,**({'_phase':_phase} if _phase is not None else {}))
         def bind_recovery_plan(plan):
             checked=validate_post_commit_recovery_plan(plan)
             if _surface_plan is not None and checked!=journal['recovery_plan']:
                 raise library.GlobalLibraryValidationError('surface transaction changed original pending plan')
             journal["recovery_plan"] = checked
+        bind_recovery_plan.phase=_phase
         try:
             yield bind_recovery_plan
             validate_post_commit_recovery_plan(journal["recovery_plan"])
-            _write_json(path, journal)  # plan durable before COMMITTED publication
+            _write_json(path, journal,**({'_phase':_phase} if _phase is not None else {}))
             journal["state"] = "COMMITTED"
-            _write_json(path, journal)
+            _write_json(path, journal,**({'_phase':_phase} if _phase is not None else {}))
         except BaseException as exc:
             if operation=='surface-only' and _surface_preimage is not None:
                 from manual_surface_actual import SurfaceWriteNotPerformed
@@ -556,7 +602,13 @@ def direct_visual_project_transaction(root: Path, *, operation='direct-visual',
                             'surface abort journal changed; no rollback or acknowledgement') from exc
                     path.unlink()  # Remove only our exact, uncommitted journal.
                     raise
-            recover_project_actual_transaction(root)
+            if _phase is not None:
+                try:
+                    _phase.reconcile()
+                except ValueError as changed:
+                    raise library.GlobalLibraryValidationError(
+                        'surface rollback rejected foreign phase; no recovery writes') from changed
+            recover_project_actual_transaction(root,**({'_phase':_phase} if _phase is not None else {}))
             raise
         # Retain the COMMITTED marker until a full-session refresh succeeds.
         # A crash after Global acknowledgement must not lose refresh recovery.

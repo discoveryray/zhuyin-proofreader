@@ -16,13 +16,32 @@ from pathlib import Path
 
 _ACTIVE = ContextVar('project_write_admission', default=())
 _CREATING = ContextVar('project_creation_admission', default=())
+_ENTRY_RECEIPTS = ContextVar('surface_entry_receipts', default=())
+
+
+def entry_write_admission(project):
+    project=Path(project).resolve()
+    return next((receipt for owner,receipt in reversed(_ENTRY_RECEIPTS.get()) if owner==project),None)
 
 
 @contextmanager
-def owned_refresh_stage(stage, source):
+def _entry_receipt(receipt):
+    if receipt is None:
+        yield
+        return
+    token=_ENTRY_RECEIPTS.set((*_ENTRY_RECEIPTS.get(),(receipt.project,receipt)))
+    try:
+        yield
+    finally:
+        _ENTRY_RECEIPTS.reset(token)
+
+
+@contextmanager
+def owned_refresh_stage(stage, source, *, _phase=None):
     """Only the existing publisher may work in its newly allocated own stage."""
     stage, source = Path(stage).resolve(), Path(source).resolve()
-    receipt = capture_project_write_admission(source, recovery=True) if has_surface_indicators(source) else None
+    receipt = (_phase.receipt() if _phase is not None else
+               capture_project_write_admission(source, recovery=True) if has_surface_indicators(source) else None)
     if receipt is not None:
         receipt.recheck()
     if (stage.parent != source.parent or not stage.name.startswith('.ar-')
@@ -63,6 +82,79 @@ class ProjectWriteAdmission:
         for name, expected in self.files:
             if _bytes(Path(name)) != expected:
                 raise ValueError('PROJECT_WRITE_ADMISSION: source changed before write: ' + name)
+
+
+class SurfaceWritePhase:
+    """In-memory continuation of one admitted surface lifecycle, not a loader.
+
+    New values may only be outputs planned before our own write. A legal but
+    different on-disk document never establishes a new continuation baseline.
+    """
+    def __init__(self, receipt):
+        if type(receipt) is not ProjectWriteAdmission:
+            raise ValueError('SURFACE_PHASE: original admission required')
+        self.project=receipt.project
+        self.profile=receipt.profile
+        self.files=dict(receipt.files)
+        self.pending=None
+        self.attempted_paths=set()
+
+    def _key(self,path):
+        return str(Path(path).resolve())
+
+    def expected_bytes(self,path):
+        key=self._key(path)
+        if key not in self.files:
+            raise ValueError('SURFACE_PHASE: unbound path: '+key)
+        return self.files[key]
+
+    def receipt(self):
+        return ProjectWriteAdmission(self.project,tuple(sorted(self.files.items())),self.profile)
+
+    def recheck(self):
+        self.receipt().recheck()
+
+    def include(self,path,expected):
+        key=self._key(path)
+        if key in self.files and self.files[key]!=expected:
+            raise ValueError('SURFACE_PHASE: conflicting known input: '+key)
+        if _bytes(Path(key))!=expected:
+            raise ValueError('SURFACE_PHASE: source changed before write: '+key)
+        self.files[key]=expected
+
+    def plan(self,outputs):
+        if self.pending is not None:
+            raise ValueError('SURFACE_PHASE: unfinished owned write')
+        changes={self._key(path):raw for path,raw in outputs.items()}
+        for name in changes:
+            if name not in self.files:
+                self.include(name,None)
+        self.recheck()
+        self.pending=({name:self.files[name] for name in changes},changes)
+
+    def written(self):
+        if self.pending is None:
+            raise ValueError('SURFACE_PHASE: no planned output')
+        self.files.update(self.pending[1])
+        self.pending=None
+        self.recheck()
+
+    def attempting(self):
+        if self.pending is None:
+            raise ValueError('SURFACE_PHASE: no planned output')
+        self.attempted_paths.update(self.pending[1])
+
+    def reconcile(self):
+        """An interrupted atomic write permits only its known before/after."""
+        if self.pending is not None:
+            before,after=self.pending
+            actual={name:_bytes(Path(name)) for name in before}
+            if actual==after:
+                self.files.update(after)
+            elif actual!=before:
+                raise ValueError('SURFACE_PHASE: foreign bytes after interrupted write')
+            self.pending=None
+        self.recheck()
 
 
 def project_from_actual_root(root):
@@ -135,6 +227,8 @@ def capture_project_write_admission(output_dir, *, allow_new=False, recovery=Fal
             raise ValueError('PROJECT_WRITE_ADMISSION: unsupported project schema')
         root = sp.project_actual_evidence_root(project)
         captured = {manifest_path: manifest_raw}
+        for name in ('待人工確認.json','pipeline_status.json'):
+            captured[project/name]=_bytes(project/name)
         db_path = project/'人工判定資料庫.json'
         captured[db_path] = _bytes(db_path)
         # Missing DB and an empty object are legal historical states. Never run
@@ -322,7 +416,9 @@ def project_write_entry(*, allow_new=False, recovery=False, locked=False, surfac
                         **({'_admission':receipt} if receipt is not None and receipt.profile else {})):
                     if receipt is not None:
                         receipt.recheck()
-                    return function(*args, **kwargs)
-            return function(*args, **kwargs)
+                    with _entry_receipt(receipt):
+                        return function(*args, **kwargs)
+            with _entry_receipt(receipt):
+                return function(*args, **kwargs)
         return run
     return decorate
