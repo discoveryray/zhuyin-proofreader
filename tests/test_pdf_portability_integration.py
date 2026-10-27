@@ -93,6 +93,9 @@ def _synthetic_decode(pdf, output, *args, global_snapshot=None):
     metadata.append(["項目", "內容"])
     metadata.append(["workbook_schema_version", ol.WORKBOOK_SCHEMA_VERSION])
     metadata.append(["ledger_schema_version", ol.LEDGER_SCHEMA_VERSION])
+    # This fixture replaces a fresh decoder invocation, so it must emit the
+    # producer's epoch receipt as well as its provisional fingerprint.
+    metadata.append(["actual_decoder_semantics_epoch", fingerprint["components"]["actual_decoder_semantics_epoch"]])
     metadata.append(["pdf_sha256", digest])
     metadata.append(["actual_asset_fingerprint", fingerprint["fingerprint"]])
     metadata.append(["actual_asset_fingerprint_components", json.dumps(fingerprint["components"], ensure_ascii=False, sort_keys=True)])

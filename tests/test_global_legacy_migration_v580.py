@@ -873,7 +873,7 @@ class MigrationArchitectureTests(unittest.TestCase):
         self.assertEqual((lib.GLOBAL_LIBRARY_SCHEMA_VERSION, lib.GLOBAL_LIBRARY_SQLITE_USER_VERSION), ("1.0", 1))
         self.assertEqual(lib.GLOBAL_MIGRATION_IMPORT_CONTRACT_VERSION, "1.0")
         self.assertEqual(lib.GLOBAL_EXACT_DEPENDENCY_CONTRACT_VERSION, "1.0")
-        self.assertEqual(compatibility.ACTUAL_DECODER_SEMANTICS_EPOCH, "1")
+        self.assertEqual(compatibility.ACTUAL_DECODER_SEMANTICS_EPOCH, "2")
         self.assertEqual(compatibility.EXPECTED_RESOLVER_SEMANTICS_EPOCH, "1")
 
     @classmethod
@@ -1235,9 +1235,73 @@ class MigrationArchitectureTests(unittest.TestCase):
         historical_assets = self._phase5_asset_bytes(json.loads(historical["runtime_asset_manifest.json"]))
         current = {name: (ROOT / name).read_bytes() for name in self._PROTECTED_RELEASE_FILES}
         assets = {path: (ROOT / path).read_bytes() for path in historical_assets}
-        current["runtime_source_validation.py"] = self._project_authorized_actual_snapshot_seam(
-            current["runtime_source_validation.py"])
-        self._assert_phase5_release_boundaries(current, historical, assets, historical_assets)
+        from tests.actual_candidate_history_projection import (
+            project_current_actual_assets, project_current_actual_cache_guard, project_current_actual_epoch,
+        )
+        original_current = dict(current)
+        current["runtime_source_validation.py"] = project_current_actual_cache_guard(
+            self._project_authorized_actual_snapshot_seam(current["runtime_source_validation.py"]))
+        current["cross_version_compat.py"] = project_current_actual_epoch(current["cross_version_compat.py"])
+        current["runtime_asset_manifest.json"], projected_assets = project_current_actual_assets(
+            current["runtime_asset_manifest.json"], historical["runtime_asset_manifest.json"], assets)
+        # The old oracle and every old mutation test stay untouched. Only the
+        # independently pinned authorized changes are projected before it.
+        self._assert_phase5_release_boundaries(current, historical, projected_assets, historical_assets)
+        for path in assets:
+            changed_assets = dict(assets)
+            changed_assets[path] += b"unauthorized bytes"
+            with self.subTest(unknown_asset_drift=path), self.assertRaises(AssertionError):
+                project_current_actual_assets(original_current["runtime_asset_manifest.json"],
+                                              historical["runtime_asset_manifest.json"], changed_assets)
+        manifest = json.loads(original_current["runtime_asset_manifest.json"])
+        for mutation in ("unknown_field", "unknown_sha", "schema", "missing_column", "expected_chain"):
+            changed = copy.deepcopy(manifest)
+            target = next(asset for asset in changed["assets"] if asset["name"] == "zhuyin_component_map")
+            if mutation == "unknown_field": target["future_contract"] = True
+            elif mutation == "unknown_sha": target["sha256"] = "0" * 64
+            elif mutation == "schema": changed["schema_version"] = "future"
+            elif mutation == "missing_column": target["required_columns"].remove("legacy_bopomofo")
+            else: next(asset for asset in changed["assets"] if asset["chain"] == "expected")["chain"] = "actual"
+            with self.subTest(unknown_manifest_drift=mutation), self.assertRaises(AssertionError):
+                project_current_actual_assets((json.dumps(changed, ensure_ascii=False, indent=2) + "\n").encode(),
+                                              historical["runtime_asset_manifest.json"], assets)
+        for old, new in ((b'ACTUAL_DECODER_SEMANTICS_EPOCH = "2"', b'ACTUAL_DECODER_SEMANTICS_EPOCH = "1"'),
+                         (b'ACTUAL_DECODER_SEMANTICS_EPOCH = "2"', b'ACTUAL_DECODER_SEMANTICS_EPOCH = "3"'),
+                         (b'EXPECTED_RESOLVER_SEMANTICS_EPOCH = "1"', b'EXPECTED_RESOLVER_SEMANTICS_EPOCH = "2"')):
+            with self.subTest(epoch_drift=new), self.assertRaises(AssertionError):
+                project_current_actual_epoch(original_current["cross_version_compat.py"].replace(old, new))
+        runtime = original_current["runtime_source_validation.py"].replace(b"\r\n", b"\n")
+        for old, new in ((b'FINGERPRINT_COMPATIBILITY_REQUIRED_KEYS["actual"]', b'FINGERPRINT_COMPATIBILITY_REQUIRED_KEYS["expected"]'),
+                         (b'"global_exact_glyph_evidence_hashes"}', b'"actual_asset_hashes"}'),
+                         (b'fingerprint_contract_components(stored_components, chain="actual")', b'pass'),
+                         (b'if not isinstance(stored_components, dict)', b'if False')):
+            self.assertEqual(runtime.count(old), 1)
+            with self.subTest(cache_guard_drift=new), self.assertRaises(AssertionError):
+                project_current_actual_cache_guard(runtime.replace(old, new, 1))
+        from tests.actual_candidate_history_projection import CACHE_SEAL_ADDITION
+        for mutation, changed in (
+                ("missing_cache_guard", runtime.replace(CACHE_SEAL_ADDITION, b"", 1)),
+                ("duplicate_cache_guard", runtime.replace(CACHE_SEAL_ADDITION, CACHE_SEAL_ADDITION * 2, 1)),
+                ("missing_required_import", runtime.replace(b"    FINGERPRINT_COMPATIBILITY_REQUIRED_KEYS,\n", b"", 1)),
+                ("duplicate_required_import", runtime.replace(b"    FINGERPRINT_COMPATIBILITY_REQUIRED_KEYS,\n",
+                     b"    FINGERPRINT_COMPATIBILITY_REQUIRED_KEYS,\n" * 2, 1))):
+            with self.subTest(cache_guard_structure=mutation), self.assertRaises(AssertionError):
+                project_current_actual_cache_guard(changed)
+        for path in ("runtime_source_validation.py", "cross_version_compat.py"):
+            # The finite projector must not hide edits outside its admitted delta;
+            # the untouched historical byte oracle rejects any remaining change.
+            changed = dict(current)
+            changed[path] += b"\n# unauthorized source edit\n"
+            with self.subTest(unrelated_source_drift=path), self.assertRaises(AssertionError):
+                self._assert_phase5_release_boundaries(changed, historical, projected_assets, historical_assets)
+        duplicate_epoch = original_current["cross_version_compat.py"] + b'\nACTUAL_DECODER_SEMANTICS_EPOCH = "2"\n'
+        with self.subTest(duplicate_actual_epoch=True), self.assertRaises(AssertionError):
+            project_current_actual_epoch(duplicate_epoch)
+        duplicate_manifest = original_current["runtime_asset_manifest.json"].replace(
+            b'"tool_version": "5.8.0"', b'"tool_version": "5.8.0", "tool_version": "5.8.0"', 1)
+        self.assertNotEqual(duplicate_manifest, original_current["runtime_asset_manifest.json"])
+        with self.subTest(duplicate_manifest_field=True), self.assertRaises(AssertionError):
+            project_current_actual_assets(duplicate_manifest, historical["runtime_asset_manifest.json"], assets)
         current = ast.parse((ROOT / "standalone_proofread.py").read_text(encoding="utf-8"))
         self._assert_legacy_expected_adapter_contract(current)
         current = self._project_authorized_standalone_actual_snapshot_calls(current)
@@ -1451,8 +1515,9 @@ class MigrationArchitectureTests(unittest.TestCase):
                  (lib, "GLOBAL_LIBRARY_SQLITE_USER_VERSION", 2),
                  (lib, "GLOBAL_MIGRATION_IMPORT_CONTRACT_VERSION", "2.0"),
                  (lib, "GLOBAL_EXACT_DEPENDENCY_CONTRACT_VERSION", "2.0"),
-                 (compatibility, "ACTUAL_DECODER_SEMANTICS_EPOCH", "2"),
+                 (compatibility, "ACTUAL_DECODER_SEMANTICS_EPOCH", "1"),
+                 (compatibility, "ACTUAL_DECODER_SEMANTICS_EPOCH", "3"),
                  (compatibility, "EXPECTED_RESOLVER_SEMANTICS_EPOCH", "2")]
         for module, field, value in cases:
-            with self.subTest(field=field), patch.object(module, field, value), self.assertRaises(AssertionError):
+            with self.subTest(field=field, value=value), patch.object(module, field, value), self.assertRaises(AssertionError):
                 self._assert_contract_versions()

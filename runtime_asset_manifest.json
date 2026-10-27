@@ -324,13 +324,16 @@
       "chain": "actual",
       "path": "zhuyin_component_map.csv",
       "kind": "csv",
-      "sha256": "53a5369e96f60a552aeae6503b1b2584741bf3930facedf1f4d273048c90b291",
+      "sha256": "2e4d3a9bf454e2653f2b7caed42ca7c82aa5cd77a845cc919bda28adf83a9998",
       "required_columns": [
         "font",
         "zhuyin_component_id",
         "bopomofo",
         "verification",
-        "notes"
+        "notes",
+        "legacy_bopomofo",
+        "calibration_status",
+        "target_bindings"
       ],
       "min_rows": 1300,
       "expected_rows": 1384,
@@ -339,11 +342,19 @@
         "zhuyin_component_id"
       ],
       "duplicate_value_columns": [
-        "bopomofo"
+        "bopomofo",
+        "legacy_bopomofo",
+        "calibration_status",
+        "target_bindings"
       ],
       "bopomofo_columns": [
         {
           "column": "bopomofo",
+          "mode": "single",
+          "allow_empty": true
+        },
+        {
+          "column": "legacy_bopomofo",
           "mode": "single",
           "allow_empty": false
         }
@@ -532,14 +543,16 @@
       "chain": "actual",
       "path": "ttf_verified_outline_signatures.csv",
       "kind": "csv",
-      "sha256": "d00e60764d976fbd19934f20399d5fa9326cae12039fbd45a5f9973368a8f4a0",
+      "sha256": "ad24d8fda6a9c6321d5d31ecbbf5b98b674e11f936dfed41f60824bc8d85b59b",
       "required_columns": [
         "outline_signature",
         "bopomofo",
         "source_count",
         "source_examples",
         "verification",
-        "notes"
+        "notes",
+        "legacy_verification",
+        "revocation_evidence"
       ],
       "min_rows": 1500,
       "expected_rows": 1563,
@@ -547,7 +560,9 @@
         "outline_signature"
       ],
       "duplicate_value_columns": [
-        "bopomofo"
+        "bopomofo",
+        "legacy_verification",
+        "revocation_evidence"
       ],
       "bopomofo_columns": [
         {
@@ -562,7 +577,7 @@
       "chain": "actual",
       "path": "ttf_verified_mapping_corrections.csv",
       "kind": "csv",
-      "sha256": "e7176b983f027f18d1883026caa845191670b4a1bed640f7bb37d7c2c125040b",
+      "sha256": "dd5827bce2d7d5f08723e8613d4a52419fde79ef434ce59fd840edfc6732691a",
       "required_columns": [
         "font",
         "component_id",
@@ -575,7 +590,7 @@
         "notes"
       ],
       "min_rows": 5,
-      "expected_rows": 10,
+      "expected_rows": 1174,
       "unique_key": [
         "font",
         "component_id",

@@ -2293,7 +2293,7 @@ def _load_sheet_rows(path: Path, sheet: str, required_columns=()) -> tuple[dict[
         return meta, rows
 
 
-def load_glyph_truth_quarantine(root: Path) -> dict[str, set[Any]]:
+def load_glyph_truth_quarantine(root: Path, *, snapshot: ValidatedDynamicActualSnapshot | None = None) -> dict[str, set[Any]]:
     """Return exact glyph identities that are forbidden from global reuse.
 
     Quarantine is behavioral evidence: the exact SHA has contradictory direct
@@ -2301,8 +2301,12 @@ def load_glyph_truth_quarantine(root: Path) -> dict[str, set[Any]]:
     occurrence reading.
     """
     root = Path(root)
-    ensure_user_evidence_files(root)
-    rows = _read_actual_evidence_csv(root / GLYPH_CONFLICT_FILE, GLYPH_CONFLICT_HEADERS)
+    if snapshot is None:
+        ensure_user_evidence_files(root)
+        rows = _read_actual_evidence_csv(root / GLYPH_CONFLICT_FILE, GLYPH_CONFLICT_HEADERS)
+    else:
+        snapshot.assert_current(root)
+        rows = snapshot.rows(GLYPH_CONFLICT_FILE)
     ttf: set[str] = set()
     cff: set[tuple[str, str]] = set()
     for row in rows:
@@ -3204,8 +3208,15 @@ def import_actual_review_workbook(
 
 
 
-def load_user_verified_glyf(path: Path) -> dict[str, dict[str, str]]:
-    rows = _read_csv(Path(path), USER_GLYF_HEADERS)
+def load_user_verified_glyf(path: Path, *, snapshot: ValidatedDynamicActualSnapshot | None = None) -> dict[str, dict[str, str]]:
+    path = Path(path)
+    if snapshot is None:
+        rows = _read_csv(path, USER_GLYF_HEADERS)
+    else:
+        snapshot.assert_current(path.parent)
+        if path.name != USER_GLYF_FILE:
+            raise ValueError("foreign TTF evidence snapshot file")
+        rows = snapshot.rows(USER_GLYF_FILE)
     out = {}
     for row in rows:
         if row.get("verification_level") != "VERIFIED_EXACT_GLYPH":
@@ -3217,8 +3228,15 @@ def load_user_verified_glyf(path: Path) -> dict[str, dict[str, str]]:
     return out
 
 
-def load_user_verified_cff(path: Path) -> dict[tuple[str, str], dict[str, str]]:
-    rows = _read_csv(Path(path), USER_CFF_HEADERS)
+def load_user_verified_cff(path: Path, *, snapshot: ValidatedDynamicActualSnapshot | None = None) -> dict[tuple[str, str], dict[str, str]]:
+    path = Path(path)
+    if snapshot is None:
+        rows = _read_csv(path, USER_CFF_HEADERS)
+    else:
+        snapshot.assert_current(path.parent)
+        if path.name != USER_CFF_FILE:
+            raise ValueError("foreign CFF evidence snapshot file")
+        rows = snapshot.rows(USER_CFF_FILE)
     out = {}
     for row in rows:
         if row.get("verification_level") != "VERIFIED_EXACT_GLYPH":

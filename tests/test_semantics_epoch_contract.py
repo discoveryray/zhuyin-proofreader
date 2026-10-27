@@ -122,8 +122,10 @@ def validation_report():
     }
 
 
-def test_initial_epochs_are_explicit_required_contract_fields():
-    assert compat.ACTUAL_DECODER_SEMANTICS_EPOCH == "1"
+def test_initial_epochs_are_explicit_required_contract_fields(tmp_path):
+    from tests.actual_candidate_checks import run_admission_checks
+    run_admission_checks(tmp_path)
+    assert compat.ACTUAL_DECODER_SEMANTICS_EPOCH == "2"
     assert compat.EXPECTED_RESOLVER_SEMANTICS_EPOCH == "1"
     assert "actual_decoder_semantics_epoch" in compat.FINGERPRINT_COMPATIBILITY_REQUIRED_KEYS["actual"]
     assert "expected_resolver_semantics_epoch" in compat.FINGERPRINT_COMPATIBILITY_REQUIRED_KEYS["expected"]
@@ -131,8 +133,9 @@ def test_initial_epochs_are_explicit_required_contract_fields():
 
 def test_actual_same_epoch_is_compatible_and_different_epoch_fails_closed():
     assert compatible(actual_components(), actual_components(), chain="actual")
+    assert not compatible(actual_components(actual_decoder_semantics_epoch="1"), actual_components(), chain="actual")
     assert not compatible(
-        actual_components(), actual_components(actual_decoder_semantics_epoch="2"), chain="actual"
+        actual_components(), actual_components(actual_decoder_semantics_epoch="3"), chain="actual"
     )
 
 
@@ -363,7 +366,7 @@ def test_actual_and_expected_epoch_contracts_are_independent():
         chain="expected",
     )
     assert not compatible(
-        actual_components(), actual_components(actual_decoder_semantics_epoch="2"), chain="actual"
+        actual_components(), actual_components(actual_decoder_semantics_epoch="3"), chain="actual"
     )
     assert not compatible(
         expected_components(), expected_components(expected_resolver_semantics_epoch="2"), chain="expected"
@@ -373,7 +376,7 @@ def test_actual_and_expected_epoch_contracts_are_independent():
 def test_exact_fingerprint_equality_cannot_bypass_epoch_boundary():
     assert not compatible(
         actual_components(),
-        actual_components(actual_decoder_semantics_epoch="2"),
+        actual_components(actual_decoder_semantics_epoch="3"),
         chain="actual",
         stored_fingerprint="same",
         current_fingerprint="same",
@@ -413,7 +416,7 @@ def test_actual_producer_writes_epoch_to_components_reuse_and_digest(tmp_path: P
         source_files=[decoder.name],
         global_exact_glyph_evidence_hashes=actual_components()["global_exact_glyph_evidence_hashes"],
     )
-    with patch.object(source, "ACTUAL_DECODER_SEMANTICS_EPOCH", "2"):
+    with patch.object(source, "ACTUAL_DECODER_SEMANTICS_EPOCH", "3"):
         second = source.compute_actual_asset_fingerprint(
             tmp_path,
             pdf,
@@ -422,8 +425,8 @@ def test_actual_producer_writes_epoch_to_components_reuse_and_digest(tmp_path: P
             source_files=[decoder.name],
             global_exact_glyph_evidence_hashes=actual_components()["global_exact_glyph_evidence_hashes"],
         )
-    assert first["components"]["actual_decoder_semantics_epoch"] == "1"
-    assert first["reuse_components"]["actual_decoder_semantics_epoch"] == "1"
+    assert first["components"]["actual_decoder_semantics_epoch"] == "2"
+    assert first["reuse_components"]["actual_decoder_semantics_epoch"] == "2"
     assert second["fingerprint"] != first["fingerprint"]
 
 
@@ -467,7 +470,7 @@ def test_producer_epoch_bumps_do_not_cross_invalidate_chains(tmp_path: Path):
     expected = source.compute_expected_asset_fingerprint(
         tmp_path, validation_report(), resolver_version="5.6.2", source_files=[resolver.name]
     )
-    with patch.object(source, "ACTUAL_DECODER_SEMANTICS_EPOCH", "2"):
+    with patch.object(source, "ACTUAL_DECODER_SEMANTICS_EPOCH", "3"):
         expected_after_actual_bump = source.compute_expected_asset_fingerprint(
             tmp_path, validation_report(), resolver_version="5.6.2", source_files=[resolver.name]
         )
@@ -539,7 +542,7 @@ def test_phase0b1_transitional_actual_digest_maps_only_to_initial_epoch():
     )
     assert not compatible(
         stored,
-        actual_components(actual_decoder_semantics_epoch="2"),
+        actual_components(actual_decoder_semantics_epoch="3"),
         chain="actual",
         stored_fingerprint=transitional_digest,
     )
@@ -570,7 +573,7 @@ def test_v551_actual_has_no_transitive_adapter_to_v30_while_expected_adapter_rem
     stored_actual.pop("actual_decoder_semantics_epoch")
     assert not compatible(stored_actual, actual_components(), chain="actual")
     assert not compatible(
-        stored_actual, actual_components(actual_decoder_semantics_epoch="2"), chain="actual"
+        stored_actual, actual_components(actual_decoder_semantics_epoch="3"), chain="actual"
     )
 
     stored_expected = expected_components(fingerprint_schema_version="2.6.0")

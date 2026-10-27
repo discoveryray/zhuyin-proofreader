@@ -148,8 +148,11 @@ def isolated_pipeline(tmp_path, monkeypatch):
         excluded = wb.create_sheet("結構偵測排除"); append_text_row(excluded, EXCLUDED_COLUMNS)
         metadata = wb.create_sheet("v5.2中繼資料")
         fingerprint = args[-2]
+        # This fixture replaces fresh decoding, so it must emit the producer's
+        # epoch receipt before the real dependency-sealing guard may accept it.
         for pair in [("項目", "內容"), ("workbook_schema_version", ol.WORKBOOK_SCHEMA_VERSION),
                      ("ledger_schema_version", ol.LEDGER_SCHEMA_VERSION), ("pdf_sha256", sealed_sha),
+                     ("actual_decoder_semantics_epoch", fingerprint["components"]["actual_decoder_semantics_epoch"]),
                      ("actual_asset_fingerprint", fingerprint["fingerprint"]),
                      ("actual_asset_fingerprint_components", json.dumps(fingerprint["components"], ensure_ascii=False, sort_keys=True))]:
             append_text_row(metadata, pair)

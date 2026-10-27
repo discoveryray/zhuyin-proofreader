@@ -1,0 +1,19 @@
+{
+  "kind": "DIRECT_GRAPHIC_LABEL_CORRECTION_V1",
+  "visual_id": 143,
+  "glyph_sha256": "4358e502d6cabf1d4b36a87cbd7d40163969e798955f2ec8f7e155b88d2ec985",
+  "old_AI_label": "ㄐㄧㄡˇ",
+  "corrected_AI_label": "ㄐㄧㄡ",
+  "method": "Enlarged original visible page crop and isolated full annotation glyph show ㄐ, ㄧ, ㄡ only. The upper/right fold is part of ㄡ, with no detached third-tone mark. No Han, dictionary, expected or manual value is used as reading evidence. Existing manual ㄐㄧㄡ remains unmodified.",
+  "original_crop_sha256": "f565cb5c6e9322507b63a772d67c200e61f492c02d13a576423eed495f2769fe",
+  "isolated_svg_sha256": "a9a186771c46fdb3b858b794d15be233be56fc018369588f98e5415d8cd52a9e",
+  "original_raw_archive": "C:\\Users\\E04069\\Documents\\Codex\\2026-10-19\\c-users-e04069-desktop-github2-zhuyin\\work\\implementation-evidence\\graphic143-original-raw",
+  "human_confirmation": false,
+  "global_approval": false,
+  "new_global_independent_source": false,
+  "independent_reviewer_visual_checks": [
+    "/root/review_candidate_admission",
+    "/root/review_graphic_calibration"
+  ],
+  "reviewer_checks_are_not_Global_independent_sources": true
+}

@@ -1,0 +1,2276 @@
+{
+  "schema": "finite-ai-root-blind-reading/1",
+  "reader": "review_graphic_calibration",
+  "reader_kind": "AI graphic observation; not human or Global evidence",
+  "source_head": "3c638b3b7d3492dc5d0dc0539aa8f5a5e8f78ece",
+  "blind_index_sha256": "d1803b34076777a2859a967ff13af5e4fc1a0e2b805f62dd5d907c20c2dc6574",
+  "frozen_at_utc": "2026-10-19 06:39:06 UTC",
+  "indices": [
+    1,
+    450
+  ],
+  "count": 450,
+  "method": "Read all 19 reviewer contact sheets with original PDF annotation painting and isolated SVG. Enlarge uncertain strokes before freeze. No old labels, Han, expected or decoder answers consulted. Labels are own visual judgment and may be corrected only by append-only postfreeze resolution.",
+  "notes": [
+    {
+      "index": 81,
+      "note": "Expanded isolated glyph: upper ㄌ has two upper vertical strokes; lower ㄥ and acute tone visible. Read ㄌㄨㄥˊ."
+    },
+    {
+      "index": 350,
+      "note": "Original PDF crop rotates the annotation sideways; isolated vertical reading ㄕㄨˇ. PAGE and isolated geometry agree after rotation. No added phonetic strokes."
+    }
+  ],
+  "records": [
+    {
+      "index": 1,
+      "reading": "ㄊㄧˇ",
+      "why": null
+    },
+    {
+      "index": 2,
+      "reading": "ㄏㄣˇ",
+      "why": null
+    },
+    {
+      "index": 3,
+      "reading": "ㄕㄤ",
+      "why": null
+    },
+    {
+      "index": 4,
+      "reading": "ㄖㄨㄥˊ",
+      "why": null
+    },
+    {
+      "index": 5,
+      "reading": "ㄑㄧㄥˊ",
+      "why": null
+    },
+    {
+      "index": 6,
+      "reading": "ㄗㄣˇ",
+      "why": null
+    },
+    {
+      "index": 7,
+      "reading": "ㄙㄨㄢˋ",
+      "why": null
+    },
+    {
+      "index": 8,
+      "reading": "ㄊㄤˊ",
+      "why": null
+    },
+    {
+      "index": 9,
+      "reading": "ㄓˇ",
+      "why": null
+    },
+    {
+      "index": 10,
+      "reading": "ㄖˋ",
+      "why": null
+    },
+    {
+      "index": 11,
+      "reading": "ㄖㄤˋ",
+      "why": null
+    },
+    {
+      "index": 12,
+      "reading": "ㄌㄧㄥˇ",
+      "why": null
+    },
+    {
+      "index": 13,
+      "reading": "ㄕㄠ",
+      "why": null
+    },
+    {
+      "index": 14,
+      "reading": "ㄅㄞˇ",
+      "why": null
+    },
+    {
+      "index": 15,
+      "reading": "ㄉㄚ",
+      "why": null
+    },
+    {
+      "index": 16,
+      "reading": "ㄉㄤ",
+      "why": null
+    },
+    {
+      "index": 17,
+      "reading": "ㄍㄨㄢ",
+      "why": null
+    },
+    {
+      "index": 18,
+      "reading": "ㄊㄧㄥ",
+      "why": null
+    },
+    {
+      "index": 19,
+      "reading": "ㄒㄧㄠˋ",
+      "why": null
+    },
+    {
+      "index": 20,
+      "reading": "ㄗㄨㄛˋ",
+      "why": null
+    },
+    {
+      "index": 21,
+      "reading": "ㄅㄤ",
+      "why": null
+    },
+    {
+      "index": 22,
+      "reading": "ㄍㄡˇ",
+      "why": null
+    },
+    {
+      "index": 23,
+      "reading": "ㄊㄨㄟˇ",
+      "why": null
+    },
+    {
+      "index": 24,
+      "reading": "ㄋㄚˇ",
+      "why": null
+    },
+    {
+      "index": 25,
+      "reading": "ㄊㄧˊ",
+      "why": null
+    },
+    {
+      "index": 26,
+      "reading": "ㄋㄠˋ",
+      "why": null
+    },
+    {
+      "index": 27,
+      "reading": "ㄔㄚˊ",
+      "why": null
+    },
+    {
+      "index": 28,
+      "reading": "ㄑㄧˋ",
+      "why": null
+    },
+    {
+      "index": 29,
+      "reading": "ㄍㄨㄢˇ",
+      "why": null
+    },
+    {
+      "index": 30,
+      "reading": "ㄨㄛˇ",
+      "why": null
+    },
+    {
+      "index": 31,
+      "reading": "ㄆㄥˊ",
+      "why": null
+    },
+    {
+      "index": 32,
+      "reading": "ㄕㄥˊ",
+      "why": null
+    },
+    {
+      "index": 33,
+      "reading": "ㄧㄤˊ",
+      "why": null
+    },
+    {
+      "index": 34,
+      "reading": "ㄍㄨㄛˋ",
+      "why": null
+    },
+    {
+      "index": 35,
+      "reading": "ㄕㄨˊ",
+      "why": null
+    },
+    {
+      "index": 36,
+      "reading": "ㄉㄧㄢˇ",
+      "why": null
+    },
+    {
+      "index": 37,
+      "reading": "ㄨㄟˋ",
+      "why": null
+    },
+    {
+      "index": 38,
+      "reading": "ㄑㄩㄢˊ",
+      "why": null
+    },
+    {
+      "index": 39,
+      "reading": "ㄉㄨㄛ",
+      "why": null
+    },
+    {
+      "index": 40,
+      "reading": "ㄅㄧˋ",
+      "why": null
+    },
+    {
+      "index": 41,
+      "reading": "ㄇㄚˇ",
+      "why": null
+    },
+    {
+      "index": 42,
+      "reading": "ㄨㄤˊ",
+      "why": null
+    },
+    {
+      "index": 43,
+      "reading": "ㄓㄢˇ",
+      "why": null
+    },
+    {
+      "index": 44,
+      "reading": "ㄌㄠˇ",
+      "why": null
+    },
+    {
+      "index": 45,
+      "reading": "˙ㄓㄜ",
+      "why": null
+    },
+    {
+      "index": 46,
+      "reading": "ㄑㄧㄤˊ",
+      "why": null
+    },
+    {
+      "index": 47,
+      "reading": "ㄒㄩㄣˊ",
+      "why": null
+    },
+    {
+      "index": 48,
+      "reading": "ㄓㄨㄥ",
+      "why": null
+    },
+    {
+      "index": 49,
+      "reading": "˙ㄋㄜ",
+      "why": null
+    },
+    {
+      "index": 50,
+      "reading": "ㄒㄧㄠ",
+      "why": null
+    },
+    {
+      "index": 51,
+      "reading": "ㄊㄡˊ",
+      "why": null
+    },
+    {
+      "index": 52,
+      "reading": "ㄒㄧㄚˋ",
+      "why": null
+    },
+    {
+      "index": 53,
+      "reading": "ㄍㄞ",
+      "why": null
+    },
+    {
+      "index": 54,
+      "reading": "ㄑㄩㄣˊ",
+      "why": null
+    },
+    {
+      "index": 55,
+      "reading": "ㄊㄧㄥ",
+      "why": null
+    },
+    {
+      "index": 56,
+      "reading": "ㄕㄨㄟˇ",
+      "why": null
+    },
+    {
+      "index": 57,
+      "reading": "ㄉㄧㄝˊ",
+      "why": null
+    },
+    {
+      "index": 58,
+      "reading": "ㄗㄨㄣ",
+      "why": null
+    },
+    {
+      "index": 59,
+      "reading": "ㄑㄩㄝˋ",
+      "why": null
+    },
+    {
+      "index": 60,
+      "reading": "ㄏㄨㄣˋ",
+      "why": null
+    },
+    {
+      "index": 61,
+      "reading": "ㄉㄨㄥˋ",
+      "why": null
+    },
+    {
+      "index": 62,
+      "reading": "ㄈㄚˇ",
+      "why": null
+    },
+    {
+      "index": 63,
+      "reading": "ㄇㄧㄥˊ",
+      "why": null
+    },
+    {
+      "index": 64,
+      "reading": "ㄌㄧㄝˋ",
+      "why": null
+    },
+    {
+      "index": 65,
+      "reading": "˙ㄒㄧ",
+      "why": null
+    },
+    {
+      "index": 66,
+      "reading": "ㄊㄞˋ",
+      "why": null
+    },
+    {
+      "index": 67,
+      "reading": "ㄊㄧˇ",
+      "why": null
+    },
+    {
+      "index": 68,
+      "reading": "ㄒㄧㄤˋ",
+      "why": null
+    },
+    {
+      "index": 69,
+      "reading": "ㄌㄧㄠˊ",
+      "why": null
+    },
+    {
+      "index": 70,
+      "reading": "ㄉㄠˋ",
+      "why": null
+    },
+    {
+      "index": 71,
+      "reading": "ㄌㄟˋ",
+      "why": null
+    },
+    {
+      "index": 72,
+      "reading": "ㄉㄨㄥˋ",
+      "why": null
+    },
+    {
+      "index": 73,
+      "reading": "ㄏㄞˊ",
+      "why": null
+    },
+    {
+      "index": 74,
+      "reading": "ㄏㄟ",
+      "why": null
+    },
+    {
+      "index": 75,
+      "reading": "ㄒㄧㄝˋ",
+      "why": null
+    },
+    {
+      "index": 76,
+      "reading": "ㄍㄥ",
+      "why": null
+    },
+    {
+      "index": 77,
+      "reading": "ㄆㄢˊ",
+      "why": null
+    },
+    {
+      "index": 78,
+      "reading": "ㄌㄧㄥˊ",
+      "why": null
+    },
+    {
+      "index": 79,
+      "reading": "ㄐㄧㄝˊ",
+      "why": null
+    },
+    {
+      "index": 80,
+      "reading": "ㄋㄚˊ",
+      "why": null
+    },
+    {
+      "index": 81,
+      "reading": "ㄌㄨㄥˊ",
+      "why": null
+    },
+    {
+      "index": 82,
+      "reading": "ㄒㄩㄥ",
+      "why": null
+    },
+    {
+      "index": 83,
+      "reading": "ㄕㄤˇ",
+      "why": null
+    },
+    {
+      "index": 84,
+      "reading": "ㄅㄨˊ",
+      "why": null
+    },
+    {
+      "index": 85,
+      "reading": "ㄍㄡ",
+      "why": null
+    },
+    {
+      "index": 86,
+      "reading": "ㄒㄩㄢˇ",
+      "why": null
+    },
+    {
+      "index": 87,
+      "reading": "ㄖㄨㄛˋ",
+      "why": null
+    },
+    {
+      "index": 88,
+      "reading": "ㄐㄧㄝˇ",
+      "why": null
+    },
+    {
+      "index": 89,
+      "reading": "ㄇㄛˊ",
+      "why": null
+    },
+    {
+      "index": 90,
+      "reading": "ㄊㄨㄣˊ",
+      "why": null
+    },
+    {
+      "index": 91,
+      "reading": "ㄗㄨˊ",
+      "why": null
+    },
+    {
+      "index": 92,
+      "reading": "ㄏㄨˋ",
+      "why": null
+    },
+    {
+      "index": 93,
+      "reading": "ㄓㄠˇ",
+      "why": null
+    },
+    {
+      "index": 94,
+      "reading": "ㄊㄧㄢˊ",
+      "why": null
+    },
+    {
+      "index": 95,
+      "reading": "ㄇㄣˇ",
+      "why": null
+    },
+    {
+      "index": 96,
+      "reading": "ㄆㄢˋ",
+      "why": null
+    },
+    {
+      "index": 97,
+      "reading": "ㄏㄨㄛˋ",
+      "why": null
+    },
+    {
+      "index": 98,
+      "reading": "ㄒㄧㄤˋ",
+      "why": null
+    },
+    {
+      "index": 99,
+      "reading": "ㄩㄥˇ",
+      "why": null
+    },
+    {
+      "index": 100,
+      "reading": "ㄊㄧ",
+      "why": null
+    },
+    {
+      "index": 101,
+      "reading": "ㄍㄣ",
+      "why": null
+    },
+    {
+      "index": 102,
+      "reading": "ㄐㄧㄣ",
+      "why": null
+    },
+    {
+      "index": 103,
+      "reading": "ㄗㄣˇ",
+      "why": null
+    },
+    {
+      "index": 104,
+      "reading": "ㄒㄩˋ",
+      "why": null
+    },
+    {
+      "index": 105,
+      "reading": "ㄋㄚˋ",
+      "why": null
+    },
+    {
+      "index": 106,
+      "reading": "ㄅㄧㄣ",
+      "why": null
+    },
+    {
+      "index": 107,
+      "reading": "ㄋㄢˊ",
+      "why": null
+    },
+    {
+      "index": 108,
+      "reading": "ㄩㄝ",
+      "why": null
+    },
+    {
+      "index": 109,
+      "reading": "ㄓㄢˋ",
+      "why": null
+    },
+    {
+      "index": 110,
+      "reading": "ㄗㄞˋ",
+      "why": null
+    },
+    {
+      "index": 111,
+      "reading": "ㄈㄟˋ",
+      "why": null
+    },
+    {
+      "index": 112,
+      "reading": "ㄊㄨㄢˊ",
+      "why": null
+    },
+    {
+      "index": 113,
+      "reading": "ㄈㄢ",
+      "why": null
+    },
+    {
+      "index": 114,
+      "reading": "ㄕㄜˋ",
+      "why": null
+    },
+    {
+      "index": 115,
+      "reading": "ㄒㄩㄣˋ",
+      "why": null
+    },
+    {
+      "index": 116,
+      "reading": "ㄕㄡˇ",
+      "why": null
+    },
+    {
+      "index": 117,
+      "reading": "ㄗㄨㄣ",
+      "why": null
+    },
+    {
+      "index": 118,
+      "reading": "ㄉㄡ",
+      "why": null
+    },
+    {
+      "index": 119,
+      "reading": "ㄉㄠˋ",
+      "why": null
+    },
+    {
+      "index": 120,
+      "reading": "ㄧㄤˋ",
+      "why": null
+    },
+    {
+      "index": 121,
+      "reading": "ㄗㄨㄛˇ",
+      "why": null
+    },
+    {
+      "index": 122,
+      "reading": "ㄎㄨㄥ",
+      "why": null
+    },
+    {
+      "index": 123,
+      "reading": "ㄙㄜˋ",
+      "why": null
+    },
+    {
+      "index": 124,
+      "reading": "ㄌㄤˋ",
+      "why": null
+    },
+    {
+      "index": 125,
+      "reading": "ㄙㄨˊ",
+      "why": null
+    },
+    {
+      "index": 126,
+      "reading": "ㄕㄡ",
+      "why": null
+    },
+    {
+      "index": 127,
+      "reading": "ㄐㄧㄤ",
+      "why": null
+    },
+    {
+      "index": 128,
+      "reading": "ㄐㄧㄢ",
+      "why": null
+    },
+    {
+      "index": 129,
+      "reading": "ㄋㄚˇ",
+      "why": null
+    },
+    {
+      "index": 130,
+      "reading": "ㄒㄧㄢˋ",
+      "why": null
+    },
+    {
+      "index": 131,
+      "reading": "ㄇㄤˊ",
+      "why": null
+    },
+    {
+      "index": 132,
+      "reading": "ㄇㄞˇ",
+      "why": null
+    },
+    {
+      "index": 133,
+      "reading": "ㄓㄤˇ",
+      "why": null
+    },
+    {
+      "index": 134,
+      "reading": "ㄅㄢ",
+      "why": null
+    },
+    {
+      "index": 135,
+      "reading": "ㄖㄣˋ",
+      "why": null
+    },
+    {
+      "index": 136,
+      "reading": "ㄏㄨㄟˊ",
+      "why": null
+    },
+    {
+      "index": 137,
+      "reading": "ㄨㄢˇ",
+      "why": null
+    },
+    {
+      "index": 138,
+      "reading": "ㄒㄧㄣˋ",
+      "why": null
+    },
+    {
+      "index": 139,
+      "reading": "ㄓㄨㄣˇ",
+      "why": null
+    },
+    {
+      "index": 140,
+      "reading": "ㄓㄨㄤˋ",
+      "why": null
+    },
+    {
+      "index": 141,
+      "reading": "ㄑㄧˇ",
+      "why": null
+    },
+    {
+      "index": 142,
+      "reading": "ㄍㄨㄛˊ",
+      "why": null
+    },
+    {
+      "index": 143,
+      "reading": "ㄌㄚˋ",
+      "why": null
+    },
+    {
+      "index": 144,
+      "reading": "ㄒㄧㄠˇ",
+      "why": null
+    },
+    {
+      "index": 145,
+      "reading": "ㄓ",
+      "why": null
+    },
+    {
+      "index": 146,
+      "reading": "ㄔㄨ",
+      "why": null
+    },
+    {
+      "index": 147,
+      "reading": "ㄌㄧˋ",
+      "why": null
+    },
+    {
+      "index": 148,
+      "reading": "ㄐㄧㄚ",
+      "why": null
+    },
+    {
+      "index": 149,
+      "reading": "ㄩˇ",
+      "why": null
+    },
+    {
+      "index": 150,
+      "reading": "ㄔㄨㄢˊ",
+      "why": null
+    },
+    {
+      "index": 151,
+      "reading": "ㄕㄨˇ",
+      "why": null
+    },
+    {
+      "index": 152,
+      "reading": "ㄉㄚˇ",
+      "why": null
+    },
+    {
+      "index": 153,
+      "reading": "ㄋㄧˊ",
+      "why": null
+    },
+    {
+      "index": 154,
+      "reading": "ㄍㄠ",
+      "why": null
+    },
+    {
+      "index": 155,
+      "reading": "ㄌㄜˋ",
+      "why": null
+    },
+    {
+      "index": 156,
+      "reading": "ㄎㄢˋ",
+      "why": null
+    },
+    {
+      "index": 157,
+      "reading": "ㄙㄨㄟˋ",
+      "why": null
+    },
+    {
+      "index": 158,
+      "reading": "ㄏㄨㄚˊ",
+      "why": null
+    },
+    {
+      "index": 159,
+      "reading": "ㄔㄠ",
+      "why": null
+    },
+    {
+      "index": 160,
+      "reading": "ㄘㄨㄥ",
+      "why": null
+    },
+    {
+      "index": 161,
+      "reading": "ㄐㄧㄥˋ",
+      "why": null
+    },
+    {
+      "index": 162,
+      "reading": "ㄙㄨㄛˇ",
+      "why": null
+    },
+    {
+      "index": 163,
+      "reading": "ㄩˊ",
+      "why": null
+    },
+    {
+      "index": 164,
+      "reading": "ㄗˋ",
+      "why": null
+    },
+    {
+      "index": 165,
+      "reading": "ㄒㄧˋ",
+      "why": null
+    },
+    {
+      "index": 166,
+      "reading": "ㄈㄚˇ",
+      "why": null
+    },
+    {
+      "index": 167,
+      "reading": "ㄊㄨㄟˋ",
+      "why": null
+    },
+    {
+      "index": 168,
+      "reading": "ㄙㄨㄛˇ",
+      "why": null
+    },
+    {
+      "index": 169,
+      "reading": "ㄕㄡˇ",
+      "why": null
+    },
+    {
+      "index": 170,
+      "reading": "ㄕㄨㄣˋ",
+      "why": null
+    },
+    {
+      "index": 171,
+      "reading": "ㄔㄤˊ",
+      "why": null
+    },
+    {
+      "index": 172,
+      "reading": "ㄓㄨˋ",
+      "why": null
+    },
+    {
+      "index": 173,
+      "reading": "ㄋㄟˋ",
+      "why": null
+    },
+    {
+      "index": 174,
+      "reading": "ㄓㄨˊ",
+      "why": null
+    },
+    {
+      "index": 175,
+      "reading": "ㄎㄜ",
+      "why": null
+    },
+    {
+      "index": 176,
+      "reading": "ㄩㄝˋ",
+      "why": null
+    },
+    {
+      "index": 177,
+      "reading": "ㄌㄧㄤˋ",
+      "why": null
+    },
+    {
+      "index": 178,
+      "reading": "ㄑㄧㄠˊ",
+      "why": null
+    },
+    {
+      "index": 179,
+      "reading": "ㄏㄠˇ",
+      "why": null
+    },
+    {
+      "index": 180,
+      "reading": "ㄗㄨㄛˋ",
+      "why": null
+    },
+    {
+      "index": 181,
+      "reading": "ㄕㄨㄛ",
+      "why": null
+    },
+    {
+      "index": 182,
+      "reading": "ㄓㄤˇ",
+      "why": null
+    },
+    {
+      "index": 183,
+      "reading": "ㄆㄟˊ",
+      "why": null
+    },
+    {
+      "index": 184,
+      "reading": "ㄗˋ",
+      "why": null
+    },
+    {
+      "index": 185,
+      "reading": "ㄌㄟˋ",
+      "why": null
+    },
+    {
+      "index": 186,
+      "reading": "ㄒㄧㄥˋ",
+      "why": null
+    },
+    {
+      "index": 187,
+      "reading": "ㄩㄥˋ",
+      "why": null
+    },
+    {
+      "index": 188,
+      "reading": "ㄗ",
+      "why": null
+    },
+    {
+      "index": 189,
+      "reading": "ㄌㄧㄢˋ",
+      "why": null
+    },
+    {
+      "index": 190,
+      "reading": "ㄧㄤˇ",
+      "why": null
+    },
+    {
+      "index": 191,
+      "reading": "ㄐㄧㄠˋ",
+      "why": null
+    },
+    {
+      "index": 192,
+      "reading": "ㄔㄚ",
+      "why": null
+    },
+    {
+      "index": 193,
+      "reading": "ㄔㄨㄤ",
+      "why": null
+    },
+    {
+      "index": 194,
+      "reading": "ㄆㄧㄥˊ",
+      "why": null
+    },
+    {
+      "index": 195,
+      "reading": "ㄋㄧㄢˊ",
+      "why": null
+    },
+    {
+      "index": 196,
+      "reading": "ㄓㄥˋ",
+      "why": null
+    },
+    {
+      "index": 197,
+      "reading": "ㄇㄛˊ",
+      "why": null
+    },
+    {
+      "index": 198,
+      "reading": "ㄍㄨㄢˋ",
+      "why": null
+    },
+    {
+      "index": 199,
+      "reading": "ㄏㄨㄞˊ",
+      "why": null
+    },
+    {
+      "index": 200,
+      "reading": "ㄉㄚˋ",
+      "why": null
+    },
+    {
+      "index": 201,
+      "reading": "ㄌㄨˋ",
+      "why": null
+    },
+    {
+      "index": 202,
+      "reading": "ㄊㄥˊ",
+      "why": null
+    },
+    {
+      "index": 203,
+      "reading": "ㄏㄜˊ",
+      "why": null
+    },
+    {
+      "index": 204,
+      "reading": "ㄐㄧˊ",
+      "why": null
+    },
+    {
+      "index": 205,
+      "reading": "ㄕㄥˋ",
+      "why": null
+    },
+    {
+      "index": 206,
+      "reading": "ㄒㄧㄝˇ",
+      "why": null
+    },
+    {
+      "index": 207,
+      "reading": "ㄅㄨˊ",
+      "why": null
+    },
+    {
+      "index": 208,
+      "reading": "ㄙㄢ",
+      "why": null
+    },
+    {
+      "index": 209,
+      "reading": "ㄧㄠˋ",
+      "why": null
+    },
+    {
+      "index": 210,
+      "reading": "ㄈㄢˋ",
+      "why": null
+    },
+    {
+      "index": 211,
+      "reading": "ㄍㄨˇ",
+      "why": null
+    },
+    {
+      "index": 212,
+      "reading": "ㄍㄨˋ",
+      "why": null
+    },
+    {
+      "index": 213,
+      "reading": "ㄊㄨㄟ",
+      "why": null
+    },
+    {
+      "index": 214,
+      "reading": "ㄓˋ",
+      "why": null
+    },
+    {
+      "index": 215,
+      "reading": "ㄈㄤˊ",
+      "why": null
+    },
+    {
+      "index": 216,
+      "reading": "ㄌㄞˋ",
+      "why": null
+    },
+    {
+      "index": 217,
+      "reading": "ㄕㄨㄟˇ",
+      "why": null
+    },
+    {
+      "index": 218,
+      "reading": "ㄍㄜˋ",
+      "why": null
+    },
+    {
+      "index": 219,
+      "reading": "ㄋㄟˋ",
+      "why": null
+    },
+    {
+      "index": 220,
+      "reading": "ㄐㄧㄡˋ",
+      "why": null
+    },
+    {
+      "index": 221,
+      "reading": "ㄍㄨㄥˋ",
+      "why": null
+    },
+    {
+      "index": 222,
+      "reading": "ㄗㄜˊ",
+      "why": null
+    },
+    {
+      "index": 223,
+      "reading": "ㄉㄚˊ",
+      "why": null
+    },
+    {
+      "index": 224,
+      "reading": "ㄒㄧˊ",
+      "why": null
+    },
+    {
+      "index": 225,
+      "reading": "ㄆㄧㄢ",
+      "why": null
+    },
+    {
+      "index": 226,
+      "reading": "ㄊㄧㄝ",
+      "why": null
+    },
+    {
+      "index": 227,
+      "reading": "ㄐㄧㄡ",
+      "why": null
+    },
+    {
+      "index": 228,
+      "reading": "ㄌㄧㄤˇ",
+      "why": null
+    },
+    {
+      "index": 229,
+      "reading": "ㄌㄧㄥˋ",
+      "why": null
+    },
+    {
+      "index": 230,
+      "reading": "ㄌㄧˋ",
+      "why": null
+    },
+    {
+      "index": 231,
+      "reading": "ㄍㄞˋ",
+      "why": null
+    },
+    {
+      "index": 232,
+      "reading": "ㄅㄚˇ",
+      "why": null
+    },
+    {
+      "index": 233,
+      "reading": "ㄐㄧㄝˇ",
+      "why": null
+    },
+    {
+      "index": 234,
+      "reading": "ㄙㄨㄟˊ",
+      "why": null
+    },
+    {
+      "index": 235,
+      "reading": "ㄊㄧㄥˊ",
+      "why": null
+    },
+    {
+      "index": 236,
+      "reading": "ㄏㄨㄢ",
+      "why": null
+    },
+    {
+      "index": 237,
+      "reading": "ㄎㄞ",
+      "why": null
+    },
+    {
+      "index": 238,
+      "reading": "ㄨˋ",
+      "why": null
+    },
+    {
+      "index": 239,
+      "reading": "ㄇㄧㄣˊ",
+      "why": null
+    },
+    {
+      "index": 240,
+      "reading": "ㄌㄧˋ",
+      "why": null
+    },
+    {
+      "index": 241,
+      "reading": "ㄓㄨㄥˋ",
+      "why": null
+    },
+    {
+      "index": 242,
+      "reading": "ㄘㄞˋ",
+      "why": null
+    },
+    {
+      "index": 243,
+      "reading": "ㄊㄠˊ",
+      "why": null
+    },
+    {
+      "index": 244,
+      "reading": "ㄧㄢˋ",
+      "why": null
+    },
+    {
+      "index": 245,
+      "reading": "ㄐㄩˋ",
+      "why": null
+    },
+    {
+      "index": 246,
+      "reading": "ㄩㄢˊ",
+      "why": null
+    },
+    {
+      "index": 247,
+      "reading": "ㄓㄨㄣˇ",
+      "why": null
+    },
+    {
+      "index": 248,
+      "reading": "ㄔㄨˊ",
+      "why": null
+    },
+    {
+      "index": 249,
+      "reading": "ㄙㄠˇ",
+      "why": null
+    },
+    {
+      "index": 250,
+      "reading": "ㄨㄢˊ",
+      "why": null
+    },
+    {
+      "index": 251,
+      "reading": "ㄍㄜ",
+      "why": null
+    },
+    {
+      "index": 252,
+      "reading": "ㄐㄧㄚˋ",
+      "why": null
+    },
+    {
+      "index": 253,
+      "reading": "ㄕˇ",
+      "why": null
+    },
+    {
+      "index": 254,
+      "reading": "ㄍㄨㄥ",
+      "why": null
+    },
+    {
+      "index": 255,
+      "reading": "ㄌㄨㄣˊ",
+      "why": null
+    },
+    {
+      "index": 256,
+      "reading": "ㄨㄣˊ",
+      "why": null
+    },
+    {
+      "index": 257,
+      "reading": "ㄖㄜˋ",
+      "why": null
+    },
+    {
+      "index": 258,
+      "reading": "ㄕˋ",
+      "why": null
+    },
+    {
+      "index": 259,
+      "reading": "ㄕㄨㄤ",
+      "why": null
+    },
+    {
+      "index": 260,
+      "reading": "ㄑㄧㄥ",
+      "why": null
+    },
+    {
+      "index": 261,
+      "reading": "ㄇㄧㄥˋ",
+      "why": null
+    },
+    {
+      "index": 262,
+      "reading": "ㄏㄞˊ",
+      "why": null
+    },
+    {
+      "index": 263,
+      "reading": "ㄩㄥˋ",
+      "why": null
+    },
+    {
+      "index": 264,
+      "reading": "ㄘˋ",
+      "why": null
+    },
+    {
+      "index": 265,
+      "reading": "ㄅㄞˇ",
+      "why": null
+    },
+    {
+      "index": 266,
+      "reading": "ㄏㄡˋ",
+      "why": null
+    },
+    {
+      "index": 267,
+      "reading": "ㄔㄨˇ",
+      "why": null
+    },
+    {
+      "index": 268,
+      "reading": "˙ㄗ",
+      "why": null
+    },
+    {
+      "index": 269,
+      "reading": "ㄨㄞˋ",
+      "why": null
+    },
+    {
+      "index": 270,
+      "reading": "ㄘˋ",
+      "why": null
+    },
+    {
+      "index": 271,
+      "reading": "ㄐㄧㄢˋ",
+      "why": null
+    },
+    {
+      "index": 272,
+      "reading": "ㄓㄜˋ",
+      "why": null
+    },
+    {
+      "index": 273,
+      "reading": "ㄅㄞˋ",
+      "why": null
+    },
+    {
+      "index": 274,
+      "reading": "ㄌㄢ",
+      "why": null
+    },
+    {
+      "index": 275,
+      "reading": "ㄆㄛ",
+      "why": null
+    },
+    {
+      "index": 276,
+      "reading": "ㄔㄜ",
+      "why": null
+    },
+    {
+      "index": 277,
+      "reading": "ㄆㄤˊ",
+      "why": null
+    },
+    {
+      "index": 278,
+      "reading": "ㄗㄨˇ",
+      "why": null
+    },
+    {
+      "index": 279,
+      "reading": "ㄍㄨˋ",
+      "why": null
+    },
+    {
+      "index": 280,
+      "reading": "ㄅㄧㄢˋ",
+      "why": null
+    },
+    {
+      "index": 281,
+      "reading": "ㄊㄧㄥˊ",
+      "why": null
+    },
+    {
+      "index": 282,
+      "reading": "ㄑㄧㄡˊ",
+      "why": null
+    },
+    {
+      "index": 283,
+      "reading": "ㄈㄤˇ",
+      "why": null
+    },
+    {
+      "index": 284,
+      "reading": "ㄍㄠˋ",
+      "why": null
+    },
+    {
+      "index": 285,
+      "reading": "ㄅㄛˊ",
+      "why": null
+    },
+    {
+      "index": 286,
+      "reading": "ㄍㄨㄣˇ",
+      "why": null
+    },
+    {
+      "index": 287,
+      "reading": "ㄊㄚ",
+      "why": null
+    },
+    {
+      "index": 288,
+      "reading": "ㄘㄥˊ",
+      "why": null
+    },
+    {
+      "index": 289,
+      "reading": "ㄅㄧˇ",
+      "why": null
+    },
+    {
+      "index": 290,
+      "reading": "ㄋㄠˇ",
+      "why": null
+    },
+    {
+      "index": 291,
+      "reading": "ㄏㄨˇ",
+      "why": null
+    },
+    {
+      "index": 292,
+      "reading": "ㄕˊ",
+      "why": null
+    },
+    {
+      "index": 293,
+      "reading": "ㄗㄨㄟˋ",
+      "why": null
+    },
+    {
+      "index": 294,
+      "reading": "ㄆㄛ",
+      "why": null
+    },
+    {
+      "index": 295,
+      "reading": "ㄅㄤ",
+      "why": null
+    },
+    {
+      "index": 296,
+      "reading": "ㄐㄧㄢ",
+      "why": null
+    },
+    {
+      "index": 297,
+      "reading": "ㄐㄩㄝˊ",
+      "why": null
+    },
+    {
+      "index": 298,
+      "reading": "ㄌㄧˇ",
+      "why": null
+    },
+    {
+      "index": 299,
+      "reading": "ㄆㄧˊ",
+      "why": null
+    },
+    {
+      "index": 300,
+      "reading": "ㄖㄣˊ",
+      "why": null
+    },
+    {
+      "index": 301,
+      "reading": "ㄑㄧˊ",
+      "why": null
+    },
+    {
+      "index": 302,
+      "reading": "ㄌㄧˊ",
+      "why": null
+    },
+    {
+      "index": 303,
+      "reading": "ㄒㄧㄢˋ",
+      "why": null
+    },
+    {
+      "index": 304,
+      "reading": "ㄈㄤ",
+      "why": null
+    },
+    {
+      "index": 305,
+      "reading": "ㄇㄧㄢˋ",
+      "why": null
+    },
+    {
+      "index": 306,
+      "reading": "ㄌㄧㄝˋ",
+      "why": null
+    },
+    {
+      "index": 307,
+      "reading": "ㄕㄣˊ",
+      "why": null
+    },
+    {
+      "index": 308,
+      "reading": "ㄐㄧㄠˇ",
+      "why": null
+    },
+    {
+      "index": 309,
+      "reading": "ㄆㄠˇ",
+      "why": null
+    },
+    {
+      "index": 310,
+      "reading": "ㄐㄧㄝˊ",
+      "why": null
+    },
+    {
+      "index": 311,
+      "reading": "ㄕㄜˋ",
+      "why": null
+    },
+    {
+      "index": 312,
+      "reading": "ㄐㄧㄥˋ",
+      "why": null
+    },
+    {
+      "index": 313,
+      "reading": "ㄢ",
+      "why": null
+    },
+    {
+      "index": 314,
+      "reading": "ㄅㄢˇ",
+      "why": null
+    },
+    {
+      "index": 315,
+      "reading": "ㄨㄛˋ",
+      "why": null
+    },
+    {
+      "index": 316,
+      "reading": "ㄒㄧㄢˇ",
+      "why": null
+    },
+    {
+      "index": 317,
+      "reading": "ㄌㄞˋ",
+      "why": null
+    },
+    {
+      "index": 318,
+      "reading": "ㄌㄨㄛˋ",
+      "why": null
+    },
+    {
+      "index": 319,
+      "reading": "ㄊㄢˇ",
+      "why": null
+    },
+    {
+      "index": 320,
+      "reading": "ㄉㄚˊ",
+      "why": null
+    },
+    {
+      "index": 321,
+      "reading": "ㄑㄧㄥˊ",
+      "why": null
+    },
+    {
+      "index": 322,
+      "reading": "ㄌㄨˊ",
+      "why": null
+    },
+    {
+      "index": 323,
+      "reading": "ㄎㄨㄞˋ",
+      "why": null
+    },
+    {
+      "index": 324,
+      "reading": "ㄗㄜˊ",
+      "why": null
+    },
+    {
+      "index": 325,
+      "reading": "ㄅㄢˋ",
+      "why": null
+    },
+    {
+      "index": 326,
+      "reading": "ㄑㄧㄥˋ",
+      "why": null
+    },
+    {
+      "index": 327,
+      "reading": "ㄙㄜˋ",
+      "why": null
+    },
+    {
+      "index": 328,
+      "reading": "ㄈㄤˋ",
+      "why": null
+    },
+    {
+      "index": 329,
+      "reading": "ㄕˊ",
+      "why": null
+    },
+    {
+      "index": 330,
+      "reading": "ㄇㄨˋ",
+      "why": null
+    },
+    {
+      "index": 331,
+      "reading": "ㄩˋ",
+      "why": null
+    },
+    {
+      "index": 332,
+      "reading": "ㄖㄨㄛˋ",
+      "why": null
+    },
+    {
+      "index": 333,
+      "reading": "ㄇㄚˊ",
+      "why": null
+    },
+    {
+      "index": 334,
+      "reading": "ㄧˇ",
+      "why": null
+    },
+    {
+      "index": 335,
+      "reading": "ㄧ",
+      "why": null
+    },
+    {
+      "index": 336,
+      "reading": "ㄘㄠ",
+      "why": null
+    },
+    {
+      "index": 337,
+      "reading": "ㄇㄧㄣˇ",
+      "why": null
+    },
+    {
+      "index": 338,
+      "reading": "˙ㄌㄨㄛ",
+      "why": null
+    },
+    {
+      "index": 339,
+      "reading": "ㄨㄟˊ",
+      "why": null
+    },
+    {
+      "index": 340,
+      "reading": "ㄊㄨˇ",
+      "why": null
+    },
+    {
+      "index": 341,
+      "reading": "ㄑㄧˇ",
+      "why": null
+    },
+    {
+      "index": 342,
+      "reading": "ㄒㄧㄝˋ",
+      "why": null
+    },
+    {
+      "index": 343,
+      "reading": "ㄕㄤˋ",
+      "why": null
+    },
+    {
+      "index": 344,
+      "reading": "ㄏㄨㄛˋ",
+      "why": null
+    },
+    {
+      "index": 345,
+      "reading": "ㄍㄟˇ",
+      "why": null
+    },
+    {
+      "index": 346,
+      "reading": "˙ㄇㄜ",
+      "why": null
+    },
+    {
+      "index": 347,
+      "reading": "ㄓㄨㄥˇ",
+      "why": null
+    },
+    {
+      "index": 348,
+      "reading": "ㄋㄧㄢˋ",
+      "why": null
+    },
+    {
+      "index": 349,
+      "reading": "ㄍㄨㄛˇ",
+      "why": null
+    },
+    {
+      "index": 350,
+      "reading": "ㄕㄨˇ",
+      "why": null
+    },
+    {
+      "index": 351,
+      "reading": "ㄏㄨㄛˊ",
+      "why": null
+    },
+    {
+      "index": 352,
+      "reading": "ㄏㄨㄟˋ",
+      "why": null
+    },
+    {
+      "index": 353,
+      "reading": "ㄕㄣˊ",
+      "why": null
+    },
+    {
+      "index": 354,
+      "reading": "ㄌㄧㄢˊ",
+      "why": null
+    },
+    {
+      "index": 355,
+      "reading": "ㄧㄚ",
+      "why": null
+    },
+    {
+      "index": 356,
+      "reading": "ㄓㄡ",
+      "why": null
+    },
+    {
+      "index": 357,
+      "reading": "ㄍㄨㄟ",
+      "why": null
+    },
+    {
+      "index": 358,
+      "reading": "ㄅㄚ",
+      "why": null
+    },
+    {
+      "index": 359,
+      "reading": "ㄋㄨㄥˊ",
+      "why": null
+    },
+    {
+      "index": 360,
+      "reading": "ㄑㄧㄣ",
+      "why": null
+    },
+    {
+      "index": 361,
+      "reading": "ㄉㄨㄟˋ",
+      "why": null
+    },
+    {
+      "index": 362,
+      "reading": "ㄌㄧㄡˋ",
+      "why": null
+    },
+    {
+      "index": 363,
+      "reading": "ㄗㄥ",
+      "why": null
+    },
+    {
+      "index": 364,
+      "reading": "ㄧㄝˊ",
+      "why": null
+    },
+    {
+      "index": 365,
+      "reading": "ㄙㄨㄥ",
+      "why": null
+    },
+    {
+      "index": 366,
+      "reading": "ㄈㄥ",
+      "why": null
+    },
+    {
+      "index": 367,
+      "reading": "ㄇㄨˇ",
+      "why": null
+    },
+    {
+      "index": 368,
+      "reading": "ㄧㄡˇ",
+      "why": null
+    },
+    {
+      "index": 369,
+      "reading": "ㄏㄨㄢ",
+      "why": null
+    },
+    {
+      "index": 370,
+      "reading": "ㄨㄤˋ",
+      "why": null
+    },
+    {
+      "index": 371,
+      "reading": "ㄌㄞˊ",
+      "why": null
+    },
+    {
+      "index": 372,
+      "reading": "ㄨㄣˋ",
+      "why": null
+    },
+    {
+      "index": 373,
+      "reading": "ㄕㄥ",
+      "why": null
+    },
+    {
+      "index": 374,
+      "reading": "ㄊㄠˋ",
+      "why": null
+    },
+    {
+      "index": 375,
+      "reading": "ㄖㄣˊ",
+      "why": null
+    },
+    {
+      "index": 376,
+      "reading": "ㄒㄩㄝˊ",
+      "why": null
+    },
+    {
+      "index": 377,
+      "reading": "ㄨㄣˊ",
+      "why": null
+    },
+    {
+      "index": 378,
+      "reading": "ㄌㄩˇ",
+      "why": null
+    },
+    {
+      "index": 379,
+      "reading": "ㄎㄨㄞˋ",
+      "why": null
+    },
+    {
+      "index": 380,
+      "reading": "ㄌㄡ",
+      "why": null
+    },
+    {
+      "index": 381,
+      "reading": "ㄈㄨˊ",
+      "why": null
+    },
+    {
+      "index": 382,
+      "reading": "ㄧㄡˇ",
+      "why": null
+    },
+    {
+      "index": 383,
+      "reading": "ㄌㄧㄢˋ",
+      "why": null
+    },
+    {
+      "index": 384,
+      "reading": "ㄏㄜ",
+      "why": null
+    },
+    {
+      "index": 385,
+      "reading": "ㄅㄧㄝˊ",
+      "why": null
+    },
+    {
+      "index": 386,
+      "reading": "ㄅㄢˊ",
+      "why": null
+    },
+    {
+      "index": 387,
+      "reading": "ㄊㄢˋ",
+      "why": null
+    },
+    {
+      "index": 388,
+      "reading": "ㄊㄧㄠˋ",
+      "why": null
+    },
+    {
+      "index": 389,
+      "reading": "ㄆㄧˊ",
+      "why": null
+    },
+    {
+      "index": 390,
+      "reading": "ㄊㄜˋ",
+      "why": null
+    },
+    {
+      "index": 391,
+      "reading": "ㄐㄧㄠ",
+      "why": null
+    },
+    {
+      "index": 392,
+      "reading": "ㄈㄥˋ",
+      "why": null
+    },
+    {
+      "index": 393,
+      "reading": "ㄏㄞˇ",
+      "why": null
+    },
+    {
+      "index": 394,
+      "reading": "ㄍㄞˇ",
+      "why": null
+    },
+    {
+      "index": 395,
+      "reading": "ㄒㄧㄤˇ",
+      "why": null
+    },
+    {
+      "index": 396,
+      "reading": "ㄍㄨㄛˋ",
+      "why": null
+    },
+    {
+      "index": 397,
+      "reading": "ㄆㄛˋ",
+      "why": null
+    },
+    {
+      "index": 398,
+      "reading": "ㄅㄚˋ",
+      "why": null
+    },
+    {
+      "index": 399,
+      "reading": "ㄨㄟˋ",
+      "why": null
+    },
+    {
+      "index": 400,
+      "reading": "ㄧㄣˇ",
+      "why": null
+    },
+    {
+      "index": 401,
+      "reading": "ㄊㄠˊ",
+      "why": null
+    },
+    {
+      "index": 402,
+      "reading": "ㄐㄧㄡˋ",
+      "why": null
+    },
+    {
+      "index": 403,
+      "reading": "ㄓㄨˋ",
+      "why": null
+    },
+    {
+      "index": 404,
+      "reading": "ㄐㄧ",
+      "why": null
+    },
+    {
+      "index": 405,
+      "reading": "ㄑㄧㄠˇ",
+      "why": null
+    },
+    {
+      "index": 406,
+      "reading": "ㄑㄩㄢˊ",
+      "why": null
+    },
+    {
+      "index": 407,
+      "reading": "ㄔㄤˇ",
+      "why": null
+    },
+    {
+      "index": 408,
+      "reading": "ㄅㄨˋ",
+      "why": null
+    },
+    {
+      "index": 409,
+      "reading": "ㄔㄨㄢ",
+      "why": null
+    },
+    {
+      "index": 410,
+      "reading": "ㄔㄚˊ",
+      "why": null
+    },
+    {
+      "index": 411,
+      "reading": "ㄏㄢˋ",
+      "why": null
+    },
+    {
+      "index": 412,
+      "reading": "ㄘㄢ",
+      "why": null
+    },
+    {
+      "index": 413,
+      "reading": "ㄒㄩ",
+      "why": null
+    },
+    {
+      "index": 414,
+      "reading": "ㄊㄚ",
+      "why": null
+    },
+    {
+      "index": 415,
+      "reading": "ㄅㄣˇ",
+      "why": null
+    },
+    {
+      "index": 416,
+      "reading": "ㄧㄢˊ",
+      "why": null
+    },
+    {
+      "index": 417,
+      "reading": "ㄆㄧㄥˊ",
+      "why": null
+    },
+    {
+      "index": 418,
+      "reading": "ㄒㄧㄠˋ",
+      "why": null
+    },
+    {
+      "index": 419,
+      "reading": "ㄐㄧ",
+      "why": null
+    },
+    {
+      "index": 420,
+      "reading": "ㄌㄠˊ",
+      "why": null
+    },
+    {
+      "index": 421,
+      "reading": "ㄌㄨㄢˋ",
+      "why": null
+    },
+    {
+      "index": 422,
+      "reading": "ㄐㄧˇ",
+      "why": null
+    },
+    {
+      "index": 423,
+      "reading": "ㄆㄧㄠ",
+      "why": null
+    },
+    {
+      "index": 424,
+      "reading": "ㄎㄞ",
+      "why": null
+    },
+    {
+      "index": 425,
+      "reading": "ㄊㄡˋ",
+      "why": null
+    },
+    {
+      "index": 426,
+      "reading": "ㄨㄛˇ",
+      "why": null
+    },
+    {
+      "index": 427,
+      "reading": "ㄎㄡˇ",
+      "why": null
+    },
+    {
+      "index": 428,
+      "reading": "˙ㄇㄜ",
+      "why": null
+    },
+    {
+      "index": 429,
+      "reading": "ㄐㄧㄤˋ",
+      "why": null
+    },
+    {
+      "index": 430,
+      "reading": "ㄐㄧㄥ",
+      "why": null
+    },
+    {
+      "index": 431,
+      "reading": "ㄅㄠ",
+      "why": null
+    },
+    {
+      "index": 432,
+      "reading": "ㄑㄩㄢˊ",
+      "why": null
+    },
+    {
+      "index": 433,
+      "reading": "ㄅㄢ",
+      "why": null
+    },
+    {
+      "index": 434,
+      "reading": "ㄇㄟˊ",
+      "why": null
+    },
+    {
+      "index": 435,
+      "reading": "ㄧㄡˋ",
+      "why": null
+    },
+    {
+      "index": 436,
+      "reading": "ㄒㄧㄥˋ",
+      "why": null
+    },
+    {
+      "index": 437,
+      "reading": "ㄒㄧˊ",
+      "why": null
+    },
+    {
+      "index": 438,
+      "reading": "ㄎㄢˋ",
+      "why": null
+    },
+    {
+      "index": 439,
+      "reading": "ㄔㄥˊ",
+      "why": null
+    },
+    {
+      "index": 440,
+      "reading": "ㄐㄩˇ",
+      "why": null
+    },
+    {
+      "index": 441,
+      "reading": "ㄇㄧㄥˊ",
+      "why": null
+    },
+    {
+      "index": 442,
+      "reading": "ㄨㄣ",
+      "why": null
+    },
+    {
+      "index": 443,
+      "reading": "ㄐㄧㄚ",
+      "why": null
+    },
+    {
+      "index": 444,
+      "reading": "ㄅㄤˋ",
+      "why": null
+    },
+    {
+      "index": 445,
+      "reading": "ㄕㄡ",
+      "why": null
+    },
+    {
+      "index": 446,
+      "reading": "ㄈㄨˊ",
+      "why": null
+    },
+    {
+      "index": 447,
+      "reading": "ㄚ",
+      "why": null
+    },
+    {
+      "index": 448,
+      "reading": "ㄎㄠˋ",
+      "why": null
+    },
+    {
+      "index": 449,
+      "reading": "ㄕ",
+      "why": null
+    },
+    {
+      "index": 450,
+      "reading": "ㄒㄧˇ",
+      "why": null
+    }
+  ]
+}

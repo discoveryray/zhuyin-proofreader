@@ -700,18 +700,40 @@ class FrozenV0CompatibilityTests(unittest.TestCase):
             self.assertEqual(sql_rows(repo, "migration_candidate"), rows)
 
     def test_occurrence_direct_override_remains_first_and_decoder_fallback_remains_independent(self):
-        from test_global_exact_glyph_read_reuse_v580 import TTFWorkbookReadReuseIntegrationTests
+        from test_global_exact_glyph_read_reuse_v580 import TTFWorkbookReadReuseIntegrationTests, _DecodeTrueTypeInspector
+        import export_zhuyin_readings as decoder
+        from ttf_symbol_recombination import ExactSymbolRecombinationModel
+        from ttf_zhuyin_shape_decoder import contour_group_signature
         old, repo = self.fixture(["ㄅ", "ㄆ"], state=lib.VERIFIED_GLOBAL)
         snapshot = repo.load_snapshot()
         helper = TTFWorkbookReadReuseIntegrationTests()
-        fallback, audit = helper._decode_fixture(self.base, snapshot, name="fallback")
+        # A historical font/GID row is a proposal, not an independent fallback.
+        candidate, audit = helper._decode_fixture(self.base, snapshot, name="candidate")
+        self.assertFalse(candidate["實際注音"])
+        self.assertIn("僅候選", candidate["解碼依據"])
+        self.assertEqual(audit[0]["已由獨立fallback解碼筆數"], 0)
+        # Supply a genuinely separate direct-symbol fixture under its own exact
+        # contract. Patch acquisition only, not the decoder's final conclusion.
+        contours = [[(0, 0, True), (100, 0, True), (100, 100, True), (0, 100, True)]]
+        path = self.base / "direct-symbol.csv"
+        path.write_text("template_type,outline_signature,label,support_keys,support_fonts,validation\n"
+                        f"symbol,{contour_group_signature(contours)},ㄇ,1,1,direct_isolated_visual_v39\n",
+                        encoding="utf-8")
+        model = ExactSymbolRecombinationModel.load_csv(path)
+        self.assertEqual(len(model.templates), 1)
+        with patch.object(_DecodeTrueTypeInspector, "simple_contours", return_value=contours), \
+                patch.object(decoder.ExactSymbolRecombinationModel, "load_csv", return_value=model):
+            fallback, audit = helper._decode_fixture(self.base, snapshot, name="fallback")
+            actual, direct_audit = helper._decode_fixture(self.base, snapshot, occurrence_override="ㄈ", name="direct")
         self.assertEqual(fallback["實際注音"], "ㄇ")
+        self.assertEqual(fallback["解碼依據"], "TTF exact注音符號重組")
         self.assertEqual(audit[0]["已由獨立fallback解碼筆數"], 1)
-        actual, audit = helper._decode_fixture(self.base, snapshot, occurrence_override="ㄈ", name="direct")
         self.assertEqual(actual["自動解碼原值"], "ㄇ")
         self.assertEqual(actual["實際注音"], "ㄈ")
         self.assertEqual(actual["解碼依據"], "使用者原頁人工覆核（出現位置限定）")
-        self.assertEqual(audit[0]["已由獨立fallback解碼筆數"], 0)
+        self.assertEqual(direct_audit[0]["已由獨立fallback解碼筆數"], 0)
+        self.assertTrue(lib.resolve_exact_glyph_reuse(snapshot, self.exact).conflict)
+        self.assertTrue(lib.resolve_exact_glyph_reuse(repo.load_snapshot(), self.exact).conflict)
 
     def test_cff_v0_conflict_uses_the_same_style_scoped_dependency_gate(self):
         self.exact = dict(kind=lib.CFF_GLYPH_SHA256, style_group="BIAOKAI_W5", glyph_sha256="a" * 64,

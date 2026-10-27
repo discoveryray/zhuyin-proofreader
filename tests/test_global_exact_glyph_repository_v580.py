@@ -2258,7 +2258,7 @@ class GlobalLibraryArchitectureBoundaryTests(unittest.TestCase):
         self.assertIn("global_exact_glyph_library.py", exported)
         self.assertEqual(runtime_source_validation.ACTUAL_FINGERPRINT_SCHEMA_VERSION, "3.0.0")
         self.assertEqual(runtime_source_validation.EXPECTED_FINGERPRINT_SCHEMA_VERSION, "2.7.0")
-        self.assertEqual(cross_version_compat.ACTUAL_DECODER_SEMANTICS_EPOCH, "1")
+        self.assertEqual(cross_version_compat.ACTUAL_DECODER_SEMANTICS_EPOCH, "2")
         self.assertEqual(cross_version_compat.EXPECTED_RESOLVER_SEMANTICS_EPOCH, "1")
         self.assertIn(
             "global_exact_glyph_evidence_hashes",

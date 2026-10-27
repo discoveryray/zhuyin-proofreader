@@ -869,6 +869,11 @@ class GroupedCollectionTests(unittest.TestCase):
         import tkinter
         import test_review_async_save as fixture
         import review_save_service as service
+        import actual_source_visual_safety as source_safety
+        # The auditor never imports a local provider while tracing. This exact
+        # production dependency is therefore an explicit fixture prerequisite.
+        self.assertEqual(Path(source_safety.__file__).resolve(),
+                         (audit.ROOT / "actual_source_visual_safety.py").resolve())
         owner = fixture.AsyncReviewSaveTests
         caller = owner.test_worker_keeps_ui_unlocked_but_guards_all_mutating_actions_and_debounce
         target = audit._bounded_callable_alias(caller, owner(), "save")
@@ -881,6 +886,39 @@ class GroupedCollectionTests(unittest.TestCase):
             audit._bounded_callable_alias(caller, owner, "save")
         with patch.object(service.ReviewSaveService, "_save", tkinter.Tk):
             self.assertTrue(audit.callable_uses_tk(caller, owner))
+
+    def test_async_save_adapter_explicit_provider_load_works_in_cold_process(self):
+        source = r'''
+import sys
+from pathlib import Path
+from unittest.mock import patch
+sys.path.insert(0, str(Path.cwd() / "tests"))
+from scripts import test_entrypoint_audit as audit
+import test_review_async_save as fixture
+import review_save_service as service
+import tkinter
+owner = fixture.AsyncReviewSaveTests
+caller = owner.test_worker_keeps_ui_unlocked_but_guards_all_mutating_actions_and_debounce
+assert audit.loaded_source_module("actual_source_visual_safety") is None
+with patch.object(service.ReviewSaveService, "_save", tkinter.Tk):
+    try:
+        audit.callable_uses_tk(caller, owner)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("an unloaded provider must remain unresolved")
+assert any("unresolved local imported helper requires inventory review: actual_source_visual_safety" in item
+           for item in audit._CLASSIFICATION_UNKNOWN_SOURCES)
+import actual_source_visual_safety as source_safety
+assert Path(source_safety.__file__).resolve() == (audit.ROOT / "actual_source_visual_safety.py").resolve()
+with patch.object(service.ReviewSaveService, "_save", tkinter.Tk):
+    assert audit.callable_uses_tk(caller, owner) is True
+print("cold provider refused; exact loaded provider reaches the real service Tk sentinel")
+'''
+        result = subprocess.run([sys.executable, "-B", "-X", "utf8", "-c", source],
+                                cwd=ROOT, capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("cold provider refused; exact loaded provider", result.stdout)
 
     def test_busy_operation_adapter_rejects_guard_caller_and_method_drift(self):
         import test_review_async_save as fixture

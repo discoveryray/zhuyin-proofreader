@@ -1,0 +1,11 @@
+{
+  "sha256": "9aafab4c16315eb41b9909e9a67f0b110b95557d1f1001f0311d7613071a6fc0",
+  "groups": 156,
+  "all_labels_set_before_old_or_new_output_comparison": false,
+  "method": "AI direct original-page + isolated annotation glyph read; not human confirmation or Global approval; no dictionary/expected/OCR supplied values",
+  "corrected_labels_sha256": "9aafab4c16315eb41b9909e9a67f0b110b95557d1f1001f0311d7613071a6fc0",
+  "label_correction_ref": "graphic143-label-correction.json",
+  "original_freeze_is_historical_not_overwritten_claim": true,
+  "original_labels_sha256": "406096d2d66d98cf8c6d83b3e3534bc9fc67fe1a415a543b607b9b20d676fe3b",
+  "revision_note": "155 unchanged labels originally frozen before comparison; visual143 corrected only after enlarged direct graphic reinspection following the first delivery comparison. The corrected label is frozen before the corrective1 final execution. Earlier raw labels/output preserved; this is calibration regression, never held-out evaluation."
+}

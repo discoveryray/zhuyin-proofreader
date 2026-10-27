@@ -1,0 +1,421 @@
+{
+  "source_head": "3c638b3b7d3492dc5d0dc0539aa8f5a5e8f78ece",
+  "changes": [
+    {
+      "index": 31,
+      "root_ref_sha256": "b4ee63cba63ce4dcde9e962b934c2f35e92ffbfcf9ec728c4a15d3bdca569090",
+      "root_key": [
+        "ZhuYinNREG-Md",
+        14243,
+        "0791bc5a96f05182987eba39bdf084ac3eb4d34ac4d2ed4467386889ac255db5"
+      ],
+      "csv_line": 52,
+      "family": "map735",
+      "original_reading": "ㄨㄥˊ",
+      "observation_visual_id": 1260,
+      "map_graphic_id": 26,
+      "group_graphic_id": null,
+      "cohort_graphic_id": null,
+      "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_綜合_教材資源_課本PDF_課本PDF_全年級\\單檔\\01-115國小綜合3上課本成書-目次(115f197887).pdf",
+      "pdf_sha256": "85d8227bfdf8e35113b21c7e36659f8e58031f30b695bf8db07b2530bda1bd9d",
+      "page": 1,
+      "whole_occurrence_bbox": [
+        296.663,
+        134.995,
+        318.809,
+        179.287
+      ],
+      "annotation_physical_clip": [
+        298.9653313495219,
+        144.43831057846546,
+        317.5019259005785,
+        172.1445886902511
+      ],
+      "source_font_xref": 405,
+      "font_program_sha256": "0318c72d6ac84206eb65a91395440f6bf18b0e0fe7dba26c40b350d6a82e6a51",
+      "component_id": 14243,
+      "glyph_sha256": "0791bc5a96f05182987eba39bdf084ac3eb4d34ac4d2ed4467386889ac255db5",
+      "source_crop": "docs/evidence/map-glyph-review-20261019/map-026-original-page.png",
+      "source_crop_sha256": "cec4ab35916981dc781f3d3548423a9fe1614965e54ff937f03b5e94a387130f",
+      "source_svg": "docs/evidence/map-glyph-review-20261019/map-026-annotation.svg",
+      "source_svg_sha256": "979a6278d73fcf9df132cec6a74b81a9ab24b341268d15302ce352bfd615c0d7",
+      "dependent_aliases": [
+        {
+          "csv_line": 978,
+          "target_key": [
+            "StdKaiZuinnEG-Md",
+            14243,
+            "0791bc5a96f05182987eba39bdf084ac3eb4d34ac4d2ed4467386889ac255db5"
+          ]
+        }
+      ],
+      "final_reading": "ㄆㄥˊ",
+      "assigned_reader": "reviewer",
+      "changed_from_3c638b3": true
+    },
+    {
+      "index": 108,
+      "root_ref_sha256": "e61084d90598ebd3fc7021a3154b5f1b2db47efeb58626c937a7766b81fb602a",
+      "root_key": [
+        "YenRoundZuinnEG-Md",
+        15522,
+        "20c764d666ff10977c520c1c2012558a06d907fd5057bc3fca140f3415bf144e"
+      ],
+      "csv_line": 789,
+      "family": "group152",
+      "original_reading": "ㄩㄝˋ",
+      "observation_visual_id": 10160,
+      "map_graphic_id": null,
+      "group_graphic_id": 16,
+      "cohort_graphic_id": null,
+      "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_綜合_教材資源_課本PDF_課本PDF_全年級\\單檔\\02-115國小綜合4上課本-成書內頁-L01(115f197900).pdf",
+      "pdf_sha256": "43900075b51eb0bd9826710c7b8d18e4d1f4ac4e42b20343494ad5677ee5b151",
+      "page": 24,
+      "whole_occurrence_bbox": [
+        247.325,
+        416.364,
+        266.459,
+        429.12
+      ],
+      "annotation_physical_clip": [
+        260.44138913974166,
+        418.23622035235167,
+        264.36709950864315,
+        426.1980403922498
+      ],
+      "source_font_xref": 933,
+      "font_program_sha256": "bdc1bda7811659d5405c6a83797b64449842fa1f3710b25ddbb567b532110bcd",
+      "component_id": 15522,
+      "glyph_sha256": "20c764d666ff10977c520c1c2012558a06d907fd5057bc3fca140f3415bf144e",
+      "source_crop": "docs/evidence/map-glyph-review-20261019/group-016-original-page.png",
+      "source_crop_sha256": "7e8fbb112b1176f0a97cf5fc53a1d10a7cb90113667b7eea594d15fb1822319f",
+      "source_svg": "docs/evidence/map-glyph-review-20261019/group-016-annotation.svg",
+      "source_svg_sha256": "03ff8e8d22f8c30889716f6ed4a31a5edcffe7c9d0632fd733882021426a5c5c",
+      "dependent_aliases": [],
+      "final_reading": "ㄩㄝ",
+      "assigned_reader": "reviewer",
+      "changed_from_3c638b3": true
+    },
+    {
+      "index": 217,
+      "root_ref_sha256": "4d7ee5d1dbc55204139e641385c97e050a137f064c4505d4193390a096464dc0",
+      "root_key": [
+        "ZhuYinNREG-Md",
+        15203,
+        "4140284b771233ab94b97547519be51e625fdba7b002784f7eedba539345eaa7"
+      ],
+      "csv_line": 821,
+      "family": "group152",
+      "original_reading": "ㄕㄨㄞˇ",
+      "observation_visual_id": 10390,
+      "map_graphic_id": null,
+      "group_graphic_id": 39,
+      "cohort_graphic_id": null,
+      "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_綜合_教材資源_課本PDF_課本PDF_全年級\\單檔\\01-115國小綜合4上課本-成書內頁-目次(115f197899).pdf",
+      "pdf_sha256": "a5d1535b2f47ffc1fd67dc6d7e6c3894b0021de7d15149973107b989790217ae",
+      "page": 3,
+      "whole_occurrence_bbox": [
+        435.585,
+        210.723,
+        438.268,
+        216.091
+      ],
+      "annotation_physical_clip": [
+        435.6123339300975,
+        210.9614060400054,
+        438.32973789051175,
+        215.78613007627428
+      ],
+      "source_font_xref": 398,
+      "font_program_sha256": "e438fd3b0c7d41f16fb8c0d8e56d50cdbb3e6c881d29aa832d7fbb68b68be413",
+      "component_id": 15203,
+      "glyph_sha256": "4140284b771233ab94b97547519be51e625fdba7b002784f7eedba539345eaa7",
+      "source_crop": "docs/evidence/map-glyph-review-20261019/group-039-original-page.png",
+      "source_crop_sha256": "74ac4e3e38a065fe430ebc6bf511d285952f8ce37490206098de55710c24057f",
+      "source_svg": "docs/evidence/map-glyph-review-20261019/group-039-annotation.svg",
+      "source_svg_sha256": "166d3c74bd710f542dd68f762be6dc95b83303c130c47a6a752ab98d8b9389c6",
+      "dependent_aliases": [],
+      "final_reading": "ㄕㄨㄟˇ",
+      "assigned_reader": "reviewer",
+      "changed_from_3c638b3": true
+    },
+    {
+      "index": 325,
+      "root_ref_sha256": "2e56092da74debbee769f85c8ffee4c64e1bb3d3d26dc24e0eecee25fdd1feed",
+      "root_key": [
+        "YenRoundZuinnEG-Bd",
+        14172,
+        "5c12025eca93a90047c025075665eddcd717d820c8373fb55f21f7adb2bf3755"
+      ],
+      "csv_line": 848,
+      "family": "group152",
+      "original_reading": "ㄅㄧㄢˋ",
+      "observation_visual_id": 10590,
+      "map_graphic_id": null,
+      "group_graphic_id": 59,
+      "cohort_graphic_id": null,
+      "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_綜合_教材資源_課本PDF_課本PDF_全年級\\單檔\\04-115國小綜合4上課本-成書內頁-L03(115f197902).pdf",
+      "pdf_sha256": "50533ddeb797a656b01da098993f55713b072ba37aca0895eccafb33a6f87721",
+      "page": 15,
+      "whole_occurrence_bbox": [
+        269.291,
+        59.58,
+        299.055,
+        79.422
+      ],
+      "annotation_physical_clip": [
+        290.1626105941832,
+        61.49154739826918,
+        298.78175882436335,
+        74.68377195857465
+      ],
+      "source_font_xref": 1187,
+      "font_program_sha256": "57d9163aea530525544decd2b393eaa5bddb392077292df6c58b631dda41ea65",
+      "component_id": 14172,
+      "glyph_sha256": "5c12025eca93a90047c025075665eddcd717d820c8373fb55f21f7adb2bf3755",
+      "source_crop": "docs/evidence/map-glyph-review-20261019/group-059-original-page.png",
+      "source_crop_sha256": "506ec32c04e83e6d9a4edce34d7ccf6c2119bdac48fad1eaac3a01f1dbf9c4fb",
+      "source_svg": "docs/evidence/map-glyph-review-20261019/group-059-annotation.svg",
+      "source_svg_sha256": "36b5296604fd6be43f89db7638195a3c3ee0bf58c664b2329c8203ef090edd8a",
+      "dependent_aliases": [],
+      "final_reading": "ㄅㄢˋ",
+      "assigned_reader": "reviewer",
+      "changed_from_3c638b3": true
+    },
+    {
+      "index": 518,
+      "root_ref_sha256": "efee5b6c56fb751117f9ed7285e264f28ea1c8d6b8162e296e3a9ab41b7991c7",
+      "root_key": [
+        "DFPBiaoKai-W5-PoIn1-BFW",
+        14128,
+        "8b824cafc14a655e2ff073a6a9972ae3bffb810716406f0ac518c62a8559d11d"
+      ],
+      "csv_line": 454,
+      "family": "map735",
+      "original_reading": "ㄜ",
+      "observation_visual_id": 5310,
+      "map_graphic_id": 431,
+      "group_graphic_id": null,
+      "cohort_graphic_id": null,
+      "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_數學_教材資源／PPT_備課教材_課本PDF_全年級\\單檔\\01-115國小數學1上課本-目次(115f233092).pdf",
+      "pdf_sha256": "84ce1c0c2206fe632c7a4026aeb8137f2e61de5c2e68c033e555d44790505629",
+      "page": 1,
+      "whole_occurrence_bbox": [
+        259.369,
+        270.836,
+        291.259,
+        292.096
+      ],
+      "annotation_physical_clip": [
+        280.73158130422235,
+        278.3781300969422,
+        287.5015613697469,
+        284.379933796823
+      ],
+      "source_font_xref": 189,
+      "font_program_sha256": "79edb59d4c16dffa3e905b7c5a64280dc7500c7a3ed9da9b1b747c6b94c3cc21",
+      "component_id": 14128,
+      "glyph_sha256": "8b824cafc14a655e2ff073a6a9972ae3bffb810716406f0ac518c62a8559d11d",
+      "source_crop": "docs/evidence/map-glyph-review-20261019/map-431-original-page.png",
+      "source_crop_sha256": "04695cb527b0705ae4e259f18c9b57841cd9e97f100f472eff75bf54fa5222d9",
+      "source_svg": "docs/evidence/map-glyph-review-20261019/map-431-annotation.svg",
+      "source_svg_sha256": "3ce9ed17d5e4c95a99c87df6b4003000310b87f15c69c9af62289a2dd5dd9e51",
+      "dependent_aliases": [
+        {
+          "csv_line": 1037,
+          "target_key": [
+            "DFPBiaoKai-W5-ZhuIn-BFW",
+            14128,
+            "8b824cafc14a655e2ff073a6a9972ae3bffb810716406f0ac518c62a8559d11d"
+          ]
+        }
+      ],
+      "final_reading": "ㄛ",
+      "assigned_reader": "coordinator",
+      "changed_from_3c638b3": true
+    },
+    {
+      "index": 583,
+      "root_ref_sha256": "839e9a6cb54c5190a0c2cf6dd27091f0ab713c74a017df097d7d9f32df049a53",
+      "root_key": [
+        "ZhuYinNREG-Md",
+        14846,
+        "9e50d0acddd4f440dc32cd76e7d1d8464bb6e6a78fcfaecaab6a50f9b2a26a88"
+      ],
+      "csv_line": 896,
+      "family": "group152",
+      "original_reading": "ㄏㄨㄞˊ",
+      "observation_visual_id": 10940,
+      "map_graphic_id": null,
+      "group_graphic_id": 94,
+      "cohort_graphic_id": null,
+      "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_綜合_教材資源_課本PDF_課本PDF_全年級\\單檔\\05-115國小綜合3上課本成書-L04(115f197891).pdf",
+      "pdf_sha256": "90be524186818ec93d0c36838f28ee77e2d57562935274e9008e3a3e162285e1",
+      "page": 25,
+      "whole_occurrence_bbox": [
+        344.107,
+        154.559,
+        353.276,
+        168.098
+      ],
+      "annotation_physical_clip": [
+        344.7072666641742,
+        155.98458822446355,
+        352.84114997056275,
+        167.24258875269854
+      ],
+      "source_font_xref": 1250,
+      "font_program_sha256": "f3c04bf1653c5c0a05d66cd77fd59730833e8ed1dcb7fab1b571d740b252a782",
+      "component_id": 14846,
+      "glyph_sha256": "9e50d0acddd4f440dc32cd76e7d1d8464bb6e6a78fcfaecaab6a50f9b2a26a88",
+      "source_crop": "docs/evidence/map-glyph-review-20261019/group-094-original-page.png",
+      "source_crop_sha256": "b31c0ea69f91dc6bb8d1e6bd0024159097c001a535401f1aea4fd60ddb7e1217",
+      "source_svg": "docs/evidence/map-glyph-review-20261019/group-094-annotation.svg",
+      "source_svg_sha256": "c550eaa9544929f12015fab11656701618fb2e1a70646818f4b1463e62628f89",
+      "dependent_aliases": [
+        {
+          "csv_line": 897,
+          "target_key": [
+            "YenRoundZuinnEG-Bd",
+            14846,
+            "9e50d0acddd4f440dc32cd76e7d1d8464bb6e6a78fcfaecaab6a50f9b2a26a88"
+          ]
+        }
+      ],
+      "final_reading": "ㄏㄨㄢˊ",
+      "assigned_reader": "coordinator",
+      "changed_from_3c638b3": true
+    },
+    {
+      "index": 765,
+      "root_ref_sha256": "0bc26abe70ac36dc7681c1a6fca9c6c9e47095749796955930c7bf2936c8030a",
+      "root_key": [
+        "DFPBiaoKai-W5-ZhuIn-BFW",
+        14241,
+        "da0095289f1198745d5acfb9c29987823ba5a4c624e0e3696ee037e3ed585646"
+      ],
+      "csv_line": 651,
+      "family": "map735",
+      "original_reading": "ㄩㄝˋ",
+      "observation_visual_id": 7220,
+      "map_graphic_id": 622,
+      "group_graphic_id": null,
+      "cohort_graphic_id": null,
+      "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_數學_教材資源／PPT_備課教材_課本PDF_全年級\\單檔\\04-115國小數學2上課本-L03(115f233175).pdf",
+      "pdf_sha256": "0b54d750f18f5cefc4161611fa753713546089b1d3fc3235699ba8959a6e7bc7",
+      "page": 9,
+      "whole_occurrence_bbox": [
+        408.898,
+        517.071,
+        436.535,
+        535.496
+      ],
+      "annotation_physical_clip": [
+        427.0367957986891,
+        520.7312534172088,
+        433.7984846942127,
+        531.8653285242617
+      ],
+      "source_font_xref": 1123,
+      "font_program_sha256": "cb4ab0c24fcf56f505af312fdc33a2a3e3acd29fd26940d014ff72ccda11cd3e",
+      "component_id": 14241,
+      "glyph_sha256": "da0095289f1198745d5acfb9c29987823ba5a4c624e0e3696ee037e3ed585646",
+      "source_crop": "docs/evidence/map-glyph-review-20261019/map-622-original-page.png",
+      "source_crop_sha256": "86e878a81bbebe3104240dda4325ebc90e98ae6e6fa0c8aa28d7ba9a903eebed",
+      "source_svg": "docs/evidence/map-glyph-review-20261019/map-622-annotation.svg",
+      "source_svg_sha256": "b4afdaecee84ea6e555aa1206556264865132baa4948fd1f8da60fed31005738",
+      "dependent_aliases": [],
+      "final_reading": "ㄩㄝ",
+      "assigned_reader": "coordinator",
+      "changed_from_3c638b3": true
+    },
+    {
+      "index": 775,
+      "root_ref_sha256": "6a90110b9c67e1673929403b80ee8fa51e7b36643e8a94d50f1d586d279d45f5",
+      "root_key": [
+        "ZhuYinNREG-Md",
+        15526,
+        "dbe1dac52f994e9082564a8fa42984a5e4513da891386636ea6224be218e2fa4"
+      ],
+      "csv_line": 948,
+      "family": "group152",
+      "original_reading": "ㄐㄩㄢˇ",
+      "observation_visual_id": 11320,
+      "map_graphic_id": null,
+      "group_graphic_id": 132,
+      "cohort_graphic_id": null,
+      "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_綜合_教材資源_課本PDF_課本PDF_全年級\\單檔\\05-115國小綜合3上課本成書-L04(115f197891).pdf",
+      "pdf_sha256": "90be524186818ec93d0c36838f28ee77e2d57562935274e9008e3a3e162285e1",
+      "page": 25,
+      "whole_occurrence_bbox": [
+        337.322,
+        182.299,
+        345.591,
+        194.51
+      ],
+      "annotation_physical_clip": [
+        338.5043687474012,
+        184.90635829263556,
+        345.054360815255,
+        193.04986622585625
+      ],
+      "source_font_xref": 1250,
+      "font_program_sha256": "f3c04bf1653c5c0a05d66cd77fd59730833e8ed1dcb7fab1b571d740b252a782",
+      "component_id": 15526,
+      "glyph_sha256": "dbe1dac52f994e9082564a8fa42984a5e4513da891386636ea6224be218e2fa4",
+      "source_crop": "docs/evidence/map-glyph-review-20261019/group-132-original-page.png",
+      "source_crop_sha256": "db8ce27a537242515c8c010c00107683c9b15ca64e951f1aa24a1e832d16503b",
+      "source_svg": "docs/evidence/map-glyph-review-20261019/group-132-annotation.svg",
+      "source_svg_sha256": "5587f4bbabbdfa271cb4773fbcd7f94fa718e6852b62e79ee6deb0f0d2f13deb",
+      "dependent_aliases": [],
+      "final_reading": "ㄩㄢˇ",
+      "assigned_reader": "coordinator",
+      "changed_from_3c638b3": true
+    },
+    {
+      "index": 893,
+      "root_ref_sha256": "9d805f3d59811f0e70636096787cf18184eb4c2075ad8093b229f9a8ba0e89e2",
+      "root_key": [
+        "YenRoundZuinnEG-Bd",
+        15174,
+        "fe80789a3b391aaf0d23332edd4aeab90b6a71c1a57bc2a9abcad9f897732ee1"
+      ],
+      "csv_line": 970,
+      "family": "group152",
+      "original_reading": "ㄕㄨˊ",
+      "observation_visual_id": 11510,
+      "map_graphic_id": null,
+      "group_graphic_id": 151,
+      "cohort_graphic_id": null,
+      "original_pdf": "C:\\hanlin\\單檔資源\\115上_國小_社會_教材資源／PPT_備課教材_課本PDF_四年級\\單檔\\115國小社會4上課本成書-L06(115f283994).pdf",
+      "pdf_sha256": "d8c0d6ac3c958545ccb7019bf2d8168054bbcc716be64c31b3e85c4f96880e79",
+      "page": 6,
+      "whole_occurrence_bbox": [
+        155.728,
+        657.502,
+        173.268,
+        669.195
+      ],
+      "annotation_physical_clip": [
+        167.7763548400253,
+        658.4801178723574,
+        173.10652727633715,
+        666.4023686610162
+      ],
+      "source_font_xref": 935,
+      "font_program_sha256": "644528c8d7b2918a7002ca87a6253ae6400e51ea1c6de2dd0b230d7f17086471",
+      "component_id": 15174,
+      "glyph_sha256": "fe80789a3b391aaf0d23332edd4aeab90b6a71c1a57bc2a9abcad9f897732ee1",
+      "source_crop": "docs/evidence/map-glyph-review-20261019/group-151-original-page.png",
+      "source_crop_sha256": "019071c6e29ed7d21a4dac6723b756b2b61e94d1b34be3729e9d3c8ccceb4170",
+      "source_svg": "docs/evidence/map-glyph-review-20261019/group-151-annotation.svg",
+      "source_svg_sha256": "83bb26089c06ec90a6c5550c84925fdd5bba10e97dc7aed745f089f211b12c09",
+      "dependent_aliases": [],
+      "final_reading": "ㄕㄡˊ",
+      "assigned_reader": "coordinator",
+      "changed_from_3c638b3": true
+    }
+  ],
+  "count": 9,
+  "not_human_or_Global": true
+}

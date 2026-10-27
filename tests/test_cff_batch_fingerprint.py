@@ -113,6 +113,14 @@ class CFFBatchFingerprintTests(unittest.TestCase):
             document.new_page()
             document.save(pdf)
         inspector, _sha = _cff_inspector(self.snapshot, style_group="")
+        # Record the real complete provisional contract before decoding. A
+        # later dependency seal cannot manufacture missing source provenance.
+        provisional = validation.compute_actual_asset_fingerprint(
+            ROOT, pdf, self.sources, decoder_version=decoder.VERSION,
+            source_files=decoder.ACTUAL_DECODER_SOURCE_FILES,
+            dynamic_evidence_root=self.dynamic,
+            global_exact_glyph_evidence_hashes=library.global_exact_glyph_evidence_hashes(self.snapshot, None),
+        )
         # Patch acquisition only; inspector.decode and single-file bootstrap
         # execute unchanged, including complete-recording SHA and symbol gates.
         with patch.object(decoder.fitz, "open", return_value=_Document(font, gid)), \
@@ -120,7 +128,7 @@ class CFFBatchFingerprintTests(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()):
             decoder.decode(pdf, workbook, decoder.DEFAULT_MAP, decoder.DEFAULT_GROUPS,
                            cff_consensus_path=self.consensus, dynamic_evidence_root=self.dynamic,
-                           global_snapshot=self.snapshot)
+                           global_snapshot=self.snapshot, actual_asset_fingerprint=provisional)
         fingerprint = self.fingerprint(workbook, pdf)
         validation.rewrite_actual_workbook_fingerprint(workbook, fingerprint)
         return pdf, workbook, fingerprint
