@@ -43,21 +43,22 @@ def profile_write_phase(root, phase=None):
     from project_write_admission import (project_from_actual_root,has_surface_indicators,
         capture_project_write_admission,entry_write_admission,entry_write_phase,SurfaceWritePhase)
     project=project_from_actual_root(root)
-    if phase is not None:
-        if project is None or phase.project!=project:
+    def ordinary(value):
+        if project is None or value.project!=project:
             raise library.GlobalLibraryValidationError('foreign ordinary write phase')
-        phase.recheck()
-        return phase
+        if not value.profile:
+            raise library.GlobalLibraryValidationError('finish owned new-profile conversion recovery before ordinary write')
+        value.recheck()
+        return value
+    if phase is not None:
+        return ordinary(phase)
     if project is None or not has_surface_indicators(project):return None
     entered=entry_write_phase(project)
     if entered is not None:
-        entered.recheck()
-        return entered
+        return ordinary(entered)
     original=entry_write_admission(project) or capture_project_write_admission(project,recovery=True)
     original.require_writable()
-    if not original.profile:
-        raise library.GlobalLibraryValidationError('finish owned new-profile conversion recovery before ordinary write')
-    return SurfaceWritePhase(original)
+    return ordinary(SurfaceWritePhase(original))
 
 
 def _json(raw: bytes):

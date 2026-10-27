@@ -72,6 +72,130 @@ def ordinary_profile(isolated_pipeline):
     return output,before
 
 
+def test_transitional_ordinary_dispatch_and_all_phase_sources_refuse_before_lock(tmp_path):
+    from project_write_admission import SurfaceWritePhase,_ENTRY_PHASES
+    output=tmp_path/'pending-conversion';output.mkdir()
+    original=create_staged_navigation_fixture(output,same_exact_peers=True)
+    root=sp.project_actual_evidence_root(output)
+    ar.ensure_user_evidence_files(root)
+    ar._write_actual_evidence_csv(root/ar.OCCURRENCE_OVERRIDE_FILE,ar.OVERRIDE_HEADERS,[])
+    row=original['records'][0]
+    sp.stage_manual_actual_correction(output,row['review_id'],'ㄅ',checked_occurrence_ids=[row['occurrence_id']])
+    assert ar.load_manual_actual_staging(root)['staged_groups']
+    resume=sp._resume_actual_refresh_publication
+    def stop(project_dir,**kwargs):
+        if (output/sp.ACTUAL_REFRESH_PUBLICATION).exists():raise OSError('isolated conversion prefix0 stop')
+        return resume(project_dir,**kwargs)
+    with patch.object(sp,'_surface_phase_move',side_effect=OSError('isolated initial move')),patch.object(sp,'_resume_actual_refresh_publication',new=stop):
+        with pytest.raises(OSError,match='prefix0 stop'):sp.enable_surface_actual_project(output,confirmation=True)
+    publication=sp._read_actual_refresh_publication(output)
+    assert publication[0]['schema']=='actual-deferred-refresh/2' and publication[0]['phase']=='PREPARED'
+    receipt=capture_project_write_admission(output,recovery=True);receipt.recheck()
+    assert receipt.profile is False and receipt.workbook_roster is not None
+    lock=root/'.global_exact_glyph_delivery.lock';lock.unlink()
+    before=files(output);stage_before=files(publication[2])
+    with pytest.raises(promotion.library.GlobalLibraryValidationError,match='conversion recovery'):
+        sp.apply_staged_manual_actual_corrections(output)
+    assert files(output)==before and files(publication[2])==stage_before and not lock.exists()
+    phase=SurfaceWritePhase(receipt)
+    with pytest.raises(promotion.library.GlobalLibraryValidationError,match='conversion recovery'):
+        promotion.profile_write_phase(root,phase)
+    token=_ENTRY_PHASES.set(((output.resolve(),phase),))
+    try:
+        with pytest.raises(promotion.library.GlobalLibraryValidationError,match='conversion recovery'):
+            promotion.profile_write_phase(root)
+    finally:_ENTRY_PHASES.reset(token)
+    assert files(output)==before and files(publication[2])==stage_before and not lock.exists()
+    recovered=sp.recover_committed_actual_project(output)
+    assert recovered['project_refresh']=='ROLLED_BACK'
+    assert ar.load_manual_actual_staging(root)['staged_groups']
+    sp.enable_surface_actual_project(output,confirmation=True)
+    supported=promotion.profile_write_phase(root);supported.recheck()
+    assert supported.profile is True and ar.load_manual_actual_staging(root)['staged_groups']
+    assert not (root/promotion.PROJECT_TRANSACTION_FILE).exists()
+
+
+def test_cold_surface_postack_foreign_stage_failure_keeps_committed_truth(project):
+    output,original=project;root=sp.project_actual_evidence_root(output)
+    stage(output,original)
+    with patch.object(sp,'_acknowledge_actual_refresh',side_effect=OSError('isolated before surface ack')):
+        with pytest.raises(sp.ManualActualPostApplyError):sp.apply_staged_surface_actual_corrections(output)
+    publication=sp._read_actual_refresh_publication(output)
+    assert publication[0]['phase']=='PUBLISHED'
+    local=root/promotion.PROJECT_TRANSACTION_FILE
+    authority=promotion._validated_project_journal(local.read_bytes())
+    cleanup=sp._surface_phase_cleanup_stage;injected=[]
+    lock=root/'.global_exact_glyph_delivery.lock';lock_raw=lock.read_bytes()
+    def project_vector():
+        result={str(path.relative_to(output)):path.read_bytes() for path in output.rglob('*') if path.is_file() and path!=lock}
+        result[str(lock.relative_to(output))]=lock_raw
+        return result
+    def foreign_cleanup(path,phase,**kwargs):
+        assert not local.exists() and not (output/sp.ACTUAL_REFRESH_PUBLICATION).exists()
+        foreign=Path(path)/'external-cleanup-note.tmp';foreign.write_bytes(b'external stage data must survive')
+        injected.append((foreign,project_vector()))
+        return cleanup(path,phase,**kwargs)
+    with patch.object(sp,'_surface_phase_cleanup_stage',new=foreign_cleanup):
+        with pytest.raises(sp.ManualActualPostApplyError) as error:sp.recover_committed_actual_project(output)
+    assert len(injected)==1 and isinstance(error.value.cause,ValueError)
+    assert 'unknown file' in str(error.value.cause)
+    assert error.value.project_actual_commit=='COMMITTED'
+    assert error.value.batch_result['project_refresh_token']==authority['transaction_id']
+    assert error.value.batch_result['recovery_plan']==authority['recovery_plan']
+    assert files(output)==injected[0][1] and injected[0][0].read_bytes()==b'external stage data must survive'
+    assert not local.exists() and not (output/sp.ACTUAL_REFRESH_PUBLICATION).exists()
+    assert ReviewSaveService(output).load_resume_snapshot().ledger[0]['actual']=='ㄅㄛˊ'
+
+
+@pytest.mark.parametrize('cold_phase',['PUBLISHED','ACKNOWLEDGING'])
+def test_cold_postack_report_io_keeps_original_committed_authority(isolated_pipeline,cold_phase):
+    from tests.test_pdf_portability import pending_actual_excel_conflict,add_override
+    output=isolated_pipeline('actual');root=sp.project_actual_evidence_root(output)
+    initial=sp.json_load_strict(output/'校對工作階段.json');add_override(output,initial['records'][0],'ㄎㄢˋ')
+    sp.refresh_actual_project(output)
+    manifest=sp.json_load_strict(output/'校對工作階段.json');pending_actual_excel_conflict(output,manifest,manifest)
+    sp.enable_surface_actual_project(output,confirmation=True)
+    before=ReviewSaveService(output).load_resume_snapshot();row=before.ledger[0]
+    sp.stage_manual_actual_correction(output,row['review_id'],'ㄅㄛˊ',checked_occurrence_ids=[row['occurrence_id']])
+    if cold_phase=='PUBLISHED':
+        with patch.object(sp,'_acknowledge_actual_refresh',side_effect=OSError('isolated before owned ack')):
+            with pytest.raises(sp.ManualActualPostApplyError):sp.apply_staged_manual_actual_corrections(output)
+    else:
+        ack=sp.acknowledge_project_refresh
+        def after_ack(*args,**kwargs):
+            result=ack(*args,**kwargs)
+            raise OSError('isolated after local owned ack')
+        with patch.object(sp,'acknowledge_project_refresh',new=after_ack):
+            with pytest.raises(sp.ManualActualPostApplyError):sp.apply_staged_manual_actual_corrections(output)
+    publication=sp._read_actual_refresh_publication(output)
+    assert publication[0]['phase']==cold_phase
+    local=root/promotion.PROJECT_TRANSACTION_FILE
+    authority=promotion._validated_project_journal(local.read_bytes() if local.exists() else (publication[2]/'ack-committed.json').read_bytes())
+    assert authority['state']=='COMMITTED' and authority['schema_version']=='3.0'
+    capture_project_write_admission(output,recovery=True).recheck()
+    reports={name:(output/name).read_bytes() if (output/name).exists() else None for name in ('注音校對_技術稽核.xlsx','注音校對_最終報告.xlsx','pipeline_status.json')}
+    technical=output/'注音校對_技術稽核.xlsx';sync=sp.os.fsync;injected=[]
+    def failed_report(fd):
+        frame=inspect.currentframe().f_back
+        if frame.f_code.co_name=='_refresh_atomic_bytes' and frame.f_locals.get('path')==technical:
+            assert not local.exists() and not (output/sp.ACTUAL_REFRESH_PUBLICATION).exists()
+            injected.append(True);raise OSError('isolated genuine post-ack report fsync')
+        return sync(fd)
+    with patch.object(sp.os,'fsync',new=failed_report):
+        with pytest.raises(sp.ManualActualPostApplyError) as error:
+            sp.recover_committed_actual_project(output,expected_recovery=(authority['transaction_id'],authority['recovery_plan']))
+    assert injected==[True] and isinstance(error.value.cause,OSError)
+    assert error.value.project_actual_commit=='COMMITTED' and error.value.project_refresh=='FAILED'
+    assert error.value.batch_result['project_refresh_token']==authority['transaction_id']
+    assert error.value.batch_result['recovery_plan']==authority['recovery_plan']
+    assert not local.exists() and not (output/sp.ACTUAL_REFRESH_PUBLICATION).exists()
+    for name,raw in reports.items():assert ((output/name).read_bytes() if (output/name).exists() else None)==raw
+    after=ReviewSaveService(output).load_resume_snapshot()
+    assert after.ledger[0]['actual']=='ㄅㄛˊ' and after.db==before.db
+    assert [{k:v for k,v in row.items() if k.startswith('expected')} for row in after.ledger]==[{k:v for k,v in row.items() if k.startswith('expected')} for row in before.ledger]
+    assert sp.recover_committed_actual_project(output) is None
+
+
 def test_new_profile_ordinary_public_batch_uses_owned_journal3_and_raw_publisher(isolated_pipeline):
     output,before=ordinary_profile(isolated_pipeline)
     root=sp.project_actual_evidence_root(output)

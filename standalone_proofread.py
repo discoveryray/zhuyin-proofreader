@@ -237,7 +237,27 @@ def _global_direct_source_context(output_dir, manifest):
     return {"session_id": manifest.get("session_id"), "pdfs": infos}
 
 
+def _retained_phase_committed_authority(output_dir,phase):
+    # Retain the original validated commit across our own ack/unlinks. A later
+    # absence (or foreign marker) cannot erase or create this historical truth.
+    from global_glyph_promotion import PROJECT_TRANSACTION_FILE,_validated_project_journal
+    output_dir=Path(output_dir).resolve();root=project_actual_evidence_root(output_dir)
+    local=phase.expected_bytes(root/PROJECT_TRANSACTION_FILE)
+    authority=_validated_project_journal(local) if local is not None else None
+    publication_raw=phase.expected_bytes(output_dir/ACTUAL_REFRESH_PUBLICATION)
+    publication=json_parse_strict(publication_raw,output_dir/ACTUAL_REFRESH_PUBLICATION) if publication_raw is not None else None
+    if authority is None and publication is not None and publication['phase']=='ACKNOWLEDGING':
+        authority=_validated_project_journal(phase.expected_bytes(output_dir.parent/publication['stage']/'ack-committed.json'))
+    retained=((authority['transaction_id'],authority['recovery_plan'])
+              if authority is not None and authority['state']=='COMMITTED' else None)
+    return retained,publication['cleared_count'] if publication is not None else None
+
+
 def _recover_direct_profile_phase(output_dir, phase, *, acknowledge, expected_recovery=None):
+    retained,cleared=_retained_phase_committed_authority(output_dir,phase)
+    if expected_recovery is not None and (type(expected_recovery) not in (tuple,list)
+            or len(expected_recovery)!=2 or tuple(expected_recovery)!=retained):
+        raise ValueError('已提交 actual 復原紀錄已變更；未套用新暫存')
     try:
         with project_delivery_lock(project_actual_evidence_root(output_dir),_admission=phase.receipt()):
             return _recover_direct_profile_phase_locked(output_dir,phase,acknowledge=acknowledge,
@@ -245,12 +265,12 @@ def _recover_direct_profile_phase(output_dir, phase, *, acknowledge, expected_re
     except ManualActualPostApplyError:
         raise
     except Exception as exc:
-        pending=_surface_phase_recovery(project_actual_evidence_root(output_dir),phase)
-        if pending is not None:
+        if retained is not None:
             raise ManualActualPostApplyError('ordinary_committed_handoff',exc,
                 batch_result={'project_actual_commit':'COMMITTED','project_refresh':'PENDING',
-                    'project_refresh_token':pending[0],'recovery_plan':pending[1]},
-                cleared_event_count=None) from exc
+                    'project_refresh_token':retained[0],'recovery_plan':retained[1],
+                    'affected_occurrence_ids':retained[1]['affected_occurrence_ids']},
+                cleared_event_count=cleared) from exc
         raise
 
 
@@ -5804,6 +5824,23 @@ def _surface_recovery_pending(output_dir, *, _snapshot=None):
 
 
 def _recover_surface_phase(output_dir,phase,*,acknowledge):
+    retained,cleared=_retained_phase_committed_authority(output_dir,phase)
+    try:
+        return _recover_surface_phase_owned(output_dir,phase,acknowledge=acknowledge)
+    except ManualActualPostApplyError:
+        raise
+    except Exception as exc:
+        if retained is not None:
+            raise ManualActualPostApplyError('surface_committed_recovery',exc,
+                batch_result={'project_actual_commit':'COMMITTED','project_refresh':'PENDING',
+                    'project_refresh_token':retained[0],'recovery_plan':retained[1],
+                    'affected_occurrence_ids':retained[1]['affected_occurrence_ids'],
+                    'global_promotion_delivery':{'status':'NOT_APPLICABLE_SURFACE_ONLY'}},
+                cleared_event_count=cleared) from exc
+        raise
+
+
+def _recover_surface_phase_owned(output_dir,phase,*,acknowledge):
     import manual_surface_actual as surface
     import global_glyph_promotion as promotion
     from pdf_portability import INCOMPLETE_FILE
@@ -6235,6 +6272,9 @@ def apply_staged_manual_actual_corrections(output_dir: Path) -> dict[str, Any]:
     if has_surface_indicators(output_dir):
         original=entry_write_admission(output_dir) or capture_project_write_admission(output_dir,recovery=True)
         original.require_writable()
+        from global_glyph_promotion import profile_write_phase
+        from project_write_admission import SurfaceWritePhase
+        ordinary_phase=profile_write_phase(project_actual_evidence_root(output_dir),SurfaceWritePhase(original))
         surface_manifest=_surface_known_json(original,output_dir/'校對工作階段.json')
         actual_root=project_actual_evidence_root(output_dir)
         surface_document=surface.load_snapshot(actual_root,surface_manifest,
@@ -6245,8 +6285,6 @@ def apply_staged_manual_actual_corrections(output_dir: Path) -> dict[str, Any]:
             return source_visual_write_result(lambda:_apply_staged_surface_actual_corrections(
                 output_dir,_admission=original),commit_state='COMMITTED_REFRESH_PENDING')
         original.recheck()
-        from project_write_admission import SurfaceWritePhase
-        ordinary_phase=SurfaceWritePhase(original)
     manifest = (_surface_known_json(ordinary_phase,output_dir/'校對工作階段.json') if ordinary_phase is not None else
                 json_load_strict(output_dir / "校對工作階段.json"))
     validate_manifest_integrity(manifest)
