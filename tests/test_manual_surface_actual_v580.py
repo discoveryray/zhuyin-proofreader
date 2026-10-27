@@ -115,6 +115,49 @@ def test_transitional_ordinary_dispatch_and_all_phase_sources_refuse_before_lock
     assert not (root/promotion.PROJECT_TRANSACTION_FILE).exists()
 
 
+def test_surface_ack_copy_matches_original_expected_owner_and_refuses_all_mismatches(project):
+    output,original=project;root=sp.project_actual_evidence_root(output)
+    before=ReviewSaveService(output).load_resume_snapshot()
+    stage(output,original)
+    ack=sp.acknowledge_project_refresh;interrupted=[]
+    def after_owned_ack(*args,**kwargs):
+        result=ack(*args,**kwargs)
+        assert not (root/promotion.PROJECT_TRANSACTION_FILE).exists()
+        interrupted.append(True);raise OSError('isolated surface ACK copy restart')
+    with patch.object(sp,'acknowledge_project_refresh',new=after_owned_ack):
+        with pytest.raises(sp.ManualActualPostApplyError) as stopped:sp.apply_staged_surface_actual_corrections(output)
+    assert interrupted==[True] and stopped.value.project_actual_commit=='COMMITTED'
+    publication=sp._read_actual_refresh_publication(output)
+    assert publication[0]['phase']=='ACKNOWLEDGING' and publication[0]['schema']=='actual-deferred-refresh/2'
+    authority=promotion._validated_project_journal((publication[2]/'ack-committed.json').read_bytes())
+    assert authority['schema_version']=='2.0' and authority['owner']['operation']=='surface-only' and authority['state']=='COMMITTED'
+    assert not (root/promotion.PROJECT_TRANSACTION_FILE).exists()
+    receipt=capture_project_write_admission(output,recovery=True);receipt.recheck()
+    expected=(authority['transaction_id'],authority['recovery_plan'])
+    snapshot=files(output);stage_snapshot=files(publication[2])
+    changed_plan=copy.deepcopy(expected[1]);changed_plan['checked_postconditions'][0]['reading']='ㄎㄢˋ'
+    wrong_token=('f'*64 if expected[0]!='f'*64 else 'e'*64,expected[1])
+    for invalid in (wrong_token,(expected[0],changed_plan),[expected[0]],'not an owner tuple'):
+        with pytest.raises(ValueError,match='已提交 actual 復原紀錄已變更'):
+            sp.recover_committed_actual_project(output,expected_recovery=invalid)
+        assert files(output)==snapshot and files(publication[2])==stage_snapshot
+    with patch.object(sp,'deliver_pending_promotion_outbox',side_effect=AssertionError('surface owner cannot deliver Global')):
+        deferred=sp.recover_committed_actual_project(output,acknowledge=False,expected_recovery=expected)
+        assert deferred['project_actual_commit']=='COMMITTED' and deferred['project_refresh']=='SUCCESS'
+        assert files(output)==snapshot and files(publication[2])==stage_snapshot
+        recovered=sp.recover_committed_actual_project(output,expected_recovery=list(expected))
+    assert recovered['project_actual_commit']=='COMMITTED' and recovered['project_refresh']=='SUCCESS'
+    assert not (root/promotion.PROJECT_TRANSACTION_FILE).exists() and not (output/sp.ACTUAL_REFRESH_PUBLICATION).exists()
+    assert not publication[2].exists()
+    after=ReviewSaveService(output).load_resume_snapshot()
+    assert after.ledger[0]['actual']=='ㄅㄛˊ' and after.db==before.db
+    assert [row['actual'] for row in after.ledger[1:]]==[row['actual'] for row in before.ledger[1:]]
+    assert [{key:value for key,value in row.items() if key.startswith('expected')} for row in after.ledger]==[{key:value for key,value in row.items() if key.startswith('expected')} for row in before.ledger]
+    ordinary={str(Path(sp.PROJECT_EVIDENCE_DIR)/sp.PROJECT_ACTUAL_EVIDENCE_DIR/name) for name in (*promotion.PROJECT_FILES,ar.MANUAL_ACTUAL_STAGING_FILE)}
+    final=files(output)
+    for name in ordinary:assert final.get(name)==snapshot.get(name)
+
+
 def test_cold_surface_postack_foreign_stage_failure_keeps_committed_truth(project):
     output,original=project;root=sp.project_actual_evidence_root(output)
     stage(output,original)

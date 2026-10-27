@@ -253,11 +253,15 @@ def _retained_phase_committed_authority(output_dir,phase):
     return retained,publication['cleared_count'] if publication is not None else None
 
 
+def _require_expected_committed_recovery(expected_recovery,known):
+    if expected_recovery is not None and (type(expected_recovery) not in (tuple,list)
+            or len(expected_recovery)!=2 or tuple(expected_recovery)!=known):
+        raise ValueError('已提交 actual 復原紀錄已變更；未套用新暫存')
+
+
 def _recover_direct_profile_phase(output_dir, phase, *, acknowledge, expected_recovery=None):
     retained,cleared=_retained_phase_committed_authority(output_dir,phase)
-    if expected_recovery is not None and (type(expected_recovery) not in (tuple,list)
-            or len(expected_recovery)!=2 or tuple(expected_recovery)!=retained):
-        raise ValueError('已提交 actual 復原紀錄已變更；未套用新暫存')
+    _require_expected_committed_recovery(expected_recovery,retained)
     try:
         with project_delivery_lock(project_actual_evidence_root(output_dir),_admission=phase.receipt()):
             return _recover_direct_profile_phase_locked(output_dir,phase,acknowledge=acknowledge,
@@ -278,15 +282,7 @@ def _recover_direct_profile_phase_locked(output_dir, phase, *, acknowledge, expe
     """Continue the original new-profile ordinary phase through raw publication."""
     output_dir=Path(output_dir).resolve();root=project_actual_evidence_root(output_dir)
     phase.recheck()
-    if expected_recovery is not None:
-        pending=_surface_phase_recovery(root,phase)
-        publication=_read_actual_refresh_publication(output_dir,_phase=phase)
-        if pending is None and publication is not None and publication[0]['phase']=='ACKNOWLEDGING':
-            from global_glyph_promotion import _validated_project_journal
-            authority=_validated_project_journal(phase.expected_bytes(publication[2]/'ack-committed.json'))
-            pending=(authority['transaction_id'],authority['recovery_plan'])
-        if type(expected_recovery) not in (tuple,list) or len(expected_recovery)!=2 or tuple(expected_recovery)!=pending:
-            raise ValueError('已提交 actual 復原紀錄已變更；未套用新暫存')
+    _require_expected_committed_recovery(expected_recovery,_retained_phase_committed_authority(output_dir,phase)[0])
     recover_pending_project_actual_write(root,_phase=phase)
     resumed=_resume_actual_refresh_publication(output_dir,acknowledge=acknowledge,_phase=phase)
     if resumed is not None and resumed['phase'] in {'PUBLISHED','ACKNOWLEDGING'}:
@@ -307,8 +303,7 @@ def _recover_direct_profile_phase_locked(output_dir, phase, *, acknowledge, expe
             'refresh_performed':True,'cleared_actual_dependent_event_count':resumed['cleared_count'],
             'refresh_report':str(report)}
     pending=_surface_phase_recovery(root,phase)
-    if expected_recovery is not None and tuple(expected_recovery)!=pending:
-        raise ValueError('已提交 actual 復原紀錄已變更；未套用新暫存')
+    _require_expected_committed_recovery(expected_recovery,pending)
     if pending is None:return None
     token,plan=pending
     result={'project_actual_commit':'COMMITTED','project_refresh':'NOT_STARTED',
@@ -412,16 +407,13 @@ def recover_committed_actual_project(output_dir: Path, *, acknowledge: bool = Tr
             authority=_validated_project_journal(entered.expected_bytes(output_dir.parent/publication['stage']/'ack-committed.json'))
         if authority is not None and authority['schema_version']=='3.0':
             known=(authority['transaction_id'],authority['recovery_plan']) if authority['state']=='COMMITTED' else None
-            if expected_recovery is not None and (type(expected_recovery) not in (tuple,list)
-                    or len(expected_recovery)!=2 or tuple(expected_recovery)!=known):
-                raise ValueError('已提交 actual 復原紀錄已變更；未套用新暫存')
+            _require_expected_committed_recovery(expected_recovery,known)
             return _recover_direct_profile_phase(output_dir,SurfaceWritePhase(entered),
                 acknowledge=acknowledge,expected_recovery=expected_recovery)
         if ((local is not None and local['schema_version']=='2.0' and local['owner']['operation']=='surface-only')
                 or (publication is not None and publication.get('schema')=='actual-deferred-refresh/2')):
             phase=SurfaceWritePhase(entered)
-            if expected_recovery is not None and tuple(expected_recovery)!=_surface_phase_recovery(root,phase):
-                raise ValueError('已提交 actual 復原紀錄已變更；未套用新暫存')
+            _require_expected_committed_recovery(expected_recovery,_retained_phase_committed_authority(output_dir,phase)[0])
             return _recover_surface_phase(output_dir,phase,acknowledge=acknowledge)
     if expected_recovery is None and not (root / PROJECT_TRANSACTION_FILE).exists() and not (output_dir / ACTUAL_REFRESH_PUBLICATION).exists():
         return None
