@@ -4610,14 +4610,40 @@ def _refresh_rebase_manifest(manifest, source, destination):
     return seal_manifest(result)
 
 
-def _refresh_atomic_bytes(path, raw):
+_REFRESH_UNSPECIFIED_BYTES = object()
+
+
+def _refresh_atomic_bytes(path, raw, *, expected_raw=_REFRESH_UNSPECIFIED_BYTES, _prewrite_guard=None):
+    """Atomic replacement, with optional optimistic guards, not an OS CAS."""
+    def check():
+        try:
+            if _prewrite_guard is not None:
+                _prewrite_guard()
+            if expected_raw is not _REFRESH_UNSPECIFIED_BYTES:
+                from project_write_admission import _bytes
+                if _bytes(path) != expected_raw:
+                    raise ValueError('SURFACE_CONTRACT: store changed before replacement')
+        except ValueError as exc:
+            if expected_raw is _REFRESH_UNSPECIFIED_BYTES:
+                raise
+            from manual_surface_actual import SurfaceWritePreconditionError
+            raise SurfaceWritePreconditionError(path,expected_raw,exc) from exc
     temporary = path.with_name(".ar-" + uuid4().hex[:8])
+    replace_attempted=False
     try:
+        check()  # Refuse before even creating an own temporary file.
         with temporary.open("xb") as stream:
             stream.write(raw)
             stream.flush()
             os.fsync(stream.fileno())
+        check()
+        replace_attempted=True
         temporary.replace(path)
+    except OSError as exc:
+        if expected_raw is not _REFRESH_UNSPECIFIED_BYTES and not replace_attempted:
+            from manual_surface_actual import SurfaceWriteIOError
+            raise SurfaceWriteIOError(path,expected_raw,exc) from exc
+        raise
     finally:
         temporary.unlink(missing_ok=True)
 
@@ -5327,7 +5353,26 @@ def _surface_recovery_pending(output_dir):
     return journal['schema_version']=='2.0' and journal['owner']['operation']=='surface-only'
 
 
-def _surface_projection_refresh(output_dir, document, *, enable=False, acknowledge=True):
+def _surface_admission_after_owned_change(output_dir, admission, replacements, *, removed_stage=None):
+    """Advance only a proven surface publication/rollback phase, never drift."""
+    from project_write_admission import ProjectWriteAdmission, capture_project_write_admission
+    expected = {name:raw for name,raw in admission.files
+                if removed_stage is None or not Path(name).is_relative_to(removed_stage)}
+    expected.update((str(Path(name).resolve()),raw) for name,raw in replacements.items())
+    transitioned = ProjectWriteAdmission(Path(output_dir).resolve(),tuple(sorted(expected.items())),admission.profile)
+    transitioned.recheck()
+    current = capture_project_write_admission(output_dir,recovery=True)
+    # A temporary valid change during recapture must not become a new baseline.
+    for name,raw in current.files:
+        if name in expected and raw != expected[name]:
+            raise ValueError('SURFACE_CONTRACT: owned transition recaptured external bytes')
+    transitioned.recheck()
+    current.recheck()
+    return current
+
+
+def _surface_projection_refresh(output_dir, document, *, enable=False, acknowledge=True,
+                                _conversion_admission=None):
     """Publish only the independent surface projection; retain decoder seals.
 
     This uses the existing refresh publication journal and owned stage. It does
@@ -5359,15 +5404,13 @@ def _surface_projection_refresh(output_dir, document, *, enable=False, acknowled
             # unrelated drift must never become a newly admitted baseline.
             if publication[0]['phase'] != 'PREPARED':
                 raise ValueError('SURFACE_CONTRACT: unexpected publication recovery phase')
-            from project_write_admission import ProjectWriteAdmission
-            restored = {name:raw for name,raw in admission.files
-                        if not Path(name).is_relative_to(publication[2])}
-            for entry in publication[0]['entries']:
-                restored[str(output_dir/entry['path'])] = publication[3].get(entry['path'])
-            restored[str(output_dir/ACTUAL_REFRESH_PUBLICATION)] = None
-            ProjectWriteAdmission(output_dir,tuple(sorted(restored.items())),admission.profile).recheck()
-            admission = capture_project_write_admission(output_dir,recovery=True)
-        manifest = json_load_strict(output_dir/'校對工作階段.json')
+            restored = {output_dir/entry['path']:publication[3].get(entry['path'])
+                        for entry in publication[0]['entries']}
+            restored[output_dir/ACTUAL_REFRESH_PUBLICATION] = None
+            admission = _surface_admission_after_owned_change(output_dir,admission,restored,
+                                                              removed_stage=publication[2])
+        manifest = json_parse_strict(admission.expected_bytes(output_dir/'校對工作階段.json'),
+                                     output_dir/'校對工作階段.json')
         validate_manifest_integrity(manifest)
         if not enable and not surface.enabled(manifest):
             raise ValueError('SURFACE_CONTRACT: explicit format conversion required')
@@ -5376,6 +5419,10 @@ def _surface_projection_refresh(output_dir, document, *, enable=False, acknowled
                 != raw_dependencies):
             raise ValueError('SURFACE_CONTRACT: raw actual evidence changed; finish normal decoder refresh first')
         surface.validate_document(document,session_id=manifest['session_id'])
+        snapshot=surface.load_snapshot(root,manifest,expected_raw=admission.expected_bytes(root/surface.FILE))
+        if (document != (surface.empty(manifest['session_id']) if enable else snapshot.document)
+                or (enable and snapshot.document is not None)):
+            raise ValueError('SURFACE_CONTRACT: publication document differs from admitted store')
         surface.verify_sources(document,manifest,output_dir)
         _verify_actual_refresh_pdf_binding(output_dir,manifest)
         source = _refresh_source_snapshot(output_dir)
@@ -5451,10 +5498,22 @@ def _surface_projection_refresh(output_dir, document, *, enable=False, acknowled
             json_save(stage/'校對工作階段.json',final)
             from actual_source_visual_safety import recheck_current_sources
             recheck_current_sources()
+            conversion_bytes = None
+            if _conversion_admission is not None:
+                if not enable or token is not None:
+                    raise ValueError('SURFACE_CONTRACT: continuation requires an owned explicit conversion')
+                # Capture our exact staged outputs before publication, rather
+                # than accepting whatever valid data appears after it.
+                changed = [name for name in names if _refresh_file_sha(stage/name) != before[name]]
+                conversion_bytes = {output_dir/name:(stage/name).read_bytes() for name in changed}
+                conversion_bytes[output_dir/ACTUAL_REFRESH_PUBLICATION] = None
             _publish_actual_refresh(output_dir,stage,final,source=source,token=token,before=before,
                                     cleared_count=removed,_surface_only=True,_prewrite_guard=admission.recheck)
             if token is not None and acknowledge:
                 _acknowledge_actual_refresh(output_dir,token)
+            if conversion_bytes is not None:
+                _conversion_admission['receipt'] = _surface_admission_after_owned_change(
+                    output_dir,admission,conversion_bytes)
             return {'project_actual_commit':'COMMITTED','project_refresh':'SUCCESS',
                     'surface_projection_refresh':True,'automatic_decoder_cache_revalidated':False,
                     'global_promotion_delivery':{'status':'NOT_APPLICABLE_SURFACE_ONLY'},
@@ -5466,7 +5525,7 @@ def _surface_projection_refresh(output_dir, document, *, enable=False, acknowled
 
 
 @project_write_entry(surface_conversion=True)
-def enable_surface_actual_project(output_dir: Path, *, confirmation: bool):
+def enable_surface_actual_project(output_dir: Path, *, confirmation: bool, _conversion_admission=None):
     """Explicit, traceable opt-in; callers must not invoke this on open/retry."""
     if confirmation is not True:
         raise ValueError('SURFACE_CONTRACT: explicit new-format confirmation required')
@@ -5481,7 +5540,8 @@ def enable_surface_actual_project(output_dir: Path, *, confirmation: bool):
         raise ValueError('SURFACE_CONTRACT: finish existing actual recovery before conversion')
     with project_delivery_lock(project_actual_evidence_root(output_dir),_admission=admission):
         admission.recheck()
-        result=_surface_projection_refresh(output_dir,surface.empty(manifest['session_id']),enable=True)
+        result=_surface_projection_refresh(output_dir,surface.empty(manifest['session_id']),enable=True,
+                                           _conversion_admission=_conversion_admission)
     return {**result,'warning':surface.UNSUPPORTED_WARNING}
 
 
@@ -5523,7 +5583,8 @@ def _stage_surface_actual_correction(output_dir,review_id,reading,**claims):
     if preview['requires_format_conversion']:
         if claims['enable_format'] is not True:
             raise ValueError('SURFACE_CONTRACT: explicit format conversion required')
-    manifest=json_load_strict(output_dir/'校對工作階段.json')
+    manifest=json_parse_strict(receipt.expected_bytes(output_dir/'校對工作階段.json'),
+                               output_dir/'校對工作階段.json')
     root=project_actual_evidence_root(output_dir)
     if load_manual_actual_staging(root)['staged_groups']:
         raise ValueError('SURFACE_CONTRACT: finish ordinary glyph staging before surface-only staging')
@@ -5535,18 +5596,24 @@ def _stage_surface_actual_correction(output_dir,review_id,reading,**claims):
         if preview['requires_format_conversion']:
             # Every input and source was proven before this first write. Keep
             # the same lock through conversion and the staging publication.
-            enable_surface_actual_project(output_dir,confirmation=True)
-            manifest=json_load_strict(output_dir/'校對工作階段.json')
-        document=surface.load(root,manifest)
+            conversion={}
+            enable_surface_actual_project(output_dir,confirmation=True,_conversion_admission=conversion)
+            receipt=conversion['receipt']
+            manifest=json_parse_strict(receipt.expected_bytes(output_dir/'校對工作階段.json'),
+                                       output_dir/'校對工作階段.json')
+        snapshot=surface.load_snapshot(root,manifest,expected_raw=receipt.expected_bytes(root/surface.FILE))
+        document=copy.deepcopy(snapshot.document)
         oid=record['proof']['source']['occurrence_id']
         applied=next((x for x in document['records'] if x['proof']['source']['occurrence_id']==oid),None)
         if applied and applied['proof']==record['proof'] and applied['reading']==record['reading']:
+            receipt.recheck()
             return {'already_applied':True,'surface_pending_count':len(document['pending'])}
         document['pending']=[x for x in document['pending'] if x['proof']['source']['occurrence_id']!=oid]+[record]
         document['pending'].sort(key=lambda x:x['proof']['source']['occurrence_id'])
         document['revision']+=1
         recheck_current_sources()
-        _refresh_atomic_bytes(root/surface.FILE,surface.bytes_for(document))
+        _refresh_atomic_bytes(root/surface.FILE,surface.bytes_for(document),expected_raw=snapshot.raw,
+                               _prewrite_guard=receipt.recheck)
         return {'surface_pending_count':len(document['pending']),'staged_occurrence_id':oid}
 
 
@@ -5566,14 +5633,25 @@ def _apply_staged_surface_actual_corrections(output_dir):
     admission=capture_project_write_admission(output_dir,recovery=True)
     with project_delivery_lock(root,_admission=admission):
         admission.recheck()
-        recover_pending_project_actual_write(root)
-        manifest=json_load_strict(output_dir/'校對工作階段.json')
-        document=surface.load(root,manifest)
+        journal_raw=admission.expected_bytes(root/promotion.PROJECT_TRANSACTION_FILE)
+        journal=promotion._validated_project_journal(journal_raw) if journal_raw is not None else None
+        admission.recheck()
+        recovered=recover_pending_project_actual_write(root)
+        if recovered=='PREPARED':
+            restored={root/name:promotion._unpacked(raw) for name,raw in journal['files'].items()}
+            restored[root/promotion.STAGING_FILE]=promotion._unpacked(journal['staging'])
+            restored[root/promotion.PROJECT_TRANSACTION_FILE]=None
+            admission=_surface_admission_after_owned_change(output_dir,admission,restored)
+        manifest=json_parse_strict(admission.expected_bytes(output_dir/'校對工作階段.json'),
+                                   output_dir/'校對工作階段.json')
+        snapshot=surface.load_snapshot(root,manifest,expected_raw=admission.expected_bytes(root/surface.FILE))
+        document=copy.deepcopy(snapshot.document)
         if _surface_recovery_pending(output_dir):
             return _surface_projection_refresh(output_dir,document)
         if load_manual_actual_staging(root)['staged_groups']:
             raise ValueError('SURFACE_CONTRACT: mixed surface/glyph batch is unsupported')
         if not document['pending']:
+            admission.recheck()
             return {'applied_group_count':0,'surface_applied_count':0,'refresh_performed':False,
                     'affected_pdf_names':[],
                     'global_promotion_delivery':{'status':'NOT_APPLICABLE_SURFACE_ONLY'}}
@@ -5582,22 +5660,30 @@ def _apply_staged_surface_actual_corrections(output_dir):
         surface.verify_sources(document,manifest,output_dir)
         roster={x['occurrence_id']:x for x in manifest['records']}
         results=[]
-        current={x['proof']['source']['occurrence_id']:x for x in document['records']}
         for item in document['pending']:
             oid=item['proof']['source']['occurrence_id'];entry=roster[oid]
-            if oid in current:
-                document['history'].append(current[oid])
-            current[oid]=item
             from actual_review import actual_group_identity
             identity=actual_group_identity(entry)
             from exact_glyph_identity import actual_group_id
             results.append({'group_id':actual_group_id(identity),'verified_occurrence_ids':[oid],
                             'affected_occurrence_ids':[oid],'reading':item['reading']})
-        document['records']=[current[key] for key in sorted(current)]
-        document['pending']=[];document['revision']+=1
+        document=surface.apply_pending(document)
         recheck_current_sources()
-        with promotion.direct_visual_project_transaction(root,operation='surface-only') as bind:
-            _refresh_atomic_bytes(root/surface.FILE,surface.bytes_for(document))
+        admission.recheck()
+        with promotion.direct_visual_project_transaction(root,operation='surface-only',
+                _prewrite_guard=admission.recheck,_surface_preimage=snapshot.raw,
+                _surface_plan=promotion.post_commit_recovery_plan_from_results(results),
+                _surface_origin_sha=manifest['manifest_integrity_sha256']) as bind:
+            # The journal is this transaction's legitimate first write. Every
+            # other original input, including the surface bytes, stays bound.
+            from project_write_admission import ProjectWriteAdmission
+            writing=ProjectWriteAdmission(admission.project,tuple((name,raw) for name,raw in admission.files
+                if name!=str(root/promotion.PROJECT_TRANSACTION_FILE)),admission.profile)
+            def recheck_surface_write():
+                writing.recheck()
+                recheck_current_sources()
+            _refresh_atomic_bytes(root/surface.FILE,surface.bytes_for(document),expected_raw=snapshot.raw,
+                                   _prewrite_guard=recheck_surface_write)
             bind(promotion.post_commit_recovery_plan_from_results(results))
         try:
             refreshed=_surface_projection_refresh(output_dir,document)

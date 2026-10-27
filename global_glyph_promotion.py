@@ -49,7 +49,9 @@ def _json(raw: bytes):
         raise library.GlobalLibraryValidationError("invalid operational JSON") from exc
 
 
-def _atomic_bytes(path: Path, raw: bytes):
+def _atomic_bytes(path: Path, raw: bytes, *, _prewrite_guard=None):
+    if _prewrite_guard is not None:
+        _prewrite_guard()
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name("." + path.name + "." + uuid4().hex + ".tmp")
     try:
@@ -57,6 +59,8 @@ def _atomic_bytes(path: Path, raw: bytes):
             handle.write(raw)
             handle.flush()
             os.fsync(handle.fileno())
+        if _prewrite_guard is not None:
+            _prewrite_guard()
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
@@ -330,6 +334,53 @@ def _validated_project_journal(raw):
     return journal
 
 
+def _surface_transaction_images(journal,manifest):
+    """Finite surface-only-all-pending/1; never infer general donor writes."""
+    import manual_surface_actual as surface
+    from actual_review import actual_group_identity
+    from exact_glyph_identity import actual_group_id
+    if (journal['schema_version']!='2.0' or journal['owner']['operation']!='surface-only'
+            or not surface.enabled(manifest)
+            or journal['owner']['session_id']!=manifest['session_id']):
+        raise library.GlobalLibraryValidationError('surface rollback unsupported owner/profile')
+    raw=_unpacked(journal['files'][surface.FILE])
+    if raw is None:
+        raise library.GlobalLibraryValidationError('surface rollback missing original document')
+    document=surface.validate_document(surface.parse(raw),session_id=manifest['session_id'])
+    after=surface.bytes_for(surface.apply_pending(document))
+    plan=journal['recovery_plan']
+    if plan is not None:
+        plan=validate_post_commit_recovery_plan(plan)
+        roster={item['occurrence_id']:item for item in manifest['records']}
+        if len(roster)!=len(manifest['records']):
+            raise library.GlobalLibraryValidationError('surface rollback duplicate source identity')
+        expected=[]
+        for item in document['pending']:
+            source=item['proof']['source'];oid=source['occurrence_id']
+            if oid not in roster or roster[oid]['review_id']!=source['review_id']:
+                raise library.GlobalLibraryValidationError('surface rollback missing original identity')
+            expected.append({'group_id':actual_group_id(actual_group_identity(roster[oid])),
+                             'occurrence_id':oid,'reading':item['reading']})
+        expected.sort(key=lambda item:item['occurrence_id'])
+        if (plan['affected_occurrence_ids']!=[item['occurrence_id'] for item in expected]
+                or plan['checked_postconditions']!=expected):
+            raise library.GlobalLibraryValidationError('surface rollback plan differs from all original pending')
+    return raw,after
+
+
+def _surface_rollback_preconditions(journal,manifest,current_files,staging_raw):
+    """One exact owner-state rule, shared by readonly admission and recovery."""
+    import manual_surface_actual as surface
+    before,after=_surface_transaction_images(journal,manifest)
+    for name,packed in journal['files'].items():
+        allowed=(before,after) if name==surface.FILE else (_unpacked(packed),)
+        if current_files[name] not in allowed:
+            raise library.GlobalLibraryValidationError('surface rollback foreign current bytes: '+name)
+    if staging_raw!=_unpacked(journal['staging']):
+        raise library.GlobalLibraryValidationError('surface rollback foreign staging bytes')
+    return before,after
+
+
 def recover_project_actual_transaction(root: Path):
     root = Path(root)
     from project_write_admission import project_from_actual_root, capture_project_write_admission, has_surface_indicators
@@ -337,30 +388,52 @@ def recover_project_actual_transaction(root: Path):
     path = root / PROJECT_TRANSACTION_FILE
     if not path.exists():
         return
-    journal = _validated_project_journal(path.read_bytes())
+    journal_raw = path.read_bytes()
+    journal = _validated_project_journal(journal_raw)
     owned = project is not None and (has_surface_indicators(project) or journal['schema_version']=='2.0')
     admission = capture_project_write_admission(project, recovery=True) if owned else None
+    if admission is not None and admission.expected_bytes(path)!=journal_raw:
+        raise library.GlobalLibraryValidationError('surface rollback journal differs from original receipt')
     if journal['schema_version'] == '2.0':
         if project is None:
             raise library.GlobalLibraryValidationError('surface transaction has no project owner')
         import standalone_proofread as sp
-        manifest = sp.json_load_strict(project/'校對工作階段.json')
+        if admission is None:
+            raise library.GlobalLibraryValidationError('surface transaction has no admitted owner snapshot')
+        manifest = sp.json_parse_strict(admission.expected_bytes(project/'校對工作階段.json'),
+                                        project/'校對工作階段.json')
         if (journal['owner']['project'] != str(project.resolve())
                 or journal['owner']['session_id'] != manifest['session_id']
                 or (journal['state']=='PREPARED' and journal['owner']['origin_manifest_sha256'] != manifest['manifest_integrity_sha256'])):
             raise library.GlobalLibraryValidationError('surface transaction owner changed; no recovery writes')
     state = journal["state"]
     if state == "PREPARED":
+        surface_only=journal['schema_version']=='2.0' and journal['owner']['operation']=='surface-only'
+        if surface_only:
+            import manual_surface_actual as surface
+            before,after=_surface_rollback_preconditions(journal,manifest,
+                {name:admission.expected_bytes(root/name) for name in journal['files']},
+                admission.expected_bytes(root/STAGING_FILE))
         if admission is not None:
             admission.recheck()
         for name, packed in journal["files"].items():
+            if surface_only and name!=surface.FILE:
+                continue  # This operation never wrote glyph/outbox files.
             raw = _unpacked(packed)
             target = root / name
+            if surface_only and admission.expected_bytes(target)==raw:
+                continue
             if raw is None:
                 target.unlink(missing_ok=True)
             else:
-                _atomic_bytes(target, raw)
-        _restore_staging(root, journal["staging"])
+                _atomic_bytes(target, raw,**({'_prewrite_guard':admission.recheck} if surface_only else {}))
+        if not surface_only:
+            _restore_staging(root, journal["staging"])
+        else:
+            from project_write_admission import ProjectWriteAdmission
+            restored=dict(admission.files)
+            restored[str((root/surface.FILE).resolve())]=before
+            ProjectWriteAdmission(admission.project,tuple(sorted(restored.items())),admission.profile).recheck()
         path.unlink()
     return state
 
@@ -410,7 +483,9 @@ def acknowledge_project_refresh(root: Path, token):
 
 
 @contextmanager
-def direct_visual_project_transaction(root: Path, *, operation='direct-visual'):
+def direct_visual_project_transaction(root: Path, *, operation='direct-visual',
+                                      _prewrite_guard=None, _surface_preimage=None,
+                                      _surface_plan=None, _surface_origin_sha=None):
     """Durable undo journal for the six-file commit and staging acknowledgement.
 
     An interrupted PREPARED transaction is rolled back before any retry/delivery.
@@ -419,6 +494,8 @@ def direct_visual_project_transaction(root: Path, *, operation='direct-visual'):
     """
     root = Path(root)
     with project_delivery_lock(root):
+        if _prewrite_guard is not None:
+            _prewrite_guard()
         recover_project_actual_transaction(root)
         if project_refresh_token(root) is not None:
             raise library.GlobalLibraryValidationError("finish committed project recovery before a new actual transaction")
@@ -440,17 +517,45 @@ def direct_visual_project_transaction(root: Path, *, operation='direct-visual'):
             journal['owner'] = {'project':str(project),'session_id':manifest['session_id'],
                                 'origin_manifest_sha256':manifest['manifest_integrity_sha256'],
                                 'operation':operation}
+            if _surface_origin_sha is not None and manifest['manifest_integrity_sha256']!=_surface_origin_sha:
+                raise library.GlobalLibraryValidationError('surface transaction origin differs from admitted seal')
+        if (_surface_preimage is not None and
+                (not surface or _unpacked(journal['files']['manual_surface_actual.json']) != _surface_preimage)):
+            raise library.GlobalLibraryValidationError('surface transaction preimage differs from admitted bytes')
+        if _surface_plan is not None:
+            journal['recovery_plan']=validate_post_commit_recovery_plan(_surface_plan)
+            _surface_transaction_images(journal,manifest)
+        if _prewrite_guard is not None:
+            _prewrite_guard()  # Before the first PREPARED journal write.
         path = root / PROJECT_TRANSACTION_FILE
+        initial_journal_raw = (library._canonical_json(journal) + '\n').encode('utf-8')
         _write_json(path, journal)
         def bind_recovery_plan(plan):
-            journal["recovery_plan"] = validate_post_commit_recovery_plan(plan)
+            checked=validate_post_commit_recovery_plan(plan)
+            if _surface_plan is not None and checked!=journal['recovery_plan']:
+                raise library.GlobalLibraryValidationError('surface transaction changed original pending plan')
+            journal["recovery_plan"] = checked
         try:
             yield bind_recovery_plan
             validate_post_commit_recovery_plan(journal["recovery_plan"])
             _write_json(path, journal)  # plan durable before COMMITTED publication
             journal["state"] = "COMMITTED"
             _write_json(path, journal)
-        except BaseException:
+        except BaseException as exc:
+            if operation=='surface-only' and _surface_preimage is not None:
+                from manual_surface_actual import SurfaceWriteNotPerformed
+                if (isinstance(exc,SurfaceWriteNotPerformed)
+                        and exc.path==(root/'manual_surface_actual.json').resolve()
+                        and exc.expected_raw==_surface_preimage):
+                    # The helper proved no replace was even attempted, whether
+                    # a guard or temporary I/O failed. No body data was written.
+                    # Undoing untouched files would destroy the competing writer.
+                    from project_write_admission import _bytes
+                    if _bytes(path) != initial_journal_raw:
+                        raise library.GlobalLibraryValidationError(
+                            'surface abort journal changed; no rollback or acknowledgement') from exc
+                    path.unlink()  # Remove only our exact, uncommitted journal.
+                    raise
             recover_project_actual_transaction(root)
             raise
         # Retain the COMMITTED marker until a full-session refresh succeeds.

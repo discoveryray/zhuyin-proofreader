@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import base64
 import copy
+from dataclasses import dataclass
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -167,16 +168,86 @@ def validate_document(document, *, session_id=None):
     return document
 
 
-def load(root, manifest):
+_UNSPECIFIED_BYTES = object()
+SURFACE_PENDING_ROLLBACK_CONTRACT = 'surface-only-all-pending/1'
+
+
+@dataclass(frozen=True)
+class SurfaceSnapshot:
+    document: dict | None
+    raw: bytes | None
+
+
+class SurfaceWriteNotPerformed:
+    """Marker only for a guarded helper that has never attempted replace."""
+    def _bind_unwritten(self,path,expected_raw):
+        self.path = Path(path).resolve()
+        self.expected_raw = expected_raw
+
+
+class SurfaceWritePreconditionError(ValueError,SurfaceWriteNotPerformed):
+    """The guarded surface replacement has not happened at all."""
+    def __init__(self, path, expected_raw, cause):
+        self._bind_unwritten(path,expected_raw)
+        super().__init__(str(cause))
+
+
+class SurfaceWriteIOError(OSError,SurfaceWriteNotPerformed):
+    def __init__(self,path,expected_raw,cause):
+        self._bind_unwritten(path,expected_raw)
+        super().__init__(*cause.args)
+        self.filename=cause.filename
+        self.filename2=cause.filename2
+        if hasattr(cause,'winerror'):
+            self.winerror=cause.winerror
+
+
+def apply_pending(document):
+    """The existing exact full-pending transform; no new confirmation data.
+
+    Shared with the finite surface-only-all-pending/1 rollback reader, including
+    the C15 producer's PREPARED/plan=None window. Never apply an unknown subset.
+    """
+    validate_document(document)
+    if not document['pending']:
+        raise ValueError('SURFACE_CONTRACT: surface transaction requires nonempty pending')
+    result=copy.deepcopy(document)
+    current={item['proof']['source']['occurrence_id']:item for item in result['records']}
+    for item in result['pending']:
+        oid=item['proof']['source']['occurrence_id']
+        if oid in current:
+            result['history'].append(current[oid])
+        current[oid]=item
+    result['records']=[current[key] for key in sorted(current)]
+    result['pending']=[]
+    result['revision']+=1
+    return validate_document(result)
+
+
+def load_snapshot(root, manifest, *, expected_raw=_UNSPECIFIED_BYTES):
+    """Bind the parsed document to the very bytes read, and optionally admitted.
+
+    A final disk comparison alone cannot detect using a different temporary
+    document after its file has been restored to the admitted bytes.
+    """
     path = Path(root)/FILE
     is_enabled = enabled(manifest)
     if not is_enabled:
         if path.exists():
             raise ValueError('SURFACE_CONTRACT: orphan surface store; explicit conversion required')
-        return None
+        if expected_raw is not _UNSPECIFIED_BYTES and expected_raw is not None:
+            raise ValueError('SURFACE_CONTRACT: store differs from admitted bytes')
+        return SurfaceSnapshot(None,None)
     if not path.is_file() or path.is_symlink() or path.is_junction():
         raise ValueError('SURFACE_CONTRACT: required surface store missing/untrusted')
-    return validate_document(parse(path.read_bytes()), session_id=manifest['session_id'])
+    raw = path.read_bytes()
+    if expected_raw is not _UNSPECIFIED_BYTES and raw != expected_raw:
+        raise ValueError('SURFACE_CONTRACT: store differs from admitted bytes')
+    return SurfaceSnapshot(validate_document(parse(raw),session_id=manifest['session_id']),raw)
+
+
+def load(root, manifest):
+    return load_snapshot(root,manifest).document
 
 
 def bytes_for(document):

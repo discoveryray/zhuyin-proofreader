@@ -52,6 +52,13 @@ class ProjectWriteAdmission:
     files: tuple
     profile: bool = False
 
+    def expected_bytes(self, path):
+        name = str(Path(path).resolve())
+        for captured, raw in self.files:
+            if captured == name:
+                return raw
+        raise ValueError('PROJECT_WRITE_ADMISSION: file not in original receipt: ' + name)
+
     def recheck(self):
         for name, expected in self.files:
             if _bytes(Path(name)) != expected:
@@ -155,6 +162,8 @@ def capture_project_write_admission(output_dir, *, allow_new=False, recovery=Fal
                 if (owner['project'] != str(project) or owner['session_id'] != manifest['session_id']
                         or (journal['state']=='PREPARED' and owner['origin_manifest_sha256'] != manifest['manifest_integrity_sha256'])):
                     raise ValueError('PROJECT_WRITE_ADMISSION: foreign surface transaction owner')
+                if owner['operation']=='surface-only':
+                    promotion._surface_transaction_images(journal,manifest)
             if journal['state'] == 'PREPARED' and not recovery:
                 raise ValueError('PROJECT_WRITE_ADMISSION: valid pending rollback requires explicit recovery')
         publication_path = project/sp.ACTUAL_REFRESH_PUBLICATION
@@ -233,6 +242,10 @@ def capture_project_write_admission(output_dir, *, allow_new=False, recovery=Fal
                 raise ValueError('PROJECT_WRITE_ADMISSION: applied surface evidence differs from sealed projection')
         elif surface_raw is not None and publication is None:
             raise ValueError('PROJECT_WRITE_ADMISSION: orphan surface format; no automatic conversion')
+        if (journal is not None and journal['schema_version']=='2.0'
+                and journal['owner']['operation']=='surface-only' and journal['state']=='PREPARED'):
+            promotion._surface_rollback_preconditions(journal,manifest,
+                {name:captured[root/name] for name in journal['files']},captured[staging_path])
         # Reuse the same finite source/artifact binding implementation as saves.
         from review_save_service import ReviewSaveService
         binder = ReviewSaveService(project)

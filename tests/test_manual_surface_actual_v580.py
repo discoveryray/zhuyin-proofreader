@@ -44,6 +44,444 @@ def stage(output, original, reading='ㄅㄛˊ'):
         target_character_matches=True,reading_from_original=True)
 
 
+def competing_pending(output,original):
+    proof=sp.prepare_surface_actual_correction(output,original['records'][1]['review_id'])['proof']
+    other=surface.record_for(proof,'ㄎㄢ',actor='isolated competing writer; no human GUI claim',
+        whole_unit_readable=True,target_character_matches=True,reading_from_original=True)
+    path=sp.project_actual_evidence_root(output)/surface.FILE
+    document=surface.parse(path.read_bytes())
+    document['revision']=100
+    document['pending']=[x for x in document['pending'] if x['proof']['source']['occurrence_id']
+        !=other['proof']['source']['occurrence_id']]+[other]
+    raw=surface.bytes_for(document)
+    surface.validate_document(surface.parse(raw),session_id=original['session_id'])
+    surface.verify_sources(surface.parse(raw),sp.json_load_strict(output/'校對工作階段.json'),output)
+    return other,raw
+
+
+@pytest.mark.parametrize('operation',['stage','apply'])
+def test_locked_surface_snapshot_drift_preserves_competing_pending(project,operation):
+    output,original=project
+    root=sp.project_actual_evidence_root(output);path=root/surface.FILE
+    if operation=='apply':
+        stage(output,original)
+    other,external=competing_pending(output,original)
+    before=files(output);expected=dict(before);expected[str(path.relative_to(output))]=external
+    load=surface.load_snapshot;injected=[]
+    target='_stage_surface_actual_correction' if operation=='stage' else '_apply_staged_surface_actual_corrections'
+    def after_real_load(actual_root,manifest,**kwargs):
+        snapshot=load(actual_root,manifest,**kwargs)
+        if inspect.currentframe().f_back.f_code.co_name==target and not injected:
+            path.write_bytes(external);injected.append(snapshot.raw)
+        return snapshot
+    with patch.object(surface,'load_snapshot',new=after_real_load):
+        with pytest.raises(ValueError,match='changed before write'):
+            stage(output,original) if operation=='stage' else sp.apply_staged_surface_actual_corrections(output)
+    assert injected and injected[0]!=external
+    assert files(output)==expected
+    stored=surface.parse(path.read_bytes())
+    assert stored['revision']==100 and other in stored['pending']
+    if operation=='stage':
+        assert len(stored['pending'])==1
+    assert not (root/promotion.PROJECT_TRANSACTION_FILE).exists()
+
+
+@pytest.mark.parametrize('operation',['stage','apply'])
+def test_temporary_surface_read_cannot_use_document_outside_receipt(project,operation):
+    output,original=project
+    root=sp.project_actual_evidence_root(output);path=root/surface.FILE
+    if operation=='apply':
+        stage(output,original)
+    _,external=competing_pending(output,original)
+    before=files(output);original_raw=path.read_bytes();read=Path.read_bytes;injected=[]
+    target='_stage_surface_actual_correction' if operation=='stage' else '_apply_staged_surface_actual_corrections'
+    def temporary_read(current):
+        frame=inspect.currentframe().f_back
+        if current==path and frame.f_code.co_name=='load_snapshot' and frame.f_back.f_code.co_name==target and not injected:
+            path.write_bytes(external)
+            try:
+                result=read(current);injected.append(result)
+                return result
+            finally:
+                path.write_bytes(original_raw)
+        return read(current)
+    with patch.object(Path,'read_bytes',new=temporary_read):
+        with pytest.raises(ValueError,match='differs from admitted bytes'):
+            stage(output,original) if operation=='stage' else sp.apply_staged_surface_actual_corrections(output)
+    assert injected==[external] and original_raw!=external
+    assert files(output)==before
+
+
+def test_surface_stage_rechecks_after_temporary_write_before_replace(project):
+    output,original=project
+    path=sp.project_actual_evidence_root(output)/surface.FILE
+    other,external=competing_pending(output,original)
+    before=files(output);before[str(path.relative_to(output))]=external
+    sync=sp.os.fsync;injected=[]
+    def after_sync(descriptor):
+        result=sync(descriptor)
+        if inspect.currentframe().f_back.f_code.co_name=='_refresh_atomic_bytes' and not injected:
+            path.write_bytes(external);injected.append(True)
+        return result
+    with patch.object(sp.os,'fsync',new=after_sync):
+        with pytest.raises(ValueError,match='changed before write'):
+            stage(output,original)
+    assert injected and files(output)==before
+    assert other in surface.parse(path.read_bytes())['pending']
+
+
+def test_surface_apply_prewrite_refusal_does_not_rollback_competing_pending(project):
+    output,original=project
+    root=sp.project_actual_evidence_root(output);path=root/surface.FILE
+    stage(output,original)
+    other,external=competing_pending(output,original)
+    expected=files(output);expected[str(path.relative_to(output))]=external
+    preserved=output.parent/'external-before-refusal'
+    shutil.copytree(output,preserved)
+    (preserved/path.relative_to(output)).write_bytes(external)
+    sync=sp.os.fsync;injected=[]
+    def after_sync(descriptor):
+        result=sync(descriptor)
+        if inspect.currentframe().f_back.f_code.co_name=='_refresh_atomic_bytes' and not injected:
+            assert (root/promotion.PROJECT_TRANSACTION_FILE).is_file()
+            path.write_bytes(external);injected.append(True)
+        return result
+    try:
+        with patch.object(sp.os,'fsync',new=after_sync):
+            with pytest.raises(ValueError,match='changed before write'):
+                sp.apply_staged_surface_actual_corrections(output)
+    finally:
+        shutil.copytree(output,output.parent/'actual-after-refusal')
+    assert injected and files(output)==expected
+    assert other in surface.parse(path.read_bytes())['pending']
+    assert not (root/promotion.PROJECT_TRANSACTION_FILE).exists()
+
+
+@pytest.mark.parametrize('failure',['temp-open','temp-write','temp-fsync','replace-attempt','after-replace'])
+def test_surface_io_and_foreign_afterimage_preservation(project,failure):
+    from global_exact_glyph_library import GlobalLibraryValidationError
+    output,original=project
+    root=sp.project_actual_evidence_root(output);path=root/surface.FILE
+    stage(output,original)
+    other,_=competing_pending(output,original)
+    original_files=files(output);expected=[]
+    before_replace=failure.startswith('temp-')
+    def inject():
+        assert (root/promotion.PROJECT_TRANSACTION_FILE).is_file()
+        document=surface.parse(path.read_bytes());document['revision']=100
+        document['pending']=[x for x in document['pending']
+            if x['proof']['source']['occurrence_id']!=other['proof']['source']['occurrence_id']]+[other]
+        path.write_bytes(surface.bytes_for(document))
+        surface.verify_sources(document,sp.json_load_strict(output/'校對工作階段.json'),output)
+        state={str(p.relative_to(output)):p.read_bytes() for p in output.rglob('*') if p.is_file()
+            and p.name!='.global_exact_glyph_delivery.lock' and not p.name.startswith('.ar-')}
+        state[str((root/'.global_exact_glyph_delivery.lock').relative_to(output))]=original_files[str((root/'.global_exact_glyph_delivery.lock').relative_to(output))]
+        if before_replace:
+            state.pop(str((root/promotion.PROJECT_TRANSACTION_FILE).relative_to(output)))
+        expected.append(state)
+    real_open=Path.open;sync=sp.os.fsync;replace=Path.replace;atomic=sp._refresh_atomic_bytes
+    class WriteFailure:
+        def __init__(self,stream): self.stream=stream
+        def __enter__(self): return self
+        def __exit__(self,*args): return self.stream.__exit__(*args)
+        def write(self,raw):
+            self.stream.write(raw);inject()
+            raise OSError('isolated temp write failure before replacement')
+    def fault_open(current,*args,**kwargs):
+        stream=real_open(current,*args,**kwargs)
+        if (failure in ('temp-open','temp-write') and current.parent==root and current.name.startswith('.ar-')
+                and inspect.currentframe().f_back.f_code.co_name=='_refresh_atomic_bytes'):
+            if failure=='temp-write': return WriteFailure(stream)
+            stream.close();inject()
+            raise OSError('isolated temp open failure before replacement')
+        return stream
+    def fault_sync(descriptor):
+        result=sync(descriptor)
+        if failure=='temp-fsync' and inspect.currentframe().f_back.f_code.co_name=='_refresh_atomic_bytes':
+            inject();raise OSError('isolated fsync failure before replacement')
+        return result
+    def fault_replace(current,target):
+        if failure=='replace-attempt' and Path(target)==path:
+            inject();raise OSError('isolated attempted replacement failure')
+        return replace(current,target)
+    def fault_after_replace(current,raw,**kwargs):
+        result=atomic(current,raw,**kwargs)
+        if failure=='after-replace' and current==path:
+            inject();raise OSError('isolated commit failure after replacement')
+        return result
+    with patch.object(Path,'open',new=fault_open),patch.object(sp.os,'fsync',new=fault_sync), \
+            patch.object(Path,'replace',new=fault_replace),patch.object(sp,'_refresh_atomic_bytes',new=fault_after_replace):
+        with pytest.raises(OSError if before_replace else GlobalLibraryValidationError):
+            sp.apply_staged_surface_actual_corrections(output)
+    assert expected and files(output)==expected[0]
+    assert other in surface.parse(path.read_bytes())['pending']
+    if not before_replace:
+        (root/'.global_exact_glyph_delivery.lock').unlink(missing_ok=True)
+        blocked=files(output)
+        with pytest.raises(GlobalLibraryValidationError,match='surface rollback'):
+            sp.recover_committed_actual_project(output)
+        assert files(output)==blocked
+
+
+def test_surface_temp_io_without_external_change_preserves_original_error_and_files(project):
+    output,original=project
+    stage(output,original);before=files(output);sync=sp.os.fsync;injected=[]
+    def fail_sync(descriptor):
+        result=sync(descriptor)
+        if inspect.currentframe().f_back.f_code.co_name=='_refresh_atomic_bytes':
+            injected.append(True);raise OSError(5,'isolated surface temporary fsync failure','isolated-surface-temp')
+        return result
+    with patch.object(sp.os,'fsync',new=fail_sync):
+        with pytest.raises(OSError,match='temporary fsync failure') as error:
+            sp.apply_staged_surface_actual_corrections(output)
+    assert injected and files(output)==before
+    assert error.value.errno==5 and error.value.filename=='isolated-surface-temp'
+
+
+def test_surface_unwritten_abort_cannot_remove_changed_journal(project):
+    from global_exact_glyph_library import GlobalLibraryValidationError
+    output,original=project
+    root=sp.project_actual_evidence_root(output);path=root/surface.FILE
+    stage(output,original);_,external=competing_pending(output,original)
+    expected=files(output);sync=sp.os.fsync;injected=[]
+    def change_owner_before_replace(descriptor):
+        result=sync(descriptor)
+        if inspect.currentframe().f_back.f_code.co_name=='_refresh_atomic_bytes' and not injected:
+            journal_path=root/promotion.PROJECT_TRANSACTION_FILE
+            journal=promotion._validated_project_journal(journal_path.read_bytes())
+            journal['transaction_id']='f'*64
+            promotion._write_json(journal_path,journal)
+            path.write_bytes(external)
+            expected[str(path.relative_to(output))]=external
+            expected[str(journal_path.relative_to(output))]=journal_path.read_bytes()
+            injected.append(True)
+        return result
+    with patch.object(sp.os,'fsync',new=change_owner_before_replace):
+        with pytest.raises(GlobalLibraryValidationError,match='abort journal changed'):
+            sp.apply_staged_surface_actual_corrections(output)
+    assert injected and files(output)==expected
+
+
+def interrupted_surface_transaction(output):
+    root=sp.project_actual_evidence_root(output)
+    write=promotion._write_json;recover=promotion.recover_project_actual_transaction
+    def fail_after_store(path,document):
+        if (path==root/promotion.PROJECT_TRANSACTION_FILE and path.exists()
+                and document.get('state')=='PREPARED' and document.get('recovery_plan') is not None):
+            raise OSError('isolated stop before plan/commit publication')
+        return write(path,document)
+    def preserve(actual_root):
+        if (root/promotion.PROJECT_TRANSACTION_FILE).exists():
+            raise OSError('isolated process stop retaining owner journal')
+        return recover(actual_root)
+    with patch.object(promotion,'_write_json',new=fail_after_store), \
+            patch.object(promotion,'recover_project_actual_transaction',new=preserve):
+        with pytest.raises(OSError,match='retaining owner journal'):
+            sp.apply_staged_surface_actual_corrections(output)
+    return promotion._validated_project_journal((root/promotion.PROJECT_TRANSACTION_FILE).read_bytes())
+
+
+@pytest.mark.parametrize('state',['preimage','afterimage'])
+def test_named_c15_plan_none_exact_surface_states_recover(project,state):
+    output,original=project
+    root=sp.project_actual_evidence_root(output)
+    stage(output,original);before=files(output)
+    journal=interrupted_surface_transaction(output)
+    assert journal['recovery_plan'] is not None
+    # The recorded C15 producer has this finite PREPARED/None phase. Reproduce
+    # that original contract without editing its immutable historical evidence.
+    journal['recovery_plan']=None
+    promotion._write_json(root/promotion.PROJECT_TRANSACTION_FILE,journal)
+    if state=='preimage':
+        (root/surface.FILE).write_bytes(promotion._unpacked(journal['files'][surface.FILE]))
+    assert surface.SURFACE_PENDING_ROLLBACK_CONTRACT=='surface-only-all-pending/1'
+    capture_project_write_admission(output,recovery=True).recheck()
+    sp.recover_committed_actual_project(output)
+    assert files(output)==before
+
+
+@pytest.mark.parametrize('mutation',['store','subset','committed-subset','csv','staging','owner'])
+def test_surface_owner_recovery_refuses_foreign_bytes_or_plan(project,mutation):
+    from global_exact_glyph_library import GlobalLibraryValidationError
+    output,original=project
+    root=sp.project_actual_evidence_root(output)
+    stage(output,original)
+    prepared=sp.prepare_surface_actual_correction(output,original['records'][1]['review_id'])
+    sp.stage_surface_actual_correction(output,original['records'][1]['review_id'],'ㄎㄢ',proof=prepared['proof'],
+        actor='isolated second pending for complete-plan validation',whole_unit_readable=True,
+        target_character_matches=True,reading_from_original=True)
+    journal=interrupted_surface_transaction(output)
+    if mutation=='store':
+        document=surface.parse((root/surface.FILE).read_bytes());document['revision']+=100
+        (root/surface.FILE).write_bytes(surface.bytes_for(document))
+        journal['recovery_plan']=None  # Legacy None still cannot authorize B.
+    elif mutation in ('subset','committed-subset'):
+        journal['recovery_plan']['affected_occurrence_ids']=journal['recovery_plan']['affected_occurrence_ids'][:1]
+        journal['recovery_plan']['checked_postconditions']=journal['recovery_plan']['checked_postconditions'][:1]
+        promotion.validate_post_commit_recovery_plan(journal['recovery_plan'])
+        if mutation=='committed-subset': journal['state']='COMMITTED'
+    elif mutation=='csv':
+        path=root/ar.OCCURRENCE_OVERRIDE_FILE;path.write_bytes(path.read_bytes()+b'\n')
+        assert ar._validated_dynamic_csv_rows(path.read_bytes(),ar.OCCURRENCE_OVERRIDE_FILE,ar.OVERRIDE_HEADERS)==[]
+    elif mutation=='staging':
+        path=root/promotion.STAGING_FILE
+        path.write_bytes(json.dumps({'schema_version':'1.0','staged_groups':[]}).encode('utf-8'))
+        ar.load_manual_actual_staging(root)
+    else:
+        journal['owner']['session_id']='foreign-owned-session'
+    promotion._write_json(root/promotion.PROJECT_TRANSACTION_FILE,journal)
+    (root/'.global_exact_glyph_delivery.lock').unlink(missing_ok=True)
+    before=files(output)
+    with pytest.raises((ValueError,GlobalLibraryValidationError)):
+        sp.recover_committed_actual_project(output)
+    assert files(output)==before
+
+
+def test_surface_cold_rollback_rechecks_before_restore_replace(project):
+    output,original=project
+    root=sp.project_actual_evidence_root(output);path=root/surface.FILE
+    stage(output,original)
+    other,_=competing_pending(output,original)
+    interrupted_surface_transaction(output)
+    initial=files(output);sync=promotion.os.fsync;expected=[]
+    def drift_during_restore(descriptor):
+        result=sync(descriptor)
+        if inspect.currentframe().f_back.f_code.co_name=='_atomic_bytes' and not expected:
+            document=surface.parse(path.read_bytes());document['revision']=100;document['pending']=[other]
+            raw=surface.bytes_for(document);path.write_bytes(raw)
+            state=dict(initial);state[str(path.relative_to(output))]=raw;expected.append(state)
+        return result
+    with patch.object(promotion.os,'fsync',new=drift_during_restore):
+        with pytest.raises(ValueError,match='changed before write'):
+            sp.recover_committed_actual_project(output)
+    assert expected and files(output)==expected[0]
+
+
+def test_surface_transaction_rejects_temporary_foreign_preimage_before_journal(project):
+    from global_exact_glyph_library import GlobalLibraryValidationError
+    output,original=project
+    root=sp.project_actual_evidence_root(output);path=root/surface.FILE
+    stage(output,original)
+    _,external=competing_pending(output,original)
+    before=files(output);original_raw=path.read_bytes();read=Path.read_bytes;injected=[]
+    def temporary_read(current):
+        if current==path and inspect.currentframe().f_back.f_code.co_name=='direct_visual_project_transaction' and not injected:
+            path.write_bytes(external)
+            try:
+                result=read(current);injected.append(result)
+                return result
+            finally:
+                path.write_bytes(original_raw)
+        return read(current)
+    with patch.object(Path,'read_bytes',new=temporary_read):
+        with pytest.raises(GlobalLibraryValidationError,match='preimage differs from admitted bytes'):
+            sp.apply_staged_surface_actual_corrections(output)
+    assert injected==[external] and files(output)==before
+    assert not (root/promotion.PROJECT_TRANSACTION_FILE).exists()
+
+
+def test_projection_refuses_caller_document_not_bound_to_store(project):
+    output,original=project
+    _,foreign=competing_pending(output,original)
+    before=files(output)
+    with pytest.raises(ValueError,match='publication document differs from admitted store'):
+        sp._surface_projection_refresh(output,surface.parse(foreign))
+    assert files(output)==before
+
+
+def test_dynamic_surface_snapshot_uses_one_document_byte_read(project):
+    output,original=project
+    root=sp.project_actual_evidence_root(output);path=root/surface.FILE
+    other,external=competing_pending(output,original)
+    original_raw=path.read_bytes();load=surface.load_snapshot;injected=[]
+    def after_real_read(actual_root,manifest,**kwargs):
+        result=load(actual_root,manifest,**kwargs)
+        if inspect.currentframe().f_back.f_code.co_name=='_capture_dynamic_actual_evidence' and not injected:
+            path.write_bytes(external);injected.append(result)
+        return result
+    with patch.object(surface,'load_snapshot',new=after_real_read):
+        report,raw_files,_=ar._capture_dynamic_actual_evidence(root,read_only=True)
+    assert report['ok'] and injected
+    assert raw_files[surface.FILE]==original_raw
+    assert report['hashes'][surface.FILE]==surface.applied_digest(surface.parse(original_raw))
+    assert path.read_bytes()==external and other in surface.parse(external)['pending']
+
+
+def test_optin_stage_cannot_adopt_competing_data_after_own_publication(tmp_path):
+    output=tmp_path/'project';output.mkdir()
+    original=create_staged_navigation_fixture(output,same_exact_peers=True)
+    root=sp.project_actual_evidence_root(output)
+    ar.ensure_user_evidence_files(root)
+    ar._write_actual_evidence_csv(root/ar.OCCURRENCE_OVERRIDE_FILE,ar.OVERRIDE_HEADERS,[])
+    prepared=[sp.prepare_surface_actual_correction(output,row['review_id']) for row in original['records'][:2]]
+    other=surface.record_for(prepared[1]['proof'],'ㄎㄢ',actor='isolated competing conversion writer',
+        whole_unit_readable=True,target_character_matches=True,reading_from_original=True)
+    publish=sp._publish_actual_refresh;expected=[]
+    def snapshot_without_open_lock():
+        return {str(p.relative_to(output)):p.read_bytes() for p in output.rglob('*')
+                if p.is_file() and p.name!='.global_exact_glyph_delivery.lock'}
+    def after_owned_publish(*args,**kwargs):
+        result=publish(*args,**kwargs)
+        path=root/surface.FILE
+        document=surface.parse(path.read_bytes());document['revision']=100;document['pending']=[other]
+        path.write_bytes(surface.bytes_for(document))
+        surface.verify_sources(document,sp.json_load_strict(output/'校對工作階段.json'),output)
+        expected.append(snapshot_without_open_lock())
+        return result
+    with patch.object(sp,'_publish_actual_refresh',new=after_owned_publish):
+        with pytest.raises(ValueError,match='changed before write'):
+            sp.stage_surface_actual_correction(output,original['records'][0]['review_id'],'ㄅㄛˊ',
+                proof=prepared[0]['proof'],actor='isolated explicit conversion',whole_unit_readable=True,
+                target_character_matches=True,reading_from_original=True,enable_format=True)
+    assert expected and snapshot_without_open_lock()==expected[0]
+    assert surface.parse((root/surface.FILE).read_bytes())['pending']==[other]
+    assert not (root/promotion.PROJECT_TRANSACTION_FILE).exists()
+
+
+@pytest.mark.parametrize('external_drift',[False,True])
+def test_local_prepared_surface_rollback_remains_bound_to_original_inputs(project,external_drift):
+    output,original=project
+    root=sp.project_actual_evidence_root(output)
+    stage(output,original)
+    _,external=competing_pending(output,original)
+    before=files(output)
+    recover=promotion.recover_project_actual_transaction;write=promotion._write_json
+    def interrupt_plan(path,document):
+        if path==root/promotion.PROJECT_TRANSACTION_FILE and path.exists() and document.get('recovery_plan') is not None:
+            raise OSError('isolated interrupted PREPARED surface transaction')
+        return write(path,document)
+    def preserve_pending(actual_root):
+        if (root/promotion.PROJECT_TRANSACTION_FILE).exists():
+            raise OSError('isolated process stop before local owner rollback')
+        return recover(actual_root)
+    with patch.object(promotion,'_write_json',new=interrupt_plan), \
+            patch.object(promotion,'recover_project_actual_transaction',new=preserve_pending):
+        with pytest.raises(OSError,match='process stop'):
+            sp.apply_staged_surface_actual_corrections(output)
+    journal=promotion._validated_project_journal((root/promotion.PROJECT_TRANSACTION_FILE).read_bytes())
+    assert journal['state']=='PREPARED' and journal['schema_version']=='2.0'
+    capture_project_write_admission(output,recovery=True).recheck()
+    injected=[]
+    def rollback_then_other_write(actual_root):
+        result=recover(actual_root)
+        if result=='PREPARED' and external_drift and not injected:
+            (root/surface.FILE).write_bytes(external);injected.append(True)
+        return result
+    with patch.object(promotion,'recover_project_actual_transaction',new=rollback_then_other_write):
+        if external_drift:
+            with pytest.raises(ValueError,match='changed before write'):
+                sp.apply_staged_surface_actual_corrections(output)
+            expected=dict(before);expected[str((root/surface.FILE).relative_to(output))]=external
+            assert injected and files(output)==expected
+        else:
+            assert sp.apply_staged_surface_actual_corrections(output)['surface_applied_count']==1
+            reopened=ReviewSaveService(output).load_resume_snapshot()
+            assert reopened.ledger[0]['actual']=='ㄅㄛˊ'
+            assert reopened.ledger[1:]==sp.materialize_ledger(original,sp.json_load_strict(output/'人工判定資料庫.json'))[1:]
+            assert (output/'人工判定資料庫.json').read_bytes()==before['人工判定資料庫.json']
+    assert not (root/promotion.PROJECT_TRANSACTION_FILE).exists()
+
+
 def test_pending_expected_save_apply_reopen_refresh_and_no_learning(project):
     output, original=project
     root=sp.project_actual_evidence_root(output)
@@ -342,8 +780,8 @@ def test_prepared_rollback_keeps_staging_and_all_evidence(project):
     stage(output,original)
     before=files(output)
     atomic=sp._refresh_atomic_bytes
-    def fail_after_surface(path,raw):
-        atomic(path,raw)
+    def fail_after_surface(path,raw,**kwargs):
+        atomic(path,raw,**kwargs)
         if path==root/surface.FILE:
             raise OSError('isolated physical commit failure')
     with patch.object(sp,'_refresh_atomic_bytes',side_effect=fail_after_surface):

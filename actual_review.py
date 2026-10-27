@@ -972,8 +972,9 @@ def _capture_dynamic_actual_evidence(root: Path, *, read_only: bool = False) -> 
         if surface_path.exists() or (manifest is not None and surface.enabled(manifest)):
             if manifest is None:
                 raise ValueError('surface evidence requires its sealed project owner')
-            document = surface.load(root, manifest)
-            raw_files[surface.FILE] = surface_path.read_bytes()
+            snapshot = surface.load_snapshot(root, manifest)
+            document = snapshot.document
+            raw_files[surface.FILE] = snapshot.raw
             parsed_rows[surface.FILE] = [{'pdf_sha256':pdf, 'dependency_sha256':sha}
                 for pdf, sha in surface.dependencies(document).items()]
             result['hashes'][surface.FILE] = surface.applied_digest(document)

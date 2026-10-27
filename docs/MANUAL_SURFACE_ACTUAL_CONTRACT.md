@@ -22,6 +22,20 @@ public surface/service 入口使用 `project_write_admission.capture_project_wri
 
 surface projection refresh 在讀取 manifest、來源及晚取的發布前像後，仍比較最初的同一份 receipt，且在建立 owned stage 前拒絕有效新封印或有效 CSV 的外部漂移；不把晚讀到的合法值當作新 baseline。原 publisher 的首個 guard 再比對此 receipt，早於 previous backup 與 project publication journal 寫入。合法 PREPARED publication 先驗 owner/preimages，鎖內比較原 receipt，再由既有 owner 回滾；只有其 owned entries 回到原 bytes、publication 消失且其他已捕捉來源完全不變，才明確 reload/re-capture。回滾後的旁支漂移不能被重新接納，自己的合法 publication 完成後也不再拿舊 receipt 比較。
 
+C16 保存 C15 R1 已確認的 stage post-read 漂移 BLOCKED 及原重現，不以先前35項短測追認通過。`load_snapshot` 將 document 與同一次讀取的原 bytes 一起回傳；stage/apply 讀取時立即與原 admission 的 store bytes 精確比對，不能只在最後比磁碟、卻已使用暫時漂移後又還原的另一份 document。dynamic capture 也使用此同源 snapshot，不再分別讀 document 與 physical bytes。projection publisher 驗證 caller document 等於已准入 store；明確轉換只允許該 session 的空初始 document。
+
+stage 在既有 atomic helper 建立 temporary file 前與 replace 前，均核原 receipt 及 expected store bytes；surface-only apply 在原 local transaction 第一筆 PREPARED journal 前核原 receipt 與其 captured store preimage，自己的 journal 寫入後仍保護其餘原資料及 store bytes。這是 project lock 下的 optimistic prewrite comparison 與 atomic replacement，並非作業系統提供 atomic compare-and-swap；不宣稱能排除非合作外部 writer 在最後比較與 replace 之間的無限小窗口。
+
+明確 opt-in 需接續 stage 時，由同一既有 publisher 在發布前保存自身確切 staged output bytes，完成後與原 receipt 加上這些 owned outputs 比對；recapture 的共同欄位也必須精確相同，前後均重核，不能在驗完自身轉換後無條件採納較晚外部狀態。local PREPARED 回滾亦只容許原 journal preimages 與 journal/staging 的指定狀態轉換，無關來源不變才可接續。原 `load` 的唯讀回傳契約、普通 transaction/atomic helper 缺省行為、schema/epochs/identity/expected/Global 均不變。
+
+surface-only 的完整 pending→applied 純轉換由 producer 與恢復共用，沒有新 actor/time。有限歷史契約命名為 `surface-only-all-pending/1`：只適用 profile1、journal2、合法原 session/origin/owner、operation=surface-only、非空原 pending。新 writer 在第一筆 PREPARED journal 已保存完整 plan；affected OIDs、reading、group 必須精確對應原全部 pending，不能接受 subset。C15 原 producer 的 PREPARED/plan=None 窗口只在上述有限契約內讀取，不視為任意操作的授權。
+
+冷／熱 PREPARED 恢復只允許 store 為 exact原raw preimage，或由其全部 pending 唯一導出的 canonical afterimage；其他 tracked files 與 ordinary staging 必須仍是 exact preimage。foreign bytes 一律在恢復寫入前拒絕，保留 journal 與外部內容，不猜測為本次寫入。尚未嘗試 target replace 的 guard/temp open/write/fsync 失敗，既有 atomic helper 以具名例外保留這個事實；surface-only transaction 只有在自己的初始 PREPARED journal bytes 也完全未變時，才僅撤其 journal，不回寫未動的 store。replace 已嘗試或成功後的失敗必須通過上述 exact own-state 判定，不能靠例外類別盲目 rollback。一般 direct-visual／legacy transaction 不套用這個有限 surface-only 推導。
+
+恢復實際使用的 journal raw／manifest／current file bytes 也取自同一 admission，避免先解析與後capture不相同的兩份資料；有效 journal plan 的完整對應檢查同樣適用 COMMITTED。合法自身 afterimage→preimage 還原沿用原 atomic helper 的可選 receipt guard，在 temporary output 前及 replace 前檢查，再以已知 preimage phase 重核後才移除 journal；不晚取外部值重設基準。I/O例外保留原 errno／filename 及原因，普通 caller 的缺省行為不變。
+
+上述 surface-only PREPARED exact own-state 規則由唯讀 admission 與恢復共用；foreign store、CSV、staging、plan或owner在不存在 project lock 的冷入口也必須先拒絕，不能先建立 lock 才驗證歸屬。
+
 dynamic actual snapshot 保存 store 的 physical bytes，per-PDF dependency 僅取該 PDF 已套用 receipt；其他 PDF 保留原 dependency mapping，pending 不成為 authoritative dependency。raw decoder epoch 不變：這是獨立人工 occurrence evidence 的 post-decoder projection，並未改 raw decoder 的 pronunciation 演算法。expected epoch 不變。
 
 純 surface apply/refresh 使用既有 deferred publisher，保留原 raw workbook/epoch seal 作 audit，獨立封印 projection 與 per-PDF receipts，明列 `automatic_decoder_cache_revalidated=false`。它不重封舊 raw cache 為當前 epoch，不宣稱完整 current-decoder/completion gate PASS，也不 drain 既有 Global outbox。原 raw inputs 若改變，普通 refresh 必須走原 decoder 路徑；明確 `run_pipeline_pdfs` 仍遵守目前 decoder epoch，再重套獨立 surface evidence。
