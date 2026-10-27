@@ -510,11 +510,14 @@ def _sealed_actual_excel_conflicts(conflicts: list[dict[str, Any]]) -> dict[str,
     return {**payload, "integrity_sha256": hashlib.sha256(_canonical(payload)).hexdigest()}
 
 
-def _validated_actual_excel_receipt(path: Path, *, with_digest: bool = False
+def _validated_actual_excel_receipt(path: Path, *, with_digest: bool = False, _read_bytes=None
                                     ) -> dict[str, Any] | tuple[dict[str, Any], str]:
     import standalone_proofread as sp
 
-    receipt, digest = sp.json_load_snapshot(path)
+    if _read_bytes is None:receipt, digest = sp.json_load_snapshot(path)
+    else:
+        raw=_read_bytes(path)
+        receipt,digest=sp.json_parse_strict(raw,path),hashlib.sha256(raw).hexdigest()
     if (not isinstance(receipt, dict)
             or set(receipt) != {"version", "conflicts", "integrity_sha256"}
             or receipt.get("version") != 1
@@ -527,25 +530,34 @@ def _validated_actual_excel_receipt(path: Path, *, with_digest: bool = False
 
 
 def actual_excel_conflict_state(output_dir: Path, manifest: Mapping[str, Any],
-                                db: Mapping[str, Any]) -> list[str]:
+                                db: Mapping[str, Any], *, _read_bytes=None) -> list[str]:
     """Keep imported actual disagreements pending until new local visual proof exists."""
     import actual_review as ar
     import standalone_proofread as sp
     from global_glyph_promotion import committed_project_recovery
 
     receipt_path = Path(output_dir) / ACTUAL_EXCEL_CONFLICT_FILE
-    if not receipt_path.exists():
+    if (_read_bytes(receipt_path) is None if _read_bytes is not None else not receipt_path.exists()):
         return []
-    receipt = _validated_actual_excel_receipt(receipt_path)
+    receipt = _validated_actual_excel_receipt(receipt_path,**({'_read_bytes':_read_bytes} if _read_bytes is not None else {}))
     entries = {entry["review_id"]: entry for entry in manifest.get("records", [])}
     ledger = {entry["review_id"]: entry for entry in sp.materialize_ledger(manifest, db)}
     root = sp.project_actual_evidence_root(output_dir)
-    override_rows = ar._read_csv(root / ar.OCCURRENCE_OVERRIDE_FILE, ar.OVERRIDE_HEADERS)
+    def rows(name,headers):
+        if _read_bytes is None:return ar._read_csv(root/name,headers)
+        raw=_read_bytes(root/name)
+        return ar._read_csv_bytes(raw,name,headers) if raw is not None else []
+    override_rows = rows(ar.OCCURRENCE_OVERRIDE_FILE, ar.OVERRIDE_HEADERS)
     overrides = {tuple(row[field] for field in (
         "pdf_contains", "pdf_excludes", "page", "target_char", "stable_key", "x0", "y0"
     )): row for row in override_rows}
-    provenance = ar._read_csv(root / ar.GLYPH_PROVENANCE_FILE, ar.GLYPH_PROVENANCE_HEADERS)
-    refresh_pending = committed_project_recovery(root) is not None
+    provenance = rows(ar.GLYPH_PROVENANCE_FILE, ar.GLYPH_PROVENANCE_HEADERS)
+    if _read_bytes is None:refresh_pending = committed_project_recovery(root) is not None
+    else:
+        from global_glyph_promotion import PROJECT_TRANSACTION_FILE,_validated_project_journal
+        raw=_read_bytes(root/PROJECT_TRANSACTION_FILE)
+        refresh_pending=raw is not None
+        if raw is not None:_validated_project_journal(raw)
     pending = []
     seen = set()
     for conflict in receipt["conflicts"]:
@@ -629,17 +641,18 @@ def actual_excel_conflict_state(output_dir: Path, manifest: Mapping[str, Any],
 
 
 def actual_excel_conflict_notes(output_dir: Path, manifest: Mapping[str, Any],
-                                db: Mapping[str, Any], checked_ids: Sequence[str]) -> str:
+                                db: Mapping[str, Any], checked_ids: Sequence[str], *, _read_bytes=None) -> str:
     """Bind a fresh local visual action to every pending conflict it checks."""
     import standalone_proofread as sp
 
     receipt_path = Path(output_dir) / ACTUAL_EXCEL_CONFLICT_FILE
-    if not receipt_path.exists():
+    if (_read_bytes(receipt_path) is None if _read_bytes is not None else not receipt_path.exists()):
         return ""
-    pending = set(actual_excel_conflict_state(output_dir, manifest, db))
+    pending = set(actual_excel_conflict_state(output_dir, manifest, db,
+        **({'_read_bytes':_read_bytes} if _read_bytes is not None else {})))
     if not pending:
         return ""
-    receipt = _validated_actual_excel_receipt(receipt_path)
+    receipt = _validated_actual_excel_receipt(receipt_path,**({'_read_bytes':_read_bytes} if _read_bytes is not None else {}))
     checked = set(checked_ids)
     tokens = sorted({_actual_excel_conflict_token(item) for item in receipt["conflicts"]
                      if item["target_review_id"] in pending
@@ -648,9 +661,10 @@ def actual_excel_conflict_notes(output_dir: Path, manifest: Mapping[str, Any],
 
 
 def hold_actual_excel_completion(output_dir: Path, manifest: Mapping[str, Any],
-                                 db: Mapping[str, Any], gate: dict[str, Any]) -> dict[str, Any]:
+                                 db: Mapping[str, Any], gate: dict[str, Any], *, _read_bytes=None) -> dict[str, Any]:
     """Keep an independently computed ledger from declaring conflict completion."""
-    pending = actual_excel_conflict_state(output_dir, manifest, db)
+    pending = actual_excel_conflict_state(output_dir, manifest, db,
+        **({'_read_bytes':_read_bytes} if _read_bytes is not None else {}))
     if not pending:
         return gate
     from occurrence_ledger import PROCESSING_FINISHED, PROOFREAD_COMPLETE
@@ -900,8 +914,9 @@ def expected_conflict_review_view(output_dir, manifest, db, ledger):
                         if entry["review_id"] in pending else {})} for entry in ledger]
 
 
-def hold_expected_conflict_completion(output_dir, manifest, db, gate):
-    pending = validate_conflict_state(output_dir, manifest, db)
+def hold_expected_conflict_completion(output_dir, manifest, db, gate, *, _read_bytes=None):
+    pending = validate_conflict_state(output_dir, manifest, db,
+        **({'_read_bytes':_read_bytes} if _read_bytes is not None else {}))
     if not pending:
         return gate
     from occurrence_ledger import PROCESSING_FINISHED, PROOFREAD_COMPLETE
@@ -915,14 +930,15 @@ def hold_expected_conflict_completion(output_dir, manifest, db, gate):
     return held
 
 
-def validate_conflict_state(output_dir: Path, manifest: Mapping[str, Any], db: Mapping[str, Any]):
+def validate_conflict_state(output_dir: Path, manifest: Mapping[str, Any], db: Mapping[str, Any], *, _read_bytes=None):
     """A conflicted row is inactive until a fresh local event cites its receipt."""
     import standalone_proofread as sp
 
     path = Path(output_dir) / CONFLICT_FILE
-    if not path.exists():
+    if (_read_bytes(path) is None if _read_bytes is not None else not path.exists()):
         return []
-    receipt = _validated_expected_receipt(sp.json_load_strict(path), manifest)
+    receipt = _validated_expected_receipt(sp.json_parse_strict(_read_bytes(path),path)
+        if _read_bytes is not None else sp.json_load_strict(path), manifest)
     valid_ids = {entry["review_id"] for entry in manifest.get("records", [])}
     return _pending_expected_conflicts(receipt, valid_ids, db)
 

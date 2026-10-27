@@ -87,12 +87,22 @@ def headless_app(output):
 
 
 def synthetic_actual_stage(pdfs, destination, *, session_id_override,
-                           defer_excel_reports, _source_project_dir):
+                           defer_excel_reports, _source_project_dir, _stage_phase=None, _prewrite_guard=None):
     """Only substitute decoder bytes inside the real isolated refresh stage."""
+    if _prewrite_guard is not None:_prewrite_guard()
     destination, source = Path(destination), Path(_source_project_dir)
     if destination.resolve() == source.resolve():
         raise AssertionError("synthetic producer must not write the live project")
-    manifest = sp.json_load_strict(destination / "校對工作階段.json")
+    manifest = (sp._surface_known_json(_stage_phase,destination / "校對工作階段.json")
+                if _stage_phase is not None else sp.json_load_strict(destination / "校對工作階段.json"))
+    snapshot=None
+    if _stage_phase is not None:
+        evidence_root=sp.project_actual_evidence_root(source)
+        def assert_source(root):
+            assert Path(root).resolve()==evidence_root.resolve()
+            _stage_phase.recheck()
+        snapshot=SimpleNamespace(assert_current=assert_source,rows=lambda name:
+            ar._validated_dynamic_csv_rows(_stage_phase.expected_bytes(evidence_root/name),name,ar.OVERRIDE_HEADERS))
     assert manifest["session_id"] == session_id_override and defer_excel_reports
     # Preserve the complete ordered roster (including multiplicity), while
     # accepting only spellings that resolve to the same existing OS files.
@@ -100,16 +110,19 @@ def synthetic_actual_stage(pdfs, destination, *, session_id_override,
         Path(pdf).resolve(strict=True) for pdf in pdfs]
     for row in manifest["records"]:
         overrides = load_actual_occurrence_overrides(
-            sp.project_actual_evidence_root(source) / ar.OCCURRENCE_OVERRIDE_FILE, Path(row["pdf"]))
+            sp.project_actual_evidence_root(source) / ar.OCCURRENCE_OVERRIDE_FILE, Path(row["pdf"]),snapshot=snapshot)
         override = match_actual_occurrence_override(row["source_record"], overrides)
         if override:
             row.update(actual=override["actual_reading"], actual_status="RESOLVED",
                        actual_evidence="isolated refreshed direct override")
             row.update(ol.refresh_derived_state(row, preserve_confirmed=False))
+    if _prewrite_guard is not None:_prewrite_guard()
     # Existing sealed fixture workbook bytes were copied by the real stage.
-    sp.json_save(destination / "校對工作階段.json", sp.seal_manifest(manifest))
+    sp.json_save(destination / "校對工作階段.json", sp.seal_manifest(manifest),
+                 **({'_phase':_stage_phase} if _stage_phase is not None else {}))
     sp.json_save(destination / "pipeline_status.json",
-                 {"excel_report_deferred": True, "status": "PROCESSING_FINISHED"})
+                 {"excel_report_deferred": True, "status": "PROCESSING_FINISHED"},
+                 **({'_phase':_stage_phase} if _stage_phase is not None else {}))
     return destination / "注音校對_最終報告.xlsx"
 
 

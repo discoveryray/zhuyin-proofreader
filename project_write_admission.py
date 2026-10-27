@@ -17,11 +17,17 @@ from pathlib import Path
 _ACTIVE = ContextVar('project_write_admission', default=())
 _CREATING = ContextVar('project_creation_admission', default=())
 _ENTRY_RECEIPTS = ContextVar('surface_entry_receipts', default=())
+_ENTRY_PHASES = ContextVar('profile_entry_phases', default=())
 
 
 def entry_write_admission(project):
     project=Path(project).resolve()
     return next((receipt for owner,receipt in reversed(_ENTRY_RECEIPTS.get()) if owner==project),None)
+
+
+def entry_write_phase(project):
+    project=Path(project).resolve()
+    return next((phase for owner,phase in reversed(_ENTRY_PHASES.get()) if owner==project),None)
 
 
 @contextmanager
@@ -30,9 +36,14 @@ def _entry_receipt(receipt):
         yield
         return
     token=_ENTRY_RECEIPTS.set((*_ENTRY_RECEIPTS.get(),(receipt.project,receipt)))
+    existing=entry_write_phase(receipt.project)
+    phase_token=None
+    if receipt.profile and existing is None:
+        phase_token=_ENTRY_PHASES.set((*_ENTRY_PHASES.get(),(receipt.project,SurfaceWritePhase(receipt))))
     try:
         yield
     finally:
+        if phase_token is not None:_ENTRY_PHASES.reset(phase_token)
         _ENTRY_RECEIPTS.reset(token)
 
 
@@ -70,6 +81,8 @@ class ProjectWriteAdmission:
     project: Path
     files: tuple
     profile: bool = False
+    write_block: str | None = None
+    workbook_roster: tuple | None = None
 
     def expected_bytes(self, path):
         name = str(Path(path).resolve())
@@ -79,9 +92,18 @@ class ProjectWriteAdmission:
         raise ValueError('PROJECT_WRITE_ADMISSION: file not in original receipt: ' + name)
 
     def recheck(self):
+        if self.workbook_roster is not None:
+            from sealed_workbook_paths import workbook_role_paths
+            if tuple(str(path) for path in workbook_role_paths(self.project))!=self.workbook_roster:
+                raise ValueError('PROJECT_WRITE_ADMISSION: workbook role namespace changed before write')
         for name, expected in self.files:
             if _bytes(Path(name)) != expected:
                 raise ValueError('PROJECT_WRITE_ADMISSION: source changed before write: ' + name)
+
+    def require_writable(self):
+        if self.write_block:
+            raise ValueError('PROJECT_WRITE_ADMISSION: '+self.write_block)
+        self.recheck()
 
 
 class SurfaceWritePhase:
@@ -93,8 +115,10 @@ class SurfaceWritePhase:
     def __init__(self, receipt):
         if type(receipt) is not ProjectWriteAdmission:
             raise ValueError('SURFACE_PHASE: original admission required')
+        receipt.require_writable()
         self.project=receipt.project
         self.profile=receipt.profile
+        self.workbook_roster=receipt.workbook_roster
         self.files=dict(receipt.files)
         self.pending=None
         self.attempted_paths=set()
@@ -109,7 +133,8 @@ class SurfaceWritePhase:
         return self.files[key]
 
     def receipt(self):
-        return ProjectWriteAdmission(self.project,tuple(sorted(self.files.items())),self.profile)
+        return ProjectWriteAdmission(self.project,tuple(sorted(self.files.items())),self.profile,
+            workbook_roster=self.workbook_roster)
 
     def recheck(self):
         self.receipt().recheck()
@@ -227,6 +252,7 @@ def capture_project_write_admission(output_dir, *, allow_new=False, recovery=Fal
             raise ValueError('PROJECT_WRITE_ADMISSION: unsupported project schema')
         root = sp.project_actual_evidence_root(project)
         captured = {manifest_path: manifest_raw}
+        import manual_surface_actual as surface
         for name in ('待人工確認.json','pipeline_status.json'):
             captured[project/name]=_bytes(project/name)
         db_path = project/'人工判定資料庫.json'
@@ -251,9 +277,9 @@ def capture_project_write_admission(output_dir, *, allow_new=False, recovery=Fal
         journal = None
         if captured[journal_path] is not None:
             journal = promotion._validated_project_journal(captured[journal_path])
-            if manifest.get('manual_surface_actual_contract') is not None and journal['schema_version'] != '2.0':
+            if manifest.get('manual_surface_actual_contract') is not None and journal['schema_version'] not in {'2.0','3.0'}:
                 raise ValueError('PROJECT_WRITE_ADMISSION: new surface format requires an owned journal/2')
-            if journal['schema_version'] == '2.0':
+            if journal['schema_version'] in {'2.0','3.0'}:
                 owner = journal['owner']
                 if (owner['project'] != str(project) or owner['session_id'] != manifest['session_id']
                         or (journal['state']=='PREPARED' and owner['origin_manifest_sha256'] != manifest['manifest_integrity_sha256'])):
@@ -275,6 +301,12 @@ def capture_project_write_admission(output_dir, *, allow_new=False, recovery=Fal
             captured[publication[2]/'ack-committed.json']=_bytes(publication[2]/'ack-committed.json')
             if publication[0]['phase'] == 'PREPARED' and not recovery:
                 raise ValueError('PROJECT_WRITE_ADMISSION: valid pending publication requires explicit recovery')
+        surface_entry=(surface.enabled(manifest) or surface_conversion or
+            (publication is not None and publication[0]['schema']=='actual-deferred-refresh/2'))
+        if surface_entry:
+            from pdf_portability import ACTUAL_EXCEL_CONFLICT_FILE,CONFLICT_FILE,INCOMPLETE_FILE
+            for name in (ACTUAL_EXCEL_CONFLICT_FILE,CONFLICT_FILE,INCOMPLETE_FILE,'注音校對_技術稽核.xlsx','注音校對_最終報告.xlsx'):
+                captured[project/name]=_bytes(project/name)
         # The original manifest and before-images define the legal recovery
         # view; do not repair damaged data to make ordinary admission succeed.
         preimages = {}
@@ -352,11 +384,36 @@ def capture_project_write_admission(output_dir, *, allow_new=False, recovery=Fal
         # Reuse the same finite source/artifact binding implementation as saves.
         from review_save_service import ReviewSaveService
         binder = ReviewSaveService(project)
+        artifact_reader=None
+        workbook_roster=None
+        if surface_entry:
+            from sealed_workbook_paths import workbook_role_paths
+            paths=workbook_role_paths(project)
+            workbook_roster=tuple(str(path) for path in paths)
+            role_inputs={path:_bytes(path) for path in paths}
+            captured.update(role_inputs)
+            originals={}
+            if publication is not None and publication[0]['schema']=='actual-deferred-refresh/2':
+                from sealed_workbook_paths import descriptor
+                wanted={project/descriptor(info,kind):info[kind+'_workbook_sha256']
+                        for info in manifest['pdfs'] for kind in ('actual','candidate')}
+                for entry in publication[0]['entries']:
+                    path=project/entry['path']
+                    if path in role_inputs:
+                        old=publication[3].get(entry['path'])
+                        if old is None or hashlib.sha256(old).hexdigest()!=entry['old_sha']:
+                            raise ValueError('PROJECT_WRITE_ADMISSION: publication workbook backup buffer differs')
+                        if wanted.get(path)==entry['old_sha']:originals[path]=old
+            def artifact_reader(path):
+                path=Path(path)
+                if path not in role_inputs:
+                    raise ValueError('PROJECT_WRITE_ADMISSION: workbook is outside original role-input roster')
+                return originals.get(path,role_inputs[path])
         try:
-            binder._specs(manifest)
+            binder._specs(manifest,**({'_artifact_reader':artifact_reader} if artifact_reader is not None else {}))
         except ValueError as exc:
             raise ValueError('SOURCE_INVALID／DATA_INTEGRITY_ERROR：檔案內容已變更或來源定位無法證明：'+str(exc)) from exc
-        runtime = binder._runtime({}) if surface.enabled(manifest) else []
+        runtime = binder._runtime({}) if surface_entry else []
         for path, expected in [*binder._source_specs.items(), *binder._artifact_specs.items(), *runtime]:
             raw = _bytes(path)
             if raw is None or hashlib.sha256(raw).hexdigest() != expected:
@@ -371,15 +428,37 @@ def capture_project_write_admission(output_dir, *, allow_new=False, recovery=Fal
                 if relative not in allowed:
                     raise ValueError('PROJECT_WRITE_ADMISSION: unrelated source changed during recovery')
             captured[Path(path)] = raw
+        write_block=None
+        if journal is not None and journal['schema_version']=='3.0' and not recovery:
+            write_block='finish pending ordinary journal/3 recovery before another project write'
+        if journal is not None and journal['schema_version']=='2.0' and surface.enabled(manifest) and journal['owner']['operation']=='direct-visual':
+            unchanged=(all(captured[root/name]==promotion._unpacked(value) for name,value in journal['files'].items())
+                       and captured[staging_path]==promotion._unpacked(journal['staging']))
+            if journal['state']!='PREPARED' or not unchanged:
+                write_block='legacy new-profile journal/2 direct pending lacks exact afterimages; read-only, no automatic upgrade/recovery'
         receipt = ProjectWriteAdmission(project, tuple(sorted((str(path), raw) for path, raw in captured.items())),
-                                        profile=surface.enabled(manifest))
+                                        profile=surface.enabled(manifest),write_block=write_block,
+                                        workbook_roster=workbook_roster)
+        if surface_entry:
+            from pdf_portability import actual_excel_conflict_state,validate_conflict_state,ACTUAL_EXCEL_CONFLICT_FILE,CONFLICT_FILE
+            checked_db=sp.normalize_db(sp.json_parse_strict(captured[db_path],db_path))
+            if captured[project/ACTUAL_EXCEL_CONFLICT_FILE] is not None:
+                actual_excel_conflict_state(project,manifest,checked_db,_read_bytes=receipt.expected_bytes)
+            if captured[project/CONFLICT_FILE] is not None:
+                validate_conflict_state(project,manifest,checked_db,_read_bytes=receipt.expected_bytes)
+        authority=journal
+        if authority is None and publication is not None and publication[0]['phase']=='ACKNOWLEDGING':
+            raw=captured.get(publication[2]/'ack-committed.json')
+            if raw is not None:authority=promotion._validated_project_journal(raw)
+        if authority is not None and authority['schema_version']=='3.0':
+            promotion._check_direct_receipt(root,authority,receipt,publication)
         receipt.recheck()
         return receipt
     finally:
         _ACTIVE.reset(token)
 
 
-def project_write_entry(*, allow_new=False, recovery=False, locked=False, surface_conversion=False, profile_only=False):
+def project_write_entry(*, allow_new=False, recovery=False, locked=False, surface_conversion=False, profile_only=False, owned_surface_recovery=False):
     """Put existing-project admission before an affected writer's first side effect."""
     def decorate(function):
         signature = inspect.signature(function)
@@ -394,7 +473,10 @@ def project_write_entry(*, allow_new=False, recovery=False, locked=False, surfac
             receipt = capture_project_write_admission(project, allow_new=allow_new, recovery=recovery,
                 **({'surface_conversion':True} if surface_conversion else {}))
             if receipt is not None:
-                receipt.recheck()
+                receipt.require_writable()
+                if (receipt.workbook_roster is not None and not receipt.profile
+                        and not surface_conversion and not owned_surface_recovery):
+                    raise ValueError('PROJECT_WRITE_ADMISSION: finish transitional surface publication via recover_committed_actual_project before ordinary write')
             # Conversion completeness and validators consumed the original
             # captured bytes above, before any project lock or nested service.
             creating = receipt is not None and dict(receipt.files).get(str(project/'校對工作階段.json')) is None
@@ -409,7 +491,7 @@ def project_write_entry(*, allow_new=False, recovery=False, locked=False, surfac
             if locked:
                 from global_glyph_promotion import project_delivery_lock
                 with project_delivery_lock(project/'_專案證據'/'actual',
-                        **({'_admission':receipt} if receipt is not None and receipt.profile else {})):
+                        **({'_admission':receipt} if receipt is not None and receipt.workbook_roster is not None else {})):
                     if receipt is not None:
                         receipt.recheck()
                     with _entry_receipt(receipt):

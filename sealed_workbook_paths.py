@@ -97,15 +97,32 @@ def owned_path(root, relative):
     return target
 
 
-def bind_workbooks(root, manifest, *, require_candidate=True):
+def workbook_role_paths(root, *, require_candidate=True):
+    """The finite namespace consumed by the same selected-role registry."""
+    root=Path(root).absolute()
+    paths=[]
+    for kind in ('actual','candidate') if require_candidate else ('actual',):
+        directory=root/ROLES[kind]
+        owned_path(root,Path(ROLES[kind])/'binding-check.xlsx')
+        if directory.is_dir():
+            paths.extend(owned_path(root,Path(ROLES[kind])/path.name) for path in directory.glob('*.xlsx'))
+    return tuple(sorted(paths))
+
+
+def bind_workbooks(root, manifest, *, require_candidate=True, _read_bytes=None):
     import standalone_proofread as sp
     sp.validate_manifest_integrity(manifest)
     root = Path(root).absolute()
+    def bound_digest(path):
+        if _read_bytes is None:return _digest(path)
+        raw=_read_bytes(path)
+        return hashlib.sha256(raw).hexdigest() if raw is not None else None
     key = (str(root.resolve()), manifest["manifest_integrity_sha256"])
     cache = _bindings.get()
     frozen = dict(cache.get(key, {})) if cache is not None else {}
     result, identities, used = [], set(), set()
     role_files = {}
+    role_paths=None
     for index, info in enumerate(manifest.get("pdfs", [])):
         pdf_sha = info.get("pdf_sha256")
         if not isinstance(pdf_sha, str) or re.fullmatch(r"[0-9a-f]{64}", pdf_sha) is None:
@@ -120,16 +137,14 @@ def bind_workbooks(root, manifest, *, require_candidate=True):
             if (index, kind) in frozen:
                 relative, old_sha = frozen[index, kind]
                 path = owned_path(root, relative)
-                if old_sha != wanted or not path.is_file() or _digest(path) != wanted:
+                if old_sha != wanted or not path.is_file() or bound_digest(path) != wanted:
                     raise ValueError("workbook binding frozen path SHA 已變動；未重新定位")
                 matches = [relative]
             else:
                 if kind not in role_files:
-                    directory = root / ROLES[kind]
-                    owned_path(root, Path(ROLES[kind]) / "binding-check.xlsx")
-                    role_files[kind] = [(Path(ROLES[kind]) / candidate.name,
-                                        _digest(owned_path(root, Path(ROLES[kind]) / candidate.name)))
-                                       for candidate in directory.glob("*.xlsx")] if directory.is_dir() else []
+                    if role_paths is None:role_paths=workbook_role_paths(root,require_candidate=require_candidate)
+                    role_files[kind] = [(path.relative_to(root),bound_digest(path))
+                                       for path in role_paths if path.parent==root/ROLES[kind]]
                 matches = [relative for relative, digest in role_files[kind] if digest == wanted]
             if len(matches) != 1 or str(matches[0]).casefold() in used or matches[0] != trusted_relative:
                 raise ValueError("DATA_INTEGRITY_ERROR：workbook binding 遺失、SHA 不符或定位不唯一")

@@ -936,6 +936,8 @@ print("cold provider refused; exact loaded provider reaches the real service Tk 
             audit._bounded_callable_alias(caller, owner, "operation")
 
     def test_exact_mock_forwarding_adapter_preserves_actual_callbacks(self):
+        import manual_surface_actual
+        self.assertEqual(Path(manual_surface_actual.__file__).resolve(),ROOT/'manual_surface_actual.py')
         import ast
         import tkinter
         import test_pdf_portability_binding as fixture

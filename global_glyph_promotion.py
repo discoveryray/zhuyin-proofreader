@@ -31,8 +31,33 @@ PROJECT_FILES = (
 )
 SURFACE_PROJECT_FILES = (*PROJECT_FILES, 'manual_surface_actual.json')
 STAGING_FILE = "manual_actual_staging.json"
+DIRECT_WRITE_CONTRACT = 'new-profile-direct-write-plan/1'
+DIRECT_WRITE_ORDER = (PROJECT_FILES[1],PROJECT_FILES[2],PROJECT_FILES[0],PROJECT_FILES[3],
+                      PROJECT_FILES[4],GLOBAL_PROMOTION_OUTBOX_FILE,STAGING_FILE)
 _LOCK = threading.RLock()
 _ACTIVE_LOCKS: dict[str, int] = {}
+
+
+def profile_write_phase(root, phase=None):
+    """One initial new-profile admission, or the caller's known continuation."""
+    from project_write_admission import (project_from_actual_root,has_surface_indicators,
+        capture_project_write_admission,entry_write_admission,entry_write_phase,SurfaceWritePhase)
+    project=project_from_actual_root(root)
+    if phase is not None:
+        if project is None or phase.project!=project:
+            raise library.GlobalLibraryValidationError('foreign ordinary write phase')
+        phase.recheck()
+        return phase
+    if project is None or not has_surface_indicators(project):return None
+    entered=entry_write_phase(project)
+    if entered is not None:
+        entered.recheck()
+        return entered
+    original=entry_write_admission(project) or capture_project_write_admission(project,recovery=True)
+    original.require_writable()
+    if not original.profile:
+        raise library.GlobalLibraryValidationError('finish owned new-profile conversion recovery before ordinary write')
+    return SurfaceWritePhase(original)
 
 
 def _json(raw: bytes):
@@ -93,7 +118,7 @@ def project_delivery_lock(root: Path, *, _admission=None):
         if _admission is not None:
             if type(_admission) is not ProjectWriteAdmission or _admission.project != project:
                 raise ValueError('PROJECT_WRITE_ADMISSION: foreign lock receipt')
-            _admission.recheck()
+            _admission.require_writable()
         if key in _ACTIVE_LOCKS:
             _ACTIVE_LOCKS[key] += 1
             try:
@@ -104,7 +129,7 @@ def project_delivery_lock(root: Path, *, _admission=None):
         owned = project is not None and has_surface_indicators(project)
         admission = capture_project_write_admission(project, recovery=True) if owned else None
         if admission is not None:
-            admission.recheck()
+            admission.require_writable()
         if _admission is not None:
             _admission.recheck()
         root.mkdir(parents=True, exist_ok=True)
@@ -206,7 +231,47 @@ def enqueue_promotion_intents(root: Path, intents):
     return len(batch)
 
 
-def acknowledge_promotion_delivery(root: Path, frozen, receipts):
+def prepare_promotion_outbox(raw,intents):
+    document=validate_outbox(_json(raw)) if raw is not None else {'schema_version':'1.0','items':[]}
+    batch=library.canonical_direct_evidence_batch(intents)
+    by_id={item['intent_id']:item for item in document['items']}
+    changed=False
+    for intent in batch:
+        old=by_id.get(intent['intent_id'])
+        if old is not None:
+            if old['payload_digest']!=intent['payload_digest'] or old['payload']!=intent['payload']:
+                raise library.GlobalLibraryIntentConflictError('same outbox ID / different payload')
+        else:
+            by_id[intent['intent_id']]=dict(intent,status='PENDING',receipt=None);changed=True
+    result=validate_outbox({'schema_version':'1.0','items':list(by_id.values())})
+    return ((library._canonical_json(result)+'\n').encode('utf-8') if changed else raw),result
+
+
+def write_prepared_outbox(root,raw,phase):
+    path=Path(root)/GLOBAL_PROMOTION_OUTBOX_FILE
+    if phase.expected_bytes(path)==raw:return
+    if raw is None:raise library.GlobalLibraryValidationError('ordinary enqueue cannot delete outbox')
+    _atomic_bytes(path,raw,_phase=phase)
+
+
+def register_outbox_delivery(root,phase,raw):
+    path=Path(root)/PROJECT_TRANSACTION_FILE
+    original=phase.expected_bytes(path)
+    if original is None:return  # Independent single-file retry, no fabricated J.
+    journal=_validated_project_journal(original)
+    if journal['schema_version']!='3.0' or journal['state']!='COMMITTED':
+        raise library.GlobalLibraryValidationError('outbox delivery requires its committed journal/3')
+    plan=journal['write_plan'];before=_unpacked(plan['afterimages']['files'][GLOBAL_PROMOTION_OUTBOX_FILE])
+    if plan['outbox_delivery']:before=_unpacked(plan['outbox_delivery'][-1]['afterimage'])
+    if before==raw:return
+    if before is None:raise library.GlobalLibraryValidationError('cannot acknowledge absent pending outbox')
+    delivery={'before_sha256':hashlib.sha256(before).hexdigest(),'afterimage':_packed(raw)}
+    plan['outbox_delivery'].append(delivery)
+    _validated_project_journal((library._canonical_json(journal)+'\n').encode('utf-8'))
+    _write_json(path,journal,_phase=phase)
+
+
+def acknowledge_promotion_delivery(root: Path, frozen, receipts, *, _phase=None):
     batch = library.canonical_direct_evidence_batch(frozen)
     if len(batch) != len(receipts):
         raise library.GlobalLibraryValidationError("delivery receipt roster mismatch")
@@ -218,8 +283,13 @@ def acknowledge_promotion_delivery(root: Path, frozen, receipts):
         if raw["intent_id"] in by_receipt:
             raise library.GlobalLibraryValidationError("duplicate receipt")
         by_receipt[raw["intent_id"]] = raw
-    with project_delivery_lock(root):
-        document = load_promotion_outbox(root)
+    phase=profile_write_phase(root,_phase)
+    if phase is not None and phase.expected_bytes(phase.project/'actual_refresh_publication.json') is not None:
+        raise library.GlobalLibraryValidationError('finish owned actual publication before Global acknowledgement retry')
+    with project_delivery_lock(root,**({'_admission':phase.receipt()} if phase is not None else {})):
+        raw=phase.expected_bytes(Path(root)/GLOBAL_PROMOTION_OUTBOX_FILE) if phase is not None else None
+        document = ((validate_outbox(_json(raw)) if raw is not None else {'schema_version':'1.0','items':[]})
+                    if phase is not None else load_promotion_outbox(root))
         by_id = {item["intent_id"]: item for item in document["items"]}
         for intent in batch:
             old = by_id.get(intent["intent_id"])
@@ -229,9 +299,14 @@ def acknowledge_promotion_delivery(root: Path, frozen, receipts):
             if old["status"] == "DELIVERED" and old["receipt"] != receipt:
                 raise library.GlobalLibraryIntentConflictError("different delivered receipt")
             by_id[intent["intent_id"]] = dict(intent, status="DELIVERED", receipt=receipt)
-        _write_json(Path(root) / GLOBAL_PROMOTION_OUTBOX_FILE, validate_outbox({
+        updated=validate_outbox({
             "schema_version": GLOBAL_PROMOTION_OUTBOX_SCHEMA_VERSION, "items": list(by_id.values()),
-        }))
+        })
+        if phase is not None:
+            expected=(library._canonical_json(updated)+'\n').encode('utf-8')
+            register_outbox_delivery(root,phase,expected)
+            _atomic_bytes(Path(root)/GLOBAL_PROMOTION_OUTBOX_FILE,expected,_phase=phase)
+        else:_write_json(Path(root)/GLOBAL_PROMOTION_OUTBOX_FILE,updated)
 
 
 def _packed(raw):
@@ -325,24 +400,170 @@ def _validated_project_journal(raw):
     parsed = _json(raw)
     version = parsed.get('schema_version') if isinstance(parsed,dict) else None
     fields = ('schema_version','state','files','staging','transaction_id','recovery_plan')
-    journal = library._exact_fields(parsed, (*fields,'owner') if version == '2.0' else fields, 'project transaction')
-    if version not in {'1.0','2.0'} or journal["state"] not in {"PREPARED", "COMMITTED"}:
+    required=(*fields,'owner','write_plan') if version=='3.0' else (*fields,'owner') if version=='2.0' else fields
+    journal = library._exact_fields(parsed, required, 'project transaction')
+    if version not in {'1.0','2.0','3.0'} or journal["state"] not in {"PREPARED", "COMMITTED"}:
         raise library.GlobalLibraryValidationError("invalid project transaction contract")
-    if version == '2.0':
+    if version in {'2.0','3.0'}:
         owner = library._exact_fields(journal['owner'],('project','session_id','origin_manifest_sha256','operation'),'surface transaction owner')
         if not isinstance(owner['project'],str) or not Path(owner['project']).is_absolute() or not owner['session_id']:
             raise library.GlobalLibraryValidationError('invalid surface transaction owner')
         library._sha256_text(owner['origin_manifest_sha256'],'origin manifest')
         if owner['operation'] not in {'direct-visual','surface-only'}:
             raise library.GlobalLibraryValidationError('unknown surface transaction operation')
+        if version=='3.0' and owner['operation']!='direct-visual':
+            raise library.GlobalLibraryValidationError('journal/3 is limited to new-profile direct-visual')
     library._sha256_text(journal["transaction_id"], "project transaction ID")
     if journal["state"] == "COMMITTED" or journal["recovery_plan"] is not None:
         validate_post_commit_recovery_plan(journal["recovery_plan"])
-    files = library._exact_fields(journal["files"], SURFACE_PROJECT_FILES if version == '2.0' else PROJECT_FILES, "transaction files")
+    files = library._exact_fields(journal["files"], SURFACE_PROJECT_FILES if version in {'2.0','3.0'} else PROJECT_FILES, "transaction files")
     for value in files.values():
         _unpacked(value)
     _unpacked(journal["staging"])
+    if version=='3.0':
+        _validate_direct_write_plan(journal)
     return journal
+
+
+def _validate_direct_write_plan(journal):
+    plan=library._exact_fields(journal['write_plan'],
+        ('contract','dependencies','afterimages','outbox_delivery'),'direct write plan')
+    if plan['contract']!=DIRECT_WRITE_CONTRACT or not isinstance(plan['dependencies'],dict):
+        raise library.GlobalLibraryValidationError('unsupported direct write plan')
+    for path,digest in plan['dependencies'].items():
+        if not isinstance(path,str) or not Path(path).is_absolute() or str(Path(path).resolve())!=path:
+            raise library.GlobalLibraryValidationError('invalid direct dependency path')
+        if digest is not None:library._sha256_text(digest,'direct dependency')
+    after=plan['afterimages']
+    if not isinstance(plan['outbox_delivery'],list):
+        raise library.GlobalLibraryValidationError('delivery history must be finite')
+    if after is None:
+        if journal['state']!='PREPARED' or journal['recovery_plan'] is not None or plan['outbox_delivery']:
+            raise library.GlobalLibraryValidationError('unprepared direct outputs cannot be committed')
+        return plan
+    images=library._exact_fields(after,('files','staging'),'direct afterimages')
+    library._exact_fields(images['files'],SURFACE_PROJECT_FILES,'direct afterimage files')
+    for packed in images['files'].values():_unpacked(packed)
+    _unpacked(images['staging'])
+    validate_post_commit_recovery_plan(journal['recovery_plan'])
+    if images['files']['manual_surface_actual.json']!=journal['files']['manual_surface_actual.json']:
+        raise library.GlobalLibraryValidationError('ordinary transaction cannot change manual surface evidence')
+    import actual_review as ar
+    specs=((ar.USER_GLYF_FILE,ar.USER_GLYF_HEADERS),(ar.USER_CFF_FILE,ar.USER_CFF_HEADERS),
+        (ar.OCCURRENCE_OVERRIDE_FILE,ar.OVERRIDE_HEADERS),(ar.GLYPH_CONFLICT_FILE,ar.GLYPH_CONFLICT_HEADERS),
+        (ar.GLYPH_PROVENANCE_FILE,ar.GLYPH_PROVENANCE_HEADERS))
+    for name,headers in specs:
+        raw=_unpacked(images['files'][name])
+        if raw is None:raise library.GlobalLibraryValidationError('new-profile direct output is missing')
+        ar._validated_dynamic_csv_rows(raw,name,headers)
+    staging=_unpacked(images['staging'])
+    if staging is not None:ar._validate_manual_actual_staging_document(_json(staging))
+    outbox=_unpacked(images['files'][GLOBAL_PROMOTION_OUTBOX_FILE])
+    current=validate_outbox(_json(outbox)) if outbox is not None else {'schema_version':'1.0','items':[]}
+    delivery=plan['outbox_delivery']
+    if not isinstance(delivery,list):raise library.GlobalLibraryValidationError('delivery history must be finite')
+    pending_count=sum(item['status']=='PENDING' for item in current['items'])
+    if len(delivery)>pending_count:raise library.GlobalLibraryValidationError('too many outbox delivery phases')
+    for entry in delivery:
+        library._exact_fields(entry,('before_sha256','afterimage'),'direct outbox delivery')
+        if outbox is None or entry['before_sha256']!=hashlib.sha256(outbox).hexdigest():
+            raise library.GlobalLibraryValidationError('delivery is not bound to original pending outbox')
+        next_raw=_unpacked(entry['afterimage'])
+        updated=validate_outbox(_json(next_raw))
+        _validate_outbox_delivery_transition(current,updated)
+        if sum(item['status']=='DELIVERED' for item in updated['items'])<=sum(item['status']=='DELIVERED' for item in current['items']):
+            raise library.GlobalLibraryValidationError('delivery phase made no monotone progress')
+        current,outbox=updated,next_raw
+    return plan
+
+
+def _validate_outbox_delivery_transition(before,after):
+    old={item['intent_id']:item for item in before['items']}
+    new={item['intent_id']:item for item in after['items']}
+    if set(old)!=set(new):raise library.GlobalLibraryValidationError('delivery changed intent roster')
+    for key,original in old.items():
+        updated=new[key]
+        if original['status']=='DELIVERED':
+            if updated!=original:raise library.GlobalLibraryValidationError('delivery changed original receipt')
+        elif updated==original:
+            continue
+        elif (updated['status']!='DELIVERED' or
+                any(updated[name]!=original[name] for name in ('intent_id','payload_digest','payload'))):
+            raise library.GlobalLibraryValidationError('delivery is not exact pending-to-delivered')
+
+
+def _new_direct_write_plan(root,phase):
+    root=Path(root).resolve()
+    excluded={str((root/name).resolve()) for name in (*SURFACE_PROJECT_FILES,STAGING_FILE,PROJECT_TRANSACTION_FILE)}
+    excluded.add(str((phase.project/'actual_refresh_publication.json').resolve()))
+    return {'contract':DIRECT_WRITE_CONTRACT,
+        'dependencies':{name:hashlib.sha256(raw).hexdigest() if raw is not None else None
+                        for name,raw in phase.files.items() if name not in excluded},
+        'afterimages':None,'outbox_delivery':[]}
+
+
+def _direct_image_map(root,journal,*,after=False):
+    root=Path(root).resolve()
+    value=journal['write_plan']['afterimages'] if after else journal
+    if after and value is None:return None
+    result={str((root/name).resolve()):_unpacked(packed) for name,packed in value['files'].items()}
+    result[str((root/STAGING_FILE).resolve())]=_unpacked(value['staging'])
+    return result
+
+
+def _check_direct_receipt(root,journal,receipt,publication=None):
+    """No writes; old SHA changes require the original publisher's exact link."""
+    root=Path(root).resolve();project=receipt.project
+    import standalone_proofread as sp
+    import manual_surface_actual as surface
+    manifest=sp.json_parse_strict(receipt.expected_bytes(project/'校對工作階段.json'),project/'校對工作階段.json')
+    if journal['owner']['project']!=str(project) or journal['owner']['session_id']!=manifest['session_id']:
+        raise library.GlobalLibraryValidationError('direct write plan owner differs from its project')
+    if not surface.enabled(manifest):raise library.GlobalLibraryValidationError('journal/3 requires its surface profile')
+    before=_direct_image_map(root,journal);after=_direct_image_map(root,journal,after=True)
+    dependencies=journal['write_plan']['dependencies'];current=dict(receipt.files)
+    stage=publication[2] if publication is not None else None
+    ignored={str((root/PROJECT_TRANSACTION_FILE).resolve()),str((project/sp.ACTUAL_REFRESH_PUBLICATION).resolve()),*before}
+    expected={name for name in current if name not in ignored and
+              (stage is None or not Path(name).is_relative_to(stage))}
+    if set(dependencies)!=expected:
+        raise library.GlobalLibraryValidationError('direct dependency roster differs from original project contract')
+    entries={};originals={}
+    if publication is not None:
+        pub,_,_,originals=publication
+        if (pub['schema']!='actual-deferred-refresh/2' or pub['token']!=journal['transaction_id'] or
+                pub['plan_sha']!=sp._hash_review_payload(journal['recovery_plan'])):
+            raise library.GlobalLibraryValidationError('direct publication owner/plan link differs')
+        old_manifest=sp.json_parse_strict(originals['校對工作階段.json'],project/sp.ACTUAL_REFRESH_PUBLICATION)
+        if old_manifest['manifest_integrity_sha256']!=journal['owner']['origin_manifest_sha256']:
+            raise library.GlobalLibraryValidationError('direct publication does not retain original manifest')
+        entries={str((project/item['path']).resolve()):item for item in pub['entries']}
+    for name,expected_sha in dependencies.items():
+        raw=current[name];observed=hashlib.sha256(raw).hexdigest() if raw is not None else None
+        if name in entries:
+            entry=entries[name]
+            if entry['old_sha']!=expected_sha:
+                raise library.GlobalLibraryValidationError('publisher backup differs from frozen direct dependency')
+            allowed={entry['old_sha'],entry['new_sha']} if publication[0]['phase']=='PREPARED' else {entry['new_sha']}
+            if observed not in allowed:raise library.GlobalLibraryValidationError('foreign direct publication dependency')
+        elif observed!=expected_sha:
+            raise library.GlobalLibraryValidationError('direct dependency changed before recovery')
+    actual={name:current[name] for name in before}
+    if after is None:
+        valid=actual==before
+    elif journal['state']=='PREPARED':
+        valid=False;prefix=dict(before)
+        for name in (None,*DIRECT_WRITE_ORDER):
+            if name is not None:prefix[str((root/name).resolve())]=after[str((root/name).resolve())]
+            if actual==prefix:valid=True;break
+    else:
+        valid=actual==after
+        delivery=journal['write_plan']['outbox_delivery']
+        for item in delivery:
+            delivered=dict(after);delivered[str((root/GLOBAL_PROMOTION_OUTBOX_FILE).resolve())]=_unpacked(item['afterimage'])
+            valid=valid or actual==delivered
+    if not valid:raise library.GlobalLibraryValidationError('direct rollback foreign current bytes; no recovery writes')
+    return before,after
 
 
 def _surface_transaction_images(journal,manifest):
@@ -412,7 +633,7 @@ def recover_project_actual_transaction(root: Path, *, _phase=None):
                  capture_project_write_admission(project, recovery=True) if owned else None)
     if admission is not None and admission.expected_bytes(path)!=journal_raw:
         raise library.GlobalLibraryValidationError('surface rollback journal differs from original receipt')
-    if journal['schema_version'] == '2.0':
+    if journal['schema_version'] in {'2.0','3.0'}:
         if project is None:
             raise library.GlobalLibraryValidationError('surface transaction has no project owner')
         import standalone_proofread as sp
@@ -426,6 +647,32 @@ def recover_project_actual_transaction(root: Path, *, _phase=None):
             raise library.GlobalLibraryValidationError('surface transaction owner changed; no recovery writes')
     state = journal["state"]
     if state == "PREPARED":
+        if journal['schema_version']=='3.0':
+            if _phase is None:
+                from project_write_admission import SurfaceWritePhase
+                _phase=SurfaceWritePhase(admission)
+            before,_after=_check_direct_receipt(root,journal,_phase.receipt())
+            for name in reversed(DIRECT_WRITE_ORDER):
+                target=root/name;raw=before[str(target.resolve())]
+                if _phase.expected_bytes(target)==raw:continue
+                if raw is None:
+                    _phase.plan({target:None});_phase.attempting();target.unlink(missing_ok=True);_phase.written()
+                else:_atomic_bytes(target,raw,_phase=_phase)
+            _phase.recheck()
+            _phase.plan({path:None});_phase.attempting();path.unlink();_phase.written()
+            return state
+        if (journal['schema_version']=='2.0' and journal['owner']['operation']=='direct-visual'
+                and admission is not None and admission.profile):
+            admission.require_writable()
+            # Only the finite all-preimages prefix is writable for old /2.
+            if (any(admission.expected_bytes(root/name)!=_unpacked(raw) for name,raw in journal['files'].items())
+                    or admission.expected_bytes(root/STAGING_FILE)!=_unpacked(journal['staging'])):
+                raise library.GlobalLibraryValidationError('legacy profile direct journal lacks exact afterimages')
+            if _phase is None:
+                from project_write_admission import SurfaceWritePhase
+                _phase=SurfaceWritePhase(admission)
+            _phase.plan({path:None});_phase.attempting();path.unlink();_phase.written()
+            return state
         surface_only=journal['schema_version']=='2.0' and journal['owner']['operation']=='surface-only'
         if surface_only:
             import manual_surface_actual as surface
@@ -453,7 +700,8 @@ def recover_project_actual_transaction(root: Path, *, _phase=None):
             restored=dict(admission.files)
             restored[str((root/surface.FILE).resolve())]=before
             if _phase is None:
-                ProjectWriteAdmission(admission.project,tuple(sorted(restored.items())),admission.profile).recheck()
+                ProjectWriteAdmission(admission.project,tuple(sorted(restored.items())),admission.profile,
+                    workbook_roster=admission.workbook_roster).recheck()
             else:
                 _phase.recheck()
         if _phase is not None:
@@ -463,12 +711,14 @@ def recover_project_actual_transaction(root: Path, *, _phase=None):
     return state
 
 
-def recover_pending_project_actual_write(root: Path):
+def recover_pending_project_actual_write(root: Path, *, _phase=None):
     """Explicit write/retry entry point; absent read-only projects stay absent."""
     root = Path(root)
-    if (root / PROJECT_TRANSACTION_FILE).exists():
+    phase = profile_write_phase(root, _phase)
+    if (phase.expected_bytes(root/PROJECT_TRANSACTION_FILE) is not None if phase is not None
+            else (root / PROJECT_TRANSACTION_FILE).exists()):
         with project_delivery_lock(root):
-            return recover_project_actual_transaction(root)
+            return recover_project_actual_transaction(root, **({'_phase':phase} if phase is not None else {}))
     return None
 
 
@@ -528,6 +778,12 @@ def direct_visual_project_transaction(root: Path, *, operation='direct-visual',
     No Global SQLite operation occurs inside this context.
     """
     root = Path(root)
+    from project_write_admission import project_from_actual_root,has_surface_indicators
+    project=project_from_actual_root(root)
+    direct_profile=operation=='direct-visual' and project is not None and (
+        _phase.profile if _phase is not None else has_surface_indicators(project))
+    if direct_profile and _phase is None:
+        raise library.GlobalLibraryValidationError('new-profile ordinary transaction requires its original write phase')
     def check_transaction_inputs():
         if _prewrite_guard is not None:
             try:
@@ -555,7 +811,7 @@ def direct_visual_project_transaction(root: Path, *, operation='direct-visual',
         surface_path = root/'manual_surface_actual.json'
         surface = _phase.expected_bytes(surface_path) is not None if _phase is not None else surface_path.exists()
         journal = {
-            "schema_version": '2.0' if surface else '1.0', "state": "PREPARED",
+            "schema_version": '3.0' if direct_profile else '2.0' if surface else '1.0', "state": "PREPARED",
             "transaction_id": hashlib.sha256(uuid4().bytes).hexdigest(),
             "recovery_plan": None,
             "files": {name: _packed(_phase.expected_bytes(root/name) if _phase is not None else
@@ -574,6 +830,8 @@ def direct_visual_project_transaction(root: Path, *, operation='direct-visual',
                                 'operation':operation}
             if _surface_origin_sha is not None and manifest['manifest_integrity_sha256']!=_surface_origin_sha:
                 raise library.GlobalLibraryValidationError('surface transaction origin differs from admitted seal')
+        if direct_profile:
+            journal['write_plan']=_new_direct_write_plan(root,_phase)
         if (_surface_preimage is not None and
                 (not surface or _unpacked(journal['files']['manual_surface_actual.json']) != _surface_preimage)):
             raise library.GlobalLibraryValidationError('surface transaction preimage differs from admitted bytes')
@@ -584,11 +842,19 @@ def direct_visual_project_transaction(root: Path, *, operation='direct-visual',
         path = root / PROJECT_TRANSACTION_FILE
         initial_journal_raw = (library._canonical_json(journal) + '\n').encode('utf-8')
         _write_json(path, journal,**({'_phase':_phase} if _phase is not None else {}))
-        def bind_recovery_plan(plan):
+        def bind_recovery_plan(plan, *, afterimages=None):
             checked=validate_post_commit_recovery_plan(plan)
             if _surface_plan is not None and checked!=journal['recovery_plan']:
                 raise library.GlobalLibraryValidationError('surface transaction changed original pending plan')
             journal["recovery_plan"] = checked
+            if direct_profile:
+                if afterimages is None:
+                    raise library.GlobalLibraryValidationError('new-profile direct plan requires exact prepared afterimages')
+                journal['write_plan']['afterimages']={
+                    'files':{name:_packed(afterimages[name]) for name in SURFACE_PROJECT_FILES},
+                    'staging':_packed(afterimages[STAGING_FILE])}
+                _validated_project_journal((library._canonical_json(journal)+'\n').encode('utf-8'))
+                _write_json(path,journal,_phase=_phase)
         bind_recovery_plan.phase=_phase
         try:
             yield bind_recovery_plan
@@ -623,14 +889,20 @@ def direct_visual_project_transaction(root: Path, *, operation='direct-visual',
         # A crash after Global acknowledgement must not lose refresh recovery.
 
 
-def deliver_pending_promotion_outbox(root: Path, repository=None, *, source_context=None, source_entries=None):
+def deliver_pending_promotion_outbox(root: Path, repository=None, *, source_context=None, source_entries=None, _phase=None):
     """A Global failure is a split outcome, never a project evidence rollback."""
-    if not any((Path(root) / name).exists() for name in (GLOBAL_PROMOTION_OUTBOX_FILE, PROJECT_TRANSACTION_FILE)):
+    phase=profile_write_phase(root,_phase)
+    if not any((phase.expected_bytes(Path(root)/name) is not None if phase is not None else (Path(root)/name).exists())
+               for name in (GLOBAL_PROMOTION_OUTBOX_FILE, PROJECT_TRANSACTION_FILE)):
         return {"status": "NO_PENDING", "delivered_count": 0}
     try:
-        with project_delivery_lock(root):
-            recover_project_actual_transaction(root)
-            document = load_promotion_outbox(root)
+        if phase is not None and phase.expected_bytes(phase.project/'actual_refresh_publication.json') is not None:
+            raise library.GlobalLibraryValidationError('finish owned actual publication before Global delivery retry')
+        with project_delivery_lock(root,**({'_admission':phase.receipt()} if phase is not None else {})):
+            recover_project_actual_transaction(root,**({'_phase':phase} if phase is not None else {}))
+            raw=phase.expected_bytes(Path(root)/GLOBAL_PROMOTION_OUTBOX_FILE) if phase is not None else None
+            document = ((validate_outbox(_json(raw)) if raw is not None else {'schema_version':'1.0','items':[]})
+                        if phase is not None else load_promotion_outbox(root))
             pending = [{key: item[key] for key in ("intent_id", "payload_digest", "payload")}
                        for item in document["items"] if item["status"] == "PENDING"]
             if not pending:
@@ -657,8 +929,9 @@ def deliver_pending_promotion_outbox(root: Path, repository=None, *, source_cont
                     if len(current) != 1 or current[0] != original:
                         raise library.GlobalLibraryValidationError("PENDING_DONOR_SOURCE_NOT_REPROVED")
             repository = repository or library.GlobalExactGlyphRepository.resolved()
+            if phase is not None:phase.recheck()
             receipts = library.deliver_global_direct_evidence(repository, pending)
-            acknowledge_promotion_delivery(root, pending, receipts)
+            acknowledge_promotion_delivery(root, pending, receipts,**({'_phase':phase} if phase is not None else {}))
             return {"status": "DELIVERED", "delivered_count": len(receipts),
                     "receipt_digests": [receipt.receipt_digest for receipt in receipts]}
     except Exception as exc:

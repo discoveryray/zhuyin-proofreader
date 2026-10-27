@@ -159,7 +159,7 @@ class ReviewSaveService:
             timings["runtime_manifest_validation"] = time.perf_counter() - started
         return self._runtime_paths
 
-    def _specs(self, manifest):
+    def _specs(self, manifest, *, _artifact_reader=None):
         sources, artifacts = {}, {}
         # Include records as well: old sessions and synthetic contract fixtures
         # may have a partial PDF inventory. Conflicting identities fail closed.
@@ -176,7 +176,8 @@ class ReviewSaveService:
             sources[path] = wanted
         from sealed_workbook_paths import bind_workbooks, owned_path
         bindings = {(index, kind): relative for index, kind, relative, wanted
-                    in bind_workbooks(self.output_dir, manifest)}
+                    in bind_workbooks(self.output_dir, manifest,
+                        **({'_read_bytes':_artifact_reader} if _artifact_reader is not None else {}))}
         for index, item in enumerate(manifest.get("pdfs", [])):
             for kind in ("actual", "candidate"):
                 path = owned_path(self.output_dir, bindings[index, kind])

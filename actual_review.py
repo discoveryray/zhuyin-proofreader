@@ -144,6 +144,9 @@ def _style_sheet(ws) -> None:
 
 
 def _read_csv(path: Path, headers: Sequence[str]) -> list[dict[str, str]]:
+    state = _prepared_actual_csv.get()
+    if state is not None and state.write_phase is not None and path.name in state.specs:
+        return state.read(path, headers)
     if not path.exists():
         return []
     return _read_csv_bytes(path.read_bytes(), path.name, headers)
@@ -175,9 +178,10 @@ _prepared_actual_csv = ContextVar("prepared_actual_csv", default=None)
 
 
 class _PreparedActualCSV:
-    def __init__(self, root, *, source_context=None, source_bindings=None):
+    def __init__(self, root, *, source_context=None, source_bindings=None, write_phase=None):
         self.root = Path(root).resolve()
         self.source_bindings = source_bindings
+        self.write_phase = write_phase
         self.specs = {
             USER_GLYF_FILE: tuple(USER_GLYF_HEADERS), USER_CFF_FILE: tuple(USER_CFF_HEADERS),
             OCCURRENCE_OVERRIDE_FILE: tuple(OVERRIDE_HEADERS),
@@ -191,7 +195,8 @@ class _PreparedActualCSV:
         for name, headers in self.specs.items():
             path = self.root / name
             self._owned_name(path, headers)
-            raw = path.read_bytes() if path.exists() else None
+            raw = (write_phase.expected_bytes(path) if write_phase is not None
+                   else path.read_bytes() if path.exists() else None)
             self.original[name] = raw
             if raw is None:
                 self.rows[name] = []
@@ -228,6 +233,9 @@ class _PreparedActualCSV:
         return self.original[name] is not None or name in self.dirty
 
     def verify_current(self):
+        if self.write_phase is not None:
+            self.write_phase.recheck()
+            return
         # All source files, including unchanged/absent ones, remain byte-bound.
         for name, original in self.original.items():
             path = self.root / name
@@ -235,7 +243,18 @@ class _PreparedActualCSV:
             if (path.read_bytes() if path.exists() else None) != original:
                 raise ValueError("actual batch 準備期間來源 CSV 已變動；未寫入候選")
 
-    def flush(self):
+    def output_bytes(self):
+        result = dict(self.original)
+        for name in self.dirty:
+            text = io.StringIO(newline="")
+            writer = csv.DictWriter(text, fieldnames=list(self.specs[name]))
+            writer.writeheader()
+            for row in self.rows[name]:
+                writer.writerow({field: row.get(field, "") for field in self.specs[name]})
+            result[name] = text.getvalue().encode("utf-8-sig")
+        return result
+
+    def flush(self, *, prepared_bytes=None):
         from actual_source_visual_safety import recheck_current_sources
         recheck_current_sources()
         self.verify_current()
@@ -249,11 +268,20 @@ class _PreparedActualCSV:
             for row in self.rows[name]:
                 writer.writerow({field: row.get(field, "") for field in headers})
             expected = text.getvalue().encode("utf-8-sig")
-            _write_csv(self.root / name, headers, self.rows[name])
+            if self.write_phase is None:
+                _write_csv(self.root / name, headers, self.rows[name])
+            else:
+                if prepared_bytes is None or prepared_bytes[name] != expected:
+                    raise ValueError("actual prepared CSV differs from durable write plan")
+                from global_glyph_promotion import _atomic_bytes
+                _atomic_bytes(self.root / name, expected, _phase=self.write_phase)
             self.published[name] = expected
             self.verify_published()
 
     def verify_published(self):
+        if self.write_phase is not None:
+            self.write_phase.recheck()
+            return
         for name, expected in self.published.items():
             path = self.root / name
             self._owned_name(path, self.specs[name])
@@ -518,11 +546,29 @@ def load_manual_actual_staging(root: Path) -> dict[str, Any]:
     return _validate_manual_actual_staging_document(raw)
 
 
-def _write_manual_actual_staging(root: Path, document: Mapping[str, Any]) -> Path:
+def _manual_actual_staging_bytes(document):
+    validated = _validate_manual_actual_staging_document(dict(document))
+    return (json.dumps(validated, ensure_ascii=False, indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
+def _phase_manual_actual_staging(root, phase):
+    if phase is None:
+        return load_manual_actual_staging(root)
+    raw = phase.expected_bytes(manual_actual_staging_path(root))
+    return (_validate_manual_actual_staging_document(json.loads(raw.decode('utf-8-sig'),
+                object_pairs_hook=_reject_duplicate_json_keys)) if raw is not None
+            else _empty_manual_actual_staging())
+
+
+def _write_manual_actual_staging(root: Path, document: Mapping[str, Any], *, _phase=None) -> Path:
     validated = _validate_manual_actual_staging_document(dict(document))
     from actual_source_visual_safety import recheck_current_sources
     recheck_current_sources()
     path = manual_actual_staging_path(root)
+    if _phase is not None:
+        from global_glyph_promotion import _atomic_bytes
+        _atomic_bytes(path, _manual_actual_staging_bytes(validated), _phase=_phase)
+        return path
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     try:
@@ -566,6 +612,12 @@ def _stage_manual_actual_group_with_sources(
     not initialize/mutate authoritative evidence, call promotion logic, clear
     review events, refresh a PDF, decode, or regenerate reports.
     """
+    from global_glyph_promotion import profile_write_phase
+    phase=profile_write_phase(root)
+    if phase is not None:
+        from global_glyph_promotion import PROJECT_TRANSACTION_FILE
+        if phase.expected_bytes(Path(root)/PROJECT_TRANSACTION_FILE) is not None:
+            raise ValueError('finish pending actual recovery before staging another ordinary decision')
     if not isinstance(group, Mapping):
         raise ValueError("manual actual staging group 必須是 mapping")
     group_id = _staging_text(group.get("group_id"), "input.group_id")
@@ -644,7 +696,7 @@ def _stage_manual_actual_group_with_sources(
         source_text = _staging_text(source, "input.source")
         note_text = _staging_text(note, "input.note", allow_empty=True)
 
-        document = load_manual_actual_staging(root)
+        document = _phase_manual_actual_staging(root,phase)
         existing = next(
             (item for item in document["staged_groups"] if item["group_id"] == group_id),
             None,
@@ -684,7 +736,7 @@ def _stage_manual_actual_group_with_sources(
         _write_manual_actual_staging(root, {
             "schema_version": MANUAL_ACTUAL_STAGING_SCHEMA_VERSION,
             "staged_groups": groups,
-        })
+        }, **({'_phase':phase} if phase is not None else {}))
         return dict(staged)
 
 
@@ -703,7 +755,9 @@ def remove_staged_manual_actual_group(
     wanted_id = _staging_text(group_id, "remove.group_id")
     wanted_snapshot = _staging_text(group_snapshot, "remove.group_snapshot").lower()
     wanted_updated_at = _staging_text(updated_at, "remove.updated_at")
-    document = load_manual_actual_staging(root)
+    from global_glyph_promotion import profile_write_phase
+    phase=profile_write_phase(root)
+    document = _phase_manual_actual_staging(root,phase)
     existing = next(
         (item for item in document["staged_groups"] if item["group_id"] == wanted_id),
         None,
@@ -716,7 +770,7 @@ def remove_staged_manual_actual_group(
     _write_manual_actual_staging(root, {
         "schema_version": MANUAL_ACTUAL_STAGING_SCHEMA_VERSION,
         "staged_groups": remaining,
-    })
+    }, **({'_phase':phase} if phase is not None else {}))
     return True
 
 
@@ -776,6 +830,7 @@ def _validate_manual_actual_staging_ack_tokens(
 def remove_staged_manual_actual_groups(
     root: Path,
     staged_decisions: Sequence[Mapping[str, Any]],
+    *, _phase=None,
 ) -> dict[str, Any]:
     """Atomically acknowledge an exact frozen batch of staged decisions.
 
@@ -784,8 +839,10 @@ def remove_staged_manual_actual_groups(
     unrelated decisions are retained from that current document; a missing or
     updated selected decision rejects the entire acknowledgement without write.
     """
+    from global_glyph_promotion import profile_write_phase
+    _phase=profile_write_phase(root,_phase)
     tokens = _manual_actual_staging_ack_tokens(staged_decisions)
-    document = load_manual_actual_staging(root)
+    document = _phase_manual_actual_staging(root, _phase)
     _validate_manual_actual_staging_ack_tokens(document, tokens)
     if not tokens:
         return {
@@ -801,7 +858,7 @@ def remove_staged_manual_actual_groups(
     _write_manual_actual_staging(root, {
         "schema_version": MANUAL_ACTUAL_STAGING_SCHEMA_VERSION,
         "staged_groups": remaining,
-    })
+    }, **({'_phase': _phase} if _phase is not None else {}))
     return {
         "acknowledged_group_count": len(tokens),
         "acknowledged_group_ids": sorted(selected_ids),
@@ -1632,18 +1689,21 @@ def _actual_project_output(root):
 
 class _ActualSourceBindings:
     """Finite occurrence source selection for one actual write operation."""
-    def __init__(self, root, decisions, source_context):
+    def __init__(self, root, decisions, source_context, *, write_phase=None):
         from actual_source_visual_safety import source_visual_operation
         self.output_dir = _actual_project_output(root)
         self.paths, self.entries = {}, {}
         self.source_context = copy.deepcopy(source_context)
         self.occurrences = None
         self.manifest_seal = None
+        self.write_phase = write_phase
         with source_visual_operation() as operation:
             self.operation = operation
             if self.output_dir is not None:
                 import standalone_proofread as sp
-                manifest = sp.json_load_strict(self.output_dir / "校對工作階段.json")
+                path = self.output_dir / "校對工作階段.json"
+                manifest = (sp.json_parse_strict(write_phase.expected_bytes(path), path)
+                            if write_phase is not None else sp.json_load_strict(path))
                 sp.validate_manifest_integrity(manifest)
                 self.manifest_seal = manifest["manifest_integrity_sha256"]
                 if source_context is not None and source_context.get("session_id") != manifest.get("session_id"):
@@ -1682,7 +1742,9 @@ class _ActualSourceBindings:
         return self.paths[key]
 
     def recheck(self):
-        if self.output_dir is not None:
+        if self.write_phase is not None:
+            self.write_phase.recheck()
+        elif self.output_dir is not None:
             import standalone_proofread as sp
             manifest = sp.json_load_strict(self.output_dir / "校對工作階段.json")
             sp.validate_manifest_integrity(manifest)
@@ -2395,6 +2457,13 @@ def _static_ttf_reading(group: Mapping[str, Any]) -> str:
         return ""
     sha = _text(group.get("exact_key")).lower()
     path = Path(__file__).resolve().parent / STATIC_TTF_FINGERPRINT_FILE
+    state = _prepared_actual_csv.get()
+    if state is not None and state.write_phase is not None:
+        raw=state.write_phase.expected_bytes(path)
+        if raw is None:return ''
+        for row in csv.DictReader(io.StringIO(raw.decode('utf-8-sig'),newline='')):
+            if _text(row.get('glyph_sha256')).lower()==sha:return _canon(row.get('bopomofo'))
+        return ''
     if not path.exists():
         return ""
     with path.open("r", encoding="utf-8-sig", newline="") as fh:
@@ -2916,12 +2985,31 @@ def apply_direct_visual_actual_batch(
     root: Path, decisions: Sequence[Mapping[str, Any]], *,
     source_context: Mapping[str, Any] | None = None,
     acknowledge=None, apply_function=None, initialize_evidence=None, prewrite_guard=None,
+    _phase=None, _staging_afterimage=None,
 ) -> dict[str, Any]:
     from actual_source_visual_safety import source_visual_write_result
-    return source_visual_write_result(lambda: _apply_direct_visual_actual_batch_with_sources(root, decisions,
+    from global_glyph_promotion import profile_write_phase,PROJECT_TRANSACTION_FILE,_validated_project_journal
+    phase=profile_write_phase(root,_phase)
+    def action():
+        try:
+            return _apply_direct_visual_actual_batch_with_sources(root, decisions,
             source_context=source_context, acknowledge=acknowledge,
             apply_function=apply_function, initialize_evidence=initialize_evidence,
-            prewrite_guard=prewrite_guard), commit_state="COMMITTED_REFRESH_PENDING",
+            prewrite_guard=prewrite_guard, _phase=phase,
+            _staging_afterimage=_staging_afterimage)
+        except Exception as exc:
+            # This is the helper's already completed own phase, never a
+            # current-disk guess or merely attempted COMMITTED replacement.
+            raw=phase.expected_bytes(Path(root)/PROJECT_TRANSACTION_FILE) if phase is not None else None
+            journal=_validated_project_journal(raw) if raw is not None else None
+            if journal is not None and journal['state']=='COMMITTED':
+                import standalone_proofread as sp
+                raise sp.ManualActualPostApplyError('ordinary_commit_context_exit',exc,
+                    batch_result={'project_actual_commit':'COMMITTED','project_refresh':'PENDING',
+                        'project_refresh_token':journal['transaction_id'],'recovery_plan':journal['recovery_plan']},
+                    cleared_event_count=None) from exc
+            raise
+    return source_visual_write_result(action, commit_state="COMMITTED_REFRESH_PENDING",
         committed=lambda result: result.get("project_actual_commit") == "COMMITTED")
 
 
@@ -2929,6 +3017,7 @@ def _apply_direct_visual_actual_batch_with_sources(
     root: Path, decisions: Sequence[Mapping[str, Any]], *,
     source_context: Mapping[str, Any] | None = None,
     acknowledge=None, apply_function=None, initialize_evidence=None, prewrite_guard=None,
+    _phase=None, _staging_afterimage=None,
 ) -> dict[str, Any]:
     """Shared project commit; Global delivery belongs to the post-commit controller.
 
@@ -2937,6 +3026,10 @@ def _apply_direct_visual_actual_batch_with_sources(
     """
     if _prepared_actual_csv.get() is not None:
         raise ValueError("nested actual batch candidate 不允許重入交易")
+    from global_glyph_promotion import profile_write_phase, prepare_promotion_outbox, write_prepared_outbox
+    phase = profile_write_phase(root, _phase)
+    if phase is not None and acknowledge is not None and _staging_afterimage is None:
+        raise ValueError("new-profile acknowledgement requires exact prepared staging output")
     if prewrite_guard is not None:
         prewrite_guard()
     if not decisions:
@@ -2949,7 +3042,7 @@ def _apply_direct_visual_actual_batch_with_sources(
     apply_function = apply_function or apply_verified_actual_group
     prepared = []
     all_intents = []
-    bindings = _ActualSourceBindings(root, decisions, source_context)
+    bindings = _ActualSourceBindings(root, decisions, source_context, write_phase=phase)
     with _DirectVisualPDFSnapshot(source_context) as pdf_snapshot:
         for decision in decisions:
             group = decision["group"]
@@ -2980,13 +3073,13 @@ def _apply_direct_visual_actual_batch_with_sources(
     results = []
     from actual_source_visual_safety import recheck_current_sources
     bindings.recheck()
-    with direct_visual_project_transaction(root) as bind_recovery_plan:
+    with direct_visual_project_transaction(root, **({'_phase': phase} if phase is not None else {})) as bind_recovery_plan:
         if prewrite_guard is not None:
             prewrite_guard()
-        if initialize_evidence is not None:
+        if initialize_evidence is not None and phase is None:
             bindings.recheck()
             initialize_evidence()
-        state = _PreparedActualCSV(root, source_bindings=bindings)
+        state = _PreparedActualCSV(root, source_bindings=bindings, write_phase=phase)
         token = _prepared_actual_csv.set(state)
         try:
             for decision, reading, checked, admissions in prepared:
@@ -3007,9 +3100,23 @@ def _apply_direct_visual_actual_batch_with_sources(
         if prewrite_guard is not None:
             prewrite_guard()
         bindings.recheck()
-        state.flush()
-        bind_recovery_plan(post_commit_recovery_plan_from_results(results))
-        enqueue_promotion_intents(root, all_intents)
+        plan = post_commit_recovery_plan_from_results(results)
+        if phase is None:
+            state.flush()
+            bind_recovery_plan(plan)
+            enqueue_promotion_intents(root, all_intents)
+        else:
+            from global_glyph_promotion import GLOBAL_PROMOTION_OUTBOX_FILE, STAGING_FILE
+            import manual_surface_actual as surface
+            csv_bytes = state.output_bytes()
+            outbox, _ = prepare_promotion_outbox(phase.expected_bytes(Path(root)/GLOBAL_PROMOTION_OUTBOX_FILE), all_intents)
+            afterimages = {**csv_bytes, GLOBAL_PROMOTION_OUTBOX_FILE: outbox,
+                surface.FILE: phase.expected_bytes(Path(root)/surface.FILE),
+                STAGING_FILE: (_staging_afterimage if acknowledge is not None else
+                              phase.expected_bytes(Path(root)/STAGING_FILE))}
+            bind_recovery_plan(plan, afterimages=afterimages)
+            state.flush(prepared_bytes=csv_bytes)
+            write_prepared_outbox(root, outbox, phase)
         if prewrite_guard is not None:
             prewrite_guard()
         bindings.recheck()
@@ -3031,6 +3138,7 @@ def apply_staged_manual_actual_batch(
     root: Path,
     live_groups: Sequence[Mapping[str, Any]],
     *, source_context: Mapping[str, Any] | None = None,
+    _phase=None,
 ) -> dict[str, Any]:
     """Apply one frozen staged-manual-actual queue as a transaction.
 
@@ -3042,7 +3150,9 @@ def apply_staged_manual_actual_batch(
     one compare-and-remove rewrite only after all group applications succeed.
     """
     root = Path(root)
-    staging = load_manual_actual_staging(root)
+    from global_glyph_promotion import profile_write_phase
+    phase = profile_write_phase(root, _phase)
+    staging = _phase_manual_actual_staging(root, phase)
     frozen = sorted(staging["staged_groups"], key=lambda item: item["group_id"])
     if not frozen:
         return _empty_manual_actual_batch_result()
@@ -3065,7 +3175,7 @@ def apply_staged_manual_actual_batch(
                 occurrence_pdf_names[occurrence_id] = pdf_name
 
     tokens = _manual_actual_staging_ack_tokens(frozen)
-    current_staging = load_manual_actual_staging(root)
+    current_staging = _phase_manual_actual_staging(root, phase)
     _validate_manual_actual_staging_ack_tokens(current_staging, tokens)
 
     transaction_result = apply_direct_visual_actual_batch(
@@ -3075,7 +3185,13 @@ def apply_staged_manual_actual_batch(
           "source": staged["source"], "note": staged["note"]}
          for staged, live in selected],
         source_context=source_context,
-        acknowledge=lambda: remove_staged_manual_actual_groups(root, frozen),
+        acknowledge=lambda: remove_staged_manual_actual_groups(root, frozen,
+            **({'_phase': phase} if phase is not None else {})),
+        **({'_phase': phase, '_staging_afterimage': _manual_actual_staging_bytes({
+                'schema_version': MANUAL_ACTUAL_STAGING_SCHEMA_VERSION,
+                'staged_groups': [item for item in current_staging['staged_groups']
+                    if item['group_id'] not in {row['group_id'] for row in frozen}]})}
+           if phase is not None else {}),
     )
     group_results = transaction_result["group_results"]
     acknowledgement = transaction_result["acknowledgement"]

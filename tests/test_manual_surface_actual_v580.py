@@ -59,6 +59,586 @@ def competing_pending(output,original):
     return other,raw
 
 
+def ordinary_profile(isolated_pipeline):
+    output=isolated_pipeline('actual')
+    root=sp.project_actual_evidence_root(output)
+    if not (root/ar.OCCURRENCE_OVERRIDE_FILE).exists():
+        ar._write_actual_evidence_csv(root/ar.OCCURRENCE_OVERRIDE_FILE,ar.OVERRIDE_HEADERS,[])
+    sp.enable_surface_actual_project(output,confirmation=True)
+    before=ReviewSaveService(output).load_resume_snapshot()
+    row=before.ledger[0]
+    sp.stage_manual_actual_correction(output,row['review_id'],'ㄅㄛˊ',
+        checked_occurrence_ids=[row['occurrence_id']],note='isolated native ordinary input')
+    return output,before
+
+
+def test_new_profile_ordinary_public_batch_uses_owned_journal3_and_raw_publisher(isolated_pipeline):
+    output,before=ordinary_profile(isolated_pipeline)
+    root=sp.project_actual_evidence_root(output)
+    surface_before=(root/surface.FILE).read_bytes()
+    seen=[];write=promotion._write_json
+    def record(path,value,**kwargs):
+        result=write(path,value,**kwargs)
+        if Path(path).name==promotion.PROJECT_TRANSACTION_FILE:
+            seen.append(copy.deepcopy(value))
+        return result
+    with patch.object(promotion,'_write_json',new=record):
+        result=sp.apply_staged_manual_actual_corrections(output)
+    assert result['project_actual_commit']=='COMMITTED' and result['project_refresh']=='SUCCESS'
+    assert seen and all(item['schema_version']=='3.0' for item in seen)
+    assert seen[0]['write_plan']['afterimages'] is None
+    assert any(item['write_plan']['afterimages'] is not None for item in seen)
+    assert not (root/promotion.PROJECT_TRANSACTION_FILE).exists()
+    assert not (output/sp.ACTUAL_REFRESH_PUBLICATION).exists()
+    assert (root/surface.FILE).read_bytes()==surface_before
+    after=ReviewSaveService(output).load_resume_snapshot()
+    assert after.ledger[0]['actual']=='ㄅㄛˊ'
+    assert [row['actual'] for row in after.ledger[1:]]==[row['actual'] for row in before.ledger[1:]]
+    assert [{k:v for k,v in row.items() if k.startswith('expected')} for row in after.ledger]==[
+        {k:v for k,v in row.items() if k.startswith('expected')} for row in before.ledger]
+    assert after.db==before.db
+
+
+@pytest.mark.parametrize('boundary',['initial','planned','committed'])
+def test_new_profile_ordinary_foreign_journal_at_true_atomic_boundary_is_preserved(isolated_pipeline,boundary):
+    output,before=ordinary_profile(isolated_pipeline)
+    root=sp.project_actual_evidence_root(output);local=root/promotion.PROJECT_TRANSACTION_FILE
+    sync=promotion.os.fsync;injected=[];expected=[]
+    lock=root/'.global_exact_glyph_delivery.lock';lock_raw=lock.read_bytes()
+    def inject(fd):
+        result=sync(fd)
+        frame=inspect.currentframe().f_back
+        if frame.f_code.co_name=='_atomic_bytes' and Path(frame.f_locals['path'])==local and not injected:
+            own=promotion._validated_project_journal(frame.f_locals['raw'])
+            label=('committed' if own['state']=='COMMITTED' else
+                   'planned' if own['write_plan']['afterimages'] is not None else 'initial')
+            if label==boundary:
+                foreign=copy.deepcopy(own);foreign['transaction_id']='f'*64
+                raw=(promotion.library._canonical_json(foreign)+'\n').encode('utf-8')
+                assert promotion._validated_project_journal(raw)==foreign
+                local.write_bytes(raw)
+                capture_project_write_admission(output,recovery=True).recheck()
+                injected.append(raw)
+                temporary=Path(frame.f_locals['temporary'])
+                # This exact still-open helper-owned temporary is not foreign
+                # evidence and is removed by its existing finally clause.
+                snapshot={str(path.relative_to(output)):path.read_bytes() for path in output.rglob('*')
+                    if path.is_file() and path not in {temporary,lock}}
+                snapshot[str(lock.relative_to(output))]=lock_raw
+                expected.append(snapshot)
+        return result
+    error=None
+    with patch.object(promotion.os,'fsync',new=inject):
+        try:sp.apply_staged_manual_actual_corrections(output)
+        except Exception as exc:error=exc
+    assert injected and error is not None
+    assert local.read_bytes()==injected[0]
+    assert files(output)==expected[0]
+
+
+@pytest.mark.parametrize('foreign',[False,True])
+def test_new_profile_ordinary_cold_prefix_recovery_has_exact_owner_images(isolated_pipeline,foreign):
+    output,before=ordinary_profile(isolated_pipeline)
+    root=sp.project_actual_evidence_root(output);local=root/promotion.PROJECT_TRANSACTION_FILE
+    write=promotion._atomic_bytes;snapshots=[]
+    lock=root/'.global_exact_glyph_delivery.lock';lock_raw=lock.read_bytes()
+    def power_loss_after_first_csv(path,raw,**kwargs):
+        result=write(path,raw,**kwargs)
+        if Path(path).name==ar.OCCURRENCE_OVERRIDE_FILE and not snapshots:
+            journal=promotion._validated_project_journal(local.read_bytes())
+            assert journal['schema_version']=='3.0' and journal['state']=='PREPARED'
+            assert journal['write_plan']['afterimages'] is not None
+            snapshot={str(path.relative_to(output)):path.read_bytes() for path in output.rglob('*')
+                if path.is_file() and path!=lock}
+            snapshot[str(lock.relative_to(output))]=lock_raw
+            snapshots.append(snapshot)
+            raise OSError('isolated power loss after real ordinary CSV replace')
+        return result
+    with patch.object(promotion,'_atomic_bytes',new=power_loss_after_first_csv):
+        with pytest.raises(OSError,match='isolated power loss'):
+            sp.apply_staged_manual_actual_corrections(output)
+    assert snapshots and not local.exists()  # Real warm rollback already worked.
+    for name,raw in snapshots[0].items():
+        path=output/name;path.parent.mkdir(parents=True,exist_ok=True);path.write_bytes(raw)
+    journal=promotion._validated_project_journal(local.read_bytes())
+    if foreign:
+        path=root/ar.OCCURRENCE_OVERRIDE_FILE
+        rows=ar._read_csv(path,ar.OVERRIDE_HEADERS)
+        target=before.ledger[1];source=target['source_record']
+        rows.append({'pdf_contains':target['pdf_name'],'pdf_excludes':'','page':str(target['physical_page']),
+            'target_char':target['char'],'stable_key':source['穩定注音鍵'],'x0':str(target['x0']),
+            'y0':str(target['y0']),'actual_reading':'ㄎㄢˋ','source':'isolated competing writer','note':'preserve'})
+        ar._write_csv(path,ar.OVERRIDE_HEADERS,rows)
+        ar._validated_dynamic_csv_rows(path.read_bytes(),path.name,ar.OVERRIDE_HEADERS)
+        (root/'.global_exact_glyph_delivery.lock').unlink()
+        exact=files(output)
+        with pytest.raises(promotion.library.GlobalLibraryValidationError,match='foreign current bytes'):
+            promotion.recover_pending_project_actual_write(root)
+        assert files(output)==exact and local.exists()
+    else:
+        assert promotion.recover_pending_project_actual_write(root)=='PREPARED'
+        assert not local.exists()
+        for name,packed in journal['files'].items():
+            path=root/name
+            assert (path.read_bytes() if path.exists() else None)==promotion._unpacked(packed)
+        assert ar.load_manual_actual_staging(root)['staged_groups']
+
+
+def test_new_profile_ordinary_committed_handoff_rejects_foreign_and_blocks_new_stage(isolated_pipeline):
+    output,before=ordinary_profile(isolated_pipeline)
+    root=sp.project_actual_evidence_root(output);local=root/promotion.PROJECT_TRANSACTION_FILE
+    write=promotion._write_json;injected=[]
+    def after_committed(path,value,**kwargs):
+        result=write(path,value,**kwargs)
+        if Path(path)==local and value['state']=='COMMITTED' and not injected:
+            foreign=copy.deepcopy(value);foreign['transaction_id']='e'*64
+            raw=(promotion.library._canonical_json(foreign)+'\n').encode('utf-8')
+            local.write_bytes(raw);injected.append(raw)
+        return result
+    with patch.object(promotion,'_write_json',new=after_committed):
+        with pytest.raises(sp.ManualActualPostApplyError) as error:
+            sp.apply_staged_manual_actual_corrections(output)
+    assert injected and error.value.project_actual_commit=='COMMITTED'
+    assert local.read_bytes()==injected[0]
+    (root/'.global_exact_glyph_delivery.lock').unlink()
+    snapshot=files(output)
+    # Both public staging families must refuse before lock/data mutation while
+    # a committed ordinary exact-image transaction still owns this project.
+    with pytest.raises(ValueError,match='finish pending ordinary'):
+        sp.stage_manual_actual_correction(output,before.ledger[1]['review_id'],'ㄎㄢˋ')
+    assert files(output)==snapshot
+    with pytest.raises(ValueError,match='finish pending ordinary'):
+        sp.stage_surface_actual_correction(output,before.ledger[1]['review_id'],'ㄎㄢˋ',proof={},
+            actor='isolated refusal',whole_unit_readable=True,target_character_matches=True,reading_from_original=True)
+    assert files(output)==snapshot
+
+
+def test_new_profile_ordinary_cold_published_ack_uses_original_plan_and_surface_roster(isolated_pipeline):
+    output,before=ordinary_profile(isolated_pipeline)
+    root=sp.project_actual_evidence_root(output)
+    with patch.object(sp,'_acknowledge_actual_refresh',side_effect=OSError('isolated ack interruption')):
+        with pytest.raises(sp.ManualActualPostApplyError) as error:
+            sp.apply_staged_manual_actual_corrections(output)
+    assert error.value.project_actual_commit=='COMMITTED'
+    publication=sp._read_actual_refresh_publication(output)
+    assert publication[0]['schema']=='actual-deferred-refresh/2' and publication[0]['phase']=='PUBLISHED'
+    assert str(Path(sp.PROJECT_EVIDENCE_DIR)/sp.PROJECT_ACTUAL_EVIDENCE_DIR/surface.FILE) in {
+        item['path'] for item in publication[0]['entries']}
+    assert promotion._validated_project_journal((root/promotion.PROJECT_TRANSACTION_FILE).read_bytes())['schema_version']=='3.0'
+    # A genuinely new admission reconstructs the frozen afterimages/publication
+    # linkage; it must not rerun the ordinary writer or raw producer.
+    with patch.object(ar,'apply_staged_manual_actual_batch',side_effect=AssertionError('no staged replay')), \
+            patch.object(sp,'run_pipeline_pdfs',side_effect=AssertionError('already published')):
+        recovered=sp.recover_committed_actual_project(output)
+    assert recovered['project_refresh']=='SUCCESS'
+    assert not (output/sp.ACTUAL_REFRESH_PUBLICATION).exists()
+    assert not (root/promotion.PROJECT_TRANSACTION_FILE).exists()
+    after=ReviewSaveService(output).load_resume_snapshot()
+    assert after.ledger[0]['actual']=='ㄅㄛˊ' and after.db==before.db
+    assert [row['expected_set'] for row in after.ledger]==[row['expected_set'] for row in before.ledger]
+
+
+def test_new_profile_ordinary_cold_publication_prefix_links_old_manifest_and_new_actual(isolated_pipeline):
+    output,before=ordinary_profile(isolated_pipeline)
+    root=sp.project_actual_evidence_root(output)
+    old_manifest=(output/'校對工作階段.json').read_bytes()
+    first=output/sp.descriptor(before.manifest['pdfs'][0],'actual')
+    old_actual=first.read_bytes();move=sp._surface_phase_move;resume=sp._resume_actual_refresh_publication
+    interrupted=[]
+    def after_first_actual(source,target,phase):
+        result=move(source,target,phase)
+        if Path(target)==first and not interrupted:
+            interrupted.append(first.read_bytes())
+            raise OSError('isolated process loss after first actual publication move')
+        return result
+    def no_hot_recovery(*args,**kwargs):
+        if interrupted:
+            raise OSError('isolated stopped process before publication recovery')
+        return resume(*args,**kwargs)
+    with patch.object(sp,'_surface_phase_move',new=after_first_actual), \
+            patch.object(sp,'_resume_actual_refresh_publication',new=no_hot_recovery):
+        with pytest.raises(sp.ManualActualPostApplyError) as error:
+            sp.apply_staged_manual_actual_corrections(output)
+    assert error.value.project_actual_commit=='COMMITTED'
+    assert interrupted and interrupted[0]!=old_actual
+    assert first.read_bytes()==interrupted[0]
+    assert (output/'校對工作階段.json').read_bytes()==old_manifest
+    publication=sp._read_actual_refresh_publication(output)
+    assert publication[0]['phase']=='PREPARED' and publication[0]['schema']=='actual-deferred-refresh/2'
+    journal=promotion._validated_project_journal((root/promotion.PROJECT_TRANSACTION_FILE).read_bytes())
+    assert journal['schema_version']=='3.0' and journal['state']=='COMMITTED'
+    original= capture_project_write_admission(output,recovery=True)
+    original.recheck()  # Genuine old-MF/new-workbook mixed-prefix admission.
+    recovered=sp.recover_committed_actual_project(output)
+    assert recovered['project_refresh']=='SUCCESS'
+    assert not (root/promotion.PROJECT_TRANSACTION_FILE).exists()
+    assert not (output/sp.ACTUAL_REFRESH_PUBLICATION).exists()
+    after=ReviewSaveService(output).load_resume_snapshot()
+    assert after.ledger[0]['actual']=='ㄅㄛˊ' and after.db==before.db
+    assert [row['expected_set'] for row in after.ledger]==[row['expected_set'] for row in before.ledger]
+
+
+def test_new_profile_ordinary_cold_ack_copy_keeps_plan_and_split_status(isolated_pipeline):
+    output,before=ordinary_profile(isolated_pipeline);root=sp.project_actual_evidence_root(output)
+    acknowledge=sp.acknowledge_project_refresh;completed=[]
+    def interrupted_after_local_ack(*args,**kwargs):
+        result=acknowledge(*args,**kwargs)
+        assert not (root/promotion.PROJECT_TRANSACTION_FILE).exists()
+        completed.append(True)
+        raise OSError('isolated process stops after local ack before publication cleanup')
+    with patch.object(sp,'acknowledge_project_refresh',new=interrupted_after_local_ack):
+        with pytest.raises(sp.ManualActualPostApplyError) as error:
+            sp.apply_staged_manual_actual_corrections(output)
+    assert completed==[True] and error.value.project_actual_commit=='COMMITTED'
+    publication=sp._read_actual_refresh_publication(output)
+    assert publication[0]['phase']=='ACKNOWLEDGING'
+    frozen_plan=promotion._validated_project_journal((publication[2]/'ack-committed.json').read_bytes())['recovery_plan']
+    with patch.object(sp,'run_pipeline_pdfs',side_effect=AssertionError('already published, no producer')):
+        result=sp.recover_committed_actual_project(output)
+    assert result['project_refresh']=='SUCCESS' and result['project_actual_commit']=='COMMITTED'
+    assert result['global_promotion_delivery']['status']=='DELIVERED'
+    assert result['recovery_plan']==frozen_plan and result['affected_occurrence_ids']==frozen_plan['affected_occurrence_ids']
+    assert not (output/sp.ACTUAL_REFRESH_PUBLICATION).exists()
+    after=ReviewSaveService(output).load_resume_snapshot()
+    assert after.ledger[0]['actual']=='ㄅㄛˊ' and after.db==before.db
+
+
+def test_new_profile_ordinary_nonempty_outbox_ack_and_cold_retry(project,tmp_path,monkeypatch):
+    # SQLite's Windows filename boundary requires a short isolated path; the
+    # unique pytest basetemp still owns this entire Global repository.
+    isolated_global=tmp_path.parent/'g'
+    monkeypatch.setenv('LOCALAPPDATA',str(isolated_global))
+    repository=promotion.library.GlobalExactGlyphRepository.resolved()
+    assert repository.path.is_relative_to(isolated_global)
+    repository.path.parent.mkdir(parents=True,exist_ok=True)
+    output,original=project;root=sp.project_actual_evidence_root(output)
+    before=ReviewSaveService(output).load_resume_snapshot();target=before.ledger[0]
+    context=sp._global_direct_source_context(output,before.manifest)
+    group=ar.build_actual_group_for_entry(before.ledger,target)
+    intents,admissions=promotion.direct_visual_intents(group,'ㄅㄛˊ',[target['occurrence_id']],context)
+    assert len(intents)==1 and admissions
+    sp.stage_manual_actual_correction(output,target['review_id'],'ㄅㄛˊ',checked_occurrence_ids=[target['occurrence_id']])
+    # Real local producer and isolated Global receipt complete; only subsequent
+    # raw refresh fails. No success substitute for admission/writer/delivery.
+    with patch.object(sp,'_stage_actual_refresh',side_effect=OSError('isolated after Global acknowledgement')):
+        with pytest.raises(sp.ManualActualPostApplyError) as error:
+            sp.apply_staged_manual_actual_corrections(output)
+    assert error.value.project_actual_commit=='COMMITTED'
+    local=root/promotion.PROJECT_TRANSACTION_FILE
+    journal=promotion._validated_project_journal(local.read_bytes())
+    assert journal['schema_version']=='3.0' and journal['state']=='COMMITTED'
+    assert len(journal['write_plan']['outbox_delivery'])==1
+    outbox=promotion.load_promotion_outbox(root)
+    assert len(outbox['items'])==1 and outbox['items'][0]['status']=='DELIVERED'
+    assert repository.path.is_file() and repository.path.is_relative_to(isolated_global)
+    receipt=repository.lookup_processed_intent(intents[0]['intent_id'],payload_digest=intents[0]['payload_digest'])
+    assert receipt is not None and receipt.receipt_digest==outbox['items'][0]['receipt']['receipt_digest']
+    exact=files(output)
+    assert promotion.deliver_pending_promotion_outbox(root,repository,source_context=context,
+        source_entries=before.manifest['records'])['status']=='NO_PENDING'
+    assert files(output)==exact
+    promotion.acknowledge_promotion_delivery(root,intents,[receipt])
+    assert files(output)==exact  # Duplicate D has no new journal delivery step.
+
+
+def test_new_profile_global_retry_waits_for_publication_then_uses_no_journal(isolated_pipeline,tmp_path,monkeypatch):
+    from tests import test_excel_text_storage as fixture
+    from tests.actual_source_test_support import register_fixture_glyph,write_fixture_pdf,bind_source_from_pdf
+    # Change only this fixture's glyph acquisition to one genuine simple donor;
+    # original composite-source fixtures and all product writers remain intact.
+    monkeypatch.setattr(fixture,'TEXTS',('角',))
+    digest=register_fixture_glyph('c19-publication-retry-donor')
+    def simple_pdf(path,count):
+        assert count==1
+        write_fixture_pdf(path,[{'glyph_sha256':digest,'char':'角','x0':50,'y0':40}])
+    def simple_sources(path):
+        with promotion.fitz.open(path) as doc:
+            span=doc[0].get_texttrace()[0];character=span['chars'][0]
+            row=bind_source_from_pdf({'x0':character[3][0],'y0':character[3][1]},path)
+            return [{'字元':row['char'],'font':span['font'],'font_xref':row['font_xref'],
+                'glyph_id_字形索引':row['glyph_id'],'注音元件ID':row['zhuyin_component_id'],
+                'TTF字形SHA256':row['source_record']['TTF字形SHA256'],
+                **{key:row[key] for key in ('x0','y0','x1','y1')}}]
+    monkeypatch.setattr(fixture,'literal_source_pdf',simple_pdf)
+    monkeypatch.setattr(fixture,'literal_native_sources',simple_sources)
+    isolated_global=tmp_path.parent/'g-retry'
+    monkeypatch.setenv('LOCALAPPDATA',str(isolated_global))
+    output,before=ordinary_profile(isolated_pipeline);root=sp.project_actual_evidence_root(output)
+    with patch.object(promotion.library,'deliver_global_direct_evidence',side_effect=OSError('isolated Global outage')), \
+            patch.object(sp,'_acknowledge_actual_refresh',side_effect=OSError('isolated before publication ack')):
+        with pytest.raises(sp.ManualActualPostApplyError):
+            sp.apply_staged_manual_actual_corrections(output)
+    publication=sp._read_actual_refresh_publication(output)
+    assert publication[0]['phase']=='PUBLISHED'
+    queue=promotion.load_promotion_outbox(root)['items'];assert len(queue)==1 and queue[0]['status']=='PENDING'
+    intents=[{key:queue[0][key] for key in ('intent_id','payload_digest','payload')}]
+    manifest=sp.json_load_strict(output/'校對工作階段.json');context=sp._global_direct_source_context(output,manifest)
+    repository=promotion.library.GlobalExactGlyphRepository.resolved()
+    exact=files(output)
+    retry=promotion.deliver_pending_promotion_outbox(root,repository,source_context=context,source_entries=manifest['records'])
+    assert retry['status']=='PENDING_RETRY' and 'publication' in retry['error']
+    assert not repository.path.exists() and files(output)==exact
+    # Real durable receipt from another delivery attempt cannot mutate the
+    # publisher's source C until that owner has acknowledged its publication.
+    receipts=promotion.library.deliver_global_direct_evidence(repository,intents)
+    assert len(receipts)==1 and repository.path.is_relative_to(isolated_global)
+    with pytest.raises(promotion.library.GlobalLibraryValidationError,match='publication'):
+        promotion.acknowledge_promotion_delivery(root,intents,receipts)
+    assert files(output)==exact
+    with pytest.raises(ValueError,match='復原紀錄已變更'):
+        sp.recover_committed_actual_project(output,expected_recovery=('f'*64,{'schema_version':'1.0',
+            'affected_occurrence_ids':[],'checked_postconditions':[]}))
+    assert files(output)==exact
+    recovered=sp.recover_committed_actual_project(output)
+    assert recovered['project_refresh']=='SUCCESS' and recovered['global_promotion_delivery']['status']=='PENDING_RETRY'
+    assert not (root/promotion.PROJECT_TRANSACTION_FILE).exists() and not (output/sp.ACTUAL_REFRESH_PUBLICATION).exists()
+    wb_before={str(path.relative_to(output)):path.read_bytes() for path in output.rglob('*.xlsx')}
+    delivered=promotion.deliver_pending_promotion_outbox(root,repository,source_context=context,source_entries=manifest['records'])
+    assert delivered['status']=='DELIVERED' and delivered['delivered_count']==1
+    assert promotion.load_promotion_outbox(root)['items'][0]['status']=='DELIVERED'
+    assert not (root/promotion.PROJECT_TRANSACTION_FILE).exists()
+    assert {str(path.relative_to(output)):path.read_bytes() for path in output.rglob('*.xlsx')}==wb_before
+    after=ReviewSaveService(output).load_resume_snapshot()
+    assert after.ledger[0]['actual']=='ㄅㄛˊ' and after.db==before.db
+
+
+def interrupted_initial_ordinary_journal(output):
+    from project_write_admission import SurfaceWritePhase
+    root=sp.project_actual_evidence_root(output);write=promotion._write_json
+    phase=SurfaceWritePhase(capture_project_write_admission(output,recovery=True))
+    def lose_process_after_initial(path,value,**kwargs):
+        result=write(path,value,**kwargs)
+        if Path(path)==root/promotion.PROJECT_TRANSACTION_FILE:
+            assert value['schema_version']=='3.0' and value['write_plan']['afterimages'] is None
+            raise OSError('isolated interrupted initial ordinary journal')
+        return result
+    with patch.object(promotion,'_write_json',new=lose_process_after_initial):
+        with pytest.raises(OSError,match='interrupted initial ordinary'):
+            with promotion.direct_visual_project_transaction(root,_phase=phase):
+                raise AssertionError('body must not run')
+    journal=promotion._validated_project_journal((root/promotion.PROJECT_TRANSACTION_FILE).read_bytes())
+    assert journal['state']=='PREPARED' and journal['write_plan']['afterimages'] is None
+    return journal
+
+
+@pytest.mark.parametrize('state',['preimages','partial','committed'])
+def test_new_profile_ordinary_old_journal2_has_finite_readonly_contract(project,state):
+    output,original=project;root=sp.project_actual_evidence_root(output)
+    journal=interrupted_initial_ordinary_journal(output)
+    journal.pop('write_plan');journal['schema_version']='2.0'
+    if state=='partial':
+        row=original['records'][0]
+        ar._write_csv(root/ar.OCCURRENCE_OVERRIDE_FILE,ar.OVERRIDE_HEADERS,[{
+            'pdf_contains':row['pdf_name'],'pdf_excludes':'','page':str(row['physical_page']),
+            'target_char':row['char'],'stable_key':row['source_record']['穩定注音鍵'],
+            'x0':str(row['x0']),'y0':str(row['y0']),'actual_reading':'ㄅㄛˊ','source':'old valid ordinary writer','note':''}])
+    if state=='committed':
+        journal['state']='COMMITTED'
+        journal['recovery_plan']={'schema_version':'1.0','affected_occurrence_ids':[],'checked_postconditions':[]}
+    raw=(promotion.library._canonical_json(journal)+'\n').encode('utf-8')
+    assert promotion._validated_project_journal(raw)==journal
+    (root/promotion.PROJECT_TRANSACTION_FILE).write_bytes(raw)
+    (root/'.global_exact_glyph_delivery.lock').unlink()
+    exact=files(output)
+    if state=='preimages':
+        assert promotion.recover_pending_project_actual_write(root)=='PREPARED'
+        for name,packed in journal['files'].items():
+            path=root/name
+            assert (path.read_bytes() if path.exists() else None)==promotion._unpacked(packed)
+        assert not (root/promotion.PROJECT_TRANSACTION_FILE).exists()
+    else:
+        with pytest.raises(ValueError,match='lacks exact afterimages'):
+            promotion.recover_pending_project_actual_write(root)
+        assert files(output)==exact
+
+
+@pytest.mark.parametrize('damage',['store','marker','future'])
+def test_new_profile_ordinary_journal3_indicator_never_downgrades_before_lock(project,damage):
+    output,original=project;root=sp.project_actual_evidence_root(output)
+    journal=interrupted_initial_ordinary_journal(output)
+    if damage=='store':(root/surface.FILE).unlink()
+    elif damage=='marker':
+        manifest=sp.json_load_strict(output/'校對工作階段.json')
+        for name in (surface.MARKER,'manual_surface_actual_projection','manual_surface_projection_refresh'):
+            manifest.pop(name)
+        sp.json_save(output/'校對工作階段.json',sp.seal_manifest(manifest))
+    else:
+        journal['schema_version']='4.0'
+        (root/promotion.PROJECT_TRANSACTION_FILE).write_bytes((promotion.library._canonical_json(journal)+'\n').encode('utf-8'))
+    (root/'.global_exact_glyph_delivery.lock').unlink()
+    exact=files(output)
+    with pytest.raises((ValueError,promotion.library.GlobalLibraryValidationError)):
+        promotion.recover_pending_project_actual_write(root)
+    assert files(output)==exact
+
+
+@pytest.mark.parametrize('entry',['optin','pub2legacy'])
+def test_transitional_surface_namespace_uses_original_admission_before_lock(tmp_path,entry):
+    from openpyxl import Workbook
+    output=tmp_path/'transitional';output.mkdir()
+    original=create_staged_navigation_fixture(output,same_exact_peers=True)
+    root=sp.project_actual_evidence_root(output)
+    ar.ensure_user_evidence_files(root)
+    ar._write_actual_evidence_csv(root/ar.OCCURRENCE_OVERRIDE_FILE,ar.OVERRIDE_HEADERS,[])
+    proof=sp.prepare_surface_actual_correction(output,original['records'][0]['review_id'])['proof']
+    publication=None
+    if entry=='pub2legacy':
+        resume=sp._resume_actual_refresh_publication
+        def process_stop(project_dir,**kwargs):
+            if (output/sp.ACTUAL_REFRESH_PUBLICATION).exists():
+                raise OSError('isolated stop retaining genuine conversion prefix')
+            return resume(project_dir,**kwargs)
+        with patch.object(sp,'_surface_phase_move',side_effect=OSError('isolated first entry stop')), \
+                patch.object(sp,'_resume_actual_refresh_publication',new=process_stop):
+            with pytest.raises(OSError,match='retaining genuine conversion prefix'):
+                sp.enable_surface_actual_project(output,confirmation=True)
+        publication=sp._read_actual_refresh_publication(output)
+        assert publication[0]['schema']=='actual-deferred-refresh/2' and publication[0]['phase']=='PREPARED'
+        assert not surface.enabled(sp.json_load_strict(output/'校對工作階段.json'))
+    lock_path=root/'.global_exact_glyph_delivery.lock'
+    if lock_path.exists():lock_path.unlink()
+    if publication is not None:
+        stable=files(output);stage_stable=files(publication[2])
+        for operation in (sp.regenerate_report,sp.refresh_actual_project):
+            with pytest.raises(ValueError,match='recover_committed_actual_project'):
+                operation(output)
+            assert files(output)==stable and files(publication[2])==stage_stable
+            assert not lock_path.exists()
+    added=output/'01_實際注音'/'foreign-distinct.xlsx'
+    real_lock=promotion.project_delivery_lock;injected=[]
+    @contextmanager
+    def before_first_lock(*args,**kwargs):
+        receipt=kwargs.get('_admission')
+        assert receipt is not None and receipt.workbook_roster is not None and not receipt.profile
+        if not injected:
+            wb=Workbook();wb.active['A1']='external distinct valid workbook';wb.save(added)
+            injected.append(files(output))
+        with real_lock(*args,**kwargs):yield
+    stage_before=files(publication[2]) if publication is not None else None
+    owner=promotion if publication is not None else sp
+    with patch.object(owner,'project_delivery_lock',new=before_first_lock):
+        with pytest.raises(ValueError,match='namespace changed'):
+            if publication is not None:sp.recover_committed_actual_project(output)
+            else:
+                sp.stage_surface_actual_correction(output,original['records'][0]['review_id'],'ㄅㄛˊ',
+                    proof=proof,actor='isolated namespace negative; no human GUI claim',
+                    whole_unit_readable=True,target_character_matches=True,reading_from_original=True,enable_format=True)
+    assert len(injected)==1 and files(output)==injected[0]
+    assert not lock_path.exists()
+    if publication is not None:assert files(publication[2])==stage_before
+    assert not surface.enabled(sp.json_load_strict(output/'校對工作階段.json'))
+
+
+def test_new_profile_workbook_namespace_addition_cannot_escape_warm_receipt(project):
+    output,original=project;root=sp.project_actual_evidence_root(output)
+    target=original['records'][0]
+    proof=sp.prepare_surface_actual_correction(output,target['review_id'])['proof']
+    (root/'.global_exact_glyph_delivery.lock').unlink()
+    manifest=sp.json_load_strict(output/'校對工作階段.json')
+    existing=output/sp.descriptor(manifest['pdfs'][0],'actual')
+    added=existing.parent/'foreign-new.xlsx';lock=sp.project_delivery_lock;injected=[]
+    @contextmanager
+    def after_admission(*args,**kwargs):
+        receipt=kwargs.get('_admission')
+        if receipt is not None and not injected:
+            assert receipt.workbook_roster is not None
+            added.write_bytes(existing.read_bytes())
+            injected.append(files(output))
+        with lock(*args,**kwargs):yield
+    with patch.object(sp,'project_delivery_lock',new=after_admission):
+        with pytest.raises(ValueError,match='namespace changed'):
+            sp.stage_surface_actual_correction(output,target['review_id'],'ㄅㄛˊ',proof=proof,
+                actor='isolated source namespace refusal',whole_unit_readable=True,
+                target_character_matches=True,reading_from_original=True)
+    assert injected and files(output)==injected[0]
+    assert not (root/'.global_exact_glyph_delivery.lock').exists()
+    assert surface.parse((root/surface.FILE).read_bytes())['pending']==[]
+
+
+def test_new_profile_actual_conflict_hold_clears_only_after_owned_ack_and_report(isolated_pipeline):
+    import pdf_portability as portability
+    from tests.test_pdf_portability import pending_actual_excel_conflict,add_override
+    output=isolated_pipeline('actual');root=sp.project_actual_evidence_root(output)
+    manifest=sp.json_load_strict(output/'校對工作階段.json');target=manifest['records'][0]
+    add_override(output,target,'ㄎㄢˋ')
+    sp.refresh_actual_project(output)
+    manifest=sp.json_load_strict(output/'校對工作階段.json')
+    marker=pending_actual_excel_conflict(output,manifest,manifest)
+    sp.enable_surface_actual_project(output,confirmation=True)
+    before=ReviewSaveService(output).load_resume_snapshot();target=before.ledger[0]
+    sp.stage_manual_actual_correction(output,target['review_id'],'ㄅㄛˊ',checked_occurrence_ids=[target['occurrence_id']])
+    helper=sp._publish_local_actual_conflict_resolution;reached=[]
+    def after_ack(project_dir,report,**kwargs):
+        phase=kwargs['_phase']
+        assert phase.expected_bytes(root/promotion.PROJECT_TRANSACTION_FILE) is None
+        assert not portability.actual_excel_conflict_state(output,sp._surface_known_json(phase,output/'校對工作階段.json'),
+            sp._surface_known_db(phase,output),_read_bytes=phase.expected_bytes)
+        manifest_bytes=phase.expected_bytes(output/'校對工作階段.json')
+        result=helper(project_dir,report,**kwargs)
+        assert (output/'校對工作階段.json').read_bytes()==manifest_bytes
+        reached.append(True)
+        return result
+    with patch.object(sp,'_publish_local_actual_conflict_resolution',new=after_ack):
+        result=sp.apply_staged_manual_actual_corrections(output)
+    assert reached==[True] and result['project_refresh']=='SUCCESS'
+    assert (output/portability.ACTUAL_EXCEL_CONFLICT_FILE).read_bytes()==marker
+    status=sp.json_load_strict(output/'pipeline_status.json')
+    assert 'actual_excel_conflicts_zero' not in status['completion_gate']['failed_gates']
+    assert (output/'注音校對_最終報告.xlsx').is_file() and (output/'注音校對_技術稽核.xlsx').is_file()
+    after=ReviewSaveService(output).load_resume_snapshot()
+    assert after.ledger[0]['actual']=='ㄅㄛˊ' and after.db==before.db
+    assert [row['expected_set'] for row in after.ledger]==[row['expected_set'] for row in before.ledger]
+
+
+@pytest.mark.parametrize('foreign',[False,True])
+def test_new_profile_report_failure_preserves_known_outputs_and_foreign_source(isolated_pipeline,foreign):
+    output=isolated_pipeline('actual');root=sp.project_actual_evidence_root(output)
+    if not (root/ar.OCCURRENCE_OVERRIDE_FILE).exists():
+        ar._write_csv(root/ar.OCCURRENCE_OVERRIDE_FILE,ar.OVERRIDE_HEADERS,[])
+    sp.enable_surface_actual_project(output,confirmation=True)
+    before=ReviewSaveService(output).load_resume_snapshot()
+    sp.generate_report(output,before.manifest,before.db)
+    current=ReviewSaveService(output).load_resume_snapshot();row=current.ledger[0]
+    ReviewSaveService(output).save_event(row['review_id'],sp.build_manual_expected_event(row,
+        operation='ENTER_EXPECTED',expected_set='ㄎㄢ'))
+    current=ReviewSaveService(output).load_resume_snapshot()
+    exact=files(output);technical=output/'注音校對_技術稽核.xlsx'
+    _other,external=competing_pending(output,current.manifest)
+    lock=root/'.global_exact_glyph_delivery.lock';lock_raw=lock.read_bytes()
+    write=sp._refresh_atomic_bytes;changed=[];expected=[]
+    def after_technical(path,raw,**kwargs):
+        result=write(path,raw,**kwargs)
+        if Path(path)==technical and not changed:
+            assert raw!=exact[technical.name]
+            changed.append(raw)
+            if foreign:
+                (root/surface.FILE).write_bytes(external)
+                snapshot={str(path.relative_to(output)):path.read_bytes() for path in output.rglob('*')
+                    if path.is_file() and path!=lock}
+                snapshot[str(lock.relative_to(output))]=lock_raw
+                expected.append(snapshot)
+            raise OSError('isolated report failure after exact own technical output')
+        return result
+    with patch.object(sp,'_refresh_atomic_bytes',new=after_technical):
+        with pytest.raises(ValueError if foreign else OSError):
+            sp.generate_report(output,current.manifest,current.db)
+    assert changed
+    assert files(output)==(expected[0] if foreign else exact)
+    assert (output/'校對工作階段.json').read_bytes()==exact['校對工作階段.json']
+    assert (output/'人工判定資料庫.json').read_bytes()==exact['人工判定資料庫.json']
+
+
+@pytest.mark.parametrize('marker',['跨Excel_actual衝突.json','跨專案判定衝突.json'],ids=['actual','expected'])
+def test_new_profile_corrupt_conflict_receipt_refuses_before_lock(project,marker):
+    output,original=project;root=sp.project_actual_evidence_root(output)
+    (output/marker).write_bytes(b'{"corrupt":true}')
+    (root/'.global_exact_glyph_delivery.lock').unlink()
+    exact=files(output)
+    with pytest.raises(ValueError):
+        sp.regenerate_report(output)
+    assert files(output)==exact
+
+
 @pytest.mark.parametrize('after_clear',[False,True])
 def test_surface_stage_db_consumer_uses_known_bytes_through_transient_disk_change(project,after_clear):
     output,original=project

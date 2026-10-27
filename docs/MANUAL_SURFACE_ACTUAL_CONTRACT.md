@@ -65,3 +65,35 @@ public enable與stage的opt-in使用同一private conversion body。直接enable
 必要定向回歸涵蓋原頁 proof/負向控制、blank human input、pending→expected save、apply→重開→refresh、其他位置／expected／DB 保全、required file 刪除／損壞／錯身分、語法有效寫前漂移、per-PDF cache、raw override 正常 refresh 分流、rollback、durable publication cleanup、pending recovery、重複保存與 provenance history。原 PDF/原九筆以隔離副本另驗；非視窗服務證據不能稱為人工 GUI 驗收。
 
 新候選仍須兩輪完整獨立審查、固定候選一次當前非視窗全集及必要當次原件／CI，不能用 C13/H13 PASS 或舊版執行失敗代替。C15 原「不授權 C16」停止及其 BLOCKED 保留於歷史，後續 C16／C17 依使用者另行限時授權執行，不追認舊 PASS。新版寫前保全不足、未解交易／來源回歸、必須改 identity/expected/Global DB schema 或放寬傳播邊界時停止；限時授權仍受其收尾與失效時間限制。generic gate 的真實結果與全部歷史原文保留。
+
+## C19：新格式專案的普通 actual 交易
+
+H18 的兩項 code BLOCKED 保留：new-profile ordinary writer 未承接原 phase，會覆蓋另一個合法 transaction journal；普通 `/2` PREPARED cold rollback 也缺少可證 own afterimage，會覆蓋合法外部 override。既有 surface-only `/2` 的 deterministic all-pending 證明不能推廣為普通 learning／quorum／outbox 寫入的證明。C19 沿原 C14／C15 必要格式版本授權，在同一既有 local journal 使用有限 `/3.0` successor；不改 Global DB、occurrence/review identity、expected、learning/quorum 或 raw decoder epoch。
+
+`/3.0` 僅供已啟用 surface profile 的 `owner.operation=direct-visual`。保留 `/2` 的 `state/transaction_id/recovery_plan/files/staging/owner`，七份 files roster 不變，另加必需 `write_plan`，其 exact fields 為 `contract/dependencies/afterimages/outbox_delivery`。contract 為 `new-profile-direct-write-plan/1`。dependencies 是原 receipt 中非本交易 body targets 的 canonical path→SHA256／JSON null（已證 absence）；afterimages 初為 null，準備完成後是 exact `files/staging` packed bytes。ordinary 的 surface-store afterimage 必須等於 preimage，不能用這份 journal 宣稱另一筆 surface store 是自身輸出。
+
+最初 PREPARED 可以尚無 afterimages，此時尚未寫任何 body data。既有 `_PreparedActualCSV` 先在記憶體完成五 CSV 的結果、時間與 provenance，沿原 validators、來源／quorum／learning 規則產生。完整 recovery plan、七份 afterimages 及 staging afterimage 必須先寫入同一 owned PREPARED journal，才 flush CSV、enqueue outbox、ack staging，最後寫 COMMITTED。冷恢復不重新產生時間或 actor，也不由 expected 推導任何 actual。
+
+最初提案曾以 null／單筆 record 表達 outbox delivery；實際 wire refinement 是有限 array，原提案與 refinement 原件分別保存。每筆 delivery 僅含 exact `before_sha256/afterimage`，SHA 必須接續上一份已知 outbox bytes；同一 intent roster/payload 不變，舊 DELIVERED receipt 不變，新增 receipt 依既有 validator，DELIVERED 數嚴格增加，array 長度不得超過原 PENDING 數。這是既有 subset acknowledgement 的有限狀態鏈，並非無界 log。Global 已完成的真 receipt 對應 D bytes 先 durable 於同一 owned COMMITTED journal，才回寫 outbox。重複 D 不增加紀錄；沒有 local journal 的獨立 retry 不補造 journal。
+
+普通 PREPARED cold recovery 僅接受 exact 原像 A，或原 producer 已封存 A→C 寫入順序的合法前綴。rollback 逆序回 A；外部 B 一律拒寫並保留 B／journal，不合併、不追認、不晚 capture。COMMITTED 僅接受 C 或已封存的有限 outbox D。真 JC replace 已成功並推進 known phase 後的 handoff／cleanup／refresh 錯誤，保留既有 COMMITTED／refresh 未完成結果；不能因目前磁碟是另一個 COMMITTED journal 或只是 attempted write 而猜測本次成功。pending J3 尚未完成時，新 ordinary／surface staging 必須先拒絕，不能合法自身新增資料卻破壞原恢復依賴。
+
+既存新格式 ordinary `/2` 沒有 afterimages，不自動升級：只有 PREPARED 且七檔與 staging 全部 exact preimages 的有限未寫 body 前綴可撤銷 journal；partial 或 COMMITTED 保留檔案並明確拒寫，需另有可驗解決方案。surface-only `/2` 與 bare／legacy `/1` 原契約保持。journal3／unknown successor 本身也是格式 indicator；缺 marker/store 不降格為 legacy。
+
+新格式 ordinary raw refresh 仍呼叫原 producer、stage、publisher 與 ack。原 project、CSV、DB、journal 與來源持續原 phase；fresh stage 的 manifest／DB／surface／raw-dependency logical consumers 使用同份已知 buffers。新 workbook bytes 沿既有 producer 封印、來源、IDs、actual postconditions、expected 獨立性與完整 artifact 驗證，單次擷取其完整有限 output roster 後交原 publisher。僅本次明列 producer／seed path 及 exact bytes 可以清除未發布的自身暫存；未知 extra／links 拒絕，不清正式 project 或舊 stage。
+
+ordinary publication 必須是既有 `/2`，包含 required surface-store entry。J3 的原 dependency SHA 與 publisher 的 token／plan digest／原 manifest seal／backup bytes 對應；合法 PREPARED old-MF/new-workbook 混合前綴及 COMMITTED→PUBLISHED→ACKNOWLEDGING 均沿同一規則，不能用舊 SHA 誤擋 own refresh，也不能把外部 B 當新基準。ACK copy 保存同一 J3；完整發布後才 acknowledgement。
+
+workbook recovery binding 重用 `sealed_workbook_paths` 同一 role/path/PDF/唯一性 registry。新格式原 receipt 固定捕捉同 registry 的兩個 role namespace 及 bytes，暖重核也比較 roster，新增 XLSX／links 不能逃過原 files tuple。已嚴驗 publication `/2` 時，只有其 exact original backup bytes 可供原 MF 的 binding view；實體 current bytes 仍須獨立符合該 publication 的 old/new 與 J3 owner/plan/dependencies。這個 in-memory recovery view 不重封 manifest truth；整筆交易寫前 guard 也不改 per-PDF actual logical dependency 或 cache scope。
+
+全部保護仍是 cooperative lock 與 optimistic precondition；不宣稱 compare→replace/unlink 是 OS atomic CAS。H18 原非視窗服務驗收、C19 定向測試與原件各保實際 source／HEAD，不能互相改標新候選執行，也不能取代兩輪完整獨立 review 或正式當次全集。
+
+普通 J3 owned ack 完成後仍沿原 `_publish_local_actual_conflict_resolution`：只在原 Excel actual receipt 的位置／來源／token、當前 override、provenance 與讀音均符合，且不再有 pending actual transaction 時，重新發布報告以清除原 hold。actual／expected conflict receipt 的 bytes／ABSENCE 在最初 admission 捕捉，非空 receipt 沿原 validator 同份 buffer 驗 schema／identity／source，損壞不能等到建立 lock 才發現；有合法 pending 的 receipt 不等於資料損壞，不阻止其 own recovery。notes、completion hold 與 expected receipt 仍用原規則，captured reader 未列路徑必須拒絕。
+
+這個後置報告是既有下一 operation，不是新增 J3 transaction。new-profile `regenerate_report` 仍執行原逐 PDF fingerprint、dynamic/global snapshot、workbook binding 與完整 collector 的只讀 cache 驗證；結果不符原 sealed raw records 時拒絕並要求正常 actual refresh，不把 stale cache 或歷史 epoch 認成 current。成立時使用原 sealed manifest／DB，保留完整 surface projection、origin、raw-completion hold、identity 與 expected；不將報告收集器的新 manifest 取代原 truth。legacy 的原 collect／write 路徑保留。
+
+new-profile 報告的兩個原 Workbook 都先序列化至記憶體；兩者成功且同一已知 receipt 重核後，才沿既有 atomic helper 寫 technical、user report，最後寫 status。所有 target 原 bytes／合法 absence 都已捕捉。handled I/O 失敗只在 exact own-prefix 下逆序還原；foreign source／target 保留並拒絕 rollback。這不提供三檔 crash atomicity 或新 journal，亦不宣稱 OS CAS。manifest／DB／J 不因這個報告步驟改寫；來源或 cache 拒絕不先寫 error status。原 report producer、actual／expected gates 與 validator 語義不改。
+
+publication 仍 pending 時，new-profile 的 Global retry／ack 不先改 outbox，避免讓 publication 綁定的 C 失效。已完整 PUBLISHED 的 owner 先完成自身 ack／cleanup，Global 未完成則維持真實 PENDING_RETRY；之後獨立 retry 以全新入口取得第一份只讀 receipt，在沒有 journal／publication 的狀態沿原單檔 outbox service 寫 D，不補造舊 J3。已有真 processed receipt 的重試仍保持 idempotent，不新增 quorum。這與 publication 之前、同一 J3 封存有限 C→D 的路徑分開驗證。
+
+C19 namespace continuation: explicit conversion and validated publication/2 with a legacy manifest capture the same shared workbook-role namespace and runtime inputs as enabled surface projects. A non-null captured namespace is carried unchanged to the first project lock. Ordinary report/refresh entries refuse transitional legacy-manifest publication before locking and direct the caller to the existing recover_committed_actual_project owner; only that owner and explicit conversion may continue the transition. Legacy ordinary inputs without this namespace retain their default contract.
