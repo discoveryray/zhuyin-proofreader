@@ -200,7 +200,7 @@ def has_surface_indicators(project):
     return False
 
 
-def capture_project_write_admission(output_dir, *, allow_new=False, recovery=False):
+def capture_project_write_admission(output_dir, *, allow_new=False, recovery=False, surface_conversion=False):
     """Validate an existing project without mkdir, lock, journal or status writes."""
     import standalone_proofread as sp
     import actual_review as ar
@@ -240,10 +240,12 @@ def capture_project_write_admission(output_dir, *, allow_new=False, recovery=Fal
             current_db = (manifest.get('manual_surface_actual_contract') is not None or any(
                 db.get(key) == value for key,value in [('version',sp.VERSION),
                     ('session_schema_version',sp.SESSION_SCHEMA_VERSION),('review_id_schema_version',sp.REVIEW_ID_SCHEMA_VERSION)]))
-            if current_db:
+            if current_db or surface_conversion:
                 sp.normalize_db(db)
         elif manifest.get('manual_surface_actual_contract') is not None:
             raise ValueError('PROJECT_WRITE_ADMISSION: required new-format decision database missing')
+        elif surface_conversion:
+            raise ValueError('SURFACE_CONTRACT: conversion decision database missing')
         journal_path = root/promotion.PROJECT_TRANSACTION_FILE
         captured[journal_path] = _bytes(journal_path)
         journal = None
@@ -283,6 +285,7 @@ def capture_project_write_admission(output_dir, *, allow_new=False, recovery=Fal
                  (ar.GLYPH_CONFLICT_FILE, ar.GLYPH_CONFLICT_HEADERS),
                  (ar.GLYPH_PROVENANCE_FILE, ar.GLYPH_PROVENANCE_HEADERS)]
         legacy = manifest.get('manual_surface_actual_contract') is None
+        strict_actual=not legacy or surface_conversion
         for name, headers in specs:
             path = root/name
             captured[path] = _bytes(path)
@@ -291,10 +294,12 @@ def capture_project_write_admission(output_dir, *, allow_new=False, recovery=Fal
                 raise ValueError('PROJECT_WRITE_ADMISSION: missing new-format evidence is not a recovery instruction')
             raw = preimages[name] if name in preimages else captured[path]
             if raw is None:
+                if surface_conversion:
+                    raise ValueError('SURFACE_CONTRACT: conversion raw evidence missing: '+name)
                 if name != ar.OCCURRENCE_OVERRIDE_FILE and not legacy:
                     raise ValueError('PROJECT_WRITE_ADMISSION: required actual evidence missing: ' + name)
                 continue
-            if not legacy:
+            if strict_actual:
                 ar._validated_dynamic_csv_rows(raw, name, headers)
                 if captured[path] is not None and captured[path] != raw:
                     ar._validated_dynamic_csv_rows(captured[path], name, headers)
@@ -304,12 +309,16 @@ def capture_project_write_admission(output_dir, *, allow_new=False, recovery=Fal
                 raise ValueError('PROJECT_WRITE_ADMISSION: corrupt dynamic actual evidence: ' + str(report['errors']))
         staging_path = root/ar.MANUAL_ACTUAL_STAGING_FILE
         captured[staging_path] = _bytes(staging_path)
-        if not legacy and not (journal and journal['state'] == 'PREPARED'):
-            ar.load_manual_actual_staging(root)
+        if strict_actual and not (journal and journal['state'] == 'PREPARED'):
+            raw=captured[staging_path]
+            if raw is not None:
+                ar._validate_manual_actual_staging_document(sp.json_parse_strict(raw,staging_path))
         outbox_path = root/promotion.GLOBAL_PROMOTION_OUTBOX_FILE
         captured[outbox_path] = _bytes(outbox_path)
-        if not legacy and not (journal and journal['state'] == 'PREPARED'):
-            promotion.load_promotion_outbox(root)
+        if strict_actual and not (journal and journal['state'] == 'PREPARED'):
+            raw=captured[outbox_path]
+            if raw is not None:
+                promotion.validate_outbox(promotion._json(raw))
         import manual_surface_actual as surface
         surface_path = root/surface.FILE
         captured[surface_path] = _bytes(surface_path)
@@ -382,25 +391,12 @@ def project_write_entry(*, allow_new=False, recovery=False, locked=False, surfac
                 # The existing local-transaction source-context contract is
                 # not a full project schema. Its original reader stays owner.
                 return function(*args, **kwargs)
-            receipt = capture_project_write_admission(project, allow_new=allow_new, recovery=recovery)
+            receipt = capture_project_write_admission(project, allow_new=allow_new, recovery=recovery,
+                **({'surface_conversion':True} if surface_conversion else {}))
             if receipt is not None:
                 receipt.recheck()
-            if surface_conversion:
-                # Explicit opt-in is permitted only from a complete existing
-                # source. Refuse incomplete legacy data before creating a lock.
-                import manual_surface_actual as surface
-                import standalone_proofread as sp
-                manifest = sp.json_load_strict(project/'校對工作階段.json')
-                if not surface.enabled(manifest):
-                    surface.raw_dependencies(sp.project_actual_evidence_root(project))
-                    sp.normalize_db(sp.json_load_strict(project/'人工判定資料庫.json'))
-                    import actual_review as ar
-                    report=ar.validate_dynamic_actual_evidence(sp.project_actual_evidence_root(project),read_only=True)
-                    if not report['ok']:
-                        raise ValueError('SURFACE_CONTRACT: conversion source invalid: '+str(report['errors']))
-                    ar.load_manual_actual_staging(sp.project_actual_evidence_root(project))
-                    import global_glyph_promotion as promotion
-                    promotion.load_promotion_outbox(sp.project_actual_evidence_root(project))
+            # Conversion completeness and validators consumed the original
+            # captured bytes above, before any project lock or nested service.
             creating = receipt is not None and dict(receipt.files).get(str(project/'校對工作階段.json')) is None
             if creating:
                 if project.exists() and (not project.is_dir() or any(project.iterdir())):

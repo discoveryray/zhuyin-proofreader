@@ -397,11 +397,15 @@ def recover_project_actual_transaction(root: Path, *, _phase=None):
     from project_write_admission import project_from_actual_root, capture_project_write_admission, has_surface_indicators
     project = project_from_actual_root(root)
     path = root / PROJECT_TRANSACTION_FILE
-    if not path.exists():
-        return
     if _phase is not None:
         _phase.recheck()
-    journal_raw = _phase.expected_bytes(path) if _phase is not None else path.read_bytes()
+        journal_raw=_phase.expected_bytes(path)
+        if journal_raw is None:
+            return
+    else:
+        if not path.exists():
+            return
+        journal_raw=path.read_bytes()
     journal = _validated_project_journal(journal_raw)
     owned = project is not None and (has_surface_indicators(project) or journal['schema_version']=='2.0')
     admission = (_phase.receipt() if _phase is not None else
@@ -542,9 +546,14 @@ def direct_visual_project_transaction(root: Path, *, operation='direct-visual',
         from_phase=_phase.expected_bytes(root/PROJECT_TRANSACTION_FILE) if _phase is not None else None
         if (from_phase is not None if _phase is not None else project_refresh_token(root) is not None):
             raise library.GlobalLibraryValidationError("finish committed project recovery before a new actual transaction")
-        load_promotion_outbox(root)  # malformed outbox fails before project writes
+        if _phase is None:
+            load_promotion_outbox(root)
+        else:
+            raw=_phase.expected_bytes(root/GLOBAL_PROMOTION_OUTBOX_FILE)
+            if raw is not None:
+                validate_outbox(_json(raw))
         surface_path = root/'manual_surface_actual.json'
-        surface = surface_path.exists()
+        surface = _phase.expected_bytes(surface_path) is not None if _phase is not None else surface_path.exists()
         journal = {
             "schema_version": '2.0' if surface else '1.0', "state": "PREPARED",
             "transaction_id": hashlib.sha256(uuid4().bytes).hexdigest(),

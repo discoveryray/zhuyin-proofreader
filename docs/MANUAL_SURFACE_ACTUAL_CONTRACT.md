@@ -56,6 +56,12 @@ C17 保留 C16 的四個已確認 lifecycle BLOCKED 原件：初次 PREPARED jou
 
 自身 COMMITTED replacement 已完成並推進 known phase 後，即使後續例外或 foreign journal 使原 transaction context 無法正常退出，結果仍以既有 `ManualActualPostApplyError` 回報 COMMITTED／refresh 未完成；不由目前磁碟或僅 attempted marker 猜測 durability。正常 publication／ack／rollback cleanup 繼續核完整 phase。若外部 project B 導致尚未發布的自身 stage 需要撤除，只有原 known publication 為 ABSENT、從未 attempt publication replacement、stage 完整檔案 roster/bytes 皆屬已知自身輸出且無 extra/links，才從這些原 bytes 與 publication ABSENT 導出窄 cleanup receipt。它只清自身未引用 stage，不觸碰 project B；曾發布後被外部刪 journal 不能套用此例外。
 
+C18 保留 C17 兩個 genuine code BLOCKED：stage DB 曾實讀合法 B 後磁碟還原 A，pending/status卻消費B；nested opt-in則以內層新capture B替代外層原A。C17 的75項及環境/metadata成功不能清除這些原件。修正後，surface-only logical consumers 的實際 manifest/DB/staging/hash/token/plan buffer都從原 receipt或已知own outputs嚴格解析；stage DB initial與clear後兩讀、pending/reconciliation/status、publisher/rollback/ack postconditions均不再以live loader重取authority。原 `normalize_db`、staging/outbox/CSV validators繼續適用，不能以initializer補成合法。顯式conversion完整性由首次captured DB、五CSV、staging/outbox作只讀驗證，普通legacy讀取/ABSENT契約保持。
+
+public enable與stage的opt-in使用同一private conversion body。直接enable取得自身原receipt後委派；stage則顯式傳已鎖內核對的outer A，不再呼叫第二個decorated public entry重新admit B。body將由A建立的phase明確交既有projection publisher，stage僅接續其已知outputs。ordinary apply dispatcher也只在受支援surface指標下，將其原receipt交同一private surface apply；legacy/raw預設路徑不因此改造成一般snapshot框架。合法冷publication `/2` 即使manifest仍是legacy，也須其原owner/session/source/stage receipt成立後沿同一phase恢復，不能以profile=False降格或補檔。
+
+原五CSV raw dependency producer沿用相同檔名registry與SHA演算法，僅增加captured reader參數供surface phase使用；普通default仍讀原路徑。這是資料綁定修正，不改raw decoder／expected結果演算法或epoch。真實負控必須非空注入合法B：新consumer可證明實際仍消費原A並產生與final DB一致的pending/status，或在首次後續寫入前拒絕保全；不能以舊live-read hook未觸發宣稱拒寫。原script/失敗與新hook角色分別保留。C18 evidence recorder使用NUL分隔Git paths，涵蓋非ASCII原檔名；這不追認C17原253項capture涵蓋當時漏掉的11個tracked輸入。
+
 必要定向回歸涵蓋原頁 proof/負向控制、blank human input、pending→expected save、apply→重開→refresh、其他位置／expected／DB 保全、required file 刪除／損壞／錯身分、語法有效寫前漂移、per-PDF cache、raw override 正常 refresh 分流、rollback、durable publication cleanup、pending recovery、重複保存與 provenance history。原 PDF/原九筆以隔離副本另驗；非視窗服務證據不能稱為人工 GUI 驗收。
 
 新候選仍須兩輪完整獨立審查、固定候選一次當前非視窗全集及必要當次原件／CI，不能用 C13/H13 PASS 或舊版執行失敗代替。C15 原「不授權 C16」停止及其 BLOCKED 保留於歷史，後續 C16／C17 依使用者另行限時授權執行，不追認舊 PASS。新版寫前保全不足、未解交易／來源回歸、必須改 identity/expected/Global DB schema 或放寬傳播邊界時停止；限時授權仍受其收尾與失效時間限制。generic gate 的真實結果與全部歷史原文保留。

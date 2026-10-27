@@ -308,7 +308,7 @@ def dependencies(document):
             for pdf,items in sorted(by_pdf.items())}
 
 
-def raw_dependencies(root):
+def raw_dependencies(root, *, _read_bytes=None):
     """Raw decoder evidence, independent of this post-decoder projection."""
     import actual_review as ar
     names=(ar.OCCURRENCE_OVERRIDE_FILE,ar.USER_GLYF_FILE,ar.USER_CFF_FILE,
@@ -316,9 +316,13 @@ def raw_dependencies(root):
     result={}
     for name in names:
         path=Path(root)/name
-        if not path.is_file():
+        raw=(_read_bytes(path) if _read_bytes is not None else
+             path.read_bytes() if path.is_file() else None)
+        if raw is None:
             raise ValueError('SURFACE_CONTRACT: required raw evidence missing: '+name)
-        result[name]=hashlib.sha256(path.read_bytes()).hexdigest()
+        if not isinstance(raw,bytes):
+            raise ValueError('SURFACE_CONTRACT: invalid captured raw evidence: '+name)
+        result[name]=hashlib.sha256(raw).hexdigest()
     return result
 
 

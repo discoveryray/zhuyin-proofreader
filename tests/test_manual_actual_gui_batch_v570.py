@@ -469,21 +469,56 @@ class ManualActualGuiBatchOrchestrationTests(unittest.TestCase):
             self.assertTrue(pipeline.call_args.kwargs["defer_excel_reports"])
 
     def test_one_refresh_pass_decodes_each_invalidated_pdf_once_and_reuses_unaffected(self):
+        from openpyxl import Workbook
+        from project_write_admission import capture_project_write_admission
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             output_dir = base / "output"
             affected = base / "affected.pdf"
             unaffected = base / "unaffected.pdf"
-            affected.write_bytes(b"affected PDF")
-            unaffected.write_bytes(b"unaffected PDF")
+            for pdf in (affected, unaffected):
+                with fitz.open() as document:
+                    document.new_page().insert_text((30, 40), pdf.stem + " isolated orchestration input")
+                    document.save(pdf)
             actual_dir = output_dir / "01_實際注音"
             candidate_dir = output_dir / "02_候選報告"
             actual_dir.mkdir(parents=True)
             candidate_dir.mkdir(parents=True)
-            sp.actual_workbook_path(actual_dir, unaffected).write_bytes(b"reusable actual workbook")
-            sp.candidate_workbook_path(candidate_dir, unaffected).write_bytes(b"reusable candidate workbook")
+            baseline_pdfs = []
+            for pdf in (affected, unaffected):
+                info = {"pdf": str(pdf), "pdf_name": pdf.name, "pdf_sha256": sp.sha256_file(pdf)}
+                for kind, folder in (("actual", actual_dir), ("candidate", candidate_dir)):
+                    path = (sp.actual_workbook_path(folder, pdf) if kind == "actual"
+                            else sp.candidate_workbook_path(folder, pdf))
+                    workbook = Workbook()
+                    workbook.active.title = "Summary"
+                    workbook.active.append(["isolated_fixture_binding", pdf.name + ":" + kind])
+                    workbook.active.append(["workbook_schema_version", sp.WORKBOOK_SCHEMA_VERSION])
+                    workbook.active.append(["ledger_schema_version", sp.LEDGER_SCHEMA_VERSION])
+                    workbook.save(path)
+                    info[kind + "_workbook"] = str(path)
+                    info[kind + "_workbook_sha256"] = sp.sha256_file(path)
+                baseline_pdfs.append(info)
             dynamic_root = output_dir / "_專案證據" / "actual"
             dynamic_root.mkdir(parents=True)
+            actual_review.ensure_user_evidence_files(dynamic_root)
+            actual_review._write_actual_evidence_csv(dynamic_root / OCCURRENCE_OVERRIDE_FILE,
+                                                      actual_review.OVERRIDE_HEADERS, [])
+            baseline_manifest = sp.seal_manifest({
+                "version": sp.VERSION, "session_id": "session",
+                "session_schema_version": sp.SESSION_SCHEMA_VERSION,
+                "ledger_schema_version": sp.LEDGER_SCHEMA_VERSION,
+                "workbook_schema_version": sp.WORKBOOK_SCHEMA_VERSION,
+                "review_id_schema_version": sp.REVIEW_ID_SCHEMA_VERSION,
+                "pdfs": baseline_pdfs, "records": [], "actual_source_ids": [],
+                "regression_gate": {"ok": True},
+            })
+            sp.json_save(output_dir / "校對工作階段.json", baseline_manifest)
+            sp.json_save(output_dir / "人工判定資料庫.json", sp.normalize_db({}))
+            # The cache/redecode assertions below require an existing project,
+            # not a session-only mock over a missing physical manifest.
+            capture_project_write_admission(output_dir, allow_new=True).recheck()
+            self.assertEqual(sp.load_reuse_baseline_manifest(output_dir), baseline_manifest)
             source_validation = {"ok": True, "errors": []}
             expected_fingerprint = {"fingerprint": "expected-fingerprint", "components": {}}
             produced_manifest = sp.seal_manifest({
@@ -535,7 +570,7 @@ class ManualActualGuiBatchOrchestrationTests(unittest.TestCase):
             with (
                 patch.object(sp, "initialize_project_actual_evidence", return_value=dynamic_root),
                 patch.object(sp, "validate_asset_manifest", return_value=source_validation),
-                patch.object(sp, "load_reuse_baseline_manifest", return_value={"session_id": "session"}),
+                patch.object(sp, "load_reuse_baseline_manifest", wraps=sp.load_reuse_baseline_manifest),
                 patch.object(sp, "compute_expected_asset_fingerprint", return_value=expected_fingerprint),
                 patch.object(sp, "actual_workbook_global_exact_dependencies", return_value=()),
                 patch.object(sp, "compute_actual_asset_fingerprint", side_effect=fingerprint),

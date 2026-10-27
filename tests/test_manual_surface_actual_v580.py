@@ -59,6 +59,167 @@ def competing_pending(output,original):
     return other,raw
 
 
+@pytest.mark.parametrize('after_clear',[False,True])
+def test_surface_stage_db_consumer_uses_known_bytes_through_transient_disk_change(project,after_clear):
+    output,original=project
+    service=ReviewSaveService(output)
+    before=service.load_resume_snapshot()
+    target=before.ledger[0]
+    if after_clear:
+        saved=service.save_event(target['review_id'],sp.build_manual_expected_event(target,
+            operation='ENTER_EXPECTED',expected_set='ㄎㄢ'))
+        confirmation={**saved.db['events'][target['review_id']],'action':'確認現版差異',
+            'confirmation_actual_snapshot':sp.actual_confirmation_snapshot(saved.resolved_entry),
+            **{gate:True for gate in sp.CONFIRMATION_GATES}}
+        service.save_event(target['review_id'],confirmation)
+        before=service.load_resume_snapshot()
+    db_before=(output/'人工判定資料庫.json').read_bytes()
+    root=sp.project_actual_evidence_root(output)
+    ordinary={name:(root/name).read_bytes() if (root/name).exists() else None for name in promotion.PROJECT_FILES}
+    stage(output,original)
+    known=sp._surface_known_json;clear=sp._clear_actual_dependent_events
+    cleared=[];injected=[]
+    def actual_clear(*args,**kwargs):
+        result=clear(*args,**kwargs);cleared.append(result)
+        return result
+    def transient_at_consumer(snapshot,path):
+        path=Path(path)
+        if (not injected and path.name=='人工判定資料庫.json' and path.parent.name.startswith('.ar-')
+                and inspect.currentframe().f_back.f_code.co_name=='_surface_projection_refresh'
+                and bool(cleared)==after_clear):
+            original_raw=path.read_bytes()
+            alternate=sp.normalize_db(sp.json_parse_strict(original_raw,path))
+            row=original['records'][1]
+            alternate['events'][row['review_id']]=sp.build_manual_expected_event(row,
+                operation='ENTER_EXPECTED',expected_set='ㄎㄢˋ')
+            foreign=json.dumps(alternate,ensure_ascii=False,indent=2).encode('utf-8')
+            assert foreign!=original_raw and sp.normalize_db(sp.json_parse_strict(foreign,path))
+            path.write_bytes(foreign)
+            try:
+                # R2's original live-read hook is retained in immutable evidence.
+                # The genuine replacement consumer must now use known A while
+                # its real stage path contains legal B, then disk returns to A.
+                value=known(snapshot,path)
+                injected.append((original_raw,foreign,copy.deepcopy(value)))
+                assert snapshot.expected_bytes(path)==original_raw
+                assert value==sp.json_parse_strict(original_raw,path) and value!=alternate
+                return value
+            finally:path.write_bytes(original_raw)
+        return known(snapshot,path)
+    with patch.object(sp,'_surface_known_json',new=transient_at_consumer), \
+            patch.object(sp,'_clear_actual_dependent_events',new=actual_clear), \
+            patch.object(sp,'deliver_pending_promotion_outbox',side_effect=AssertionError('no Global delivery')):
+        result=sp.apply_staged_manual_actual_corrections(output)
+    assert injected and result['surface_applied_count']==1
+    if after_clear:assert cleared==[1]
+    else:assert not cleared and (output/'人工判定資料庫.json').read_bytes()==db_before
+    reopened=ReviewSaveService(output).load_resume_snapshot()
+    assert reopened.ledger[0]['actual']=='ㄅㄛˊ'
+    assert reopened.ledger[1:]==before.ledger[1:]
+    expected=lambda row:{key:value for key,value in row.items() if key.startswith('expected')}
+    previous=[expected(row) for row in before.ledger];current=[expected(row) for row in reopened.ledger]
+    if after_clear:
+        # The original service records why an actual-bound confirmation was
+        # revoked. Its independent expected payload is still exact; this audit
+        # explanation is not a new reading or expected decision.
+        assert current[0].pop('expected_resolution_reason')=='actual 已更新；撤銷舊差異確認但保留獨立 expected 證據'
+        previous[0].pop('expected_resolution_reason')
+        old=before.db['events'][target['review_id']];new=reopened.db['events'][target['review_id']]
+        for key in ('expected_set','expected_evidence','context_evidence','manual_expected_decision','source'):
+            assert new[key]==old[key]
+    assert current==previous
+    assert {key:value for key,value in reopened.manifest.items() if key.startswith('expected')}=={
+        key:value for key,value in before.manifest.items() if key.startswith('expected')}
+    assert original['records'][1]['review_id'] not in reopened.db['events']
+    pending=sp.json_load_strict(output/'待人工確認.json')['pending']
+    wanted=[row for row in reopened.ledger if row.get('state') in sp.NON_TERMINAL_STATES
+            or row.get('expected_business_conflict_pending') is True]
+    assert [row['review_id'] for row in pending]==[row['review_id'] for row in wanted]
+    reconciled=sp.reconcile_ledger(reopened.ledger,reopened.manifest.get('actual_source_ids') or [])
+    assert sp.json_load_strict(output/'pipeline_status.json')['reconciliation']=={
+        'ok':reconciled.ok,'errors':list(reconciled.errors),**reconciled.details}
+    for name,raw in ordinary.items():assert ((root/name).read_bytes() if (root/name).exists() else None)==raw
+
+
+def test_nested_surface_optin_keeps_original_outer_receipt(tmp_path):
+    # Genuine legacy producer; no pre-enabled project or mocked admission.
+    output=tmp_path/'legacy-optin';output.mkdir()
+    original=create_staged_navigation_fixture(output,same_exact_peers=True)
+    root=sp.project_actual_evidence_root(output)
+    ar.ensure_user_evidence_files(root)
+    ar._write_actual_evidence_csv(root/ar.OCCURRENCE_OVERRIDE_FILE,ar.OVERRIDE_HEADERS,[])
+    prepared=sp.prepare_surface_actual_correction(output,original['records'][0]['review_id'])
+    enable=sp._enable_surface_actual_project;injected=[]
+    lock=root/'.global_exact_glyph_delivery.lock'
+    with promotion.project_delivery_lock(root):
+        pass
+    lock_raw=lock.read_bytes()
+    def snapshot_with_open_lock():
+        result={str(path.relative_to(output)):path.read_bytes() for path in output.rglob('*')
+                if path.is_file() and path!=lock}
+        result[str(lock.relative_to(output))]=lock_raw
+        return result
+    def after_outer_before_common(project_dir,receipt,**kwargs):
+        assert not injected and project_dir==output
+        path=output/'人工判定資料庫.json'
+        old=path.read_bytes();db=sp.normalize_db(sp.json_parse_strict(old,path))
+        row=original['records'][1]
+        db['events'][row['review_id']]=sp.build_manual_expected_event(row,
+            operation='ENTER_EXPECTED',expected_set='ㄎㄢˋ')
+        foreign=json.dumps(db,ensure_ascii=False,indent=2).encode('utf-8')
+        assert receipt.expected_bytes(path)==old and foreign!=old
+        path.write_bytes(foreign)
+        capture_project_write_admission(output,recovery=True).recheck()
+        injected.append(snapshot_with_open_lock())
+        return enable(project_dir,receipt,**kwargs)
+    with patch.object(sp,'_enable_surface_actual_project',new=after_outer_before_common):
+        with pytest.raises(ValueError,match='changed before write'):
+            sp.stage_surface_actual_correction(output,original['records'][0]['review_id'],'ㄅㄛˊ',
+                proof=prepared['proof'],actor='isolated genuine opt-in input; no human GUI claim',
+                whole_unit_readable=True,target_character_matches=True,reading_from_original=True,enable_format=True)
+    assert injected and files(output)==injected[0]
+    assert not surface.enabled(sp.json_load_strict(output/'校對工作階段.json'))
+    assert not (root/surface.FILE).exists()
+
+
+@pytest.mark.parametrize('published_prefix',[0,1])
+def test_cold_legacy_manifest_publication_two_recovers_owned_optin_prefix(tmp_path,published_prefix):
+    output=tmp_path/'legacy-prefix';output.mkdir()
+    create_staged_navigation_fixture(output,same_exact_peers=True)
+    root=sp.project_actual_evidence_root(output)
+    ar.ensure_user_evidence_files(root)
+    ar._write_actual_evidence_csv(root/ar.OCCURRENCE_OVERRIDE_FILE,ar.OVERRIDE_HEADERS,[])
+    before=files(output);resume=sp._resume_actual_refresh_publication;move=sp._surface_phase_move;moved=[]
+    def stop_after_prefix(source,target,phase):
+        if len(moved)==published_prefix:
+            raise OSError('isolated stop before next entry')
+        result=move(source,target,phase);moved.append(target)
+        return result
+    def process_stop(project_dir,**kwargs):
+        if (output/sp.ACTUAL_REFRESH_PUBLICATION).exists():
+            raise OSError('isolated process stop retaining owned opt-in prefix')
+        return resume(project_dir,**kwargs)
+    with patch.object(sp,'_surface_phase_move',new=stop_after_prefix), \
+            patch.object(sp,'_resume_actual_refresh_publication',new=process_stop):
+        with pytest.raises(OSError,match='retaining owned opt-in prefix'):
+            sp.enable_surface_actual_project(output,confirmation=True)
+    assert not surface.enabled(sp.json_load_strict(output/'校對工作階段.json'))
+    assert len(moved)==published_prefix
+    assert (root/surface.FILE).exists()==bool(published_prefix)
+    journal=sp._read_actual_refresh_publication(output)[0]
+    assert journal['schema']=='actual-deferred-refresh/2' and journal['phase']=='PREPARED'
+    receipt=capture_project_write_admission(output,recovery=True)
+    assert receipt.profile is False
+    receipt.recheck()
+    with patch.object(sp,'deliver_pending_promotion_outbox',side_effect=AssertionError('no Global delivery')):
+        result=sp.recover_committed_actual_project(output)
+    assert result['project_actual_commit']=='NOT_COMMITTED' and result['project_refresh']=='ROLLED_BACK'
+    after=files(output);lock=str((root/'.global_exact_glyph_delivery.lock').relative_to(output))
+    after.pop(lock)  # The exact existing operational lock is not project data.
+    assert after==before
+    assert not list(output.parent.glob('.ar-*'))
+
+
 @pytest.mark.parametrize('boundary',['initial-journal','after-body','plan-journal','commit-journal',
     'body-error','commit-written','handoff','backup','publication','entry-prefix','ack-buffer','ack-unlink'])
 def test_surface_phase_preserves_injected_foreign_state(project,boundary):
