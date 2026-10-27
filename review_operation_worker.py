@@ -39,6 +39,10 @@ _PAYLOAD_FIELDS = {
     "prepare_actual": ({"review_id", "expected_manifest", "expected_db"}, {"review_id", "expected_manifest", "expected_db"}),
     "stage_actual": ({"review_id", "reading", "checked_occurrence_ids", "expected_manifest", "expected_db"},
                      {"review_id", "reading", "checked_occurrence_ids", "note", "expected_manifest", "expected_db"}),
+    "stage_surface": ({"review_id", "reading", "proof", "actor", "whole_unit_readable", "target_character_matches",
+                       "reading_from_original", "enable_format", "expected_manifest", "expected_db"},
+                      {"review_id", "reading", "proof", "actor", "whole_unit_readable", "target_character_matches",
+                       "reading_from_original", "enable_format", "expected_manifest", "expected_db"}),
     "actual_summary": (set(), {"expected_manifest", "expected_db", "recovery_only"}),
     "apply_actual": (set(), {"expected_manifest", "expected_db", "recovery_only", "expected_recovery"}),
     "report": ({"expected_manifest", "expected_db"}, {"expected_manifest", "expected_db"}),
@@ -72,7 +76,8 @@ def validate_payload(operation, payload):
     for key in ("expected_manifest", "expected_db"):
         if key in payload and type(payload[key]) is not dict:
             raise ValueError("review displayed project must be an object")
-    for key in ("recovery_only", "defer_staging_validation"):
+    for key in ("recovery_only", "defer_staging_validation", "whole_unit_readable", "target_character_matches",
+                "reading_from_original", "enable_format"):
         if key in payload and type(payload[key]) is not bool:
             raise ValueError("review payload boolean field invalid")
     if operation == "apply_actual":
@@ -138,9 +143,20 @@ class ReviewOperationState:
             self.service = self.service.with_invalidated_cache()
             self.snapshots.clear()
             return None
-        if operation in {"reload", "actual_summary", "prepare_actual", "stage_actual", "report", "apply_actual"}:
+        if operation in {"reload", "actual_summary", "prepare_actual", "stage_actual", "stage_surface", "report", "apply_actual"}:
             expected = {key: payload[key] for key in ("expected_manifest", "expected_db")
                         if key in payload}
+            if operation == 'stage_surface':
+                # The service's resume lock is a write boundary too. Reject
+                # bad first input/proof/consent before entering that service.
+                import manual_surface_actual as surface
+                prepared=sp.prepare_surface_actual_correction(self.output_dir,payload['review_id'])
+                if prepared['proof'] != payload['proof']:
+                    raise ValueError('SURFACE_CONTRACT: preview proof differs before service admission')
+                if prepared['requires_format_conversion'] and payload['enable_format'] is not True:
+                    raise ValueError('SURFACE_CONTRACT: explicit format conversion required')
+                surface.record_for(payload['proof'],payload['reading'],actor=payload['actor'],
+                    **{key:payload[key] for key in ('whole_unit_readable','target_character_matches','reading_from_original')})
             # Caller dictionaries only describe what was displayed. The existing
             # service compares them with fully verified durable bytes.
             if not payload.get("recovery_only"):
@@ -169,11 +185,22 @@ class ReviewOperationState:
                 group = build_actual_group_for_entry(snapshot.ledger, entry)
                 summary = self.service.validate_resume_staging(snapshot)
                 view = self.service._conflicts.review_view(snapshot.db, snapshot.ledger)
-                return dict(group=group, summary=summary, ledger=view)
+                from actual_review import actual_visual_source_safety
+                safety = actual_visual_source_safety(entry, self.output_dir)
+                surface = None
+                if not safety['location_readable'] or entry.get('manual_surface_actual') is not None:
+                    # Exact native eligibility is re-proven; an unsafe/unknown
+                    # slot is not made eligible by the presence of pixels.
+                    surface = sp.prepare_surface_actual_correction(self.output_dir, payload['review_id'])
+                return dict(group=group, summary=summary, ledger=view, surface=surface)
             if operation == "stage_actual":
                 progress("正在保存 actual 暫存")
                 sp.stage_manual_actual_correction(self.output_dir, payload["review_id"],
                     payload["reading"], payload["checked_occurrence_ids"], payload.get("note", ""))
+            elif operation == 'stage_surface':
+                progress('正在保存單一位置人工表面 actual')
+                result = sp.stage_surface_actual_correction(self.output_dir,
+                    **{key:value for key,value in payload.items() if key not in ('expected_manifest','expected_db')})
             elif operation == "report":
                 progress("正在更新 Excel 報告")
                 result = sp.regenerate_report(self.output_dir)
@@ -189,7 +216,7 @@ class ReviewOperationState:
             # A successful actual apply/report can establish a new sealed
             # session. No pre-mutation actual snapshot is used for the result.
             try:
-                if operation != "stage_actual":
+                if operation not in {"stage_actual", "stage_surface"}:
                     self.service = ReviewSaveService(self.output_dir, evidence_anchor=self.service.evidence_anchor)
                 else:
                     self.service = self.service.with_invalidated_cache()
@@ -198,7 +225,7 @@ class ReviewOperationState:
                 summary = self.service.validate_resume_staging(snapshot)
                 view = self.service._conflicts.review_view(snapshot.db, snapshot.ledger)
             except Exception as exc:
-                status = {"stage_actual": "STAGED_REFRESH_PENDING", "report": "REPORT_SAVED_REFRESH_PENDING",
+                status = {"stage_actual": "STAGED_REFRESH_PENDING", "stage_surface": "STAGED_REFRESH_PENDING", "report": "REPORT_SAVED_REFRESH_PENDING",
                           "apply_actual": "COMMITTED_REFRESH_PENDING"}[operation]
                 raise ReviewOperationError(str(exc), commit_state=status) from exc
             return dict(result=str(result) if operation == "report" else result if operation == "apply_actual" else None,

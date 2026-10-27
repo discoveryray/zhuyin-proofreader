@@ -1,4 +1,4 @@
-"""Content-verified, occurrence-local review saves; no Tk or PDF rendering.
+"""Content-verified, occurrence-local review saves; no Tk.
 
 The cache is a process-local optimization of a sealed session, not a new actual
 or expected fingerprint. Every operation hashes the complete input bytes. An
@@ -22,6 +22,8 @@ from typing import Any
 import actual_review as ar
 import standalone_proofread as sp
 from runtime_source_validation import ASSET_MANIFEST_SCHEMA_VERSION, REQUIRED_ASSET_CHAINS
+
+_NO_REVIEW_ID = object()
 
 
 class StaleReviewProjectError(ValueError):
@@ -198,8 +200,10 @@ class ReviewSaveService:
                       root / "global_exact_glyph_promotion_outbox.json"})
         paths.update(root / name for name in (sp.OCCURRENCE_OVERRIDE_FILE, sp.USER_GLYF_FILE,
                                               sp.USER_CFF_FILE, sp.GLYPH_CONFLICT_FILE, sp.GLYPH_PROVENANCE_FILE))
+        from manual_surface_actual import FILE as SURFACE_FILE
+        paths.add(root / SURFACE_FILE)
         documents = {self.output_dir / "校對工作階段.json", self.output_dir / "人工判定資料庫.json",
-                     root / "manual_actual_staging.json"}
+                     root / "manual_actual_staging.json", root / SURFACE_FILE}
         initial_documents = initial_documents or {}
         content = {path: (initial_documents[path] if path in initial_documents else _read(path))
                    for path in documents}
@@ -213,6 +217,9 @@ class ReviewSaveService:
 
     def save_event(self, review_id, event, *, expected_manifest=None, expected_db=None,
                    defer_staging_validation=False, progress=None, confirm_current_actual_snapshot=None):
+        from project_write_admission import capture_project_write_admission
+        admission = capture_project_write_admission(self.output_dir)
+        self._preflight_displayed_context(admission,expected_manifest,expected_db,review_id=review_id)
         def notify(phase):
             # Advisory callbacks never turn a durable save into a failure.
             if progress is not None:
@@ -229,7 +236,9 @@ class ReviewSaveService:
             notify("等待專案儲存鎖（尚未寫入）")
             waiting = time.perf_counter()
             from actual_source_visual_safety import source_visual_write_result
-            with self._lock, sp.project_delivery_lock(sp.project_actual_evidence_root(self.output_dir)):
+            with self._lock, sp.project_delivery_lock(sp.project_actual_evidence_root(self.output_dir),
+                    **({'_admission':admission} if admission.profile else {})):
+                admission.recheck()
                 return source_visual_write_result(lambda: self._save(
                     review_id, event, expected_manifest, expected_db,
                     defer_staging_validation=defer_staging_validation, notify=notify,
@@ -241,6 +250,22 @@ class ReviewSaveService:
                                          "staged_checked_occurrence_ids": []}))
         finally:
             self._save_lock.release()
+
+    def _preflight_displayed_context(self, admission, expected_manifest, expected_db, *, review_id=_NO_REVIEW_ID):
+        """Reject stale display ownership before creating any project lock."""
+        captured=dict(admission.files)
+        manifest_path=self.output_dir/'校對工作階段.json'
+        manifest=_json(captured[str(manifest_path)],manifest_path)
+        if expected_manifest is not None and manifest != expected_manifest:
+            raise StaleReviewProjectError('工作階段已變更；未保存，請重新開啟人工校對畫面')
+        db_path=self.output_dir/'人工判定資料庫.json'
+        raw=captured[str(db_path)]
+        db=sp.normalize_db(_json(raw,db_path) if raw is not None else {})
+        if expected_db is not None and db != expected_db:
+            raise StaleReviewProjectError('人工判定資料庫已由其他操作變更；未覆寫，請重新載入')
+        if review_id is not _NO_REVIEW_ID and not any(row.get('review_id')==review_id for row in manifest['records']):
+            raise ValueError('找不到目前 review_id；已取消寫入')
+        admission.recheck()
 
     def _prepare_snapshot(self, timings, expected_manifest, expected_db, notify=lambda phase: None):
         if (self.output_dir / "跨電腦接續未完成.json").exists():
@@ -285,9 +310,14 @@ class ReviewSaveService:
         frozen_paths = [sp.REUSABLE_EXPECTED_RULES] + [evidence_root / name for name in (
             sp.OCCURRENCE_OVERRIDE_FILE, sp.USER_GLYF_FILE, sp.USER_CFF_FILE, sp.GLYPH_CONFLICT_FILE,
             sp.GLYPH_PROVENANCE_FILE)]
+        from manual_surface_actual import FILE as SURFACE_FILE, enabled, parse, validate_document, applied_digest
+        frozen_inputs = [(str(path), hashes[str(path)]) for path in frozen_paths]
+        if enabled(manifest):
+            surface = validate_document(parse(content[evidence_root / SURFACE_FILE]), session_id=manifest['session_id'])
+            frozen_inputs.append((str(evidence_root / SURFACE_FILE), applied_digest(surface)))
         candidate_anchor = ReviewEvidenceAnchor(
             manifest_seal=str(manifest["manifest_integrity_sha256"]),
-            frozen_inputs=tuple(sorted((str(path), hashes[str(path)]) for path in frozen_paths)))
+            frozen_inputs=tuple(sorted(frozen_inputs)))
         if (self._evidence_anchor is not None
                 and self._evidence_anchor.manifest_seal == candidate_anchor.manifest_seal
                 and self._evidence_anchor != candidate_anchor):
@@ -338,8 +368,13 @@ class ReviewSaveService:
         is a boundary check, not another parse/materialization. No staging
         checked IDs are trusted until validate_resume_staging succeeds.
         """
+        from project_write_admission import capture_project_write_admission
+        admission = capture_project_write_admission(self.output_dir)
+        self._preflight_displayed_context(admission,expected_manifest,expected_db)
         timings = {}
-        with self._lock, sp.project_delivery_lock(sp.project_actual_evidence_root(self.output_dir)):
+        with self._lock, sp.project_delivery_lock(sp.project_actual_evidence_root(self.output_dir),
+                **({'_admission':admission} if admission.profile else {})):
+            admission.recheck()
             values = self._prepare_snapshot(timings, expected_manifest, expected_db)
             manifest, db, baseline, ledger, index, content, hashes, anchor, pending = values
             _, final_hashes = self._capture(timings)

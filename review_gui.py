@@ -360,6 +360,8 @@ class _ReviewDialog(tk.Toplevel):
                 value = self.__dict__.pop(name, None)
                 if isinstance(value, list):
                     value.clear()
+                elif isinstance(value, dict):
+                    value.clear()
 
 
 def expected_conflict_summary(entry):
@@ -539,6 +541,75 @@ class OccurrenceCheckState:
     def unbind(self):
         self.value = self.get()
         self.variable = None
+
+
+def surface_input_result(prepared, *, reading, actor, confirmations):
+    """Plain-data dialog validation; never initializes reading from expected."""
+    from manual_surface_actual import record_for
+    keys = ('whole_unit_readable','target_character_matches','reading_from_original')
+    if set(confirmations) != set(keys):
+        raise ValueError('請逐項確認原頁最終畫面')
+    record = record_for(prepared['proof'], reading, actor=actor, **confirmations)
+    return dict(reading=record['reading'], proof=prepared['proof'], actor=actor,
+                enable_format=prepared['requires_format_conversion'], **confirmations)
+
+
+class SurfaceActualDialog(_ReviewDialog):
+    """One sealed original final surface, with explicit human attestations."""
+    _variable_attributes = ('reading','actor','confirmations')
+    _widget_attributes = ('body_canvas','photos')
+
+    def __init__(self, parent, entry, prepared):
+        super().__init__(parent)
+        self.result = None
+        self.prepared = prepared
+        self.title('單一位置人工表面 actual')
+        apply_screen_safe_geometry(self, 980, 780, min_width=720, min_height=520)
+        self.transient(parent)
+        self.grab_set()
+        footer = ActionRows(self)
+        footer.pack(side='bottom',fill='x')
+        footer.set_items([tk.Button(footer,text='暫存本位置 actual',command=self.submit),
+                          tk.Button(footer,text='取消',command=self.destroy)])
+        body,self.body_canvas = create_scrollable_body(self)
+        WrappedLabel(body,text=prepared['warning'],fg='#9a4100').pack(fill='x',padx=14,pady=8)
+        WrappedLabel(body,text=f"僅此位置：{entry.get('char','')}；自動解碼原值：{prepared['proof']['automatic_actual'] or '未解碼'}。疊蓋警示保留，不學習或傳播。"
+            ).pack(fill='x',padx=14)
+        self.photos=[]
+        for key,title,subsample in [('page_png','原頁最終畫面',2),('target_png','目標最終畫面',1)]:
+            WrappedLabel(body,text=title).pack(fill='x',padx=14)
+            photo=tk.PhotoImage(master=self,data=prepared['proof']['render'][key])
+            if subsample>1:
+                photo=photo.subsample(subsample,subsample)
+            self.photos.append(photo)
+            tk.Label(body,image=photo).pack(padx=14,pady=5)
+        self.reading=tk.StringVar(master=self,value='')
+        self.actor=tk.StringVar(master=self,value='')
+        WrappedLabel(body,text='依原頁輸入實際注音（不提供應標答案）').pack(fill='x',padx=14)
+        scrollable_entry(body,self.reading).pack(fill='x',padx=14)
+        WrappedLabel(body,text='人工核對者紀錄').pack(fill='x',padx=14)
+        scrollable_entry(body,self.actor).pack(fill='x',padx=14)
+        self.confirmations={}
+        for key,text in [('whole_unit_readable','我看過上方最終畫面，整個字與注音清楚可讀'),
+                         ('target_character_matches','我確認最終畫面的目標字與此位置一致'),
+                         ('reading_from_original','讀音是我依原頁自行輸入，未使用應標答案')]:
+            variable=tk.BooleanVar(master=self,value=False)
+            self.confirmations[key]=variable
+            tk.Checkbutton(body,text=text,variable=variable,wraplength=850,anchor='w').pack(fill='x',padx=14,pady=4)
+        self.wait_window(self)
+
+    def submit(self):
+        try:
+            value=surface_input_result(self.prepared,reading=self.reading.get(),actor=self.actor.get().strip(),
+                confirmations={key:variable.get() for key,variable in self.confirmations.items()})
+            if value['enable_format'] and not messagebox.askyesno('明確轉換專案格式',
+                    self.prepared['warning']+'\n確認轉換此專案並保留版本化證據？',parent=self):
+                return
+        except ValueError as exc:
+            messagebox.showerror('尚未完成原頁確認',str(exc),parent=self)
+            return
+        self.result=value
+        self.destroy()
 
 
 class ActualReadingDialog(_ReviewDialog):
@@ -1222,6 +1293,9 @@ class ReviewApp:
         self._start_staging_validation(result["snapshot"])
         self.show()
         _review_log("[人工校對] 已載入，可以開始校對")
+        from manual_surface_actual import enabled, UNSUPPORTED_WARNING
+        if enabled(self.manifest):
+            messagebox.showwarning('專案格式相容性',UNSUPPORTED_WARNING,parent=self.root)
         if result["source_actual_pending"]:
             messagebox.showwarning(
                 "來源 actual 暫存待重新核對",
@@ -2196,16 +2270,19 @@ class ReviewApp:
                 return
             self._review_action_in_progress = True
             try:
-                dialog = ActualReadingDialog(self.root, entry, value["group"], self.output_dir,
-                    verified_checked_occurrence_ids=self.staged_checked_occurrence_ids
-                    if not value["summary"].get("staging_error") else ())
+                if value.get('surface') is not None:
+                    dialog = SurfaceActualDialog(self.root, entry, value['surface'])
+                else:
+                    dialog = ActualReadingDialog(self.root, entry, value["group"], self.output_dir,
+                        verified_checked_occurrence_ids=self.staged_checked_occurrence_ids
+                        if not value["summary"].get("staging_error") else ())
             finally:
                 self._review_action_in_progress = False
             if not dialog.result:
                 return
             request = dict(payload, **dialog.result)
             def stage(progress):
-                return service.invoke("stage_actual", request, progress=progress)
+                return service.invoke('stage_surface' if value.get('surface') is not None else "stage_actual", request, progress=progress)
             def staged(result):
                 self._last_actual_staged = True
                 self.manifest, self.db = result["snapshot"].manifest, result["snapshot"].db

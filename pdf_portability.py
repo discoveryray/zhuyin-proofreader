@@ -450,7 +450,13 @@ def _project_transfer_locks(*directories):
     roots = {sp.project_actual_evidence_root(Path(path).resolve()) for path in directories}
     with binding_scope(), ExitStack() as stack:
         for root in sorted(roots, key=lambda path: str(path).casefold()):
-            stack.enter_context(sp.project_delivery_lock(root))
+            from global_exact_glyph_library import GlobalLibraryValidationError
+            try:
+                stack.enter_context(sp.project_delivery_lock(root))
+            except GlobalLibraryValidationError as exc:
+                # Transfer's existing invalid-source boundary is ValueError;
+                # direct local recovery retains its library exception type.
+                raise ValueError('來源 actual 交易無法驗證；未轉送：'+str(exc)) from exc
         yield
 
 
@@ -473,6 +479,10 @@ def _load_project(output_dir: Path, *, allow_incomplete: bool = False,
         raise ValueError(f"跨電腦接續未完成，不能當作完整來源或匯入目標：{output_dir}")
     manifest = sp.json_load_strict(output_dir / "校對工作階段.json")
     sp.validate_manifest_integrity(manifest)
+    import manual_surface_actual as surface
+    if surface.enabled(manifest):
+        from project_write_admission import capture_project_write_admission
+        capture_project_write_admission(output_dir)
     bind_workbooks(output_dir, manifest)
     raw_db = sp.json_load_strict(output_dir / "人工判定資料庫.json")
     if not isinstance(raw_db, dict):
@@ -1025,6 +1035,9 @@ def _actual_transfer_state(output_dir: Path, manifest: Mapping[str, Any]):
     """Preserve unresolved actual intent without creating new human evidence."""
     import actual_review as ar
     import standalone_proofread as sp
+    import manual_surface_actual as surface
+    if surface.enabled(manifest):
+        raise ValueError('manual-surface-actual/1 僅支援原 session/occurrence；不支援 actual 跨專案轉送。可用 expected-only 入口。')
     from global_glyph_promotion import PROJECT_TRANSACTION_FILE, load_promotion_outbox
 
     root = sp.project_actual_evidence_root(output_dir)

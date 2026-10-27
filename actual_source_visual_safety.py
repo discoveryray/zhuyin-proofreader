@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import hashlib
 import io
+import base64
+import json
 import math
 import re
 from contextlib import contextmanager
@@ -1107,6 +1109,13 @@ def _native_visibility_proof(analysis, seqno, ordinal, glyph):
         else:
             result = {"readable": True, "overlay_status": "NONE", "reason": "SOURCE_FINAL_VISIBILITY_PROVED"}
         result["source_coverage_pixels"] = len(pixels)
+        # Surface confirmation uses a different evidence lane. Nonzero native
+        # source contribution is necessary, never proof of human readability.
+        result["surface_source_contribution_pixels"] = sum(
+            full[offset:offset+3] != without[offset:offset+3] for offset in pixels)
+        result["surface_replay_sha256"] = {
+            name: hashlib.sha256(raw).hexdigest() for name, raw in
+            (("full", full), ("without", without), ("prefix", prefix), ("prefix_without", prefix_without))}
         analysis["visibility"][key] = dict(result)
         return result
     finally:
@@ -1344,10 +1353,98 @@ def source_visual_safety(entry, *, pdf=None, document=None, page=None):
         current = _CURRENT_OPERATION.get()
         if current is not None:
             current._require_owner()
-            return _source_visual_safety(current, entry, pdf=pdf, document=document, page=page)
-        with source_visual_operation() as operation:
-            result = _source_visual_safety(operation, entry, pdf=pdf, document=document, page=page)
-            operation.recheck_sources()
-            return result
+            result = _source_visual_safety(current, entry, pdf=pdf, document=document, page=page)
+        else:
+            with source_visual_operation() as operation:
+                result = _source_visual_safety(operation, entry, pdf=pdf, document=document, page=page)
+                operation.recheck_sources()
+        if entry.get('manual_surface_actual') is not None:
+            result = {**result,'donor_eligible':False,'surface_evidence_is_occurrence_local':True}
+        return result
     except Exception as exc:
         return _result(reason=str(exc) or type(exc).__name__, warning_bbox=_warning_bounds(entry))
+
+
+def _surface_plain(value):
+    """Finite canonical native summaries; never serialize object repr/pointers."""
+    if value is None or type(value) in (str, bool, int):
+        return value
+    if type(value) is float:
+        if not math.isfinite(value):
+            raise ValueError('SURFACE_NONFINITE_NATIVE_VALUE')
+        return value
+    if isinstance(value, (fitz.Point, fitz.Rect, fitz.Quad, fitz.Matrix)):
+        return [_surface_plain(item) for item in value]
+    if isinstance(value, (tuple, list)):
+        return [_surface_plain(item) for item in value]
+    if isinstance(value, dict) and all(type(key) is str for key in value):
+        return {key: _surface_plain(item) for key, item in value.items()}
+    raise ValueError('SURFACE_UNKNOWN_NATIVE_SUMMARY_TYPE')
+
+
+def surface_visual_proof(entry, *, pdf, session_id):
+    """Bind a final unit for explicit human reading, without qualifying a donor.
+
+    The machine proves the slot, known native composition and immutable render.
+    It does not identify a Chinese body or pronounce the resulting surface.
+    The separate writer requires whole-unit/character/input attestations.
+    """
+    if not isinstance(session_id, str) or not session_id:
+        raise ValueError('SURFACE_SESSION_MISSING')
+    with source_visual_operation() as operation:
+        raw_safety = _source_visual_safety(operation, entry, pdf=pdf)
+        if raw_safety['reason'] not in {
+                'SOURCE_OVERPAINT_CONFIRMED', 'SOURCE_DRAW_UNCONTRADICTED',
+                'SOURCE_LOCATION_ONLY_NO_EXACT_PROOF'}:
+            raise ValueError('SURFACE_SOURCE_REFUSED: ' + raw_safety['reason'])
+        values, source = _tuple(entry)
+        raw = operation.read_source(pdf, values['pdf_sha256'])
+        analysis = operation._page(raw, values['pdf_sha256'], values['physical_page'])
+        matches = []
+        for span in analysis['traces']:
+            xref, *_ = resolve_font(analysis['lookup'], normalize_basefont(span.get('font')))
+            if xref != values['font_xref']:
+                continue
+            for char in span.get('chars', ()):
+                if (char[0] == ord(values['char']) and char[1] == values['glyph_id']
+                        and all(abs(float(a)-b) <= .001 for a, b in zip(char[3], values['bbox']))):
+                    matches.append((span, char))
+        if len(matches) != 1:
+            raise ValueError('SURFACE_SOURCE_DRAW_NOT_UNIQUE')
+        span, char = matches[0]
+        seqno = _index(span['seqno'])
+        ordinal, glyph = _native_clip_proof(analysis, seqno, span, char)
+        visibility = _native_visibility_proof(analysis, seqno, ordinal, glyph)
+        if visibility['surface_source_contribution_pixels'] <= 0:
+            raise ValueError('SURFACE_SOURCE_FULLY_OCCLUDED')
+        page = analysis['page']
+        composition = _surface_plain({
+            'paint_calls': analysis['paint_calls'], 'traces': analysis['traces'],
+            'drawings': page.get_drawings(extended=True), 'bboxlog': page.get_bboxlog(layers=True)})
+        scale = 1.5
+        if page.rect.width*page.rect.height*scale*scale > 12_000_000:
+            raise ValueError('SURFACE_PAGE_RENDER_ALLOCATION_EXCEEDED')
+        target = (fitz.Rect(glyph['render_bounds']) + (-8, -8, 8, 8)) & page.rect
+        if target.is_empty:
+            raise ValueError('SURFACE_TARGET_EMPTY')
+        full = page.get_pixmap(matrix=fitz.Matrix(scale, scale), alpha=False, annots=True).tobytes('png')
+        crop = page.get_pixmap(matrix=fitz.Matrix(4, 4), clip=target, alpha=False, annots=True).tobytes('png')
+        render = {'page_scale': scale, 'target_scale': 4, 'annots': True,
+                  'target_rect': list(target),
+                  'page_png': base64.b64encode(full).decode('ascii'),
+                  'target_png': base64.b64encode(crop).decode('ascii'),
+                  'page_sha256': hashlib.sha256(full).hexdigest(),
+                  'target_sha256': hashlib.sha256(crop).hexdigest()}
+        proof = {'schema': 'surface-visual-proof/1', 'session_id': session_id,
+                 'source': _surface_plain(values), 'composition': composition,
+                 'source_seqno': seqno, 'glyph_ordinal': ordinal,
+                 'source_coverage_pixels': visibility['source_coverage_pixels'],
+                 'source_contribution_pixels': visibility['surface_source_contribution_pixels'],
+                 'replay_sha256': visibility['surface_replay_sha256'], 'render': render,
+                 'raw_reason': raw_safety['reason'], 'raw_overlay_status': raw_safety['overlay_status'],
+                 'automatic_actual': str(entry.get('actual_raw') or source.get('實際注音') or entry.get('actual') or ''),
+                 'donor_eligible': False}
+        operation.recheck_sources()
+        proof['proof_sha256'] = hashlib.sha256(json.dumps(proof, ensure_ascii=False, sort_keys=True,
+            separators=(',', ':'), allow_nan=False).encode('utf-8')).hexdigest()
+        return proof

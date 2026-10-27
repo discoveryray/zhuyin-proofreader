@@ -29,6 +29,7 @@ PROJECT_FILES = (
     "user_verified_cff_glyph_fingerprints.csv", "glyph_truth_conflicts.csv",
     "glyph_truth_provenance.csv", GLOBAL_PROMOTION_OUTBOX_FILE,
 )
+SURFACE_PROJECT_FILES = (*PROJECT_FILES, 'manual_surface_actual.json')
 STAGING_FILE = "manual_actual_staging.json"
 _LOCK = threading.RLock()
 _ACTIVE_LOCKS: dict[str, int] = {}
@@ -66,11 +67,18 @@ def _write_json(path: Path, value):
 
 
 @contextmanager
-def project_delivery_lock(root: Path):
+def project_delivery_lock(root: Path, *, _admission=None):
     """Serialize project apply/delivery/ack; nested calls reuse the same lock."""
     root = Path(root).resolve()
     key = str(root)
     with _LOCK:
+        from project_write_admission import (project_from_actual_root, capture_project_write_admission,
+                                            ProjectWriteAdmission, has_surface_indicators)
+        project = project_from_actual_root(root)
+        if _admission is not None:
+            if type(_admission) is not ProjectWriteAdmission or _admission.project != project:
+                raise ValueError('PROJECT_WRITE_ADMISSION: foreign lock receipt')
+            _admission.recheck()
         if key in _ACTIVE_LOCKS:
             _ACTIVE_LOCKS[key] += 1
             try:
@@ -78,6 +86,12 @@ def project_delivery_lock(root: Path):
             finally:
                 _ACTIVE_LOCKS[key] -= 1
             return
+        owned = project is not None and has_surface_indicators(project)
+        admission = capture_project_write_admission(project, recovery=True) if owned else None
+        if admission is not None:
+            admission.recheck()
+        if _admission is not None:
+            _admission.recheck()
         root.mkdir(parents=True, exist_ok=True)
         with (root / ".global_exact_glyph_delivery.lock").open("a+b") as handle:
             handle.seek(0, 2)
@@ -93,6 +107,10 @@ def project_delivery_lock(root: Path):
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             _ACTIVE_LOCKS[key] = 1
             try:
+                if admission is not None:
+                    admission.recheck()
+                if _admission is not None:
+                    _admission.recheck()
                 yield
             finally:
                 del _ACTIVE_LOCKS[key]
@@ -289,15 +307,23 @@ def post_commit_recovery_plan_from_results(results):
 
 
 def _validated_project_journal(raw):
-    journal = library._exact_fields(_json(raw), (
-        "schema_version", "state", "files", "staging", "transaction_id", "recovery_plan",
-    ), "project transaction")
-    if journal["schema_version"] != "1.0" or journal["state"] not in {"PREPARED", "COMMITTED"}:
+    parsed = _json(raw)
+    version = parsed.get('schema_version') if isinstance(parsed,dict) else None
+    fields = ('schema_version','state','files','staging','transaction_id','recovery_plan')
+    journal = library._exact_fields(parsed, (*fields,'owner') if version == '2.0' else fields, 'project transaction')
+    if version not in {'1.0','2.0'} or journal["state"] not in {"PREPARED", "COMMITTED"}:
         raise library.GlobalLibraryValidationError("invalid project transaction contract")
+    if version == '2.0':
+        owner = library._exact_fields(journal['owner'],('project','session_id','origin_manifest_sha256','operation'),'surface transaction owner')
+        if not isinstance(owner['project'],str) or not Path(owner['project']).is_absolute() or not owner['session_id']:
+            raise library.GlobalLibraryValidationError('invalid surface transaction owner')
+        library._sha256_text(owner['origin_manifest_sha256'],'origin manifest')
+        if owner['operation'] not in {'direct-visual','surface-only'}:
+            raise library.GlobalLibraryValidationError('unknown surface transaction operation')
     library._sha256_text(journal["transaction_id"], "project transaction ID")
     if journal["state"] == "COMMITTED" or journal["recovery_plan"] is not None:
         validate_post_commit_recovery_plan(journal["recovery_plan"])
-    files = library._exact_fields(journal["files"], PROJECT_FILES, "transaction files")
+    files = library._exact_fields(journal["files"], SURFACE_PROJECT_FILES if version == '2.0' else PROJECT_FILES, "transaction files")
     for value in files.values():
         _unpacked(value)
     _unpacked(journal["staging"])
@@ -306,12 +332,27 @@ def _validated_project_journal(raw):
 
 def recover_project_actual_transaction(root: Path):
     root = Path(root)
+    from project_write_admission import project_from_actual_root, capture_project_write_admission, has_surface_indicators
+    project = project_from_actual_root(root)
     path = root / PROJECT_TRANSACTION_FILE
     if not path.exists():
         return
     journal = _validated_project_journal(path.read_bytes())
+    owned = project is not None and (has_surface_indicators(project) or journal['schema_version']=='2.0')
+    admission = capture_project_write_admission(project, recovery=True) if owned else None
+    if journal['schema_version'] == '2.0':
+        if project is None:
+            raise library.GlobalLibraryValidationError('surface transaction has no project owner')
+        import standalone_proofread as sp
+        manifest = sp.json_load_strict(project/'校對工作階段.json')
+        if (journal['owner']['project'] != str(project.resolve())
+                or journal['owner']['session_id'] != manifest['session_id']
+                or (journal['state']=='PREPARED' and journal['owner']['origin_manifest_sha256'] != manifest['manifest_integrity_sha256'])):
+            raise library.GlobalLibraryValidationError('surface transaction owner changed; no recovery writes')
     state = journal["state"]
     if state == "PREPARED":
+        if admission is not None:
+            admission.recheck()
         for name, packed in journal["files"].items():
             raw = _unpacked(packed)
             target = root / name
@@ -369,7 +410,7 @@ def acknowledge_project_refresh(root: Path, token):
 
 
 @contextmanager
-def direct_visual_project_transaction(root: Path):
+def direct_visual_project_transaction(root: Path, *, operation='direct-visual'):
     """Durable undo journal for the six-file commit and staging acknowledgement.
 
     An interrupted PREPARED transaction is rolled back before any retry/delivery.
@@ -382,14 +423,23 @@ def direct_visual_project_transaction(root: Path):
         if project_refresh_token(root) is not None:
             raise library.GlobalLibraryValidationError("finish committed project recovery before a new actual transaction")
         load_promotion_outbox(root)  # malformed outbox fails before project writes
+        surface_path = root/'manual_surface_actual.json'
+        surface = surface_path.exists()
         journal = {
-            "schema_version": "1.0", "state": "PREPARED",
+            "schema_version": '2.0' if surface else '1.0', "state": "PREPARED",
             "transaction_id": hashlib.sha256(uuid4().bytes).hexdigest(),
             "recovery_plan": None,
             "files": {name: _packed((root / name).read_bytes() if (root / name).exists() else None)
-                      for name in PROJECT_FILES},
+                      for name in (SURFACE_PROJECT_FILES if surface else PROJECT_FILES)},
             "staging": _packed((root / STAGING_FILE).read_bytes() if (root / STAGING_FILE).exists() else None),
         }
+        if surface:
+            import standalone_proofread as sp
+            project = root.resolve().parent.parent
+            manifest = sp.json_load_strict(project/'校對工作階段.json')
+            journal['owner'] = {'project':str(project),'session_id':manifest['session_id'],
+                                'origin_manifest_sha256':manifest['manifest_integrity_sha256'],
+                                'operation':operation}
         path = root / PROJECT_TRANSACTION_FILE
         _write_json(path, journal)
         def bind_recovery_plan(plan):

@@ -888,6 +888,36 @@ def _restore_dynamic_actual_evidence(backups: Mapping[Path, bytes | None]) -> No
             path.write_bytes(data)
 
 
+def _validated_dynamic_csv_rows(raw, name, headers):
+    """Shared row semantics for ordinary reads and owned pending recovery."""
+    rows = _read_csv_bytes(raw, name, headers)
+    for idx, row in enumerate(rows, 2):
+        reading_col = "actual_reading" if name == OCCURRENCE_OVERRIDE_FILE else "bopomofo"
+        reading = _canon(row.get(reading_col))
+        if row.get(reading_col) and not reading:
+            raise ValueError(f"row {idx} {reading_col} 不是合法單一注音")
+        if name == USER_GLYF_FILE and row.get("verification_level") == "VERIFIED_EXACT_GLYPH":
+            if not row.get("glyph_sha256") or len(row.get("glyph_sha256", "")) != 64:
+                raise ValueError(f"row {idx} glyph_sha256 無效")
+        if name == USER_CFF_FILE and row.get("verification_level") == "VERIFIED_EXACT_GLYPH":
+            sha = _text(row.get("glyph_sha256")).lower()
+            if not row.get("style_group") or len(sha) != 64 or any(ch not in "0123456789abcdef" for ch in sha):
+                raise ValueError(f"row {idx} CFF exact full-glyph SHA-256 key 不完整")
+        if name == GLYPH_CONFLICT_FILE:
+            sha = _text(row.get("glyph_sha256")).lower()
+            kind = _text(row.get("kind"))
+            if kind not in {"TTF_GLYF_SHA256", "CFF_GLYPH_SHA256"}:
+                raise ValueError(f"row {idx} kind 無效")
+            if len(sha) != 64 or any(ch not in "0123456789abcdef" for ch in sha):
+                raise ValueError(f"row {idx} glyph_sha256 無效")
+            if _text(row.get("status")) != "GLYPH_TRUTH_CONFLICT":
+                raise ValueError(f"row {idx} status 必須為 GLYPH_TRUTH_CONFLICT")
+            readings = [_canon(x) for x in _text(row.get("readings")).split("|") if _text(x)]
+            if len(set(filter(None, readings))) < 2:
+                raise ValueError(f"row {idx} conflict 至少需要兩個互斥讀音")
+    return rows
+
+
 def _capture_dynamic_actual_evidence(root: Path, *, read_only: bool = False) -> tuple:
     assert_project_actual_readable(root)
     root = Path(root)
@@ -918,38 +948,38 @@ def _capture_dynamic_actual_evidence(root: Path, *, read_only: bool = False) -> 
                 continue
             raw = path.read_bytes() if path.exists() else None
             raw_files[name] = raw
-            rows = _read_csv_bytes(raw, name, headers) if raw is not None else []
+            rows = _validated_dynamic_csv_rows(raw, name, headers) if raw is not None else []
             parsed_rows[name] = rows
-            for idx, row in enumerate(rows, 2):
-                reading_col = "actual_reading" if name == OCCURRENCE_OVERRIDE_FILE else "bopomofo"
-                reading = _canon(row.get(reading_col))
-                if row.get(reading_col) and not reading:
-                    raise ValueError(f"row {idx} {reading_col} 不是合法單一注音")
-                if name == USER_GLYF_FILE and row.get("verification_level") == "VERIFIED_EXACT_GLYPH":
-                    if not row.get("glyph_sha256") or len(row.get("glyph_sha256", "")) != 64:
-                        raise ValueError(f"row {idx} glyph_sha256 無效")
-                if name == USER_CFF_FILE and row.get("verification_level") == "VERIFIED_EXACT_GLYPH":
-                    sha = _text(row.get("glyph_sha256")).lower()
-                    if not row.get("style_group") or len(sha) != 64 or any(ch not in "0123456789abcdef" for ch in sha):
-                        raise ValueError(f"row {idx} CFF exact full-glyph SHA-256 key 不完整")
-                if name == GLYPH_CONFLICT_FILE:
-                    sha = _text(row.get("glyph_sha256")).lower()
-                    kind = _text(row.get("kind"))
-                    if kind not in {"TTF_GLYF_SHA256", "CFF_GLYPH_SHA256"}:
-                        raise ValueError(f"row {idx} kind 無效")
-                    if len(sha) != 64 or any(ch not in "0123456789abcdef" for ch in sha):
-                        raise ValueError(f"row {idx} glyph_sha256 無效")
-                    if _text(row.get("status")) != "GLYPH_TRUTH_CONFLICT":
-                        raise ValueError(f"row {idx} status 必須為 GLYPH_TRUTH_CONFLICT")
-                    readings = [_canon(x) for x in _text(row.get("readings")).split("|") if _text(x)]
-                    if len(set(filter(None, readings))) < 2:
-                        raise ValueError(f"row {idx} conflict 至少需要兩個互斥讀音")
             if raw is None:
                 raise FileNotFoundError(path)
             result["hashes"][name] = hashlib.sha256(raw).hexdigest()
         except Exception as exc:
             result["ok"] = False
             result["errors"].append(f"{name}：{exc}")
+    # Final-surface evidence is a separate occurrence projection, never a glyph
+    # truth input. Capture its physical staging bytes but hash applied receipts.
+    import manual_surface_actual as surface
+    surface_path = root / surface.FILE
+    from project_write_admission import project_from_actual_root
+    project = project_from_actual_root(root)
+    manifest_path = project / '校對工作階段.json' if project is not None else None
+    try:
+        manifest = None
+        if manifest_path is not None and manifest_path.is_file():
+            import standalone_proofread as sp
+            manifest = sp.json_load_strict(manifest_path)
+            sp.validate_manifest_integrity(manifest)
+        if surface_path.exists() or (manifest is not None and surface.enabled(manifest)):
+            if manifest is None:
+                raise ValueError('surface evidence requires its sealed project owner')
+            document = surface.load(root, manifest)
+            raw_files[surface.FILE] = surface_path.read_bytes()
+            parsed_rows[surface.FILE] = [{'pdf_sha256':pdf, 'dependency_sha256':sha}
+                for pdf, sha in surface.dependencies(document).items()]
+            result['hashes'][surface.FILE] = surface.applied_digest(document)
+    except Exception as exc:
+        result['ok'] = False
+        result['errors'].append(f'{surface.FILE}：{exc}')
     return result, raw_files, parsed_rows
 
 
@@ -1303,13 +1333,21 @@ def dynamic_actual_hashes(
             )
         ]
 
-    return {
+    result = {
         "scope_mode": hashlib.sha256(mode.encode("utf-8")).hexdigest(),
         OCCURRENCE_OVERRIDE_FILE: _subset_sha256(override_rows, OVERRIDE_HEADERS),
         USER_GLYF_FILE: _subset_sha256(glyf_rows, USER_GLYF_HEADERS),
         USER_CFF_FILE: _subset_sha256(cff_rows, USER_CFF_HEADERS),
         GLYPH_CONFLICT_FILE: _subset_sha256(conflict_rows, GLYPH_CONFLICT_HEADERS),
     }
+    import manual_surface_actual as surface
+    if surface.FILE in dict(snapshot.parsed_rows):
+        pdf_sha = _sha256_file(pdf_path)
+        dependencies = {row['pdf_sha256']:row['dependency_sha256'] for row in snapshot.rows(surface.FILE)}
+        # An unrelated PDF retains exactly its legacy dependency mapping.
+        if pdf_sha in dependencies:
+            result[surface.FILE] = dependencies[pdf_sha]
+    return result
 
 
 def _sha256_file(path: Path) -> str:
