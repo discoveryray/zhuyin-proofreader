@@ -3360,6 +3360,8 @@ def _resume_actual_excel_project_locked(output_dir: Path):
     recovered = sp.recover_committed_actual_project(output_dir, acknowledge=False)
     if recovered is None or recovered.get("project_refresh") != "SUCCESS":
         raise ValueError("actual Excel COMMITTED 交易未完成安全恢復")
+    # A successful surface projection cannot satisfy this Excel-owner output.
+    sp._actual_refresh_output_path(output_dir,recovered,require_report=True)
     _assert_actual_marker_owner(marker_path, marker_sha)
     marker_sha = sp.json_save(marker_path, _sealed_actual_excel_marker({
         "status": "ACTUAL_EXCEL_RECOVERED",

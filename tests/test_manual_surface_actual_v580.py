@@ -115,6 +115,188 @@ def test_transitional_ordinary_dispatch_and_all_phase_sources_refuse_before_lock
     assert not (root/promotion.PROJECT_TRANSACTION_FILE).exists()
 
 
+@pytest.mark.parametrize('restart',['PUBLISHED','ACKNOWLEDGING','no-pending'])
+def test_real_cli_surface_refresh_returns_only_published_status_artifact(project,restart,capsys):
+    import sys
+    output,original=project;root=sp.project_actual_evidence_root(output)
+    before=ReviewSaveService(output).load_resume_snapshot();stage(output,original)
+    if restart=='PUBLISHED':
+        with patch.object(sp,'_acknowledge_actual_refresh',side_effect=OSError('isolated CLI published restart')):
+            with pytest.raises(sp.ManualActualPostApplyError):sp.apply_staged_surface_actual_corrections(output)
+    elif restart=='ACKNOWLEDGING':
+        ack=sp.acknowledge_project_refresh
+        def after_ack(*args,**kwargs):
+            result=ack(*args,**kwargs);raise OSError('isolated CLI ACK restart')
+        with patch.object(sp,'acknowledge_project_refresh',new=after_ack):
+            with pytest.raises(sp.ManualActualPostApplyError):sp.apply_staged_surface_actual_corrections(output)
+    else:sp.apply_staged_surface_actual_corrections(output)
+    xlsx={str(path.relative_to(output)):path.read_bytes() for path in output.rglob('*.xlsx')}
+    ordinary={name:(root/name).read_bytes() if (root/name).exists() else None for name in promotion.PROJECT_FILES}
+    capsys.readouterr()
+    with patch.object(sys,'argv',['proofreader','--refresh-actual','-o',str(output)]), \
+            patch.object(sp,'run_pipeline_pdfs',side_effect=AssertionError('surface status cannot claim fresh decoder')), \
+            patch.object(sp,'deliver_pending_promotion_outbox',side_effect=AssertionError('no surface Global')):
+        assert sp.main()==0
+        printed=capsys.readouterr().out
+        assert 'surface projection' in printed and 'decoder NOT revalidated' in printed
+        assert str(output/'pipeline_status.json') in printed
+        assert sp.refresh_actual_with_recovery(output)==output/'pipeline_status.json'
+    status=sp.json_load_strict(output/'pipeline_status.json')
+    assert status['manual_surface_projection_refreshed'] is True and status['automatic_decoder_cache_revalidated'] is False
+    assert status['completion_gate']['hard_gates']['surface_projection_raw_decoder_revalidated'] is False
+    assert {str(path.relative_to(output)):path.read_bytes() for path in output.rglob('*.xlsx')}==xlsx
+    for name,raw in ordinary.items():assert ((root/name).read_bytes() if (root/name).exists() else None)==raw
+    assert not (root/promotion.PROJECT_TRANSACTION_FILE).exists() and not (output/sp.ACTUAL_REFRESH_PUBLICATION).exists()
+    after=ReviewSaveService(output).load_resume_snapshot()
+    assert after.ledger[0]['actual']=='ㄅㄛˊ' and after.db==before.db
+    assert [row['actual'] for row in after.ledger[1:]]==[row['actual'] for row in before.ledger[1:]]
+    assert [{k:v for k,v in row.items() if k.startswith('expected')} for row in after.ledger]==[{k:v for k,v in row.items() if k.startswith('expected')} for row in before.ledger]
+
+
+def test_cli_surface_prepared_rollback_never_prints_committed_or_runs_second_writer(tmp_path,capsys):
+    output=tmp_path/'rollback-cli';output.mkdir();original=create_staged_navigation_fixture(output,same_exact_peers=True)
+    root=sp.project_actual_evidence_root(output);ar.ensure_user_evidence_files(root)
+    ar._write_actual_evidence_csv(root/ar.OCCURRENCE_OVERRIDE_FILE,ar.OVERRIDE_HEADERS,[])
+    baseline=files(output);resume=sp._resume_actual_refresh_publication
+    def stop(project_dir,**kwargs):
+        if (output/sp.ACTUAL_REFRESH_PUBLICATION).exists():raise OSError('isolated CLI prefix0 restart')
+        return resume(project_dir,**kwargs)
+    with patch.object(sp,'_surface_phase_move',side_effect=OSError('isolated prefix0')),patch.object(sp,'_resume_actual_refresh_publication',new=stop):
+        with pytest.raises(OSError,match='prefix0 restart'):sp.enable_surface_actual_project(output,confirmation=True)
+    publication=sp._read_actual_refresh_publication(output);assert publication[0]['phase']=='PREPARED'
+    capsys.readouterr()
+    with patch.object(sp,'run_pipeline_pdfs',side_effect=AssertionError('no automatic second writer')):
+        with pytest.raises(ValueError,match='NOT_COMMITTED.*ROLLED_BACK'):sp.refresh_actual_with_recovery(output)
+    assert 'actual recovery: COMMITTED' not in capsys.readouterr().out
+    assert not (output/sp.ACTUAL_REFRESH_PUBLICATION).exists() and not publication[2].exists()
+    current=files(output);current.pop(str((root/'.global_exact_glyph_delivery.lock').relative_to(output)))
+    assert current==baseline
+
+
+def test_real_excel_resume_surface_result_refusal_preserves_marker_and_entire_stage(tmp_path):
+    import pdf_portability as portability
+    from openpyxl import Workbook
+    from exact_glyph_identity import actual_group_id
+    output=tmp_path/'excel-owner';output.mkdir();original=create_staged_navigation_fixture(output,same_exact_peers=True)
+    root=sp.project_actual_evidence_root(output);ar.ensure_user_evidence_files(root)
+    ar._write_actual_evidence_csv(root/ar.OCCURRENCE_OVERRIDE_FILE,ar.OVERRIDE_HEADERS,[])
+    excel=tmp_path/'isolated-source.xlsx';book=Workbook();book.active['A1']='isolated Excel audit fixture';book.save(excel)
+    excel_sha=hashlib.sha256(excel.read_bytes()).hexdigest();row=original['records'][0]
+    group_id=actual_group_id(ar.actual_group_identity(row))
+    # Contract-valid synthetic prior Excel audit; not a human/import acceptance claim.
+    ar._append_or_update_overrides(root,[row],'ㄅㄛˊ',source='isolated prior Excel audit',
+        note=json.dumps({'source_excel_sha256':excel_sha,'source_group_id':group_id}))
+    sp.enable_surface_actual_project(output,confirmation=True);stage(output,original)
+    with patch.object(sp,'_acknowledge_actual_refresh',side_effect=OSError('isolated mixed owner PUBLISHED')):
+        with pytest.raises(sp.ManualActualPostApplyError):sp.apply_staged_surface_actual_corrections(output)
+    local=root/promotion.PROJECT_TRANSACTION_FILE;authority=promotion._validated_project_journal(local.read_bytes())
+    pending=(authority['transaction_id'],authority['recovery_plan'])
+    manifest=sp.json_load_strict(output/'校對工作階段.json')
+    marker=portability._sealed_actual_excel_marker({'status':'ACTUAL_EXCEL_REFRESH_PENDING',
+        'source_excel_sha256':excel_sha,'import_token':'a'*32,
+        'pre_state':portability._actual_excel_file_snapshot(output),
+        'sealed_workbooks':portability._sealed_workbook_snapshot(output,manifest),
+        'recovery_plan':pending[1],'recovery_plan_sha256':hashlib.sha256(portability._canonical(pending[1])).hexdigest()})
+    marker_path=output/portability.INCOMPLETE_FILE;sp.json_save(marker_path,marker)
+    portability._validate_actual_excel_marker(output,marker)
+    # Actual marker/source/override validators run unchanged; no admission/writer mocks.
+    portability._restore_sealed_workbooks_for_actual_resume(output,marker,pending)
+    publication=sp._read_actual_refresh_publication(output)
+    assert publication[0]['phase']=='PUBLISHED'
+    before=files(output);stage_before=files(publication[2])
+    selector=sp._actual_refresh_output_path;seen=[]
+    def observe(project,result,**kwargs):
+        assert result['project_actual_commit']=='COMMITTED' and result['surface_projection_refresh'] is True
+        seen.append(kwargs.get('require_report'))
+        return selector(project,result,**kwargs)
+    with patch.object(sp,'_actual_refresh_output_path',new=observe):
+        with pytest.raises(sp.ManualActualPostApplyError) as error:portability.resume_actual_excel_project(output)
+    assert seen==[True] and error.value.project_actual_commit=='COMMITTED'
+    assert 'not a new Excel report' in str(error.value.cause)
+    assert files(output)==before and files(publication[2])==stage_before
+    assert sp.json_load_strict(marker_path)['status']=='ACTUAL_EXCEL_REFRESH_PENDING'
+    assert local.read_bytes()==before[str(local.relative_to(output))]
+
+
+def test_direct_finish_validates_real_recovered_count_before_consuming_result(isolated_pipeline):
+    from project_write_admission import _entry_receipt
+    output,before=ordinary_profile(isolated_pipeline);root=sp.project_actual_evidence_root(output)
+    with patch.object(sp,'_acknowledge_actual_refresh',side_effect=OSError('isolated finish PUBLISHED restart')):
+        with pytest.raises(sp.ManualActualPostApplyError):sp.apply_staged_manual_actual_corrections(output)
+    publication=sp._read_actual_refresh_publication(output)
+    assert publication[0]['phase']=='PUBLISHED'
+    receipt=capture_project_write_admission(output,recovery=True);receipt.recheck()
+    lock=root/'.global_exact_glyph_delivery.lock';lock_raw=lock.read_bytes()
+    def vector():
+        result={str(path.relative_to(output)):path.read_bytes() for path in output.rglob('*') if path.is_file() and path!=lock}
+        result[str(lock.relative_to(output))]=lock_raw
+        return result
+    recover=sp._recover_direct_profile_phase;recovered=[]
+    def after_real_recovery(*args,**kwargs):
+        result=recover(*args,**kwargs)
+        assert result['project_actual_commit']=='COMMITTED' and result['project_refresh']=='SUCCESS'
+        assert not (root/promotion.PROJECT_TRANSACTION_FILE).exists() and not (output/sp.ACTUAL_REFRESH_PUBLICATION).exists()
+        value=dict(result);value.pop('cleared_actual_dependent_event_count')
+        recovered.append(vector())
+        return value
+    caller_result={'caller':'unchanged'}
+    with _entry_receipt(receipt),patch.object(sp,'_recover_direct_profile_phase',new=after_real_recovery):
+        with pytest.raises(sp.ManualActualPostApplyError) as error:
+            sp._finish_direct_actual_commit(output,before.ledger,caller_result)
+    assert len(recovered)==1 and error.value.project_actual_commit=='COMMITTED'
+    assert isinstance(error.value.cause,ValueError)
+    assert files(output)==recovered[0] and caller_result=={'caller':'unchanged'}
+    after=ReviewSaveService(output).load_resume_snapshot()
+    assert after.ledger[0]['actual']=='ㄅㄛˊ' and after.db==before.db
+    assert [row['expected_set'] for row in after.ledger]==[row['expected_set'] for row in before.ledger]
+
+
+def test_genuine_ordinary_output_requires_delivery_shape_and_wraps_announce_io(isolated_pipeline,capsys):
+    output,before=ordinary_profile(isolated_pipeline)
+    result=sp.apply_staged_manual_actual_corrections(output)
+    assert result['project_actual_commit']=='COMMITTED' and result['project_refresh']=='SUCCESS'
+    snapshot=files(output);capsys.readouterr()
+    missing=dict(result);missing.pop('global_promotion_delivery')
+    malformed=[missing,dict(result,global_promotion_delivery={}),
+        dict(result,global_promotion_delivery={'status':'NOT_ATTEMPTED'}),
+        dict(result,global_promotion_delivery={'status':'unknown-future'}),
+        dict(result,cleared_actual_dependent_event_count=-1),dict(result,refresh_performed=False)]
+    no_report=dict(result);no_report.pop('refresh_report');malformed.append(no_report)
+    for value in malformed:
+        with pytest.raises(sp.ManualActualPostApplyError) as error:sp._actual_refresh_output_path(output,value)
+        assert error.value.project_actual_commit=='COMMITTED' and files(output)==snapshot
+    assert sp._actual_refresh_output_path(output,result,announce=True)==Path(result['refresh_report'])
+    assert result['global_promotion_delivery']['status'] in capsys.readouterr().out
+    with patch('builtins.print',side_effect=OSError('isolated successful recovery announce IO')):
+        with pytest.raises(sp.ManualActualPostApplyError) as announce_error:
+            sp._actual_refresh_output_path(output,result,announce=True)
+    assert announce_error.value.project_actual_commit=='COMMITTED' and isinstance(announce_error.value.cause,OSError)
+    assert files(output)==snapshot
+
+
+def test_surface_output_boundary_rejects_unknown_and_preserves_committed_io_truth(project):
+    output,original=project;root=sp.project_actual_evidence_root(output);stage(output,original)
+    result=sp.apply_staged_surface_actual_corrections(output);snapshot=files(output)
+    assert result['project_actual_commit']=='COMMITTED' and result['project_refresh']=='SUCCESS'
+    with pytest.raises(sp.ManualActualPostApplyError) as report_error:
+        sp._actual_refresh_output_path(output,result,require_report=True)
+    assert report_error.value.project_actual_commit=='COMMITTED' and files(output)==snapshot
+    for unknown in ({},{'project_actual_commit':'COMMITTED','project_refresh':'SUCCESS'},
+                    dict(result,surface_projection_refresh='yes'),dict(result,automatic_decoder_cache_revalidated=True),
+                    dict(result,cleared_actual_dependent_event_count=-1),dict(result,cleared_actual_dependent_event_count=True),
+                    dict(result,refresh_performed=False)):
+        with pytest.raises(ValueError,match='unknown'):sp._actual_refresh_output_path(output,unknown)
+        assert files(output)==snapshot
+    read=Path.read_bytes;reached=[]
+    def failed_read(path):
+        if path==output/'pipeline_status.json':reached.append(True);raise OSError('isolated published-artifact read failure')
+        return read(path)
+    with patch.object(Path,'read_bytes',new=failed_read):
+        with pytest.raises(sp.ManualActualPostApplyError) as io_error:sp._actual_refresh_output_path(output,result)
+    assert reached==[True] and io_error.value.project_actual_commit=='COMMITTED' and isinstance(io_error.value.cause,OSError)
+    assert files(output)==snapshot
+
+
 def test_surface_ack_copy_matches_original_expected_owner_and_refuses_all_mismatches(project):
     output,original=project;root=sp.project_actual_evidence_root(output)
     before=ReviewSaveService(output).load_resume_snapshot()

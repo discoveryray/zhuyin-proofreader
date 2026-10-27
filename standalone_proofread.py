@@ -523,13 +523,70 @@ def recover_committed_actual_project(output_dir: Path, *, acknowledge: bool = Tr
         return result
 
 
+def _actual_refresh_output_path(output_dir, result, *, require_report=False, announce=False):
+    """Deliver only an explicitly known refresh kind; never invent a report."""
+    if not isinstance(result,Mapping):
+        raise ValueError('unknown actual recovery result')
+    if result.get('project_actual_commit')=='NOT_COMMITTED' and result.get('project_refresh')=='ROLLED_BACK':
+        raise ValueError('actual recovery: NOT_COMMITTED; project refresh: ROLLED_BACK; start a separate explicit refresh')
+    cleared=result.get('cleared_actual_dependent_event_count')
+    valid_count=type(cleared) is int and cleared>=0
+    surface=(result.get('surface_projection_refresh') is True
+        and result.get('automatic_decoder_cache_revalidated') is False
+        and result.get('refresh_performed') is True and valid_count
+        and isinstance(result.get('global_promotion_delivery'),Mapping)
+        and result['global_promotion_delivery'].get('status')=='NOT_APPLICABLE_SURFACE_ONLY')
+    ordinary=False
+    if 'surface_projection_refresh' not in result and isinstance(result.get('project_refresh_token'),str) and result['project_refresh_token']:
+        from global_glyph_promotion import validate_post_commit_recovery_plan
+        from global_exact_glyph_library import GlobalLibraryValidationError
+        try:
+            validate_post_commit_recovery_plan(result['recovery_plan'])
+            ordinary=True
+        except (KeyError,TypeError,ValueError,GlobalLibraryValidationError):
+            pass
+    if not (surface or ordinary) or result.get('project_actual_commit')!='COMMITTED':
+        raise ValueError('unknown actual recovery result kind/state')
+    try:
+        if result.get('project_refresh')!='SUCCESS':
+            raise ValueError('actual recovery has not completed its refresh: '+str(result.get('project_refresh')))
+        if not valid_count or result.get('refresh_performed') is not True:
+            raise ValueError('actual recovery completion/count output is invalid')
+        if surface:
+            if require_report:
+                raise ValueError('surface projection produced a status artifact, not a new Excel report')
+            path=Path(output_dir)/'pipeline_status.json'
+            if path.is_symlink() or path.is_junction() or not path.is_file():
+                raise ValueError('published surface status artifact is missing or linked')
+            status=json_parse_strict(path.read_bytes(),path)
+            if (not isinstance(status,dict) or status.get('manual_surface_projection_refreshed') is not True
+                    or status.get('automatic_decoder_cache_revalidated') is not False):
+                raise ValueError('published surface status artifact has an unknown refresh kind')
+            message='actual recovery: COMMITTED; project refresh: SUCCESS; surface projection refreshed; decoder NOT revalidated; status artifact: '+str(path)
+        else:
+            delivery=result['global_promotion_delivery']
+            if not isinstance(delivery,Mapping) or delivery.get('status') not in {'NO_PENDING','DELIVERED','PENDING_RETRY'}:
+                raise ValueError('ordinary recovery Global delivery output is unknown')
+            report=result['refresh_report']
+            if not isinstance(report,(str,Path)) or not str(report).strip():
+                raise ValueError('ordinary recovery report output is missing')
+            path=Path(report)
+            message='actual recovery: COMMITTED; Global: '+delivery['status']+'; project refresh: SUCCESS'
+        if announce:
+            print(message,flush=True)
+        return path
+    except ManualActualPostApplyError:
+        raise
+    except Exception as exc:
+        raise ManualActualPostApplyError('actual_refresh_output',exc,batch_result=result,
+            cleared_event_count=cleared if valid_count else None) from exc
+
+
 def refresh_actual_with_recovery(output_dir: Path) -> Path:
     recovered = recover_committed_actual_project(output_dir)
     if recovered is None:
         return refresh_actual_project(output_dir)
-    print("actual recovery: COMMITTED; Global: " + recovered["global_promotion_delivery"]["status"]
-          + "; project refresh: SUCCESS", flush=True)
-    return Path(recovered["refresh_report"])
+    return _actual_refresh_output_path(output_dir,recovered,announce=True)
 
 
 def _finish_direct_actual_commit(output_dir, ledger, result, *, refresh=True, acknowledge=True):
@@ -538,12 +595,14 @@ def _finish_direct_actual_commit(output_dir, ledger, result, *, refresh=True, ac
     if ordinary_phase is not None:
         recovered=_recover_direct_profile_phase(output_dir,ordinary_phase,acknowledge=acknowledge)
         if recovered is not None:
+            report=_actual_refresh_output_path(output_dir,recovered,require_report=True)
             result.update(recovered)
-            return recovered['cleared_actual_dependent_event_count'],Path(recovered['refresh_report'])
+            return recovered['cleared_actual_dependent_event_count'],report
     if committed_project_recovery(project_actual_evidence_root(output_dir)) is not None:
         recovered = recover_committed_actual_project(output_dir, acknowledge=acknowledge)
+        report=_actual_refresh_output_path(output_dir,recovered,require_report=True)
         result.update(recovered)
-        return recovered["cleared_actual_dependent_event_count"], Path(recovered["refresh_report"])
+        return recovered["cleared_actual_dependent_event_count"], report
     _deliver_after_actual_commit(output_dir, result)
     group_results = result.get("group_results", result.get("results", []))
     affected = {
@@ -5321,7 +5380,7 @@ def refresh_actual_project(output_dir: Path, *, defer_excel_reports: bool = True
             **({'_phase':SurfaceWritePhase(entry)} if entry is not None else {}))
         if _refresh_status is not None:
             _refresh_status['cleared_actual_dependent_event_count'] = result['cleared_actual_dependent_event_count']
-        return output_dir / '注音校對_最終報告.xlsx'
+        return _actual_refresh_output_path(output_dir,result,announce=True)
     if defer_excel_reports:
         with project_delivery_lock(project_actual_evidence_root(output_dir)):
             return _stage_actual_refresh(output_dir, _prewrite_guard=_prewrite_guard,
