@@ -49,7 +49,7 @@ def test_actual_conflict_receipt_snapshot_cas_preserves_other_sources(
 
     def swap_present(path, *args, **kwargs):
         caller = inspect.currentframe().f_back
-        if (Path(path) == receipt and caller.f_code.co_name == 'import_actual_excel'
+        if (Path(path) == receipt and caller.f_code is p._import_actual_excel_with_visual_sources.__code__
                 and caller.f_locals.get('conflict_records') and not observed):
             original_save(receipt, foreign(original_validate(receipt)))
             consumed = original_validate(path, *args, **kwargs)

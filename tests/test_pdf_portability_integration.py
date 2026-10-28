@@ -33,9 +33,13 @@ def _pdfs(folder):
     first, second = folder / "download-a.pdf", folder / "download-b.pdf"
     with fitz.open() as document:
         page = document.new_page(width=400, height=220)
-        page.insert_text((50, 90), "角角", fontname="china-t", fontsize=20)
+        # Keep the complete later horizontal annotation outside every Han
+        # source slot. Adjacent Han cells let the first reading overpaint the
+        # second target's real trace bbox, which is correctly unconfirmable.
+        page.insert_text((50, 90), "角", fontname="china-t", fontsize=20)
+        page.insert_text((150, 90), "角", fontname="china-t", fontsize=20)
         page.insert_text((80, 76), "ㄐㄩㄝˊ", fontname="china-t", fontsize=8)
-        page.insert_text((114, 76), "ㄐㄩㄝˊ", fontname="china-t", fontsize=8)
+        page.insert_text((180, 76), "ㄐㄩㄝˊ", fontname="china-t", fontsize=8)
         document.set_metadata({"title": "download A"})
         document.save(first, deflate=False, garbage=0)
         document.set_metadata({"title": "download B"})
@@ -47,23 +51,30 @@ def _pdfs(folder):
 
 def _synthetic_decode(pdf, output, *args, global_snapshot=None):
     """Emit actual rows from visible PDF char boxes, without expected input."""
+    from export_pdf_text_diagnostics import build_font_lookup, normalize_basefont, resolve_font
     fingerprint = args[-2]
     digest = sp.sha256_file(pdf)
     with fitz.open(pdf) as document:
-        chars = [char for block in document[0].get_text("rawdict")["blocks"]
-                 for line in block.get("lines", []) for span in line.get("spans", [])
-                 for char in span.get("chars", []) if char.get("c") == "角"]
+        page = document[0]
+        lookup = build_font_lookup(page.get_fonts(full=True))
+        chars = []
+        for span in page.get_texttrace():
+            xref, *_ = resolve_font(lookup, normalize_basefont(span["font"]))
+            for char in span["chars"]:
+                if chr(char[0]) == "角":
+                    assert isinstance(xref, int), "fixture source font must be unique"
+                    chars.append((span["font"], xref, char))
     assert len(chars) == 2
     rows = []
-    for index, char in enumerate(chars, 1):
-        x0, y0, x1, y1 = char["bbox"]
+    for index, (font, xref, char) in enumerate(chars, 1):
+        codepoint, gid, _origin, (x0, y0, x1, y1) = char
         rows.append({
-            "實體頁碼": 1, "課本頁": 1, "頁面標籤": "1", "字元": "角",
+            "實體頁碼": 1, "課本頁": 1, "頁面標籤": "1", "字元": chr(codepoint),
             "實際注音": "ㄐㄩㄝˊ", "解碼狀態": "已映射",
             "解碼依據": "synthetic independent PDF glyph fixture",
             "穩定注音鍵": f"fixture-{index}", "群組注音鍵": f"fixture-{index}",
-            "font": "synthetic-font", "font_xref": 1, "注音元件ID": index,
-            "glyph_id_字形索引": index, "x0": x0, "y0": y0, "x1": x1, "y1": y1,
+            "font": font, "font_xref": xref, "注音元件ID": "",
+            "glyph_id_字形索引": gid, "x0": x0, "y0": y0, "x1": x1, "y1": y1,
             "source_row_number": index + 1,
             "ledger_schema_version": ol.LEDGER_SCHEMA_VERSION,
             "workbook_schema_version": ol.WORKBOOK_SCHEMA_VERSION,
@@ -439,7 +450,11 @@ def test_real_pipeline_actual_override_refresh_publishes_current_manifest(tmp_pa
         assert refreshed["session_id"] == original["session_id"]
         portability.prepare_portable_project(a)
         first.rename(tmp_path / "source-away.pdf")
-        result = portability.continue_project(a, second, b)
+        result = portability.continue_project(a, second, b, source_pdf_aliases=[{
+            "source_project": str(a), "session_id": refreshed["session_id"],
+            "pdf_sha256": refreshed["pdfs"][0]["pdf_sha256"],
+            "path": str(tmp_path / "source-away.pdf"),
+        }])
         assert result["matched_actual_overrides"] == 1
         assert not (b / portability.INCOMPLETE_FILE).exists()
         b_manifest = sp.json_load_strict(b / "校對工作階段.json")

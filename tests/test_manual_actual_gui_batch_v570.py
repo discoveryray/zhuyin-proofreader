@@ -20,8 +20,10 @@ import global_exact_glyph_library as global_library
 import review_gui
 import review_save_service
 import standalone_proofread as sp
+from review_display import occurrence_preview as native_source_preview
 from pdf_portability import _VerifiedExpectedConflicts
 from tests.review_save_test_support import QueuedRoot
+from tests.actual_source_test_support import source_entry, write_fixture_pdf, bind_source_from_pdf
 from actual_review import (
     GLYPH_CONFLICT_FILE,
     GLYPH_PROVENANCE_FILE,
@@ -63,7 +65,7 @@ def entry(
     expected: str = "ㄓㄨㄢˇ",
     x0: float = 10.0,
 ) -> dict:
-    return {
+    row = {
         "occurrence_id": occurrence_id,
         "review_id": "review-" + occurrence_id,
         "state": "ACTUAL_DECODE_ERROR",
@@ -86,6 +88,12 @@ def entry(
             "預期注音": "SECRET_EXPECTED_SOURCE",
         },
     }
+    bound = source_entry(glyph_sha256, occurrence_id=occurrence_id,
+        review_id=row["review_id"], pdf_name=row["pdf_name"], char=row["char"], x0=x0, y0=row["y0"])
+    row.update({key: value for key, value in bound.items() if key != "source_record"})
+    row["source_record"].update(bound["source_record"])
+    return row
+
 
 
 def make_project(base: Path) -> Path:
@@ -102,7 +110,10 @@ def make_project(base: Path) -> Path:
         path.write_bytes(("sealed-controller-" + kind).encode())
         info[kind + "_workbook"] = str(path)
         info[kind + "_workbook_sha256"] = sp.sha256_file(path)
-    manifest = sp.seal_manifest({"pdfs": [info], "records": []})
+    manifest = sp.seal_manifest({'version':sp.VERSION,'session_id':'isolated-staging-controller',
+        'session_schema_version':sp.SESSION_SCHEMA_VERSION,'ledger_schema_version':sp.LEDGER_SCHEMA_VERSION,
+        'workbook_schema_version':sp.WORKBOOK_SCHEMA_VERSION,'review_id_schema_version':sp.REVIEW_ID_SCHEMA_VERSION,
+        "pdfs": [info], "records": []})
     sp.json_save(output_dir / "校對工作階段.json", manifest)
     sp.json_save(output_dir / "人工判定資料庫.json", sp.normalize_db({}))
     return output_dir
@@ -113,17 +124,23 @@ def actual_root(output_dir: Path) -> Path:
 
 
 def attach_source_bytes(output_dir, ledger):
-    # Headless behavior samples use auditable bytes; real PDF rendering has
-    # separate GUI fixtures. No production source or runtime asset is changed.
+    # Real embedded source replaces the former non-PDF byte placeholder.
+    by_name = {}
     for row in ledger:
-        path = output_dir / row["pdf_name"]
-        path.write_bytes(b"isolated source hash fixture")
-        row.update(pdf=str(path), pdf_sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+        by_name.setdefault(row["pdf_name"], []).append(row)
+    for name, rows in by_name.items():
+        path = output_dir / name
+        write_fixture_pdf(path, [{"glyph_sha256": row["source_record"]["TTF字形SHA256"],
+            "char": row["char"], "x0": row["x0"], "y0": row["y0"]} for row in rows])
+        for row in rows:
+            bind_source_from_pdf(row, path)
 
 
 def seal_resume_fixture(output_dir, ledger):
     """Give synthetic ledger samples the real resume reader's durable inputs."""
+    original=sp.json_load_strict(output_dir / '校對工作階段.json')
     manifest = sp.seal_manifest({
+        'version':sp.VERSION,'session_id':original.get('session_id','isolated-staging-controller'),
         "session_schema_version": sp.SESSION_SCHEMA_VERSION,
         "ledger_schema_version": sp.LEDGER_SCHEMA_VERSION,
         "workbook_schema_version": sp.WORKBOOK_SCHEMA_VERSION,
@@ -214,6 +231,7 @@ class ManualActualGuiStagingServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output_dir = make_project(Path(directory))
             ledger = [entry("occ-a", "a" * 64, pdf_name="book.pdf")]
+            seal_resume_fixture(output_dir,ledger)
             root = actual_root(output_dir)
             root.mkdir(parents=True)
             # Preserve a mix of existing bytes and legitimate absence.
@@ -233,9 +251,25 @@ class ManualActualGuiStagingServiceTests(unittest.TestCase):
             before_artifacts = snapshot_paths(artifact_paths)
             before_authoritative = snapshot_paths(authoritative_paths)
 
+            # Keep the original two body validations observable while every
+            # newly added admission/binder validation also calls the real guard.
+            import inspect
+            manifest_check=MagicMock()
+            admission_checks=[]
+            real_manifest_guard=sp.validate_manifest_integrity
+            def observe_manifest(value):
+                real_manifest_guard(value)
+                frame=inspect.currentframe().f_back
+                caller=frame.f_code.co_name
+                admission=False
+                while frame is not None:
+                    admission=admission or frame.f_code.co_name=='capture_project_write_admission'
+                    frame=frame.f_back
+                if admission:admission_checks.append(caller)
+                else:manifest_check(value)
             with (
                 patch.object(sp, "materialize_ledger", return_value=ledger),
-                patch.object(sp, "validate_manifest_integrity", wraps=sp.validate_manifest_integrity) as manifest_check,
+                patch.object(sp, "validate_manifest_integrity", new=observe_manifest),
                 patch.object(sp, "validate_output_artifact_hashes", wraps=sp.validate_output_artifact_hashes) as artifact_check,
                 patch.object(sp, "apply_verified_actual_group") as single_apply,
                 patch.object(sp, "apply_staged_manual_actual_batch") as batch_apply,
@@ -264,6 +298,7 @@ class ManualActualGuiStagingServiceTests(unittest.TestCase):
             self.assertEqual(snapshot_paths(authoritative_paths), before_authoritative)
             self.assertEqual(manifest_check.call_count, 2)
             self.assertEqual(manifest_check.call_args_list[0], manifest_check.call_args_list[1])
+            self.assertEqual(admission_checks,['capture_project_write_admission','bind_workbooks'])
             artifact_check.assert_called_once()
             for forbidden in (
                 single_apply, batch_apply, clear_events, refresh, pipeline,
@@ -275,6 +310,7 @@ class ManualActualGuiStagingServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output_dir = make_project(Path(directory))
             current_ledger = [entry("current", "b" * 64, actual="ㄅ")]
+            seal_resume_fixture(output_dir,current_ledger)
             with (
                 patch.object(sp, "materialize_ledger", return_value=current_ledger),
                 patch.object(
@@ -301,6 +337,7 @@ class ManualActualGuiStagingServiceTests(unittest.TestCase):
                 entry("same-a", "c" * 64, pdf_name="a.pdf", x0=10),
                 entry("same-b", "c" * 64, pdf_name="b.pdf", x0=30),
             ]
+            seal_resume_fixture(output_dir,ledger)
             with patch.object(sp, "materialize_ledger", return_value=ledger):
                 sp.stage_manual_actual_correction(
                     output_dir, "review-same-a", "ㄓㄨㄢˇ", ["same-a"],
@@ -320,6 +357,7 @@ class ManualActualGuiStagingServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output_dir = make_project(Path(directory))
             ledger = [entry("restart", "d" * 64)]
+            seal_resume_fixture(output_dir,ledger)
             with patch.object(sp, "materialize_ledger", return_value=ledger):
                 staged = sp.stage_manual_actual_correction(
                     output_dir, "review-restart", "ㄖㄣˊ", ["restart"],
@@ -457,21 +495,56 @@ class ManualActualGuiBatchOrchestrationTests(unittest.TestCase):
             self.assertTrue(pipeline.call_args.kwargs["defer_excel_reports"])
 
     def test_one_refresh_pass_decodes_each_invalidated_pdf_once_and_reuses_unaffected(self):
+        from openpyxl import Workbook
+        from project_write_admission import capture_project_write_admission
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)
             output_dir = base / "output"
             affected = base / "affected.pdf"
             unaffected = base / "unaffected.pdf"
-            affected.write_bytes(b"affected PDF")
-            unaffected.write_bytes(b"unaffected PDF")
+            for pdf in (affected, unaffected):
+                with fitz.open() as document:
+                    document.new_page().insert_text((30, 40), pdf.stem + " isolated orchestration input")
+                    document.save(pdf)
             actual_dir = output_dir / "01_實際注音"
             candidate_dir = output_dir / "02_候選報告"
             actual_dir.mkdir(parents=True)
             candidate_dir.mkdir(parents=True)
-            sp.actual_workbook_path(actual_dir, unaffected).write_bytes(b"reusable actual workbook")
-            sp.candidate_workbook_path(candidate_dir, unaffected).write_bytes(b"reusable candidate workbook")
+            baseline_pdfs = []
+            for pdf in (affected, unaffected):
+                info = {"pdf": str(pdf), "pdf_name": pdf.name, "pdf_sha256": sp.sha256_file(pdf)}
+                for kind, folder in (("actual", actual_dir), ("candidate", candidate_dir)):
+                    path = (sp.actual_workbook_path(folder, pdf) if kind == "actual"
+                            else sp.candidate_workbook_path(folder, pdf))
+                    workbook = Workbook()
+                    workbook.active.title = "Summary"
+                    workbook.active.append(["isolated_fixture_binding", pdf.name + ":" + kind])
+                    workbook.active.append(["workbook_schema_version", sp.WORKBOOK_SCHEMA_VERSION])
+                    workbook.active.append(["ledger_schema_version", sp.LEDGER_SCHEMA_VERSION])
+                    workbook.save(path)
+                    info[kind + "_workbook"] = str(path)
+                    info[kind + "_workbook_sha256"] = sp.sha256_file(path)
+                baseline_pdfs.append(info)
             dynamic_root = output_dir / "_專案證據" / "actual"
             dynamic_root.mkdir(parents=True)
+            actual_review.ensure_user_evidence_files(dynamic_root)
+            actual_review._write_actual_evidence_csv(dynamic_root / OCCURRENCE_OVERRIDE_FILE,
+                                                      actual_review.OVERRIDE_HEADERS, [])
+            baseline_manifest = sp.seal_manifest({
+                "version": sp.VERSION, "session_id": "session",
+                "session_schema_version": sp.SESSION_SCHEMA_VERSION,
+                "ledger_schema_version": sp.LEDGER_SCHEMA_VERSION,
+                "workbook_schema_version": sp.WORKBOOK_SCHEMA_VERSION,
+                "review_id_schema_version": sp.REVIEW_ID_SCHEMA_VERSION,
+                "pdfs": baseline_pdfs, "records": [], "actual_source_ids": [],
+                "regression_gate": {"ok": True},
+            })
+            sp.json_save(output_dir / "校對工作階段.json", baseline_manifest)
+            sp.json_save(output_dir / "人工判定資料庫.json", sp.normalize_db({}))
+            # The cache/redecode assertions below require an existing project,
+            # not a session-only mock over a missing physical manifest.
+            capture_project_write_admission(output_dir, allow_new=True).recheck()
+            self.assertEqual(sp.load_reuse_baseline_manifest(output_dir), baseline_manifest)
             source_validation = {"ok": True, "errors": []}
             expected_fingerprint = {"fingerprint": "expected-fingerprint", "components": {}}
             produced_manifest = sp.seal_manifest({
@@ -523,7 +596,7 @@ class ManualActualGuiBatchOrchestrationTests(unittest.TestCase):
             with (
                 patch.object(sp, "initialize_project_actual_evidence", return_value=dynamic_root),
                 patch.object(sp, "validate_asset_manifest", return_value=source_validation),
-                patch.object(sp, "load_reuse_baseline_manifest", return_value={"session_id": "session"}),
+                patch.object(sp, "load_reuse_baseline_manifest", wraps=sp.load_reuse_baseline_manifest),
                 patch.object(sp, "compute_expected_asset_fingerprint", return_value=expected_fingerprint),
                 patch.object(sp, "actual_workbook_global_exact_dependencies", return_value=()),
                 patch.object(sp, "compute_actual_asset_fingerprint", side_effect=fingerprint),
@@ -1374,10 +1447,9 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
         self.unexpected_error.assert_not_called()
 
     def sealed_preview_entries(self, rows):
-        for row in rows:
-            path = self.output / row["pdf_name"]
-            path.write_bytes(self.source_bytes)
-            row.update(pdf=str(path), pdf_sha256=hashlib.sha256(self.source_bytes).hexdigest())
+        # Each already genuine source stays distinct even when samples use the
+        # same label/coordinates. Pixel/viewport substitutes below only retire
+        # native display, not source admission proof.
         return rows
 
     def wait_for_gui(self, predicate, *, timeout=3.0):
@@ -1388,16 +1460,28 @@ class ManualActualGuiVisibleLayoutTests(unittest.TestCase):
         self.assertTrue(predicate())
 
     @staticmethod
-    def preview_pixels(*_args, **_kwargs):
-        pixmap = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 120, 80), False)
-        pixmap.clear_with(255)
-        return pixmap, (10.0, 10.0, 30.0, 30.0), "合成預覽"
+    def preview_pixels(*args, **kwargs):
+        return ManualActualGuiVisibleLayoutTests._pixel_view_fixture(80, *args, **kwargs)
 
     @staticmethod
-    def tall_preview_pixels(*_args, **_kwargs):
-        pixmap = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 120, 160), False)
+    def tall_preview_pixels(*args, **kwargs):
+        return ManualActualGuiVisibleLayoutTests._pixel_view_fixture(160, *args, **kwargs)
+
+    @staticmethod
+    def _pixel_view_fixture(height, *args, **kwargs):
+        # Retire only the native view's pixels/viewport geometry. The current
+        # sealed PDF, actual glyph source proof and diagnostic are real. Keep
+        # this unpatched function reference to avoid replacing qualification.
+        details = native_source_preview(*args, **{**kwargs, "return_details": True})
+        pixmap = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 120, height), False)
         pixmap.clear_with(255)
-        return pixmap, (10.0, 10.0, 30.0, 30.0), "合成原頁"
+        fixture_rect = (10.0, 10.0, 30.0, 30.0)
+        details = {**details, "pixmap": pixmap,
+                   "target": fixture_rect if details["target"] is not None else None,
+                   "warning_target": fixture_rect if details["warning_target"] is not None else None}
+        if kwargs.get("return_details", False):
+            return details
+        return details["pixmap"], details["target"], details["notice"]
 
     def reveal_sample_target(self, dialog, index):
         preview = dialog.previews[index]

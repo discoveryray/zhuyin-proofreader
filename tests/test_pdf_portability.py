@@ -29,7 +29,7 @@ def synthetic_project_report_renderer(monkeypatch):
     monkeypatch.setattr(portable, "_publish_portable_outputs", lambda *_args: None)
 
 
-def pdf(path: Path, *, title: str, text: str = "角角ㄐㄩㄝˊ", picture=(0, 0, 1), tone="rising"):
+def pdf(path: Path, *, title: str, text: str = "角角ㄐㄩㄝˊ", picture=(0, 0, 1), tone="rising", genuine_source=False):
     document = fitz.open()
     page = document.new_page(width=300, height=200)
     page.insert_text((20, 40), text, fontsize=16)
@@ -40,14 +40,58 @@ def pdf(path: Path, *, title: str, text: str = "角角ㄐㄩㄝˊ", picture=(0, 
     document.set_metadata({"title": title})
     document.save(path)
     document.close()
+    if genuine_source:
+        _genuine_project_sources(path, ((20, 20, 40, 45), (90, 20, 110, 45)))
 
 
 def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def project(root: Path, source_pdf: Path, *, session: str, event_positions=(), boxes=None):
+def _genuine_project_sources(source_pdf, boxes):
+    """Add real fixture-only target glyphs before any source is sealed.
+
+    Opt-in keeps the geometry-only, rotated and malformed-source contracts
+    separate. Original picture/tone and metadata remain unchanged.
+    """
+    from tests.actual_source_test_support import register_fixture_glyph, _font, _GLYPHS, bind_source_from_pdf
+    digest = register_fixture_glyph("portable-source-fixture")
+    with fitz.open(source_pdf) as document:
+        page = document[0]
+        fonts = [font for font in page.get_fonts(full=True) if font[4] == "PortableSourceFixture"]
+        if not fonts:
+            # pdf() emits exactly three independent streams: an unqualified
+            # Helvetica placeholder, the picture and the vector tone mark.
+            # Replace only that placeholder before sealing, leaving both
+            # independent map/tamper signals byte-for-byte unchanged. Draw the
+            # genuine sources first so an earlier unrelated stroked path's
+            # trace-only linewidth state is not part of the fixture source.
+            original = page.get_contents()
+            assert len(original) == 3
+            page.insert_font(fontname="PortableSourceFixture", fontbuffer=_font(_GLYPHS[digest], "角"))
+            for x0, y0, _x1, _y1 in boxes:
+                page.insert_text((x0, y0 + 16), "角", fontsize=20, fontname="PortableSourceFixture")
+            appended = page.get_contents()[len(original):]
+            assert len(appended) == len(boxes)
+            stream = document.get_new_xref()
+            document.update_object(stream, "<<>>")
+            document.update_stream(stream, b"\n".join(document.xref_stream(xref)
+                for xref in [*appended, *original[1:]]))
+            page.set_contents(stream)
+            document.saveIncr()
+    sources = []
+    for x0, y0, _x1, _y1 in boxes:
+        entry = {"x0": x0, "y0": y0, "source_record": {}}
+        bind_source_from_pdf(entry, source_pdf)
+        assert entry["char"] == "角" and entry["source_record"]["TTF字形SHA256"] == digest
+        sources.append(entry)
+    return sources
+
+
+def project(root: Path, source_pdf: Path, *, session: str, event_positions=(), boxes=None, genuine_source=False):
     root.mkdir(exist_ok=True)
+    boxes = boxes or ((20, 20, 40, 45), (90, 20, 110, 45))
+    genuine = _genuine_project_sources(source_pdf, boxes) if genuine_source else None
     actual = root / "01_實際注音"
     candidate = root / "02_候選報告"
     actual.mkdir()
@@ -81,6 +125,12 @@ def project(root: Path, source_pdf: Path, *, session: str, event_positions=(), b
             "glyph_id_字形索引": index, "注音元件ID": index,
             "x0": x0, "y0": y0, "x1": x1, "y1": y1, "source_row_number": index,
         })
+    if genuine is not None:
+        for row, source in zip(rows, genuine):
+            row.update(font="", font_xref=source["font_xref"],
+                       glyph_id_字形索引=source["glyph_id"], 注音元件ID=source["zhuyin_component_id"],
+                       TTF字形SHA256=source["source_record"]["TTF字形SHA256"],
+                       **{key: source[key] for key in ("x0", "y0", "x1", "y1")})
     prepare_occurrence_rows(digest, rows)
     ledger = build_occurrence_ledger(rows, {
         row["occurrence_id"]: {
@@ -384,9 +434,9 @@ def test_project_import_rechecks_conflict_receipt_after_preflight(tmp_path, monk
     report_path.write_bytes(b"previous report")
     prior_views = {path: path.read_bytes() for path in (pending_path, status_path, report_path)}
     original_mapper = portable._mapped_occurrence_overrides
-    def completed_concurrent_conflict(*args):
+    def completed_concurrent_conflict(*args, **kwargs):
         sp.json_save(receipt_path, {"version": 1, "conflicts": [conflict]})
-        return original_mapper(*args)
+        return original_mapper(*args, **kwargs)
     with patch.object(portable, "_mapped_occurrence_overrides", side_effect=completed_concurrent_conflict):
         with pytest.raises(ValueError, match="衝突|未裁決"):
             portable.import_project_decisions(source, target)
@@ -561,9 +611,9 @@ def test_project_import_rejects_target_pdf_changed_after_mapping(tmp_path, monke
     original = portable._mapped_occurrence_overrides
     changed = False
 
-    def replace_after_mapping(*args):
+    def replace_after_mapping(*args, **kwargs):
         nonlocal changed
-        result = original(*args)
+        result = original(*args, **kwargs)
         changed = True
         b_pdf.write_bytes(changed_pdf.read_bytes())
         return result
@@ -1121,8 +1171,8 @@ def test_imported_project_can_show_local_page_save_and_reopen(tmp_path, monkeypa
     pdf(source_pdf, title="computer A")
     pdf(local_pdf, title="computer B")
     source, target = tmp_path / "source", tmp_path / "target"
-    project(source, source_pdf, session="A", event_positions=(0,))
-    target_manifest, _ = project(target, local_pdf, session="B")
+    project(source, source_pdf, session="A", event_positions=(0,), genuine_source=True)
+    target_manifest, _ = project(target, local_pdf, session="B", genuine_source=True)
     portable.prepare_portable_project(source)
     source_pdf.rename(tmp_path / "not-on-B.pdf")
     portable.import_project_decisions(source, target)
@@ -1144,8 +1194,8 @@ def test_source_actual_staging_is_preserved_as_recheck_not_new_global_evidence(t
     pdf(source_pdf, title="A")
     pdf(target_pdf, title="B")
     source, target = tmp_path / "source", tmp_path / "target"
-    manifest, _ = project(source, source_pdf, session="source", event_positions=(0,))
-    project(target, target_pdf, session="target")
+    manifest, _ = project(source, source_pdf, session="source", event_positions=(0,), genuine_source=True)
+    project(target, target_pdf, session="target", genuine_source=True)
     group = ar.build_actual_group_for_entry(manifest["records"], manifest["records"][0])
     root = sp.project_actual_evidence_root(source)
     ar.stage_manual_actual_group(
@@ -1170,10 +1220,10 @@ def test_staged_actual_receipt_survives_a_to_b_to_c(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
     files = [tmp_path / f"{letter}.pdf" for letter in "ABC"]
     for letter, path in zip("ABC", files):
-        pdf(path, title=letter)
+        pdf(path, title=letter, genuine_source=True)
     a, b, c = [tmp_path / name for name in ("project-a", "project-b", "project-c")]
-    a_manifest, _ = project(a, files[0], session="A", event_positions=(0,))
-    project(b, files[1], session="B")
+    a_manifest, _ = project(a, files[0], session="A", event_positions=(0,), genuine_source=True)
+    project(b, files[1], session="B", genuine_source=True)
     group = ar.build_actual_group_for_entry(a_manifest["records"], a_manifest["records"][0])
     a_root = sp.project_actual_evidence_root(a)
     ar.stage_manual_actual_group(a_root, group, "ㄐㄩㄝˊ",
@@ -1184,7 +1234,7 @@ def test_staged_actual_receipt_survives_a_to_b_to_c(tmp_path, monkeypatch):
     portable.prepare_portable_project(b)
 
     def build_target(paths, output_dir, **kwargs):
-        project(output_dir, files[2], session="C")
+        project(output_dir, files[2], session="C", genuine_source=True)
 
     with patch.object(sp, "run_pipeline_pdfs", side_effect=build_target):
         result = portable.continue_project(b, files[2], c)
@@ -1203,8 +1253,8 @@ def test_tampered_forwarded_actual_receipt_is_rejected_before_target_creation(tm
     for letter, path in zip("ABC", files):
         pdf(path, title=letter)
     a, b, c = [tmp_path / name for name in ("project-a", "project-b", "project-c")]
-    a_manifest, _ = project(a, files[0], session="A", event_positions=(0,))
-    project(b, files[1], session="B")
+    a_manifest, _ = project(a, files[0], session="A", event_positions=(0,), genuine_source=True)
+    project(b, files[1], session="B", genuine_source=True)
     group = ar.build_actual_group_for_entry(a_manifest["records"], a_manifest["records"][0])
     ar.stage_manual_actual_group(
         sp.project_actual_evidence_root(a), group, "ㄐㄩㄝˊ",
@@ -1253,15 +1303,23 @@ def test_failed_continue_keeps_source_and_marks_target_incomplete(tmp_path):
     project(source, first, session="source", event_positions=(0,))
     portable.prepare_portable_project(source)
     source_db = (source / "人工判定資料庫.json").read_bytes()
-    with patch.object(sp, "run_pipeline_pdfs", side_effect=OSError("write failed")):
+    with patch.object(sp, "run_pipeline_pdfs", side_effect=OSError("write failed")) as failed_pipeline:
         with pytest.raises(OSError, match="write failed"):
             portable.continue_project(source, local, target)
+    failed_pipeline.assert_called_once()
     assert (source / "人工判定資料庫.json").read_bytes() == source_db
     assert (target / portable.INCOMPLETE_FILE).is_file()
     from standalone_gui import project_status_details
     assert "未完成" in project_status_details(target)[0]
+    # This isolated fixture's prior operation is over. Remove only its own
+    # operational lock, proving refusal precedes creation of a new lock.
+    lock=sp.project_actual_evidence_root(target)/'.global_exact_glyph_delivery.lock'
+    lock.unlink(missing_ok=True)
+    before_refusal={path:path.read_bytes() for path in target.rglob('*') if path.is_file()}
     with pytest.raises(ValueError, match="接續未完成"):
         ReviewSaveService(target).save_event("any", {"action": "保留待人工"})
+    assert not lock.exists()
+    assert {path:path.read_bytes() for path in target.rglob('*') if path.is_file()}==before_refusal
 
 
 def test_sealed_but_incomplete_target_cannot_be_reexported(tmp_path):
@@ -1299,18 +1357,26 @@ def test_report_publication_failure_retains_data_and_blocks_partial_target(tmp_p
     project(source, first, session="A", event_positions=(0,))
     project(target, local, session="B")
     before = (source / "人工判定資料庫.json").read_bytes()
-    with patch.object(portable, "_publish_portable_outputs", side_effect=OSError("report disk full")):
+    with patch.object(portable, "_publish_portable_outputs", side_effect=OSError("report disk full")) as failed_report:
         with pytest.raises(OSError, match="report disk full"):
             portable.import_project_decisions(source, target)
     assert (source / "人工判定資料庫.json").read_bytes() == before
+    failed_report.assert_called_once()
     assert len(sp.json_load_strict(target / "人工判定資料庫.json")["events"]) == 1
     assert (target / portable.INCOMPLETE_FILE).exists()
     from standalone_gui import project_status_details
     assert "未完成" in project_status_details(target)[0]
     with pytest.raises(ValueError, match="接續未完成"):
         portable.prepare_portable_project(target)
+    # This isolated fixture's prior operation is over. Remove only its own
+    # operational lock, proving refusal precedes creation of a new lock.
+    lock=sp.project_actual_evidence_root(target)/'.global_exact_glyph_delivery.lock'
+    lock.unlink(missing_ok=True)
+    before_refusal={path:path.read_bytes() for path in target.rglob('*') if path.is_file()}
     with pytest.raises(ValueError, match="接續未完成"):
         ReviewSaveService(target).save_event("any", {"action": "保留待人工"})
+    assert not lock.exists()
+    assert {path:path.read_bytes() for path in target.rglob('*') if path.is_file()}==before_refusal
 
 
 def test_tampered_source_actual_override_cannot_be_imported(tmp_path):
@@ -1390,8 +1456,8 @@ def test_unrelated_pdf_actual_override_does_not_invalidate_sealed_source(tmp_pat
     pdf(first, title="A")
     pdf(second, title="B")
     source, target = tmp_path / "source", tmp_path / "target"
-    source_manifest, _ = project(source, first, session="A", event_positions=(0,))
-    target_manifest, _ = project(target, second, session="B")
+    source_manifest, _ = project(source, first, session="A", event_positions=(0,), genuine_source=True)
+    target_manifest, _ = project(target, second, session="B", genuine_source=True)
     sealed_row = add_override(source, source_manifest["records"][0])
     reseal_actual_dynamic(source, first)
     add_override(target, target_manifest["records"][0])
@@ -1410,24 +1476,27 @@ def test_unrelated_pdf_actual_override_does_not_invalidate_sealed_source(tmp_pat
 def test_saved_actual_override_maps_without_global_promotion(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
     first, local = tmp_path / "first.pdf", tmp_path / "local.pdf"
-    pdf(first, title="A")
-    pdf(local, title="B")
+    pdf(first, title="A", genuine_source=True)
+    pdf(local, title="B", genuine_source=True)
     source, continued = tmp_path / "source", tmp_path / "continued"
-    source_manifest, _ = project(source, first, session="A", event_positions=(0,))
+    source_manifest, _ = project(source, first, session="A", event_positions=(0,), genuine_source=True)
     add_override(source, source_manifest["records"][0])
     reseal_actual_dynamic(source, first)
     portable.prepare_portable_project(source)
     first.rename(tmp_path / "first-away.pdf")
+    alias = {"source_project": str(source), "session_id": source_manifest["session_id"],
+             "pdf_sha256": source_manifest["pdfs"][0]["pdf_sha256"],
+             "path": str(tmp_path / "first-away.pdf")}
 
     def build_target(paths, output_dir, **kwargs):
-        project(output_dir, local, session="B")
+        project(output_dir, local, session="B", genuine_source=True)
 
     def refresh_target(output_dir, **kwargs):
         reseal_actual_dynamic(output_dir, local)
 
     with patch.object(sp, "run_pipeline_pdfs", side_effect=build_target), \
          patch.object(sp, "refresh_actual_project", side_effect=refresh_target):
-        result = portable.continue_project(source, local, continued)
+        result = portable.continue_project(source, local, continued, source_pdf_aliases=[alias])
     assert result["matched_actual_overrides"] == 1
     target_rows = ar._read_csv(sp.project_actual_evidence_root(continued) / ar.OCCURRENCE_OVERRIDE_FILE,
                                ar.OVERRIDE_HEADERS)
@@ -1450,8 +1519,8 @@ def test_existing_target_rejects_unmapped_actual_without_changing_either_project
     pdf(first, title="A")
     pdf(second, title="B")
     source, target = tmp_path / "source", tmp_path / "target"
-    source_manifest, _ = project(source, first, session="A", event_positions=(0,))
-    project(target, second, session="B")
+    source_manifest, _ = project(source, first, session="A", event_positions=(0,), genuine_source=True)
+    project(target, second, session="B", genuine_source=True)
     add_override(source, source_manifest["records"][0])
     reseal_actual_dynamic(source, first)
     before_source = (source / "人工判定資料庫.json").read_bytes()
@@ -1520,10 +1589,10 @@ def test_two_sources_keep_both_actual_staging_originals_without_promotion(tmp_pa
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
     files = [tmp_path / f"{letter}.pdf" for letter in "ABC"]
     for letter, path in zip("ABC", files):
-        pdf(path, title=letter)
+        pdf(path, title=letter, genuine_source=True)
     first, second, merged = [tmp_path / name for name in ("first", "second", "merged")]
-    first_manifest, _ = project(first, files[0], session="A", event_positions=(0,))
-    second_manifest, _ = project(second, files[1], session="B", event_positions=(1,))
+    first_manifest, _ = project(first, files[0], session="A", event_positions=(0,), genuine_source=True)
+    second_manifest, _ = project(second, files[1], session="B", event_positions=(1,), genuine_source=True)
     originals = []
     for folder, manifest, index in ((first, first_manifest, 0), (second, second_manifest, 1)):
         group = ar.build_actual_group_for_entry(manifest["records"], manifest["records"][index])
@@ -1536,7 +1605,7 @@ def test_two_sources_keep_both_actual_staging_originals_without_promotion(tmp_pa
         originals.append(ar.load_manual_actual_staging(evidence_root))
 
     def build_target(paths, output_dir, **kwargs):
-        project(output_dir, files[2], session="C")
+        project(output_dir, files[2], session="C", genuine_source=True)
 
     with patch.object(sp, "run_pipeline_pdfs", side_effect=build_target):
         result = portable.merge_projects([first, second], files[2], merged)
@@ -1554,15 +1623,15 @@ def test_two_sources_keep_both_actual_staging_originals_without_promotion(tmp_pa
 def test_b_new_actual_override_returns_to_a_in_new_project(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "isolated-localappdata"))
     first_pdf, b_pdf = tmp_path / "first.pdf", tmp_path / "download-b.pdf"
-    pdf(first_pdf, title="A")
-    pdf(b_pdf, title="B")
+    pdf(first_pdf, title="A", genuine_source=True)
+    pdf(b_pdf, title="B", genuine_source=True)
     first, b, back = [tmp_path / name for name in ("first-project", "b-project", "back-on-a")]
-    project(first, first_pdf, session="A", event_positions=(0,))
+    project(first, first_pdf, session="A", event_positions=(0,), genuine_source=True)
     portable.prepare_portable_project(first)
     first_pdf.rename(tmp_path / "missing-on-b.pdf")
 
     def build_target(paths, output_dir, **kwargs):
-        project(output_dir, paths[0], session="B" if output_dir == b else "A-return")
+        project(output_dir, paths[0], session="B" if output_dir == b else "A-return", genuine_source=True)
 
     def refresh_target(output_dir, **kwargs):
         reseal_actual_dynamic(output_dir, b_pdf if output_dir == b else first_pdf)
@@ -1702,9 +1771,9 @@ def test_target_db_becomes_nonobject_before_locked_candidate_read(tmp_path):
     project(target, second, session="B")
     original_mapper = portable._mapped_occurrence_overrides
 
-    def change_target_db(*args):
+    def change_target_db(*args, **kwargs):
         (target / "人工判定資料庫.json").write_text("[]", encoding="utf-8")
-        return original_mapper(*args)
+        return original_mapper(*args, **kwargs)
 
     with patch.object(portable, "_mapped_occurrence_overrides", side_effect=change_target_db):
         with pytest.raises(ValueError, match="根節點"):
@@ -1809,3 +1878,65 @@ def test_duplicate_carries_source_conflict_adjudication_across_hops(tmp_path):
     portable.import_project_decisions(d, e)
     e_event = next(iter(sp.json_load_strict(e / "人工判定資料庫.json")["events"].values()))
     assert e_event["portability_source"]["prior_duplicate_sources"][0]["source_conflict_resolution"] == c_event["portability_conflict_resolution"]
+
+
+@pytest.mark.parametrize("drift", ["extra", "marker", "source"])
+def test_owned_continue_rechecks_original_prefix_before_first_producer_write(tmp_path, monkeypatch, drift):
+    monkeypatch.setenv('LOCALAPPDATA',str(tmp_path/'isolated-user'))
+    first,local=tmp_path/'first.pdf',tmp_path/'local.pdf'
+    pdf(first,title='A');pdf(local,title='B')
+    source,target=tmp_path/'source',tmp_path/'target'
+    project(source,first,session='legacy-source')
+    portable.prepare_portable_project(source)
+    lock='_專案證據/actual/.global_exact_glyph_delivery.lock'
+    def files(root):
+        return {str(path.relative_to(root)).replace('\\','/'):path.read_bytes()
+                for path in root.rglob('*') if path.is_file()
+                and str(path.relative_to(root)).replace('\\','/')!=lock}
+    initial_source=files(source)
+    injected=[]
+    real=sp.validate_asset_manifest
+    def validate(root):
+        result=real(root)
+        assert result['ok']
+        # The actual decorated producer has been admitted, but no producer
+        # directory, CSV, status, workbook or manifest has been written yet.
+        assert (target/portable.INCOMPLETE_FILE).is_file()
+        assert not (target/'校對工作階段.json').exists()
+        if drift=='extra':(target/'foreign.txt').write_bytes(b'foreign target bytes')
+        elif drift=='marker':
+            value=sp.json_load_strict(target/portable.INCOMPLETE_FILE)
+            value['reason']='another valid marker owner'
+            sp.json_save(target/portable.INCOMPLETE_FILE,value)
+        else:local.write_bytes(local.read_bytes()+b'\nexternal PDF edit\n')
+        injected.append((files(target),local.read_bytes()))
+        return result
+    with patch.object(sp,'validate_asset_manifest',side_effect=validate):
+        with pytest.raises(ValueError):portable.continue_project(source,local,target)
+    assert len(injected)==1
+    assert files(target)==injected[0][0]
+    assert local.read_bytes()==injected[0][1]
+    assert files(source)==initial_source
+    assert not (target/'校對工作階段.json').exists()
+    assert not (target/'01_實際注音').exists()
+
+
+def test_legal_legacy_project_save_preserves_expected_identity_and_sources(tmp_path):
+    source=tmp_path/'source.pdf';pdf(source,title='legacy',genuine_source=True)
+    root=tmp_path/'project'
+    manifest,_=project(root,source,session='legal-legacy',genuine_source=True)
+    before={path:path.read_bytes() for path in root.rglob('*') if path.is_file()}
+    pdf_before=source.read_bytes()
+    selected=manifest['records'][0]['review_id']
+    ReviewSaveService(root).save_event(selected,{'action':'確認非校對範圍',
+        'exclusion_reason':'isolated legacy regression','exclusion_evidence':'original page visual source'})
+    assert source.read_bytes()==pdf_before
+    assert all(path.read_bytes()==raw for path,raw in before.items()
+               if path.name!='人工判定資料庫.json')
+    current=sp.json_load_strict(root/'校對工作階段.json')
+    assert current==manifest and 'manual_surface_actual_contract' not in current
+    saved=sp.json_load_strict(root/'人工判定資料庫.json')
+    assert set(saved['events'])=={selected}
+    assert saved['events'][selected]['action']=='確認非校對範圍'
+    reopened=ReviewSaveService(root).load_resume_snapshot()
+    assert len(reopened.ledger)==len(manifest['records'])

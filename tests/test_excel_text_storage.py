@@ -1,5 +1,6 @@
 """Isolated XLSX round trips, not manual Excel or real textbook acceptance."""
 import copy
+import io
 import json
 from pathlib import Path
 from unittest.mock import patch
@@ -8,6 +9,8 @@ import fitz
 import pytest
 from openpyxl import Workbook, load_workbook
 from openpyxl.worksheet.datavalidation import DataValidation
+from fontTools.fontBuilder import FontBuilder
+from fontTools.pens.ttGlyphPen import TTGlyphPen
 
 import actual_review as ar
 import check_pronunciation_candidates as candidates
@@ -19,7 +22,10 @@ from excel_text import append_text_row, write_text_value
 from tests.test_global_exact_glyph_read_reuse_v580 import (
     _DecodeDocument, _DecodeTrueTypeInspector, _absent_snapshot,
 )
-from tests.test_pdf_portability_integration import _pdfs, _synthetic_decode
+from export_pdf_text_diagnostics import TrueTypeGlyphInspector, build_font_lookup, normalize_basefont, resolve_font
+from exact_glyph_identity import classify_ttf_glyf_record, NON_GLOBAL_ELIGIBLE
+from actual_source_visual_safety import source_visual_safety, source_visual_operation
+from tests.test_project_repair_integration_v562 import ACTUAL_COLUMNS, EXCLUDED_COLUMNS
 from tests.test_import_transaction import make_manifest
 from tests.test_actual_review_v540 import entry, make_pdf
 
@@ -58,58 +64,146 @@ def project_bytes(root):
             if p.is_file() and p.suffix != ".lock"}
 
 
+def literal_source_pdf(path, count):
+    """Real distinct project-only programs, created before source/ID sealing."""
+    with fitz.open() as document:
+        page = document.new_page(width=300, height=max(200, 80 + count * 32))
+        for index in range(count):
+            names = [".notdef", "base", "whole"]
+            pen = TTGlyphPen(None)
+            pen.moveTo((0, 0)); pen.lineTo((200 + index * 8, 0))
+            pen.lineTo((200 + index * 8, 350 + index * 6))
+            pen.lineTo((0, 350 + index * 6)); pen.closePath()
+            glyphs = {".notdef": TTGlyphPen(None).glyph(), "base": pen.glyph()}
+            composite = TTGlyphPen(glyphs)
+            composite.addComponent("base", (1, 0, 0, 1, 0, 0))
+            glyphs["whole"] = composite.glyph()
+            builder = FontBuilder(1000, isTTF=True)
+            builder.setupGlyphOrder(names); builder.setupCharacterMap({ord("角"): "whole"})
+            builder.setupGlyf(glyphs)
+            builder.setupHorizontalMetrics({name: (600, 0) for name in names})
+            builder.setupHorizontalHeader(ascent=800, descent=-200)
+            builder.setupNameTable({"familyName": f"LiteralSource{index}", "styleName": "Regular"})
+            builder.setupOS2(sTypoAscender=800, sTypoDescender=-200, usWinAscent=800, usWinDescent=200)
+            builder.setupPost()
+            stream = io.BytesIO(); builder.save(stream)
+            name = f"Literal{index}"
+            page.insert_font(fontname=name, fontbuffer=stream.getvalue())
+            page.insert_text((50, 56 + index * 32), "角", fontname=name, fontsize=20)
+        document.save(path)
+
+
+def literal_native_sources(path):
+    records = []
+    with fitz.open(path) as document:
+        page = document[0]
+        lookup = build_font_lookup(page.get_fonts(full=True))
+        for span in page.get_texttrace():
+            xref, *_ = resolve_font(lookup, normalize_basefont(span["font"]))
+            assert type(xref) is int
+            inspector = TrueTypeGlyphInspector(document.extract_font(xref)[3])
+            for char in span["chars"]:
+                assert char[0] == ord("角")
+                identity = classify_ttf_glyf_record(inspector.glyph_bytes(char[1]))
+                assert identity["reason"] == "COMPOSITE_GLYF"
+                assert identity["eligibility"] == NON_GLOBAL_ELIGIBLE
+                records.append({"字元": chr(char[0]), "font": span["font"], "font_xref": xref,
+                                "glyph_id_字形索引": char[1], "注音元件ID": char[1],
+                                "TTF字形SHA256": inspector.glyph_sha256(char[1]),
+                                **dict(zip(("x0", "y0", "x1", "y1"), char[3]))})
+    assert len({row["TTF字形SHA256"] for row in records}) == len(records)
+    boxes = [fitz.Rect(*(row[key] for key in ("x0", "y0", "x1", "y1"))) for row in records]
+    assert all(not first.intersects(second) for index, first in enumerate(boxes) for second in boxes[index+1:])
+    return records
+
+
 @pytest.fixture
 def isolated_pipeline(tmp_path, monkeypatch):
     monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "localappdata"))
-    pdf, _ = _pdfs(tmp_path)
+    source_snapshots = {}
 
     def controlled_decode(pdf, output, *args, global_snapshot=None):
         # Only glyph acquisition is synthetic. The real candidate analyzer,
         # seals, both exporters/importers, actual transaction and refresh run.
-        _synthetic_decode(pdf, output, *args, global_snapshot=global_snapshot)
-        wb = load_workbook(output)
-        sheet = wb["實際注音"]
-        columns = {cell.value: cell.column for cell in sheet[1]}
-        base = {key: sheet.cell(2, col).value for key, col in columns.items()}
-        sheet.delete_rows(2, sheet.max_row)
+        sealed_sha = sp.sha256_file(pdf)
+        snapshot = source_snapshots[sealed_sha]
+        texts, native_sources, roster = (snapshot[key] for key in ("texts", "native_sources", "roster"))
+        unresolved = snapshot["unresolved"]
+        assert literal_native_sources(pdf) == native_sources
+        wb = Workbook(); sheet = wb.active; sheet.title = "實際注音"
+        columns = [*ACTUAL_COLUMNS, "注音結構偵測來源", "CFF符號簽名", "CFF聲調"]
+        append_text_row(sheet, columns)
         overrides = ar._read_csv(args[13] / ar.OCCURRENCE_OVERRIDE_FILE, ar.OVERRIDE_HEADERS)
         records = []
-        for index, text in enumerate(TEXTS):
-            stable = f"text-fixture-{index}"
+        for base, text in zip(roster, texts):
+            stable = base["穩定注音鍵"]
             matched = next((item for item in overrides if item["stable_key"] == stable), None)
-            rec = {**base, "課本頁": text, "頁面標籤": text, "穩定注音鍵": stable,
-                   "群組注音鍵": stable, "注音元件ID": index + 1,
-                   "glyph_id_字形索引": index + 1, "x0": 50 + index, "x1": 65 + index,
-                   "source_row_number": index + 1,
-                   "實際注音": matched["actual_reading"] if matched else ("" if unresolved[0] else "ㄐㄩㄝˇ"),
-                   "解碼狀態": "已映射" if matched or not unresolved[0] else "未辨識",
+            rec = {**base,
+                   "實際注音": matched["actual_reading"] if matched else ("" if unresolved else "ㄐㄩㄝˇ"),
+                   "解碼狀態": "已映射" if matched or not unresolved else "未辨識",
                    "解碼依據": text}
-            for field in ("occurrence_id", "review_id"):
-                rec.pop(field, None)
             records.append(rec)
-        ol.prepare_occurrence_rows(sp.sha256_file(pdf), records)
         for rec in records:
             append_text_row(sheet, [rec.get(key, "") for key in columns])
-        # The reused two-glyph acquisition surface originally reports two rows;
-        # this expanded fixture must report its independently declared roster.
-        for row in wb["摘要"]:
-            if row[0].value == "偵測到注音字形筆數":
-                row[1].value = len(TEXTS)
+        excluded = wb.create_sheet("結構偵測排除"); append_text_row(excluded, EXCLUDED_COLUMNS)
+        metadata = wb.create_sheet("v5.2中繼資料")
+        fingerprint = args[-2]
+        # This fixture replaces fresh decoding, so it must emit the producer's
+        # epoch receipt before the real dependency-sealing guard may accept it.
+        for pair in [("項目", "內容"), ("workbook_schema_version", ol.WORKBOOK_SCHEMA_VERSION),
+                     ("ledger_schema_version", ol.LEDGER_SCHEMA_VERSION), ("pdf_sha256", sealed_sha),
+                     ("actual_decoder_semantics_epoch", fingerprint["components"]["actual_decoder_semantics_epoch"]),
+                     ("actual_asset_fingerprint", fingerprint["fingerprint"]),
+                     ("actual_asset_fingerprint_components", json.dumps(fingerprint["components"], ensure_ascii=False, sort_keys=True))]:
+            append_text_row(metadata, pair)
+        summary = wb.create_sheet("摘要")
+        append_text_row(summary, ["項目", "內容"])
+        append_text_row(summary, ["偵測到注音字形筆數", len(texts)])
         wb.save(output)
         wb.close()
 
     def context(rec, _index):
-        text = TEXTS[int(str(rec["穩定注音鍵"]).rsplit("-", 1)[1])]
+        snapshot = source_snapshots[rec["pdf_sha256"]]
+        index = int(str(rec["穩定注音鍵"]).rsplit("-", 1)[1])
+        assert rec["occurrence_id"] == snapshot["roster"][index]["occurrence_id"]
+        text = snapshot["texts"][index]
         return text, text, "", "", "", None, text
 
-    unresolved = [False]
     monkeypatch.setattr(sp, "decode", controlled_decode)
     monkeypatch.setattr(sp, "actual_workbook_global_exact_dependencies", lambda *_: ())
     monkeypatch.setattr(candidates, "actual_workbook_global_exact_dependencies", lambda *_: ())
     monkeypatch.setattr(candidates, "locate_line_context", context)
 
     def create(lane):
-        unresolved[0] = lane == "actual"
+        # Callers can select their literal roster after fixture setup, before create.
+        texts = tuple(TEXTS)
+        source_dir = tmp_path / f"literal-source-{len(source_snapshots)}"
+        source_dir.mkdir()
+        pdf = source_dir / "literal-sources.pdf"
+        literal_source_pdf(pdf, len(texts))
+        sealed_sha = sp.sha256_file(pdf)
+        native_sources = literal_native_sources(pdf)
+        assert len(native_sources) == len(texts)
+        roster = [{**native, "實體頁碼": 1, "課本頁": text, "頁面標籤": text,
+                   "穩定注音鍵": f"text-fixture-{index}", "群組注音鍵": f"text-fixture-{index}",
+                   "source_row_number": index + 1, "ledger_schema_version": ol.LEDGER_SCHEMA_VERSION,
+                   "workbook_schema_version": ol.WORKBOOK_SCHEMA_VERSION}
+                  for index, (native, text) in enumerate(zip(native_sources, texts))]
+        ol.prepare_occurrence_rows(sealed_sha, roster)
+        with source_visual_operation():
+            for rec in roster:
+                proof = source_visual_safety({
+                    "pdf": str(pdf), "pdf_name": pdf.name, "pdf_sha256": sealed_sha, "physical_page": 1,
+                    "char": rec["字元"], "font_xref": rec["font_xref"],
+                    "glyph_id": rec["glyph_id_字形索引"], "zhuyin_component_id": rec["注音元件ID"],
+                    "occurrence_id": rec["occurrence_id"], "review_id": rec["review_id"],
+                    "source_record": rec, **{key: rec[key] for key in ("x0", "y0", "x1", "y1")}})
+                assert proof["location_readable"] is True and proof["donor_eligible"] is True
+
+        # Refresh is bound to this immutable source/roster, not later TEXTS edits.
+        assert sealed_sha not in source_snapshots
+        source_snapshots[sealed_sha] = {"texts": texts, "native_sources": native_sources,
+                                        "roster": roster, "unresolved": lane == "actual"}
         root = tmp_path / lane
         sp.run_pipeline_pdfs([pdf], root, defer_excel_reports=True)
         return root

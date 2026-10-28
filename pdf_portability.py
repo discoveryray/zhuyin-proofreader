@@ -181,7 +181,8 @@ def _canonical(value: Any) -> bytes:
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
 
 
-def _pdf_content_snapshot(path: Path, *, expected_sha256: str | None = None):
+def _pdf_content_snapshot(path: Path, *, expected_sha256: str | None = None,
+                          _source_bytes: bytes | None = None):
     """Read PDF bytes once, then derive SHA, candidate text and raster from them.
 
     The candidate resolver uses RAWDICT text even when a PDF marks it invisible.
@@ -191,7 +192,7 @@ def _pdf_content_snapshot(path: Path, *, expected_sha256: str | None = None):
     """
     from check_pronunciation_candidates import build_pdf_line_index
 
-    data = Path(path).read_bytes()
+    data = Path(path).read_bytes() if _source_bytes is None else _source_bytes
     digest = hashlib.sha256(data).hexdigest()
     if expected_sha256 is not None and digest != expected_sha256:
         raise ValueError(f"PDF SHA 在建立內容證據前已變動：{path}")
@@ -253,6 +254,181 @@ def _source_pdf(manifest: Mapping[str, Any], info: Mapping[str, Any], output_dir
     return matching[0]
 
 
+class _SourcePdfBindings:
+    """Finite, caller-selected original locations for this transfer only.
+
+    Loaded source projects own session/SHA authority. A supplied path changes
+    neither a source record nor a sealed identity, and is never a safety flag.
+    Native bytes/pages remain owned by source_visual_operation.
+    """
+    def __init__(self, source_dirs, aliases=()):
+        from actual_source_visual_safety import source_visual_operation
+        self._sources, self._aliases, self._content_snapshots = {}, {}, {}
+        with source_visual_operation() as operation:
+            self._operation = operation
+        for directory in source_dirs:
+            directory = Path(directory).resolve()
+            if directory in self._sources:
+                raise ValueError("原 PDF 別名的來源專案重複")
+            manifest, _ = _load_project(directory)
+            self._sources[directory] = copy.deepcopy(manifest)
+        if not isinstance(aliases, (tuple, list)):
+            raise ValueError("原 PDF 別名必須是明確來源綁定清單")
+        for alias in aliases:
+            if (not isinstance(alias, Mapping)
+                    or set(alias) != {"source_project", "session_id", "pdf_sha256", "path"}):
+                raise ValueError("原 PDF 別名需要 source_project/session_id/pdf_sha256/path 四欄")
+            directory = Path(alias["source_project"]).resolve()
+            manifest = self._sources.get(directory)
+            if manifest is None or alias["session_id"] != manifest["session_id"]:
+                required = " | ".join(self._description(root, loaded, info)
+                    for root, loaded in self._sources.items() for info in loaded["pdfs"])
+                raise ValueError(f"原 PDF 別名來源專案/session 綁定不符：{directory}；實際來源：{required}")
+            infos = [info for info in manifest["pdfs"] if info["pdf_sha256"] == alias["pdf_sha256"]]
+            if len(infos) != 1:
+                required = " | ".join(self._description(directory, manifest, info) for info in manifest["pdfs"])
+                raise ValueError(f"原 PDF 別名封印 SHA 無唯一來源：{alias['pdf_sha256']}；實際來源：{required}")
+            key = directory, infos[0]["pdf_sha256"]
+            if key in self._aliases:
+                raise ValueError(f"原 PDF 別名綁定有歧義：{self._description(directory, manifest, infos[0])}")
+            try:
+                path = Path(alias["path"]).resolve(strict=True)
+                if not path.is_file():
+                    raise ValueError("選入的原 PDF 不是檔案")
+                with source_visual_operation() as operation:
+                    operation.read_source(path, infos[0]["pdf_sha256"])
+            except (OSError, ValueError) as exc:
+                raise ValueError(f"原 PDF 別名查證失敗：{self._description(directory, manifest, infos[0])}；{exc}") from exc
+            self._aliases[key] = path
+
+    @staticmethod
+    def _description(directory, manifest, info):
+        return (f"source_project={directory}；session={manifest['session_id']}；"
+                f"原 PDF={info['pdf_name']}；sealed SHA256={info['pdf_sha256']}")
+
+    def source_path(self, directory, manifest, entry):
+        from actual_source_visual_safety import source_visual_operation
+        directory = Path(directory).resolve()
+        sealed = self._sources.get(directory)
+        if (sealed is None or sealed["session_id"] != manifest["session_id"]
+                or sealed["manifest_integrity_sha256"] != manifest["manifest_integrity_sha256"]):
+            raise ValueError("原 PDF 別名所綁來源工作階段已變動")
+        infos = [info for info in sealed["pdfs"] if (
+            info["pdf_sha256"] == entry.get("pdf_sha256")
+            and info["pdf_name"] == entry.get("pdf_name"))]
+        if len(infos) != 1:
+            raise ValueError("actual occurrence 原 PDF 無唯一封印來源")
+        info = infos[0]
+        path = self._aliases.get((directory, info["pdf_sha256"]))
+        if path is None:
+            try:
+                path = _source_pdf(sealed, info, directory)
+            except FileNotFoundError as exc:
+                raise FileNotFoundError(
+                    f"搬移已保存 actual 需要原 PDF：{self._description(directory, sealed, info)}；"
+                    "原路徑不可用，請明確指定改名/移動後的原 PDF 別名") from exc
+        with source_visual_operation() as operation:
+            operation.read_source(path, info["pdf_sha256"])
+        return path
+
+    def aliases_for(self, directory):
+        directory = Path(directory).resolve()
+        manifest = self._sources[directory]
+        return [{"source_project": str(directory), "session_id": manifest["session_id"],
+                 "pdf_sha256": digest, "path": str(path)}
+                for (owner, digest), path in self._aliases.items() if owner == directory]
+
+    def content_snapshot(self, directory, manifest, info):
+        """Derive content from the same owned exact bytes as native proof."""
+        from actual_source_visual_safety import source_visual_operation
+        path = self.source_path(directory, manifest, info)
+        digest = info["pdf_sha256"]
+        with source_visual_operation() as operation:
+            raw = operation.read_source(path, digest)
+            cached = self._content_snapshots.get(digest)
+            if cached is None or cached[0] is not operation:
+                snapshot = _pdf_content_snapshot(path, expected_sha256=digest, _source_bytes=raw)
+                self._content_snapshots[digest] = operation, snapshot
+            return copy.deepcopy(self._content_snapshots[digest][1])
+
+    def recheck(self):
+        from actual_source_visual_safety import recheck_current_sources
+        recheck_current_sources()
+        for directory, sealed in self._sources.items():
+            current, _ = _load_project(directory)
+            if (current["session_id"] != sealed["session_id"]
+                    or current["manifest_integrity_sha256"] != sealed["manifest_integrity_sha256"]):
+                raise ValueError(f"原 PDF 別名所綁來源工作階段已變動：{directory}")
+
+
+def _require_source_actual_visual(entry, pdf, source_dir, manifest):
+    from actual_source_visual_safety import source_visual_safety
+    safety = source_visual_safety(entry, pdf=pdf)
+    if not safety["location_readable"]:
+        raise ValueError("來源 actual 原頁無法可靠確認："
+                         + _SourcePdfBindings._description(source_dir, manifest, entry)
+                         + "；" + safety["reason"])
+    return safety
+
+
+def _preflight_actual_source_overrides(source_dir, manifest, source_pdfs):
+    """Check only saved actual positions; expected-only stays usable offline."""
+    import actual_review as ar
+    rows = _source_occurrence_override_rows(source_dir, manifest)
+    if not rows:
+        return
+    by_key = {}
+    for entry in manifest["records"]:
+        by_key.setdefault(ar._override_key_from_entry(entry)[2:], []).append(entry)
+    seen = set()
+    for row in rows:
+        key = tuple(row.get(field, "") for field in ("page", "target_char", "stable_key", "x0", "y0"))
+        if key in seen:
+            raise ValueError(f"來源 actual occurrence override 位置重複：{key}")
+        seen.add(key)
+        _source_override_reading(row)
+        entries = by_key.get(key, [])
+        if len(entries) != 1:
+            raise ValueError(f"來源 actual occurrence override 位置不唯一：{key}")
+        entry = entries[0]
+        path = source_pdfs.source_path(source_dir, manifest, entry)
+        _require_source_actual_visual(entry, path, source_dir, manifest)
+
+
+def _source_override_reading(row):
+    import actual_review as ar
+    reading = ar._canon(row.get("actual_reading"))
+    if not reading or reading != row["actual_reading"]:
+        raise ValueError("來源 actual occurrence override 讀音不是 canonical")
+    return reading
+
+
+def source_pdf_alias_requests(source_dirs):
+    """GUI discovery uses only validated roots and finite original locations."""
+    import actual_review as ar
+    bindings = _SourcePdfBindings(source_dirs)
+    requests = []
+    for directory, manifest in bindings._sources.items():
+        rows = _source_occurrence_override_rows(directory, manifest)
+        for info in manifest["pdfs"]:
+            if not any(ar._override_applies_to_pdf(row, Path(info["pdf_name"])) for row in rows):
+                continue
+            try:
+                _source_pdf(manifest, info, directory)
+            except FileNotFoundError:
+                requests.append({"source_project": str(directory), "session_id": manifest["session_id"],
+                                 "pdf_sha256": info["pdf_sha256"], "pdf_name": info["pdf_name"]})
+    return requests
+
+
+def validate_source_pdf_aliases(source_dirs, aliases):
+    """Finite GUI binding/SHA check; authoritative native proof is backend-only."""
+    from actual_source_visual_safety import source_visual_operation
+    with source_visual_operation():
+        bindings = _SourcePdfBindings(source_dirs, aliases)
+        bindings.recheck()
+
+
 def _verify_available_session_pdfs(output_dir: Path, manifest) -> None:
     """Expected can work offline, but a known local replacement is not offline."""
     import standalone_proofread as sp
@@ -274,7 +450,13 @@ def _project_transfer_locks(*directories):
     roots = {sp.project_actual_evidence_root(Path(path).resolve()) for path in directories}
     with binding_scope(), ExitStack() as stack:
         for root in sorted(roots, key=lambda path: str(path).casefold()):
-            stack.enter_context(sp.project_delivery_lock(root))
+            from global_exact_glyph_library import GlobalLibraryValidationError
+            try:
+                stack.enter_context(sp.project_delivery_lock(root))
+            except GlobalLibraryValidationError as exc:
+                # Transfer's existing invalid-source boundary is ValueError;
+                # direct local recovery retains its library exception type.
+                raise ValueError('來源 actual 交易無法驗證；未轉送：'+str(exc)) from exc
         yield
 
 
@@ -297,6 +479,10 @@ def _load_project(output_dir: Path, *, allow_incomplete: bool = False,
         raise ValueError(f"跨電腦接續未完成，不能當作完整來源或匯入目標：{output_dir}")
     manifest = sp.json_load_strict(output_dir / "校對工作階段.json")
     sp.validate_manifest_integrity(manifest)
+    import manual_surface_actual as surface
+    if surface.enabled(manifest):
+        from project_write_admission import capture_project_write_admission
+        capture_project_write_admission(output_dir)
     bind_workbooks(output_dir, manifest)
     raw_db = sp.json_load_strict(output_dir / "人工判定資料庫.json")
     if not isinstance(raw_db, dict):
@@ -324,11 +510,14 @@ def _sealed_actual_excel_conflicts(conflicts: list[dict[str, Any]]) -> dict[str,
     return {**payload, "integrity_sha256": hashlib.sha256(_canonical(payload)).hexdigest()}
 
 
-def _validated_actual_excel_receipt(path: Path, *, with_digest: bool = False
+def _validated_actual_excel_receipt(path: Path, *, with_digest: bool = False, _read_bytes=None
                                     ) -> dict[str, Any] | tuple[dict[str, Any], str]:
     import standalone_proofread as sp
 
-    receipt, digest = sp.json_load_snapshot(path)
+    if _read_bytes is None:receipt, digest = sp.json_load_snapshot(path)
+    else:
+        raw=_read_bytes(path)
+        receipt,digest=sp.json_parse_strict(raw,path),hashlib.sha256(raw).hexdigest()
     if (not isinstance(receipt, dict)
             or set(receipt) != {"version", "conflicts", "integrity_sha256"}
             or receipt.get("version") != 1
@@ -341,25 +530,34 @@ def _validated_actual_excel_receipt(path: Path, *, with_digest: bool = False
 
 
 def actual_excel_conflict_state(output_dir: Path, manifest: Mapping[str, Any],
-                                db: Mapping[str, Any]) -> list[str]:
+                                db: Mapping[str, Any], *, _read_bytes=None) -> list[str]:
     """Keep imported actual disagreements pending until new local visual proof exists."""
     import actual_review as ar
     import standalone_proofread as sp
     from global_glyph_promotion import committed_project_recovery
 
     receipt_path = Path(output_dir) / ACTUAL_EXCEL_CONFLICT_FILE
-    if not receipt_path.exists():
+    if (_read_bytes(receipt_path) is None if _read_bytes is not None else not receipt_path.exists()):
         return []
-    receipt = _validated_actual_excel_receipt(receipt_path)
+    receipt = _validated_actual_excel_receipt(receipt_path,**({'_read_bytes':_read_bytes} if _read_bytes is not None else {}))
     entries = {entry["review_id"]: entry for entry in manifest.get("records", [])}
     ledger = {entry["review_id"]: entry for entry in sp.materialize_ledger(manifest, db)}
     root = sp.project_actual_evidence_root(output_dir)
-    override_rows = ar._read_csv(root / ar.OCCURRENCE_OVERRIDE_FILE, ar.OVERRIDE_HEADERS)
+    def rows(name,headers):
+        if _read_bytes is None:return ar._read_csv(root/name,headers)
+        raw=_read_bytes(root/name)
+        return ar._read_csv_bytes(raw,name,headers) if raw is not None else []
+    override_rows = rows(ar.OCCURRENCE_OVERRIDE_FILE, ar.OVERRIDE_HEADERS)
     overrides = {tuple(row[field] for field in (
         "pdf_contains", "pdf_excludes", "page", "target_char", "stable_key", "x0", "y0"
     )): row for row in override_rows}
-    provenance = ar._read_csv(root / ar.GLYPH_PROVENANCE_FILE, ar.GLYPH_PROVENANCE_HEADERS)
-    refresh_pending = committed_project_recovery(root) is not None
+    provenance = rows(ar.GLYPH_PROVENANCE_FILE, ar.GLYPH_PROVENANCE_HEADERS)
+    if _read_bytes is None:refresh_pending = committed_project_recovery(root) is not None
+    else:
+        from global_glyph_promotion import PROJECT_TRANSACTION_FILE,_validated_project_journal
+        raw=_read_bytes(root/PROJECT_TRANSACTION_FILE)
+        refresh_pending=raw is not None
+        if raw is not None:_validated_project_journal(raw)
     pending = []
     seen = set()
     for conflict in receipt["conflicts"]:
@@ -443,17 +641,18 @@ def actual_excel_conflict_state(output_dir: Path, manifest: Mapping[str, Any],
 
 
 def actual_excel_conflict_notes(output_dir: Path, manifest: Mapping[str, Any],
-                                db: Mapping[str, Any], checked_ids: Sequence[str]) -> str:
+                                db: Mapping[str, Any], checked_ids: Sequence[str], *, _read_bytes=None) -> str:
     """Bind a fresh local visual action to every pending conflict it checks."""
     import standalone_proofread as sp
 
     receipt_path = Path(output_dir) / ACTUAL_EXCEL_CONFLICT_FILE
-    if not receipt_path.exists():
+    if (_read_bytes(receipt_path) is None if _read_bytes is not None else not receipt_path.exists()):
         return ""
-    pending = set(actual_excel_conflict_state(output_dir, manifest, db))
+    pending = set(actual_excel_conflict_state(output_dir, manifest, db,
+        **({'_read_bytes':_read_bytes} if _read_bytes is not None else {})))
     if not pending:
         return ""
-    receipt = _validated_actual_excel_receipt(receipt_path)
+    receipt = _validated_actual_excel_receipt(receipt_path,**({'_read_bytes':_read_bytes} if _read_bytes is not None else {}))
     checked = set(checked_ids)
     tokens = sorted({_actual_excel_conflict_token(item) for item in receipt["conflicts"]
                      if item["target_review_id"] in pending
@@ -462,9 +661,10 @@ def actual_excel_conflict_notes(output_dir: Path, manifest: Mapping[str, Any],
 
 
 def hold_actual_excel_completion(output_dir: Path, manifest: Mapping[str, Any],
-                                 db: Mapping[str, Any], gate: dict[str, Any]) -> dict[str, Any]:
+                                 db: Mapping[str, Any], gate: dict[str, Any], *, _read_bytes=None) -> dict[str, Any]:
     """Keep an independently computed ledger from declaring conflict completion."""
-    pending = actual_excel_conflict_state(output_dir, manifest, db)
+    pending = actual_excel_conflict_state(output_dir, manifest, db,
+        **({'_read_bytes':_read_bytes} if _read_bytes is not None else {}))
     if not pending:
         return gate
     from occurrence_ledger import PROCESSING_FINISHED, PROOFREAD_COMPLETE
@@ -714,8 +914,9 @@ def expected_conflict_review_view(output_dir, manifest, db, ledger):
                         if entry["review_id"] in pending else {})} for entry in ledger]
 
 
-def hold_expected_conflict_completion(output_dir, manifest, db, gate):
-    pending = validate_conflict_state(output_dir, manifest, db)
+def hold_expected_conflict_completion(output_dir, manifest, db, gate, *, _read_bytes=None):
+    pending = validate_conflict_state(output_dir, manifest, db,
+        **({'_read_bytes':_read_bytes} if _read_bytes is not None else {}))
     if not pending:
         return gate
     from occurrence_ledger import PROCESSING_FINISHED, PROOFREAD_COMPLETE
@@ -729,14 +930,15 @@ def hold_expected_conflict_completion(output_dir, manifest, db, gate):
     return held
 
 
-def validate_conflict_state(output_dir: Path, manifest: Mapping[str, Any], db: Mapping[str, Any]):
+def validate_conflict_state(output_dir: Path, manifest: Mapping[str, Any], db: Mapping[str, Any], *, _read_bytes=None):
     """A conflicted row is inactive until a fresh local event cites its receipt."""
     import standalone_proofread as sp
 
     path = Path(output_dir) / CONFLICT_FILE
-    if not path.exists():
+    if (_read_bytes(path) is None if _read_bytes is not None else not path.exists()):
         return []
-    receipt = _validated_expected_receipt(sp.json_load_strict(path), manifest)
+    receipt = _validated_expected_receipt(sp.json_parse_strict(_read_bytes(path),path)
+        if _read_bytes is not None else sp.json_load_strict(path), manifest)
     valid_ids = {entry["review_id"] for entry in manifest.get("records", [])}
     return _pending_expected_conflicts(receipt, valid_ids, db)
 
@@ -849,6 +1051,9 @@ def _actual_transfer_state(output_dir: Path, manifest: Mapping[str, Any]):
     """Preserve unresolved actual intent without creating new human evidence."""
     import actual_review as ar
     import standalone_proofread as sp
+    import manual_surface_actual as surface
+    if surface.enabled(manifest):
+        raise ValueError('manual-surface-actual/1 僅支援原 session/occurrence；不支援 actual 跨專案轉送。可用 expected-only 入口。')
     from global_glyph_promotion import PROJECT_TRANSACTION_FILE, load_promotion_outbox
 
     root = sp.project_actual_evidence_root(output_dir)
@@ -919,11 +1124,14 @@ def _actual_transfer_state(output_dir: Path, manifest: Mapping[str, Any]):
     }
 
 
-def _proof_payload(output_dir: Path, manifest: Mapping[str, Any]) -> dict[str, Any]:
+def _proof_payload(output_dir: Path, manifest: Mapping[str, Any], *, source_pdfs=None) -> dict[str, Any]:
     pdfs = []
     for info in manifest.get("pdfs", []):
-        path = _source_pdf(manifest, info, output_dir)
-        observed_sha, pages = _pdf_content_snapshot(path, expected_sha256=str(info["pdf_sha256"]))
+        if source_pdfs is None:
+            path = _source_pdf(manifest, info, output_dir)
+            observed_sha, pages = _pdf_content_snapshot(path, expected_sha256=str(info["pdf_sha256"]))
+        else:
+            observed_sha, pages = source_pdfs.content_snapshot(output_dir, manifest, info)
         pdfs.append({
             "pdf_sha256": observed_sha,
             "pdf_name": str(info["pdf_name"]),
@@ -1366,7 +1574,7 @@ def prepare_portable_project(output_dir: Path) -> Path:
     return path
 
 
-def _load_proof(output_dir: Path, manifest: Mapping[str, Any]):
+def _load_proof(output_dir: Path, manifest: Mapping[str, Any], *, source_pdfs=None):
     import standalone_proofread as sp
 
     path = output_dir / PROOF_FILE
@@ -1389,29 +1597,32 @@ def _load_proof(output_dir: Path, manifest: Mapping[str, Any]):
             upgraded = copy.deepcopy(proof)
             for saved, info in zip(upgraded["pdfs"], manifest["pdfs"]):
                 try:
-                    original = _source_pdf(manifest, info, output_dir)
+                    if source_pdfs is None:
+                        original = _source_pdf(manifest, info, output_dir)
+                        _, fresh = _pdf_content_snapshot(original, expected_sha256=str(info["pdf_sha256"]))
+                    else:
+                        _, fresh = source_pdfs.content_snapshot(output_dir, manifest, info)
                 except FileNotFoundError:
                     # _match_pdfs may still prove byte-for-byte identity with
                     # the target; different bytes require this missing layer.
                     return proof
-                _, fresh = _pdf_content_snapshot(original, expected_sha256=str(info["pdf_sha256"]))
                 if not _pages_visual_equivalent(saved["pages"], fresh):
                     raise ValueError("舊 PDF 內容證據與來源原頁不符；未補證")
                 saved["pages"] = fresh
             return upgraded
         return proof
     # Source bytes may still be present without a previously exported proof.
-    return _proof_payload(output_dir, manifest)
+    return _proof_payload(output_dir, manifest, source_pdfs=source_pdfs)
 
 
 def _proof_from_explicit_local(output_dir: Path, manifest: Mapping[str, Any],
-                               local_pdf: Path, local_pages):
+                               local_pdf: Path, local_pages, *, source_pdfs=None):
     infos = manifest.get("pdfs", [])
     observed_sha, observed_pages = _pdf_content_snapshot(local_pdf)
     if observed_pages != local_pages:
         raise ValueError("明確指定的本地 PDF 在頁面內容取證後已變動")
     try:
-        return _load_proof(output_dir, manifest)
+        return _load_proof(output_dir, manifest, source_pdfs=source_pdfs)
     except FileNotFoundError:
         if len(infos) != 1 or observed_sha != infos[0].get("pdf_sha256"):
             raise
@@ -2001,7 +2212,8 @@ def _presentation_current_receipts(target_dir: Path):
 
 
 @bound_operation(project_parameter="output_dir")
-def resume_portable_project(output_dir: Path, *, _expected_marker_sha: str | None = None):
+def resume_portable_project(output_dir: Path, *, _expected_marker_sha: str | None = None,
+                            _prewrite_guard=None):
     """Redo only a fully bound committed presentation, or undo precommit receipts."""
     import standalone_proofread as sp
 
@@ -2035,16 +2247,24 @@ def resume_portable_project(output_dir: Path, *, _expected_marker_sha: str | Non
             _load_project(output_dir, allow_incomplete=True, allow_unresolved_conflict=True)
             _actual_transfer_state(output_dir, manifest)
             _assert_actual_marker_owner(marker_path, marker_sha)
+            if _prewrite_guard is not None:
+                _prewrite_guard()
             published_report = _publish_portable_outputs(output_dir, manifest, db)
+            if _prewrite_guard is not None:
+                _prewrite_guard()
             if marker["export_pending"]:
                 if any(sp.needs_expected_review(row) for row in sp.materialize_ledger(manifest, db)):
                     sp.export_pending_for_gpt(output_dir, _allow_internal_portable=True)
+                    if _prewrite_guard is not None:
+                        _prewrite_guard()
             if (sp.json_load_strict(marker_path) != marker
                     or _sha(manifest_path) != marker["manifest_file_sha256"]
                     or _document_digest(sp.normalize_db(sp.json_load_strict(db_path))) != marker["db_after_digest"]
                     or _presentation_current_receipts(output_dir) != current_receipts):
                 raise ValueError("發布期間來源資料或未完成標記已由其他交易變動；保留標記")
             _assert_actual_marker_owner(marker_path, marker_sha)
+            if _prewrite_guard is not None:
+                _prewrite_guard()
             marker_path.unlink()
             return {"status": "PRESENTATION_RECOVERED", "report": str(published_report)}
         if (_sha(db_path) == marker["db_before_sha256"]
@@ -2396,6 +2616,12 @@ def _guard_actual_excel_sources(xlsx, source_ledger, target_dir, target_manifest
                 if group["group_id"] == gid:
                     groups[gid] = group
     def resolve(entry):
+        # A content mapping authorizes target geometry, not replacement of the
+        # source's font/draw seal. Re-prove the source profile against its bytes.
+        try:
+            return ar._resolve_pdf_path(entry, Path(target_dir))
+        except (FileNotFoundError, ValueError):
+            pass
         from actual_render_geometry import source_clipped_candidate
         if (source_clipped_candidate(entry) is not None
                 or entry.get("x0") == entry.get("x1") or entry.get("y0") == entry.get("y1")):
@@ -2424,10 +2650,35 @@ def _guard_actual_excel_sources(xlsx, source_ledger, target_dir, target_manifest
         raise
 
 
+def _require_portable_actual_visual_pair(source, target, target_dir, *, source_dir=None,
+                                         directly_checked=False, source_pdf=None, source_manifest=None):
+    """A page-content map never creates a fresh visual vote or altered actual."""
+    import actual_review as ar
+    source_safety = (_require_source_actual_visual(source, source_pdf, source_dir, source_manifest)
+                     if source_pdf is not None else ar.require_actual_visual_target(source, source_dir or target_dir))
+    target_safety = ar.require_actual_visual_target(target, target_dir)
+    altered = {"EXACT_ANNOTATION_OVERPAINT_LOCAL_ONLY"}
+    if source_safety["reason"] in altered or target_safety["reason"] in altered:
+        if (not directly_checked or source.get("pdf_sha256") != target.get("pdf_sha256")
+                or source.get("occurrence_id") != target.get("occurrence_id")
+                or source_safety["reason"] != target_safety["reason"]):
+            raise ValueError("portable actual 後畫修改位置僅接受同 PDF 同 occurrence 的直接核對；不得由 raw 字形或群組映射重用")
+    return target_safety
+
+
 @_stable_excel_import
 @bound_operation(project_parameter="target_dir")
 def import_actual_excel(target_dir: Path, xlsx: Path, *,
                         _original_xlsx: Path, _snapshot_sha: str):
+    from actual_source_visual_safety import source_visual_write_result
+    return source_visual_write_result(lambda: _import_actual_excel_with_visual_sources(target_dir, xlsx,
+        _original_xlsx=_original_xlsx, _snapshot_sha=_snapshot_sha),
+        commit_state="COMMITTED_REFRESH_PENDING",
+        committed=lambda result: result.status.get("project_actual_commit") == "COMMITTED")
+
+
+def _import_actual_excel_with_visual_sources(target_dir: Path, xlsx: Path, *,
+                                            _original_xlsx: Path, _snapshot_sha: str):
     """Carry source visual decisions as local occurrence evidence, never a vote."""
     import actual_review as ar
     import standalone_proofread as sp
@@ -2538,11 +2789,14 @@ def import_actual_excel(target_dir: Path, xlsx: Path, *,
         # independently mapped from the source's complete occurrence roster.
         selected = members if len(members) <= 1 or b_checked else members[:1]
         target_entries = []
-        for member in selected:
+        for member_index, member in enumerate(selected):
             pair = reviews.get(member["review_id"])
             if pair is None:
                 raise ValueError(f"Excel actual row {number} 來源 occurrence 無位置映射")
-            target_entries.append(by_target_occ[pair[1]["occurrence_id"]])
+            target_entry = by_target_occ[pair[1]["occurrence_id"]]
+            _require_portable_actual_visual_pair(member, target_entry, target_dir,
+                directly_checked=member_index == 0 or (member_index == 1 and b_checked))
+            target_entries.append(target_entry)
         provenance = {
             "source_session_id": source_manifest["session_id"],
             "source_manifest_integrity_sha256": source_manifest["manifest_integrity_sha256"],
@@ -2618,6 +2872,8 @@ def import_actual_excel(target_dir: Path, xlsx: Path, *,
                                      "verified_occurrence_ids": sorted(target_ids),
                                      "affected_occurrence_ids": sorted(target_ids)})
     def validate_live_target():
+        from actual_source_visual_safety import recheck_current_sources
+        recheck_current_sources()
         _verify_excel_import_snapshot(xlsx, _original_xlsx, _snapshot_sha)
         if (target_dir / INCOMPLETE_FILE).exists() or (root / PROJECT_TRANSACTION_FILE).exists():
             raise ValueError("目標 actual Excel 交易待專用恢復；未寫入或回報完成")
@@ -2626,6 +2882,13 @@ def import_actual_excel(target_dir: Path, xlsx: Path, *,
             raise ValueError("目標封印或人工判定於 actual Excel 匯入期間變動；未寫入")
         _verify_mapped_target_pdfs(target_dir, live_manifest, pdf_map, geometry)
         _guard_actual_excel_sources(xlsx, source_ledger, target_dir, live_manifest, pdf_map)
+        for _group_id, _reading, target_entries, provenance in decisions:
+            checked = {provenance["source_roster"][0]["occurrence_id"]}
+            if str(provenance["source_decision"].get("sample_b_checked") or "").upper() == "Y":
+                checked.update(provenance["source_occurrence_ids"][1:2])
+            for source_oid, target_entry in zip(provenance["source_occurrence_ids"], target_entries):
+                _require_portable_actual_visual_pair(source_by_occ[source_oid], target_entry, target_dir,
+                    directly_checked=source_oid in checked)
         if (_sha(conflict_receipt_path) if conflict_receipt_path.exists() else None) != conflict_receipt_sha:
             raise ValueError("Excel actual 衝突紀錄於匯入期間變動；未寫入")
 
@@ -2729,6 +2992,15 @@ def import_actual_excel(target_dir: Path, xlsx: Path, *,
                 _guard_actual_excel_sources(xlsx, source_ledger, target_dir, live_manifest, pdf_map)
                 ar._write_csv(override_path, ar.OVERRIDE_HEADERS,
                               sorted(by_key.values(), key=lambda row: tuple(row[field] for field in fields)))
+                for _group_id, reading, target_entries, _provenance in decisions:
+                    for entry in target_entries:
+                        safety = ar.actual_visual_source_safety(entry, target_dir)
+                        if safety["reason"] == "EXACT_ANNOTATION_OVERPAINT_LOCAL_ONLY":
+                            stored = by_key[ar._override_key_from_entry(entry)]
+                            identity = ar.actual_group_identity(entry)
+                            ar._append_provenance_event(root, {**identity, "exact_key": identity["exact_key"]},
+                                reading, "OCCURRENCE_OVERRIDE", [entry["occurrence_id"]],
+                                source=stored["source"], note=stored["note"])
                 _assert_actual_marker_owner(marker, marker_sha)
                 _verify_mapped_target_pdfs(target_dir, live_manifest, pdf_map, geometry)
                 bind_recovery_plan(recovery_plan)
@@ -3088,6 +3360,8 @@ def _resume_actual_excel_project_locked(output_dir: Path):
     recovered = sp.recover_committed_actual_project(output_dir, acknowledge=False)
     if recovered is None or recovered.get("project_refresh") != "SUCCESS":
         raise ValueError("actual Excel COMMITTED 交易未完成安全恢復")
+    # A successful surface projection cannot satisfy this Excel-owner output.
+    sp._actual_refresh_output_path(output_dir,recovered,require_report=True)
     _assert_actual_marker_owner(marker_path, marker_sha)
     marker_sha = sp.json_save(marker_path, _sealed_actual_excel_marker({
         "status": "ACTUAL_EXCEL_RECOVERED",
@@ -3178,8 +3452,8 @@ def _validate_project_confirmation_transfer(event, source, target):
         raise ValueError("目標 expected、詞境或六閘門證據不同；來源確認不可直接沿用")
 
 
-def _mapped_occurrence_overrides(source_dir: Path, source_manifest, target_manifest, reviews):
-    """Carry occurrence-local actual only; never mint Global glyph evidence."""
+def _source_occurrence_override_rows(source_dir: Path, source_manifest):
+    """Read exactly the override rows bound by the sealed source workbooks."""
     import actual_review as ar
     import standalone_proofread as sp
 
@@ -3215,9 +3489,19 @@ def _mapped_occurrence_overrides(source_dir: Path, source_manifest, target_manif
             consumed = [row for row in rows if ar._override_applies_to_pdf(row, name)]
             if ar._subset_sha256(consumed, ar.OVERRIDE_HEADERS) != sealed_hash:
                 raise ValueError(f"來源動態 actual 證據與封印 workbook fingerprint 不符：{name}")
-    rows = [row for row in rows if any(ar._override_applies_to_pdf(row, name) for name in source_names)]
+    return [row for row in rows if any(ar._override_applies_to_pdf(row, name) for name in source_names)]
+
+
+def _mapped_occurrence_overrides(source_dir: Path, source_manifest, target_manifest, reviews, *, source_pdfs=None):
+    """Carry occurrence-local actual only; never mint Global glyph evidence."""
+    import actual_review as ar
+    import standalone_proofread as sp
+    source_root = sp.project_actual_evidence_root(source_dir)
+    rows = _source_occurrence_override_rows(source_dir, source_manifest)
     if not rows:
         return []
+    if source_pdfs is None:
+        source_pdfs = _SourcePdfBindings([source_dir])
     by_source_key = {}
     for source, target in reviews.values():
         key = ar._override_key_from_entry(source)[2:]
@@ -3232,9 +3516,11 @@ def _mapped_occurrence_overrides(source_dir: Path, source_manifest, target_manif
         if pair is None:
             raise ValueError(f"來源 actual occurrence override 無法唯一對應：{key}")
         source, target = pair
-        reading = ar._canon(row.get("actual_reading"))
-        if not reading or reading != row["actual_reading"]:
-            raise ValueError("來源 actual occurrence override 讀音不是 canonical")
+        direct = ar.has_direct_occurrence_actual(source_root, source, row.get("actual_reading"))
+        _require_portable_actual_visual_pair(source, target, Path(target.get("pdf") or "").parent,
+            source_dir=source_dir, directly_checked=direct,
+            source_pdf=source_pdfs.source_path(source_dir, source_manifest, source), source_manifest=source_manifest)
+        reading = _source_override_reading(row)
         target_key = ar._override_key_from_entry(target)
         if target_key in seen_target:
             raise ValueError("多個來源 actual override 對應同一目標位置")
@@ -3262,6 +3548,25 @@ def _publish_portable_outputs(target_dir: Path, manifest, db):
 
 
 def import_project_decisions(source_dir: Path, target_dir: Path, *,
+                             source_pdf_aliases=(),
+                             _source_pdf_bindings=None,
+                             _allow_incomplete_target: bool = False,
+                             _selected_local_pdf: Path | None = None,
+                             _target_marker_sha: str | None = None) -> dict[str, Any]:
+    from actual_source_visual_safety import source_visual_write_result
+    return source_visual_write_result(lambda: _import_project_decisions_with_visual_sources(source_dir, target_dir,
+        source_pdf_aliases=source_pdf_aliases,
+        _source_pdf_bindings=_source_pdf_bindings,
+        _allow_incomplete_target=_allow_incomplete_target,
+        _selected_local_pdf=_selected_local_pdf, _target_marker_sha=_target_marker_sha),
+        commit_state="COMMITTED_REFRESH_PENDING",
+        committed=lambda result: bool(result["imported"] or result["provenance_updates"] or result["conflicts"]
+            or result["actual_staging"] == "RECHECK_LOCAL_PDF_REQUIRED"))
+
+
+def _import_project_decisions_with_visual_sources(source_dir: Path, target_dir: Path, *,
+                             source_pdf_aliases=(),
+                             _source_pdf_bindings=None,
                              _allow_incomplete_target: bool = False,
                              _selected_local_pdf: Path | None = None,
                              _target_marker_sha: str | None = None) -> dict[str, Any]:
@@ -3276,13 +3581,26 @@ def import_project_decisions(source_dir: Path, target_dir: Path, *,
             raise ValueError("內部接續缺少明確 owner；未匯入")
         _assert_actual_marker_owner(target_dir / INCOMPLETE_FILE, _target_marker_sha)
     source_manifest, source_db = _load_project(source_dir)
+    source_actual = _actual_transfer_state(source_dir, source_manifest)
+    if _source_pdf_bindings is None:
+        source_pdfs = _SourcePdfBindings([source_dir], source_pdf_aliases)
+    else:
+        if (not isinstance(_source_pdf_bindings, _SourcePdfBindings)
+                or list(source_pdf_aliases) != _source_pdf_bindings.aliases_for(source_dir)):
+            raise ValueError("內部內容證據來源綁定不符")
+        from actual_source_visual_safety import source_visual_operation
+        with source_visual_operation() as operation:
+            if _source_pdf_bindings._operation is not operation:
+                raise ValueError("內部內容證據 operation owner 不符")
+        source_pdfs = _source_pdf_bindings
+    _preflight_actual_source_overrides(source_dir, source_manifest, source_pdfs)
+    source_pdfs.recheck()
     target_manifest, _ = _load_project(target_dir, allow_incomplete=_allow_incomplete_target)
     source_current = {entry["review_id"]: entry for entry in
                       sp.materialize_ledger(source_manifest, source_db)}
-    source_actual = _actual_transfer_state(source_dir, source_manifest)
     _actual_transfer_state(target_dir, target_manifest)
     if _selected_local_pdf is None:
-        proof = _load_proof(source_dir, source_manifest)
+        proof = _load_proof(source_dir, source_manifest, source_pdfs=source_pdfs)
     else:
         local_pdf = Path(_selected_local_pdf).resolve()
         target_pdfs = target_manifest.get("pdfs", [])
@@ -3291,10 +3609,11 @@ def import_project_decisions(source_dir: Path, target_dir: Path, *,
             raise ValueError("明確指定的本地 PDF 與目標封印 SHA 不符")
         _, local_pages = _pdf_content_snapshot(local_pdf, expected_sha256=target_pdfs[0]["pdf_sha256"])
         proof = _proof_from_explicit_local(source_dir, source_manifest,
-                                            local_pdf, local_pages)
+                                            local_pdf, local_pages, source_pdfs=source_pdfs)
     pdf_map, geometry = _match_pdfs(proof, source_manifest, target_manifest, target_dir)
     reviews = _map_reviews(source_manifest, target_manifest, pdf_map, geometry)
-    mapped_overrides = _mapped_occurrence_overrides(source_dir, source_manifest, target_manifest, reviews)
+    mapped_overrides = _mapped_occurrence_overrides(source_dir, source_manifest, target_manifest, reviews,
+                                                    source_pdfs=source_pdfs)
     if mapped_overrides:
         import actual_review as ar
         target_actual_root = sp.project_actual_evidence_root(target_dir)
@@ -3469,11 +3788,15 @@ def import_project_decisions(source_dir: Path, target_dir: Path, *,
                     "sources": sources,
                 }
         def validate_source():
+            from actual_source_visual_safety import recheck_current_sources
+            recheck_current_sources()
+            source_pdfs.recheck()
             if _load_project(source_dir) != (source_manifest, source_db):
                 raise ValueError("來源工作階段或判定於匯入期間變動；未轉送")
             if _actual_transfer_state(source_dir, source_manifest) != source_actual:
                 raise ValueError("來源 actual 狀態於匯入期間變動；未轉送")
-            if _mapped_occurrence_overrides(source_dir, source_manifest, target_manifest, reviews) != mapped_overrides:
+            if _mapped_occurrence_overrides(source_dir, source_manifest, target_manifest, reviews,
+                                             source_pdfs=source_pdfs) != mapped_overrides:
                 raise ValueError("來源 actual occurrence 證據於匯入期間變動；未轉送")
         validate_source()
         _actual_transfer_state(target_dir, live_manifest)
@@ -3511,7 +3834,8 @@ def import_project_decisions(source_dir: Path, target_dir: Path, *,
         if marker_sha:
             _assert_actual_marker_owner(marker_path, marker_sha)
     if not _allow_incomplete_target and mutations:
-        resume_portable_project(target_dir, _expected_marker_sha=marker_sha)
+        resume_portable_project(target_dir, _expected_marker_sha=marker_sha,
+                                _prewrite_guard=validate_source)
     return {"imported": imported, "duplicates": duplicates, "conflicts": conflicts,
             "provenance_updates": provenance_updates,
             "matched_actual_overrides": len(mapped_overrides),
@@ -3520,41 +3844,62 @@ def import_project_decisions(source_dir: Path, target_dir: Path, *,
             "target_session_id": target_manifest["session_id"], "pdf_sha_map": pdf_map}
 
 
-def continue_project(source_dir: Path, local_pdf: Path, target_dir: Path):
+def continue_project(source_dir: Path, local_pdf: Path, target_dir: Path, *, source_pdf_aliases=()):
     """Create a new sealed project from local bytes, then import proven events."""
-    return merge_projects([source_dir], local_pdf, target_dir)
+    return merge_projects([source_dir], local_pdf, target_dir, source_pdf_aliases=source_pdf_aliases)
 
 
-def _preflight_merge_sources(source_dirs, local_pdf):
+def _preflight_merge_sources(source_dirs, local_pdf, *, source_pdfs=None):
     if not 1 <= len(source_dirs) <= 2 or len(set(source_dirs)) != len(source_dirs):
         raise ValueError("跨專案合併需要一至兩個不同來源專案")
     if not local_pdf.is_file() or local_pdf.suffix.lower() != ".pdf":
         raise FileNotFoundError(f"找不到當地 PDF：{local_pdf}")
     _, local_pages = _pdf_content_snapshot(local_pdf)
+    source_pdfs = source_pdfs or _SourcePdfBindings(source_dirs)
     for source_dir in source_dirs:
         source_manifest, _ = _load_project(source_dir)
         _actual_transfer_state(source_dir, source_manifest)
-        proof = _proof_from_explicit_local(source_dir, source_manifest, local_pdf, local_pages)
+        _preflight_actual_source_overrides(source_dir, source_manifest, source_pdfs)
+        proof = _proof_from_explicit_local(source_dir, source_manifest, local_pdf, local_pages,
+                                         source_pdfs=source_pdfs)
         if len(proof["pdfs"]) != 1:
             raise ValueError("此入口目前僅支援單一 PDF 專案；多 PDF 請先建立目標專案再匯入")
         if not _pages_equivalent(proof["pdfs"][0]["pages"], local_pages):
             raise ValueError(f"當地 PDF 頁面內容/位置與來源不同：{source_dir}；未建立目標專案")
+    source_pdfs.recheck()
     return local_pages
 
 
-def merge_projects(source_dirs, local_pdf: Path, target_dir: Path):
+def merge_projects(source_dirs, local_pdf: Path, target_dir: Path, *, source_pdf_aliases=()):
+    from actual_source_visual_safety import source_visual_write_result
+    return source_visual_write_result(lambda: _merge_projects_with_visual_sources(
+        source_dirs, local_pdf, target_dir, source_pdf_aliases=source_pdf_aliases),
+        commit_state="COMMITTED_REFRESH_PENDING",
+        completed_cleanup=lambda result, error: {
+            **result, "project_actual_commit": "COMMITTED", "source_cleanup_error": str(error)})
+
+
+def _merge_projects_with_visual_sources(source_dirs, local_pdf, target_dir, *, source_pdf_aliases):
+    from actual_source_visual_safety import source_visual_operation
     source_dirs = [Path(path).resolve() for path in source_dirs]
     local_pdf = Path(local_pdf).resolve()
     target_dir = Path(target_dir).resolve()
     if target_dir.exists() and any(target_dir.iterdir()):
         raise ValueError("接續目標資料夾必須為空，避免覆寫既有成果")
+    from project_write_admission import capture_fresh_transfer_target
+    target_origin=capture_fresh_transfer_target(target_dir)
     # Invalid source/preflight must not create even a lock-only target.
-    _preflight_merge_sources(source_dirs, local_pdf)
+    source_pdfs = _SourcePdfBindings(source_dirs, source_pdf_aliases)
+    with source_visual_operation() as operation:
+        operation.read_source(local_pdf, _sha(local_pdf))
+    _preflight_merge_sources(source_dirs, local_pdf, source_pdfs=source_pdfs)
+    source_pdfs.recheck()
     with _project_transfer_locks(*source_dirs, target_dir):
-        return _merge_projects_locked(source_dirs, local_pdf, target_dir)
+        return _merge_projects_locked(source_dirs, local_pdf, target_dir, source_pdfs=source_pdfs,
+                                      _target_origin=target_origin)
 
 
-def _merge_projects_locked(source_dirs, local_pdf: Path, target_dir: Path):
+def _merge_projects_locked(source_dirs, local_pdf: Path, target_dir: Path, *, source_pdfs, _target_origin):
     """Build a new project from local bytes and merge one or two source projects.
 
     The existing projects are read-only. The first source's decision wins only
@@ -3575,7 +3920,14 @@ def _merge_projects_locked(source_dirs, local_pdf: Path, target_dir: Path):
     allowed.update(parent for parent in actual_root.parents if target_dir in parent.parents)
     if any(path not in allowed for path in target_dir.rglob("*")):
         raise ValueError("接續目標資料夾必須為空，避免覆寫既有成果")
-    local_pages = _preflight_merge_sources(source_dirs, local_pdf)
+    local_pages = _preflight_merge_sources(source_dirs, local_pdf, source_pdfs=source_pdfs)
+    def validate_sources():
+        source_pdfs.recheck()
+        for source_dir in source_dirs:
+            manifest, _ = _load_project(source_dir)
+            _preflight_actual_source_overrides(source_dir, manifest, source_pdfs)
+        source_pdfs.recheck()
+    validate_sources()
     target_dir.mkdir(parents=True, exist_ok=True)
     marker = target_dir / INCOMPLETE_FILE
     marker_sha = sp.json_save(marker, {
@@ -3585,18 +3937,26 @@ def _merge_projects_locked(source_dirs, local_pdf: Path, target_dir: Path):
         "reason": "只有建立目標封印、匯入映射與核對均成功後才移除此標記",
     }, expected_sha256="")
     try:
+        def validate_target_write():
+            validate_sources()
+            _assert_actual_marker_owner(marker, marker_sha)
         _assert_actual_marker_owner(marker, marker_sha)
-        sp.run_pipeline_pdfs([local_pdf], target_dir,
-                             _prewrite_guard=lambda: _assert_actual_marker_owner(marker, marker_sha))
+        from project_write_admission import owned_transfer_creation
+        with owned_transfer_creation(_target_origin,marker_sha,validate_target_write):
+            sp.run_pipeline_pdfs([local_pdf], target_dir,
+                                 _prewrite_guard=validate_target_write)
+        validate_target_write()
         _assert_actual_marker_owner(marker, marker_sha)
         target_manifest, _ = _load_project(target_dir, allow_incomplete=True)
         mapped_by_key = {}
         for source_dir in source_dirs:
             source_manifest, _ = _load_project(source_dir)
-            proof = _proof_from_explicit_local(source_dir, source_manifest, local_pdf, local_pages)
+            proof = _proof_from_explicit_local(source_dir, source_manifest, local_pdf, local_pages,
+                                             source_pdfs=source_pdfs)
             pdf_map, geometry = _match_pdfs(proof, source_manifest, target_manifest, target_dir)
             reviews = _map_reviews(source_manifest, target_manifest, pdf_map, geometry)
-            for row in _mapped_occurrence_overrides(source_dir, source_manifest, target_manifest, reviews):
+            for row in _mapped_occurrence_overrides(source_dir, source_manifest, target_manifest, reviews,
+                                                     source_pdfs=source_pdfs):
                 key = tuple(row[field] for field in (
                     "pdf_contains", "pdf_excludes", "page", "target_char", "stable_key", "x0", "y0"
                 ))
@@ -3617,10 +3977,12 @@ def _merge_projects_locked(source_dirs, local_pdf: Path, target_dir: Path):
             if any(tuple(row[field] for field in fields) in existing_keys for row in mapped_overrides):
                 raise ValueError("目標已有同位置 actual occurrence override；未覆寫")
             _assert_actual_marker_owner(marker, marker_sha)
+            validate_target_write()
             ar._write_csv(actual_root / ar.OCCURRENCE_OVERRIDE_FILE, ar.OVERRIDE_HEADERS,
                           [*existing_rows, *mapped_overrides])
             sp.refresh_actual_project(
-                target_dir, _prewrite_guard=lambda: _assert_actual_marker_owner(marker, marker_sha))
+                target_dir, _prewrite_guard=validate_target_write)
+            validate_target_write()
             refreshed_manifest, _ = _load_project(target_dir, allow_incomplete=True)
             if (refreshed_manifest.get("session_id") != target_manifest.get("session_id")
                     or {(row["review_id"], row["occurrence_id"]) for row in refreshed_manifest["records"]}
@@ -3631,6 +3993,8 @@ def _merge_projects_locked(source_dirs, local_pdf: Path, target_dir: Path):
         conflicts = []
         for source_dir in source_dirs:
             result = import_project_decisions(source_dir, target_dir,
+                                              source_pdf_aliases=source_pdfs.aliases_for(source_dir),
+                                              _source_pdf_bindings=source_pdfs,
                                               _allow_incomplete_target=True,
                                               _selected_local_pdf=local_pdf,
                                               _target_marker_sha=marker_sha)
@@ -3650,9 +4014,11 @@ def _merge_projects_locked(source_dirs, local_pdf: Path, target_dir: Path):
                 target_dir, final_manifest, final_db_sha, final_db, {},
                 phase="NEW_PROJECT_FINAL", export_pending=True)
             _assert_actual_marker_owner(marker, marker_sha)
+            validate_sources()
             marker_sha = sp.json_save(marker, owned_marker, expected_sha256=marker_sha)
             _assert_actual_marker_owner(marker, marker_sha)
-        resume_portable_project(target_dir, _expected_marker_sha=marker_sha)
+        resume_portable_project(target_dir, _expected_marker_sha=marker_sha,
+                                _prewrite_guard=validate_sources)
         return {"sources": results, "conflicts": conflicts,
                 "imported": sum(item["imported"] for item in results),
                 "duplicates": sum(item["duplicates"] for item in results),

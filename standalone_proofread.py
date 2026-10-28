@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from project_write_admission import project_write_entry
+
 import argparse
 import copy
 import csv
@@ -189,7 +191,19 @@ def _serialized_user_project_entry(operation):
     @wraps(operation)
     def locked(output_dir, *args, **kwargs):
         output_dir = resolve_existing_project_dir(trusted_root(output_dir))
-        with binding_scope(), project_delivery_lock(project_actual_evidence_root(output_dir)):
+        from project_write_admission import capture_project_write_admission, has_surface_indicators, _entry_receipt
+        supplied=kwargs.get('_phase') if operation.__name__=='regenerate_report' else None
+        if supplied is not None:
+            if supplied.project!=output_dir:raise ValueError('report continuation has a foreign project')
+            supplied.recheck()
+        admission = (supplied.receipt() if supplied is not None else
+                     capture_project_write_admission(output_dir, recovery=True) if has_surface_indicators(output_dir) else None)
+        if admission is not None and admission.workbook_roster is not None and not admission.profile:
+            raise ValueError('PROJECT_WRITE_ADMISSION: finish transitional surface publication via recover_committed_actual_project before ordinary write')
+        with binding_scope(), _entry_receipt(admission), project_delivery_lock(project_actual_evidence_root(output_dir),
+                **({'_admission':admission} if admission is not None and admission.workbook_roster is not None else {})):
+            if admission is not None:
+                admission.recheck()
             if operation.__name__ == "repair_project_state":
                 from pdf_portability import INCOMPLETE_FILE, resume_portable_project
                 if (output_dir / INCOMPLETE_FILE).exists():
@@ -197,7 +211,9 @@ def _serialized_user_project_entry(operation):
                     if result["status"] != "PRESENTATION_RECOVERED":
                         raise ValueError("未完成專案仍無可發布判定；已還原提交前回執，請重試操作")
                     return Path(result["report"])
-            _reject_incomplete_portable_project(output_dir)
+            from project_write_admission import entry_write_phase
+            current_phase=supplied or entry_write_phase(output_dir)
+            _reject_incomplete_portable_project(output_dir,**({'_phase':current_phase} if current_phase is not None else {}))
             return operation(output_dir, *args, **kwargs)
     return locked
 
@@ -205,29 +221,137 @@ def _serialized_user_project_entry(operation):
 def _global_direct_source_context(output_dir, manifest):
     # Called only after the controller validates the sealed manifest/artifacts.
     # No expected fields cross this boundary.
-    infos = {str(info.get("pdf_name") or ""): {
-        "pdf": str(info.get("pdf") or ""), "pdf_sha256": info.get("pdf_sha256"),
-    } for info in manifest.get("pdfs", [])}
-    if any(not Path(info["pdf"]).is_file() for info in infos.values()):
-        try:
-            for pdf in _resolve_session_pdfs(output_dir, manifest):
-                if pdf.name in infos:
-                    infos[pdf.name]["pdf"] = str(pdf)
-        except (OSError, ValueError):
-            # Missing bytes produce explicit per-occurrence ineligibility below.
-            pass
+    from actual_source_visual_safety import source_visual_operation
+    infos = {}
+    with source_visual_operation() as operation:
+        for info in manifest.get("pdfs", []):
+            name = str(info.get("pdf_name") or "")
+            records = [entry for entry in manifest.get("records", []) if entry.get("pdf_name") == name]
+            entry = records[0] if records else info
+            path = _resolve_pdf_path(entry, output_dir)
+            wanted = info.get("pdf_sha256")
+            if entry.get("pdf_sha256") != wanted:
+                raise ValueError("SOURCE_CONTEXT_PDF_SEAL_MISMATCH")
+            operation.read_source(path, wanted)
+            infos[name] = {"pdf": str(path), "pdf_sha256": wanted}
     return {"session_id": manifest.get("session_id"), "pdfs": infos}
 
 
-def _deliver_after_actual_commit(output_dir, result):
+def _retained_phase_committed_authority(output_dir,phase):
+    # Retain the original validated commit across our own ack/unlinks. A later
+    # absence (or foreign marker) cannot erase or create this historical truth.
+    from global_glyph_promotion import PROJECT_TRANSACTION_FILE,_validated_project_journal
+    output_dir=Path(output_dir).resolve();root=project_actual_evidence_root(output_dir)
+    local=phase.expected_bytes(root/PROJECT_TRANSACTION_FILE)
+    authority=_validated_project_journal(local) if local is not None else None
+    publication_raw=phase.expected_bytes(output_dir/ACTUAL_REFRESH_PUBLICATION)
+    publication=json_parse_strict(publication_raw,output_dir/ACTUAL_REFRESH_PUBLICATION) if publication_raw is not None else None
+    if authority is None and publication is not None and publication['phase']=='ACKNOWLEDGING':
+        authority=_validated_project_journal(phase.expected_bytes(output_dir.parent/publication['stage']/'ack-committed.json'))
+    retained=((authority['transaction_id'],authority['recovery_plan'])
+              if authority is not None and authority['state']=='COMMITTED' else None)
+    return retained,publication['cleared_count'] if publication is not None else None
+
+
+def _require_expected_committed_recovery(expected_recovery,known):
+    if expected_recovery is not None and (type(expected_recovery) not in (tuple,list)
+            or len(expected_recovery)!=2 or tuple(expected_recovery)!=known):
+        raise ValueError('已提交 actual 復原紀錄已變更；未套用新暫存')
+
+
+def _recover_direct_profile_phase(output_dir, phase, *, acknowledge, expected_recovery=None):
+    retained,cleared=_retained_phase_committed_authority(output_dir,phase)
+    _require_expected_committed_recovery(expected_recovery,retained)
+    try:
+        with project_delivery_lock(project_actual_evidence_root(output_dir),_admission=phase.receipt()):
+            return _recover_direct_profile_phase_locked(output_dir,phase,acknowledge=acknowledge,
+                expected_recovery=expected_recovery)
+    except ManualActualPostApplyError:
+        raise
+    except Exception as exc:
+        if retained is not None:
+            raise ManualActualPostApplyError('ordinary_committed_handoff',exc,
+                batch_result={'project_actual_commit':'COMMITTED','project_refresh':'PENDING',
+                    'project_refresh_token':retained[0],'recovery_plan':retained[1],
+                    'affected_occurrence_ids':retained[1]['affected_occurrence_ids']},
+                cleared_event_count=cleared) from exc
+        raise
+
+
+def _recover_direct_profile_phase_locked(output_dir, phase, *, acknowledge, expected_recovery=None):
+    """Continue the original new-profile ordinary phase through raw publication."""
+    output_dir=Path(output_dir).resolve();root=project_actual_evidence_root(output_dir)
+    phase.recheck()
+    _require_expected_committed_recovery(expected_recovery,_retained_phase_committed_authority(output_dir,phase)[0])
+    recover_pending_project_actual_write(root,_phase=phase)
+    resumed=_resume_actual_refresh_publication(output_dir,acknowledge=acknowledge,_phase=phase)
+    if resumed is not None and resumed['phase'] in {'PUBLISHED','ACKNOWLEDGING'}:
+        pending=_surface_phase_recovery(root,phase)
+        plan=resumed['_recovery_plan'] if resumed['phase']=='ACKNOWLEDGING' else pending[1]
+        report=output_dir/'注音校對_最終報告.xlsx'
+        if resumed['phase']=='PUBLISHED' and acknowledge:
+            _acknowledge_actual_refresh(output_dir,resumed['token'],_phase=phase)
+        if acknowledge:report=_publish_local_actual_conflict_resolution(output_dir,report,_phase=phase)
+        from global_glyph_promotion import GLOBAL_PROMOTION_OUTBOX_FILE,validate_outbox,_json
+        raw=phase.expected_bytes(root/GLOBAL_PROMOTION_OUTBOX_FILE)
+        items=validate_outbox(_json(raw))['items'] if raw is not None else []
+        return {'project_actual_commit':'COMMITTED','project_refresh':'SUCCESS',
+            'global_promotion_delivery':{'status':'DELIVERED' if all(item['status']=='DELIVERED' for item in items) else 'PENDING_RETRY'},
+            'affected_occurrence_ids':plan['affected_occurrence_ids'],'recovery_plan':plan,
+            'project_refresh_token':resumed['token'],
+            'postcondition_checked_occurrence_ids':[item['occurrence_id'] for item in plan['checked_postconditions']],
+            'refresh_performed':True,'cleared_actual_dependent_event_count':resumed['cleared_count'],
+            'refresh_report':str(report)}
+    pending=_surface_phase_recovery(root,phase)
+    _require_expected_committed_recovery(expected_recovery,pending)
+    if pending is None:return None
+    token,plan=pending
+    result={'project_actual_commit':'COMMITTED','project_refresh':'NOT_STARTED',
+        'project_refresh_token':token,'affected_occurrence_ids':plan['affected_occurrence_ids'],
+        'recovery_plan':plan}
+    name='global_promotion_delivery';status={}
+    try:
+        _deliver_after_actual_commit(output_dir,result,_phase=phase)
+        name='refresh_actual_project'
+        report=_stage_actual_refresh(output_dir,plan=plan,status=status,acknowledge=acknowledge,_phase=phase)
+        if acknowledge:
+            name='acknowledge_project_refresh'
+            _acknowledge_actual_refresh(output_dir,token,_phase=phase)
+            report=_publish_local_actual_conflict_resolution(output_dir,report,_phase=phase)
+        result.update(project_refresh='SUCCESS',refresh_performed=True,refresh_report=str(report),
+            cleared_actual_dependent_event_count=status['cleared_actual_dependent_event_count'],
+            postcondition_checked_occurrence_ids=[item['occurrence_id'] for item in plan['checked_postconditions']])
+        return result
+    except Exception as exc:
+        raise ManualActualPostApplyError(name,exc,batch_result=result,
+            cleared_event_count=status.get('cleared_actual_dependent_event_count')) from exc
+
+
+def _deliver_after_actual_commit(output_dir, result, *, _phase=None):
+    if _phase is None:
+        from project_write_admission import entry_write_phase
+        _phase=entry_write_phase(output_dir)
     result.setdefault("project_actual_commit",
                       "COMMITTED" if result.get("group_results", result.get("results")) else "NO_CHANGES")
+    try:
+        source_manifest = (_surface_known_json(_phase,Path(output_dir)/'校對工作階段.json') if _phase is not None
+                           else json_load_strict(Path(output_dir) / "校對工作階段.json"))
+        validate_manifest_integrity(source_manifest)
+        source_context = _global_direct_source_context(output_dir, source_manifest)
+        source_entries = source_manifest.get("records") or []
+    except Exception:
+        # Delivery below retains pending intents; no guessed source/reuse.
+        source_context = source_entries = None
     result["global_promotion_delivery"] = deliver_pending_promotion_outbox(
-        project_actual_evidence_root(output_dir)
+        project_actual_evidence_root(output_dir), source_context=source_context,
+        source_entries=source_entries,
+        **({'_phase':_phase} if _phase is not None else {}),
     )
     result["project_refresh"] = "NOT_STARTED"
     try:
-        result["project_refresh_token"] = project_refresh_token(project_actual_evidence_root(output_dir))
+        pending = _surface_phase_recovery(project_actual_evidence_root(output_dir),_phase) if _phase is not None else None
+        result["project_refresh_token"] = ((pending[0] if pending is not None else None) if _phase is not None
+                                           else project_refresh_token(project_actual_evidence_root(output_dir)))
         if result["project_refresh_token"]:
             result["project_actual_commit"] = "COMMITTED"
     except Exception as exc:
@@ -236,20 +360,63 @@ def _deliver_after_actual_commit(output_dir, result):
         ) from exc
 
 
-def _publish_local_actual_conflict_resolution(output_dir: Path, report: Path) -> Path:
+def _publish_local_actual_conflict_resolution(output_dir: Path, report: Path, *, _phase=None) -> Path:
     """Republish only after a new visual commit has cleared the durable conflict."""
     from pdf_portability import ACTUAL_EXCEL_CONFLICT_FILE, actual_excel_conflict_state
 
-    if not (Path(output_dir) / ACTUAL_EXCEL_CONFLICT_FILE).exists():
+    marker=Path(output_dir)/ACTUAL_EXCEL_CONFLICT_FILE
+    if (_phase.expected_bytes(marker) is None if _phase is not None else not marker.exists()):
         return Path(report)
-    manifest = json_load_strict(Path(output_dir) / "校對工作階段.json")
-    db = load_or_initialize_db(output_dir)
-    if actual_excel_conflict_state(output_dir, manifest, db):
+    manifest = _surface_known_json(_phase,Path(output_dir)/'校對工作階段.json') if _phase is not None else json_load_strict(Path(output_dir) / "校對工作階段.json")
+    db = _surface_known_db(_phase,output_dir) if _phase is not None else load_or_initialize_db(output_dir)
+    if actual_excel_conflict_state(output_dir, manifest, db,
+            **({'_read_bytes':_phase.expected_bytes} if _phase is not None else {})):
         return Path(report)
-    return regenerate_report(output_dir)
+    if _phase is not None:_phase.recheck()
+    return regenerate_report(output_dir,**({'_phase':_phase} if _phase is not None else {}))
+
+
+def _confirmed_recovery_entry(function):
+    """Validate the user's complete durable owner before format dispatch/locks.
+
+    This is only an identity preflight. Admission and the locked owner check
+    still validate original sources and recheck the actual recovery bytes.
+    """
+    @wraps(function)
+    def run(output_dir, *, acknowledge=True, expected_recovery=None):
+        if expected_recovery is not None:
+            from global_glyph_promotion import (_validated_project_journal,
+                validate_post_commit_recovery_plan,PROJECT_TRANSACTION_FILE,library)
+            from project_write_admission import _bytes
+            try:
+                if (type(expected_recovery) not in (tuple,list) or len(expected_recovery)!=2
+                        or type(expected_recovery[0]) is not str):
+                    raise ValueError('invalid confirmed recovery identity')
+                validate_post_commit_recovery_plan(expected_recovery[1])
+            except (ValueError,library.GlobalLibraryValidationError) as exc:
+                raise ValueError('已提交 actual 復原紀錄已變更；未套用新暫存') from exc
+            root=project_actual_evidence_root(Path(output_dir))
+            raw=_bytes(root/PROJECT_TRANSACTION_FILE)
+            known=None
+            try:
+                if raw is not None:
+                    journal=_validated_project_journal(raw)
+                    if journal['state']=='COMMITTED':known=(journal['transaction_id'],journal['recovery_plan'])
+                else:
+                    publication=_read_actual_refresh_publication(Path(output_dir))
+                    if publication is not None and publication[0]['phase']=='ACKNOWLEDGING':
+                        journal=_validated_project_journal(_bytes(publication[2]/'ack-committed.json'))
+                        if journal['state']=='COMMITTED':known=(journal['transaction_id'],journal['recovery_plan'])
+            except library.GlobalLibraryValidationError as exc:
+                raise ValueError('已提交 actual 復原紀錄已變更；未套用新暫存') from exc
+            _require_expected_committed_recovery(expected_recovery,known)
+        return function(output_dir,acknowledge=acknowledge,expected_recovery=expected_recovery)
+    return run
 
 
 @bound_operation(project_parameter="output_dir")
+@_confirmed_recovery_entry
+@project_write_entry(recovery=True, locked=True, profile_only=True, owned_surface_recovery=True)
 def recover_committed_actual_project(output_dir: Path, *, acknowledge: bool = True, expected_recovery=None):
     """Explicit restart recovery; staging is never reapplied here.
 
@@ -265,6 +432,28 @@ def recover_committed_actual_project(output_dir: Path, *, acknowledge: bool = Tr
         raise ValueError("專案未完成標記仍存在；請先使用所屬交易的恢復入口，未 acknowledgement")
     root = project_actual_evidence_root(output_dir)
     from global_glyph_promotion import PROJECT_TRANSACTION_FILE
+    from project_write_admission import entry_write_admission,SurfaceWritePhase
+    entered=entry_write_admission(output_dir)
+    if entered is not None:
+        entered.require_writable()
+        local_raw=entered.expected_bytes(root/PROJECT_TRANSACTION_FILE)
+        pub_raw=entered.expected_bytes(output_dir/ACTUAL_REFRESH_PUBLICATION)
+        from global_glyph_promotion import _validated_project_journal
+        local=_validated_project_journal(local_raw) if local_raw is not None else None
+        publication=json_parse_strict(pub_raw,output_dir/ACTUAL_REFRESH_PUBLICATION) if pub_raw is not None else None
+        authority = local
+        if authority is None and publication is not None and publication.get('phase')=='ACKNOWLEDGING':
+            authority=_validated_project_journal(entered.expected_bytes(output_dir.parent/publication['stage']/'ack-committed.json'))
+        if authority is not None and authority['schema_version']=='3.0':
+            known=(authority['transaction_id'],authority['recovery_plan']) if authority['state']=='COMMITTED' else None
+            _require_expected_committed_recovery(expected_recovery,known)
+            return _recover_direct_profile_phase(output_dir,SurfaceWritePhase(entered),
+                acknowledge=acknowledge,expected_recovery=expected_recovery)
+        if ((local is not None and local['schema_version']=='2.0' and local['owner']['operation']=='surface-only')
+                or (publication is not None and publication.get('schema')=='actual-deferred-refresh/2')):
+            phase=SurfaceWritePhase(entered)
+            _require_expected_committed_recovery(expected_recovery,_retained_phase_committed_authority(output_dir,phase)[0])
+            return _recover_surface_phase(output_dir,phase,acknowledge=acknowledge)
     if expected_recovery is None and not (root / PROJECT_TRANSACTION_FILE).exists() and not (output_dir / ACTUAL_REFRESH_PUBLICATION).exists():
         return None
     with project_delivery_lock(root):
@@ -285,6 +474,28 @@ def recover_committed_actual_project(output_dir: Path, *, acknowledge: bool = Tr
         if acknowledge and (output_dir / INCOMPLETE_FILE).exists():
             raise ValueError("專案未完成標記仍存在；請先使用所屬交易的恢復入口，未 acknowledgement")
         recover_pending_project_actual_write(root)
+        publication=_read_actual_refresh_publication(output_dir)
+        if publication is not None and publication[0]['schema']=='actual-deferred-refresh/2':
+            resumed=_resume_actual_refresh_publication(output_dir,acknowledge=acknowledge)
+            if resumed is not None:
+                if resumed['phase']=='PUBLISHED' and resumed['token'] is not None and acknowledge:
+                    _acknowledge_actual_refresh(output_dir,resumed['token'])
+                elif resumed['token'] is None:
+                    _resume_actual_refresh_publication(output_dir,cleanup=True,acknowledge=acknowledge)
+                return {'project_actual_commit':'COMMITTED','project_refresh':'SUCCESS',
+                    'surface_projection_refresh':True,'automatic_decoder_cache_revalidated':False,
+                    'global_promotion_delivery':{'status':'NOT_APPLICABLE_SURFACE_ONLY'},
+                    'cleared_actual_dependent_event_count':resumed['cleared_count'],'refresh_performed':True}
+            # A PREPARED opt-in publication rolls back completely. If no local
+            # actual commit owns it, there is no new format to resume/apply.
+            if committed_project_recovery(root) is None:
+                return {'project_actual_commit':'NOT_COMMITTED','project_refresh':'ROLLED_BACK',
+                        'global_promotion_delivery':{'status':'NOT_APPLICABLE_SURFACE_ONLY'}}
+        if _surface_recovery_pending(output_dir):
+            import manual_surface_actual as surface
+            manifest = json_load_strict(output_dir / '校對工作階段.json')
+            document = surface.load(root, manifest)
+            return _surface_projection_refresh(output_dir, document, acknowledge=acknowledge)
         if committed_project_recovery(root) is None and not (output_dir / ACTUAL_REFRESH_PUBLICATION).exists():
             return None
         resumed = _resume_actual_refresh_publication(output_dir.resolve(), acknowledge=acknowledge)
@@ -309,12 +520,23 @@ def recover_committed_actual_project(output_dir: Path, *, acknowledge: bool = Tr
                   "recovery_plan": plan, "project_refresh_token": token}
         phase, removed = "global_promotion_delivery", None
         try:
-            result["global_promotion_delivery"] = deliver_pending_promotion_outbox(root)
+            donor_manifest = json_load_strict(output_dir / "校對工作階段.json")
+            validate_manifest_integrity(donor_manifest)
+            result["global_promotion_delivery"] = deliver_pending_promotion_outbox(root,
+                source_context=_global_direct_source_context(output_dir, donor_manifest),
+                source_entries=donor_manifest.get("records") or [])
             phase = "reload_current_ledger"
             manifest = json_load_strict(output_dir / "校對工作階段.json")
             validate_manifest_integrity(manifest)
             validate_output_artifact_hashes(manifest, output_dir=output_dir)
             ledger = materialize_ledger(manifest, load_or_initialize_db(output_dir))
+            from actual_review import require_actual_visual_target
+            source_by_id = {entry["occurrence_id"]: entry for entry in ledger}
+            for condition in plan["checked_postconditions"]:
+                entry = source_by_id.get(condition["occurrence_id"])
+                if entry is None:
+                    raise ValueError("復原 actual checked occurrence 已不在目前來源；未 refresh／acknowledgement")
+                require_actual_visual_target(entry, output_dir)
             phase = "refresh_actual_project"
             refresh_status = {}
             report = refresh_actual_project(output_dir, _refresh_plan=plan, _refresh_status=refresh_status,
@@ -340,20 +562,86 @@ def recover_committed_actual_project(output_dir: Path, *, acknowledge: bool = Tr
         return result
 
 
+def _actual_refresh_output_path(output_dir, result, *, require_report=False, announce=False):
+    """Deliver only an explicitly known refresh kind; never invent a report."""
+    if not isinstance(result,Mapping):
+        raise ValueError('unknown actual recovery result')
+    if result.get('project_actual_commit')=='NOT_COMMITTED' and result.get('project_refresh')=='ROLLED_BACK':
+        raise ValueError('actual recovery: NOT_COMMITTED; project refresh: ROLLED_BACK; start a separate explicit refresh')
+    cleared=result.get('cleared_actual_dependent_event_count')
+    valid_count=type(cleared) is int and cleared>=0
+    surface=(result.get('surface_projection_refresh') is True
+        and result.get('automatic_decoder_cache_revalidated') is False
+        and result.get('refresh_performed') is True and valid_count
+        and isinstance(result.get('global_promotion_delivery'),Mapping)
+        and result['global_promotion_delivery'].get('status')=='NOT_APPLICABLE_SURFACE_ONLY')
+    ordinary=False
+    if 'surface_projection_refresh' not in result and isinstance(result.get('project_refresh_token'),str) and result['project_refresh_token']:
+        from global_glyph_promotion import validate_post_commit_recovery_plan
+        from global_exact_glyph_library import GlobalLibraryValidationError
+        try:
+            validate_post_commit_recovery_plan(result['recovery_plan'])
+            ordinary=True
+        except (KeyError,TypeError,ValueError,GlobalLibraryValidationError):
+            pass
+    if not (surface or ordinary) or result.get('project_actual_commit')!='COMMITTED':
+        raise ValueError('unknown actual recovery result kind/state')
+    try:
+        if result.get('project_refresh')!='SUCCESS':
+            raise ValueError('actual recovery has not completed its refresh: '+str(result.get('project_refresh')))
+        if not valid_count or result.get('refresh_performed') is not True:
+            raise ValueError('actual recovery completion/count output is invalid')
+        if surface:
+            if require_report:
+                raise ValueError('surface projection produced a status artifact, not a new Excel report')
+            path=Path(output_dir)/'pipeline_status.json'
+            if path.is_symlink() or path.is_junction() or not path.is_file():
+                raise ValueError('published surface status artifact is missing or linked')
+            status=json_parse_strict(path.read_bytes(),path)
+            if (not isinstance(status,dict) or status.get('manual_surface_projection_refreshed') is not True
+                    or status.get('automatic_decoder_cache_revalidated') is not False):
+                raise ValueError('published surface status artifact has an unknown refresh kind')
+            message='actual recovery: COMMITTED; project refresh: SUCCESS; surface projection refreshed; decoder NOT revalidated; status artifact: '+str(path)
+        else:
+            delivery=result['global_promotion_delivery']
+            if not isinstance(delivery,Mapping) or delivery.get('status') not in {'NO_PENDING','DELIVERED','PENDING_RETRY'}:
+                raise ValueError('ordinary recovery Global delivery output is unknown')
+            report=result['refresh_report']
+            if not isinstance(report,(str,Path)) or not str(report).strip():
+                raise ValueError('ordinary recovery report output is missing')
+            path=Path(report)
+            message='actual recovery: COMMITTED; Global: '+delivery['status']+'; project refresh: SUCCESS'
+        if announce:
+            print(message,flush=True)
+        return path
+    except ManualActualPostApplyError:
+        raise
+    except Exception as exc:
+        raise ManualActualPostApplyError('actual_refresh_output',exc,batch_result=result,
+            cleared_event_count=cleared if valid_count else None) from exc
+
+
 def refresh_actual_with_recovery(output_dir: Path) -> Path:
     recovered = recover_committed_actual_project(output_dir)
     if recovered is None:
         return refresh_actual_project(output_dir)
-    print("actual recovery: COMMITTED; Global: " + recovered["global_promotion_delivery"]["status"]
-          + "; project refresh: SUCCESS", flush=True)
-    return Path(recovered["refresh_report"])
+    return _actual_refresh_output_path(output_dir,recovered,announce=True)
 
 
 def _finish_direct_actual_commit(output_dir, ledger, result, *, refresh=True, acknowledge=True):
+    from project_write_admission import entry_write_phase
+    ordinary_phase=entry_write_phase(output_dir)
+    if ordinary_phase is not None:
+        recovered=_recover_direct_profile_phase(output_dir,ordinary_phase,acknowledge=acknowledge)
+        if recovered is not None:
+            report=_actual_refresh_output_path(output_dir,recovered,require_report=True)
+            result.update(recovered)
+            return recovered['cleared_actual_dependent_event_count'],report
     if committed_project_recovery(project_actual_evidence_root(output_dir)) is not None:
         recovered = recover_committed_actual_project(output_dir, acknowledge=acknowledge)
+        report=_actual_refresh_output_path(output_dir,recovered,require_report=True)
         result.update(recovered)
-        return recovered["cleared_actual_dependent_event_count"], Path(recovered["refresh_report"])
+        return recovered["cleared_actual_dependent_event_count"], report
     _deliver_after_actual_commit(output_dir, result)
     group_results = result.get("group_results", result.get("results", []))
     affected = {
@@ -437,7 +725,16 @@ def project_actual_evidence_root(output_dir: Path) -> Path:
 
 
 def initialize_project_actual_evidence(output_dir: Path, program_root: Path | None = None) -> Path:
+    from project_write_admission import capture_project_write_admission, has_surface_indicators
+    admission=capture_project_write_admission(output_dir) if has_surface_indicators(output_dir) else None
+    if admission is not None:
+        admission.recheck()
     target = project_actual_evidence_root(output_dir)
+    if (Path(output_dir)/'校對工作階段.json').is_file() and json_load_strict(
+            Path(output_dir)/'校對工作階段.json').get('manual_surface_actual_contract') is not None:
+        # Existing projects were admitted read-only. Legal legacy absence is
+        # retained; opening or refreshing is not an implicit seed/migration.
+        return target
     target.mkdir(parents=True, exist_ok=True)
     source_root = Path(program_root).resolve() if program_root else Path(__file__).resolve().parent
     # One-time seed for backward compatibility.  Existing installation evidence
@@ -1466,10 +1763,25 @@ def _guard_actual_csv_sources(output_dir, ledger, rows):
                 actual_sample_availability(entry, output_dir)
 
 
+def _ordinary_entry_manifest(output_dir):
+    from project_write_admission import entry_write_phase
+    phase=entry_write_phase(output_dir)
+    return (_surface_known_json(phase,Path(output_dir)/'校對工作階段.json') if phase is not None else
+            json_load_strict(Path(output_dir)/'校對工作階段.json'))
+
+
+def _ordinary_entry_db(output_dir):
+    from project_write_admission import entry_write_phase
+    phase=entry_write_phase(output_dir)
+    return _surface_known_db(phase,output_dir) if phase is not None else load_or_initialize_db(output_dir)
+
+
 def _read_actual_source_db(output_dir):
     # Avoid load_or_initialize_db's legacy orphan report and all recovery writes.
     path = Path(output_dir) / "人工判定資料庫.json"
-    raw = json_load_strict(path) if path.exists() else {}
+    from project_write_admission import entry_write_phase
+    phase=entry_write_phase(output_dir)
+    raw = _surface_known_json(phase,path) if phase is not None else json_load_strict(path) if path.exists() else {}
     if not isinstance(raw, dict):
         raise ValueError("DATA_INTEGRITY_ERROR：人工判定資料庫根節點必須是物件")
     return normalize_db(raw)
@@ -1488,14 +1800,14 @@ def import_actual_occurrence_decisions(output_dir: Path, csv_path: Path, *, pack
     occurrence-specific.
     """
     output_dir = Path(output_dir)
-    manifest = json_load_strict(output_dir / "校對工作階段.json")
+    manifest = _ordinary_entry_manifest(output_dir)
     validate_manifest_integrity(manifest)
     validate_output_artifact_hashes(manifest, output_dir=output_dir)
     _validate_gpt_bundle_metadata(package_meta, manifest)
     rows = _read_actual_csv_rows(csv_path)
     _guard_actual_csv_sources(output_dir, materialize_ledger(manifest, _read_actual_source_db(output_dir)), rows)
     recover_pending_project_actual_write(project_actual_evidence_root(output_dir))
-    db = load_or_initialize_db(output_dir)
+    db = _ordinary_entry_db(output_dir)
     ledger = materialize_ledger(manifest, db)
     by_occ = {str(e.get("occurrence_id") or ""): e for e in ledger}
 
@@ -1891,6 +2203,8 @@ def import_gpt_decisions(output_dir: Path, xlsx: Path, *, dry_run: bool = False,
             event[gate] = value == "Y"
         if action in expected_only_actions and manifest.get("expected_asset_fingerprint"):
             event = bind_expected_resolution(import_baseline_by_id[review_id], event, manifest)
+        if action == "確認現版差異":
+            require_current_actual_visual_source(entry, output_dir)
         staged_events[review_id] = event
 
     if errors:
@@ -2002,13 +2316,21 @@ def json_load_snapshot(path: Path) -> tuple[Any, str]:
     return json_parse_strict(raw, path), hashlib.sha256(raw).hexdigest()
 
 
-def json_save(path: Path, data, *, expected_sha256: str | None = None) -> str:
+def json_save(path: Path, data, *, expected_sha256: str | None = None, _phase=None) -> str:
     """Atomically replace JSON, optionally rejecting a concurrent DB edit.
 
     A private temporary file avoids collisions between writers; failed writes
     leave the prior document intact. The optional guard is used by review saves.
     """
     path = Path(path)
+    if _phase is not None:
+        raw=json.dumps(data,ensure_ascii=False,indent=2).encode('utf-8')
+        if expected_sha256 is not None:
+            known=_phase.expected_bytes(path)
+            if (hashlib.sha256(known).hexdigest() if known is not None else '')!=expected_sha256:
+                raise ValueError('SURFACE_PHASE: JSON expected preimage differs')
+        _refresh_atomic_bytes(path,raw,_phase=_phase)
+        return hashlib.sha256(raw).hexdigest()
     tmp = None
     try:
         with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
@@ -2666,6 +2988,9 @@ def normalize_db(db: dict[str, Any]) -> dict[str, Any]:
     return db
 
 def load_or_initialize_db(output_dir: Path) -> dict[str, Any]:
+    from project_write_admission import capture_project_write_admission, has_surface_indicators
+    if has_surface_indicators(output_dir):
+        capture_project_write_admission(output_dir, recovery=True)
     path = output_dir / "人工判定資料庫.json"
     if not path.exists():
         return normalize_db({})
@@ -2789,6 +3114,22 @@ def build_manual_expected_event(
     if not valid_manual_expected_decision({**entry, **event}):
         raise InvalidTransitionError("人工應標判定缺少有效項目識別或語境")
     return event
+
+
+def require_current_actual_visual_source(entry, output_dir):
+    """Guard new actual-dependent confirmations, never independent expected input.
+
+    Final-paint local-only sources need their current authoritative occurrence
+    override before a raw decoder value can be adopted/confirmed. Old saved
+    expected decisions/replay remain independent and are not rewritten here.
+    """
+    from actual_review import require_actual_visual_target
+    safety = require_actual_visual_target(entry, output_dir)
+    if safety["reason"] == "EXACT_ANNOTATION_OVERPAINT_LOCAL_ONLY":
+        from actual_review import has_direct_occurrence_actual
+        if not has_direct_occurrence_actual(project_actual_evidence_root(output_dir), entry, entry.get("actual")):
+            raise ValueError("原頁注音包含後畫修改；目前 raw decoder actual 尚不可用作確認，請先保存本位置實際注音")
+    return safety
 
 
 def actual_confirmation_snapshot(entry: Mapping[str, Any]) -> dict[str, str]:
@@ -3192,6 +3533,8 @@ def prepare_review_ledger(manifest: Mapping[str, Any], db: Mapping[str, Any]):
         # binding context for this operation. Never cache trust on caller data.
         manifest, context = _validated_expected_manifest(manifest)
     ledger = [dict(entry) for entry in manifest.get("records", [])]
+    from manual_surface_actual import apply_projection
+    ledger = apply_projection(manifest, ledger)
     rules_doc = _canonical_rule_doc(manifest.get("reusable_expected_rules") or {})
     expected_rules_hash = str(manifest.get("reusable_expected_rules_sha256") or reusable_rules_sha256(rules_doc))
     if expected_rules_hash != reusable_rules_sha256(rules_doc):
@@ -3329,7 +3672,7 @@ def bind_legacy_gui_expected_resolutions(output_dir: Path, workbook: Path, *, re
             "original_db_sha256": db_sha, "decision_db_sha256": sha256_file(db_path)}
 
 
-def save_pending_json(output_dir: Path, manifest: dict[str, Any], db: dict[str, Any]) -> int:
+def save_pending_json(output_dir: Path, manifest: dict[str, Any], db: dict[str, Any], *, _phase=None) -> int:
     ledger = materialize_ledger(manifest, db)
     from pdf_portability import expected_conflict_review_view
     ledger = expected_conflict_review_view(output_dir, manifest, db, ledger)
@@ -3342,7 +3685,7 @@ def save_pending_json(output_dir: Path, manifest: dict[str, Any], db: dict[str, 
         "ledger_schema_version": LEDGER_SCHEMA_VERSION,
         "pending": pending,
         "expected_gaps": gaps,
-    })
+    },**({'_phase':_phase} if _phase is not None else {}))
     return len(pending)
 
 
@@ -3647,11 +3990,23 @@ def _friendly_issue(entry: Mapping[str, Any]) -> tuple[str, str]:
 
 def _serialized_report_publication(render):
     @wraps(render)
-    def serialized(output_dir, manifest, db, *, runtime_root=None):
+    def serialized(output_dir, manifest, db, *, runtime_root=None, _phase=None):
+        from project_write_admission import capture_project_write_admission, has_surface_indicators,SurfaceWritePhase
+        admission = (_phase.receipt() if _phase is not None else
+                     capture_project_write_admission(output_dir) if has_surface_indicators(output_dir) else None)
+        if _phase is None and admission is not None and admission.profile:_phase=SurfaceWritePhase(admission)
+        if _phase is not None:
+            _phase.recheck()
+            if manifest!=_surface_known_json(_phase,Path(output_dir)/'校對工作階段.json') or db!=_surface_known_db(_phase,output_dir):
+                raise ValueError('report consumer differs from original sealed buffers')
         # Conflict receipt and completion report share one publication lock.
         # This project lock is reentrant during local visual refresh/recovery.
-        with project_delivery_lock(project_actual_evidence_root(output_dir)):
-            return render(output_dir, manifest, db, runtime_root=runtime_root)
+        with project_delivery_lock(project_actual_evidence_root(output_dir),
+                **({'_admission':admission} if admission is not None and admission.profile else {})):
+            if admission is not None:
+                admission.recheck()
+            return render(output_dir, manifest, db, runtime_root=runtime_root,
+                **({'_phase':_phase} if _phase is not None else {}))
     return serialized
 
 
@@ -3663,6 +4018,7 @@ def generate_report(
     db: dict[str, Any],
     *,
     runtime_root: Path | None = None,
+    _phase=None,
 ) -> Path:
     """Render mutually-exclusive ledger views and the v2.5 completion gate."""
     validate_manifest_integrity(manifest)
@@ -3678,7 +4034,7 @@ def generate_report(
     root = Path(runtime_root or Path(__file__).resolve().parent).resolve()
     source_validation = validate_asset_manifest(root)
     if not source_validation.get("ok"):
-        write_pipeline_blocked(output_dir, source_validation, "SOURCE_INVALID_DURING_REPORT")
+        if _phase is None:write_pipeline_blocked(output_dir, source_validation, "SOURCE_INVALID_DURING_REPORT")
         raise SourceValidationError("runtime 核心資料來源已改變或損壞；保留上一份可用最終報告")
     current_expected_fingerprint = compute_expected_asset_fingerprint(
         root,
@@ -3694,7 +4050,7 @@ def generate_report(
     ):
         blocked_report = dict(source_validation)
         blocked_report["errors"] = list(source_validation.get("errors") or []) + ["candidate expected evidence assets 已失效"]
-        write_pipeline_blocked(output_dir, blocked_report, "EXPECTED_CANDIDATE_CACHE_INVALID")
+        if _phase is None:write_pipeline_blocked(output_dir, blocked_report, "EXPECTED_CANDIDATE_CACHE_INVALID")
         raise SourceValidationError("expected 資料資產已改變；只需重建受影響候選，未覆寫上一份最終報告")
     compat_warnings = metadata_compatibility_warnings(
         manifest.get("expected_asset_fingerprint_components"), current_expected_fingerprint, chain="expected"
@@ -3710,8 +4066,11 @@ def generate_report(
         source_validation_ok=bool(source_validation.get("ok")),
     )
     from pdf_portability import hold_actual_excel_completion, hold_expected_conflict_completion
-    gate = hold_actual_excel_completion(output_dir, manifest, db, gate)
-    gate = hold_expected_conflict_completion(output_dir, manifest, db, gate)
+    reader={'_read_bytes':_phase.expected_bytes} if _phase is not None else {}
+    gate = hold_actual_excel_completion(output_dir, manifest, db, gate,**reader)
+    gate = hold_expected_conflict_completion(output_dir, manifest, db, gate,**reader)
+    from manual_surface_actual import hold_completion
+    gate = hold_completion(manifest,gate)
 
     wb = Workbook()
     ws = wb.active
@@ -3878,7 +4237,11 @@ def generate_report(
     for sheet in wb.worksheets:
         _style_sheet(sheet)
     technical_out = output_dir / "注音校對_技術稽核.xlsx"
-    wb.save(technical_out)
+    report_outputs={}
+    if _phase is None:wb.save(technical_out)
+    else:
+        import io
+        buffer=io.BytesIO();wb.save(buffer);report_outputs[technical_out]=buffer.getvalue()
 
     user_wb = Workbook()
     us = user_wb.active
@@ -4000,9 +4363,11 @@ def generate_report(
     for sheet in user_wb.worksheets:
         _style_sheet(sheet)
     out = output_dir / "注音校對_最終報告.xlsx"
-    user_wb.save(out)
+    if _phase is None:user_wb.save(out)
+    else:
+        buffer=io.BytesIO();user_wb.save(buffer);report_outputs[out]=buffer.getvalue()
 
-    json_save(output_dir / "pipeline_status.json", {
+    status={
         "version": VERSION,
         "status": gate["status"],
         "status_text": status_text,
@@ -4010,9 +4375,35 @@ def generate_report(
         "reconciliation": reconciliation.as_dict(),
         "user_report": str(out),
         "technical_audit_report": str(technical_out),
-    })
+    }
+    if _phase is None:json_save(output_dir/'pipeline_status.json',status)
+    else:
+        report_outputs[output_dir/'pipeline_status.json']=json.dumps(status,ensure_ascii=False,indent=2).encode('utf-8')
+        _publish_profile_report_outputs(output_dir,report_outputs,_phase)
     return out
 
+
+
+def _publish_profile_report_outputs(output_dir,outputs,phase):
+    """Existing report's three outputs; no new transaction or crash-CAS claim."""
+    output_dir=Path(output_dir).resolve()
+    names=('注音校對_技術稽核.xlsx','注音校對_最終報告.xlsx','pipeline_status.json')
+    targets=tuple(output_dir/name for name in names)
+    if phase.project!=output_dir or set(outputs)!=set(targets) or any(type(raw) is not bytes for raw in outputs.values()):
+        raise ValueError('new-profile report output contract differs')
+    before={path:phase.expected_bytes(path) for path in targets}
+    phase.recheck()
+    try:
+        for path in targets:_refresh_atomic_bytes(path,outputs[path],_phase=phase)
+    except BaseException:
+        # Only exact own before/after may be undone. A foreign buffer (in any
+        # source or target) stops rollback and remains available for diagnosis.
+        phase.reconcile()
+        for path in reversed(targets):
+            if phase.expected_bytes(path)==before[path]:continue
+            if before[path] is None:_surface_phase_unlink(path,phase)
+            else:_refresh_atomic_bytes(path,before[path],_phase=phase)
+        raise
 
 
 def _session_metadata_for_actual(manifest: Mapping[str, Any]) -> dict[str, Any]:
@@ -4149,8 +4540,18 @@ def _manual_actual_snapshot_ledger(manifest, db, ledger, *, base_ledger=None):
     return projected
 
 
-def _validate_manual_actual_group_sources(output_dir, live_groups, *, source_hashes=None):
+def _validate_manual_actual_group_sources(output_dir, live_groups, *, source_hashes=None, checked_occurrence_ids=None):
     """Reprove the source bytes before retaining any prior visual checks."""
+    from actual_source_visual_safety import source_visual_operation
+    with source_visual_operation() as operation:
+        _validate_manual_actual_group_sources_in_operation(output_dir, live_groups,
+            source_hashes=source_hashes, checked_occurrence_ids=checked_occurrence_ids,
+            operation=operation)
+        operation.recheck_sources()
+
+
+def _validate_manual_actual_group_sources_in_operation(output_dir, live_groups, *,
+        source_hashes, checked_occurrence_ids, operation):
     checked_sources = set()
     for live in live_groups:
         for member in live["members"]:
@@ -4158,11 +4559,20 @@ def _validate_manual_actual_group_sources(output_dir, live_groups, *, source_has
             wanted = str(member.get("pdf_sha256") or "")
             key = (path, wanted)
             if key not in checked_sources:
-                observed = (source_hashes.get(str(path.resolve())) if source_hashes is not None
-                            else sha256_file(path))
-                if not wanted or observed != wanted:
+                if not wanted or (source_hashes is not None
+                        and source_hashes.get(str(path.resolve())) != wanted):
                     raise ValueError(f"SOURCE_INVALID：actual 暫存來源 PDF 已變更：{path.name}")
+                # The verified snapshot hash is an additional binding, not a
+                # substitute for current sealed bytes. Register every original
+                # source dependency without proving unchecked peer glyphs.
+                try:
+                    operation.read_source(path, wanted)
+                except ValueError as exc:
+                    raise ValueError(f"SOURCE_INVALID：actual 暫存來源 PDF 已變更：{path.name}") from exc
                 checked_sources.add(key)
+            if checked_occurrence_ids is None or str(member.get("occurrence_id")) in checked_occurrence_ids:
+                from actual_review import require_actual_visual_target
+                require_actual_visual_target(member, output_dir)
 
 
 def _manual_actual_staging_inventory(staging):
@@ -4187,6 +4597,20 @@ def _manual_actual_staging_inventory(staging):
 
 def _manual_actual_summary_from_verified_snapshot(output_dir, staging, manifest, db, ledger,
                                                 *, base_ledger=None, source_hashes=None, cancelled=None):
+    from actual_source_visual_safety import source_visual_operation
+    with source_visual_operation() as operation:
+        summary = _manual_actual_summary_in_visual_operation(output_dir, staging, manifest, db, ledger,
+            base_ledger=base_ledger, source_hashes=source_hashes, cancelled=cancelled)
+        try:
+            operation.recheck_sources()
+        except Exception as exc:
+            summary["staging_error"] = str(exc)
+            summary["staged_checked_occurrence_ids"] = []
+        return summary
+
+
+def _manual_actual_summary_in_visual_operation(output_dir, staging, manifest, db, ledger,
+                                              *, base_ledger=None, source_hashes=None, cancelled=None):
     """Internal save path: all arguments belong to one content-verified snapshot.
 
     This shares group/source validators with the ordinary read path. It never
@@ -4196,13 +4620,24 @@ def _manual_actual_summary_from_verified_snapshot(output_dir, staging, manifest,
     groups = list(staging.get("staged_groups") or [])
     try:
         summary["actual_recovery_pending"] = committed_project_recovery(project_actual_evidence_root(output_dir)) is not None
+        import manual_surface_actual as surface
+        if surface.enabled(manifest):
+            document = surface.load(project_actual_evidence_root(output_dir), manifest)
+            surface.verify_sources(document, manifest, output_dir)
+            if document['pending']:
+                if groups:
+                    raise ValueError('surface and glyph staging cannot be applied together')
+                summary['staged_group_count'] += len(document['pending'])
+                summary['staged_checked_occurrence_ids'] += [item['proof']['source']['occurrence_id'] for item in document['pending']]
+                summary['surface_pending_count'] = len(document['pending'])
         if groups:
             projected = _manual_actual_snapshot_ledger(manifest, db, ledger, base_ledger=base_ledger)
             live_groups = _current_live_groups_for_staged_manual_actual(
                 ledger, groups, snapshot_ledger=projected, cancelled=cancelled)
             # Supplying snapshot_ledger makes the group builder validate each
             # live (or proven expected-only projected) group before returning.
-            _validate_manual_actual_group_sources(output_dir, live_groups, source_hashes=source_hashes)
+            _validate_manual_actual_group_sources(output_dir, live_groups, source_hashes=source_hashes,
+                checked_occurrence_ids={oid for item in groups for oid in item["checked_occurrence_ids"]})
     except Exception as exc:
         summary["staging_error"] = str(exc)
         summary["staged_checked_occurrence_ids"] = []
@@ -4219,10 +4654,27 @@ def manual_actual_staging_summary(output_dir: Path, *, ledger=None) -> dict[str,
     output_dir = Path(output_dir)
     staging = load_manual_actual_staging(project_actual_evidence_root(output_dir))
     summary = _manual_actual_staging_inventory(staging)
+    from project_write_admission import has_surface_indicators
+    surface_profile=has_surface_indicators(output_dir)
+    if ledger is None and surface_profile:
+        try:
+            import manual_surface_actual as surface
+            manifest=json_load_strict(output_dir/'校對工作階段.json')
+            validate_manifest_integrity(manifest)
+            document=surface.load(project_actual_evidence_root(output_dir),manifest)
+            if document['pending']:
+                if staging['staged_groups']:
+                    raise ValueError('surface and glyph staging cannot be applied together')
+                summary['surface_pending_count']=len(document['pending'])
+                summary['staged_group_count']+=len(document['pending'])
+                summary['staged_checked_occurrence_ids'] += [item['proof']['source']['occurrence_id'] for item in document['pending']]
+        except Exception as exc:
+            summary['staging_error']=str(exc)
+            summary['staged_checked_occurrence_ids']=[]
     if ledger is not None:
         try:
             summary["actual_recovery_pending"] = committed_project_recovery(project_actual_evidence_root(output_dir)) is not None
-            if not staging.get("staged_groups"):
+            if not staging.get("staged_groups") and not surface_profile:
                 return summary
             manifest = json_load_strict(output_dir / "校對工作階段.json")
             validate_manifest_integrity(manifest)
@@ -4241,6 +4693,7 @@ def manual_actual_staging_summary(output_dir: Path, *, ledger=None) -> dict[str,
 
 
 @bound_operation(project_parameter="output_dir")
+@project_write_entry(locked=True)
 def stage_manual_actual_correction(
     output_dir: Path,
     review_id: str,
@@ -4248,12 +4701,46 @@ def stage_manual_actual_correction(
     checked_occurrence_ids: list[str] | None = None,
     note: str = "",
 ) -> dict[str, Any]:
+    from actual_source_visual_safety import source_visual_write_result
+    return source_visual_write_result(lambda: _stage_manual_actual_correction_visual_result(
+        output_dir, review_id, reading, checked_occurrence_ids=checked_occurrence_ids, note=note),
+        commit_state="STAGED_REFRESH_PENDING")
+
+
+def _stage_manual_actual_correction_visual_result(
+    output_dir: Path, review_id: str, reading: str,
+    checked_occurrence_ids: list[str] | None = None, note: str = "",
+) -> dict[str, Any]:
+    from actual_source_visual_safety import source_visual_operation
+    with source_visual_operation() as operation:
+        result = _stage_manual_actual_correction_with_visual_sources(output_dir, review_id, reading,
+            checked_occurrence_ids=checked_occurrence_ids, note=note)
+        try:
+            operation.recheck_sources()
+        except Exception as exc:
+            result["staging_summary"]["staging_error"] = str(exc)
+            result["staging_summary"]["staged_checked_occurrence_ids"] = []
+        return result
+
+
+def _stage_manual_actual_correction_with_visual_sources(
+    output_dir: Path, review_id: str, reading: str,
+    checked_occurrence_ids: list[str] | None = None, note: str = "",
+) -> dict[str, Any]:
     """Rebuild one current live group and durably stage its visual actual decision."""
     output_dir = Path(output_dir)
-    manifest = json_load_strict(output_dir / "校對工作階段.json")
+    from project_write_admission import entry_write_phase
+    phase=entry_write_phase(output_dir)
+    manifest = _surface_known_json(phase,output_dir/'校對工作階段.json') if phase is not None else json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
     validate_output_artifact_hashes(manifest, output_dir=output_dir)
-    db = load_or_initialize_db(output_dir)
+    import manual_surface_actual as surface
+    document=(surface.load_snapshot(project_actual_evidence_root(output_dir),manifest,
+        expected_raw=phase.expected_bytes(project_actual_evidence_root(output_dir)/surface.FILE)).document
+        if phase is not None else surface.load(project_actual_evidence_root(output_dir),manifest)) if surface.enabled(manifest) else None
+    if document is not None and document['pending']:
+        raise ValueError('apply pending surface corrections before staging glyph truth')
+    db = _surface_known_db(phase,output_dir) if phase is not None else load_or_initialize_db(output_dir)
     ledger = materialize_ledger(manifest, db)
     entry = next(
         (row for row in ledger if str(row.get("review_id") or "") == str(review_id)),
@@ -4261,12 +4748,15 @@ def stage_manual_actual_correction(
     )
     if entry is None:
         raise ValueError("找不到目前 review_id；請重新開啟人工校對畫面")
+    if entry.get('manual_surface_actual') is not None:
+        raise ValueError('此位置已有獨立人工表面 actual；請使用表面證據編輯，不能改成 glyph learning')
     snapshot_ledger = _manual_actual_snapshot_ledger(manifest, db, ledger)
     snapshot_entry = next(row for row in snapshot_ledger if row["review_id"] == entry["review_id"])
     group = build_actual_group_for_entry(snapshot_ledger, snapshot_entry)
     # Keep a historical current-state snapshot when it is exactly provable.
     # An unknown older snapshot is intentionally still rejected by stage/upsert.
-    existing = load_manual_actual_staging(project_actual_evidence_root(output_dir))["staged_groups"]
+    existing = (_surface_known_staging(phase,project_actual_evidence_root(output_dir)) if phase is not None else
+                load_manual_actual_staging(project_actual_evidence_root(output_dir)))["staged_groups"]
     prior = next((item for item in existing if item["group_id"] == group["group_id"]), None)
     if prior:
         group = _current_live_groups_for_staged_manual_actual(ledger, [prior], snapshot_ledger=snapshot_ledger)[0]
@@ -4276,7 +4766,8 @@ def stage_manual_actual_correction(
         else list(checked_occurrence_ids)
     )
     from pdf_portability import actual_excel_conflict_notes
-    conflict_note = actual_excel_conflict_notes(output_dir, manifest, db, checked_ids)
+    conflict_note = actual_excel_conflict_notes(output_dir, manifest, db, checked_ids,
+        **({'_read_bytes':phase.expected_bytes} if phase is not None else {}))
     if conflict_note:
         note = f"{note}；{conflict_note}" if note else conflict_note
     if prior:
@@ -4285,7 +4776,8 @@ def stage_manual_actual_correction(
         # only after proving the retained snapshot, sources and same reading.
         if canonical_bopomofo(reading) != prior["reading"]:
             raise ValueError("此字形已有不同讀音的 actual 暫存；未覆寫既有確認。請先釐清既有暫存，再重新核對本筆。")
-        _validate_manual_actual_group_sources(output_dir, [group])
+        _validate_manual_actual_group_sources(output_dir, [group],
+            checked_occurrence_ids=set(prior["checked_occurrence_ids"]) | set(checked_ids))
         checked_ids = _staging_id_list(checked_ids, "input.checked_occurrence_ids")
         if not checked_ids:
             raise ValueError("manual actual staging checked_occurrence_ids 不得為空")
@@ -4306,10 +4798,11 @@ def stage_manual_actual_correction(
     }
 
 
-def _clear_actual_dependent_events(output_dir: Path, ledger: list[dict[str, Any]], occurrence_ids: set[str]) -> int:
+def _clear_actual_dependent_events(output_dir: Path, ledger: list[dict[str, Any]], occurrence_ids: set[str], *, _phase=None) -> int:
     if not occurrence_ids:
         return 0
-    db = load_or_initialize_db(output_dir)
+    db = (normalize_db(json_parse_strict(_phase.expected_bytes(output_dir/'人工判定資料庫.json'),output_dir/'人工判定資料庫.json'))
+          if _phase is not None else load_or_initialize_db(output_dir))
     review_ids = {
         str(entry.get("review_id") or "")
         for entry in ledger
@@ -4364,7 +4857,7 @@ def _clear_actual_dependent_events(output_dir: Path, ledger: list[dict[str, Any]
             else:
                 events.pop(rid, None)
             removed += 1
-    json_save(output_dir / "人工判定資料庫.json", db)
+    json_save(output_dir / "人工判定資料庫.json", db,**({'_phase':_phase} if _phase is not None else {}))
     return removed
 
 
@@ -4425,29 +4918,161 @@ def _refresh_rebase_manifest(manifest, source, destination):
     return seal_manifest(result)
 
 
-def _refresh_atomic_bytes(path, raw):
+_REFRESH_UNSPECIFIED_BYTES = object()
+
+
+def _refresh_atomic_bytes(path, raw, *, expected_raw=_REFRESH_UNSPECIFIED_BYTES, _prewrite_guard=None, _phase=None):
+    """Atomic replacement, with optional optimistic guards, not an OS CAS."""
+    def check():
+        try:
+            if _prewrite_guard is not None:
+                _prewrite_guard()
+            if _phase is not None:
+                _phase.recheck()
+            if expected_raw is not _REFRESH_UNSPECIFIED_BYTES:
+                from project_write_admission import _bytes
+                if _bytes(path) != expected_raw:
+                    raise ValueError('SURFACE_CONTRACT: store changed before replacement')
+        except ValueError as exc:
+            if expected_raw is _REFRESH_UNSPECIFIED_BYTES:
+                raise
+            from manual_surface_actual import SurfaceWritePreconditionError
+            raise SurfaceWritePreconditionError(path,expected_raw,exc) from exc
     temporary = path.with_name(".ar-" + uuid4().hex[:8])
+    replace_attempted=False
     try:
+        if _phase is not None:
+            _phase.plan({path:raw})
+        check()  # Refuse before even creating an own temporary file.
         with temporary.open("xb") as stream:
             stream.write(raw)
             stream.flush()
             os.fsync(stream.fileno())
+        check()
+        replace_attempted=True
+        if _phase is not None:
+            _phase.attempting()
         temporary.replace(path)
+        if _phase is not None:
+            _phase.written()
+    except OSError as exc:
+        if expected_raw is not _REFRESH_UNSPECIFIED_BYTES and not replace_attempted:
+            from manual_surface_actual import SurfaceWriteIOError
+            raise SurfaceWriteIOError(path,expected_raw,exc) from exc
+        raise
     finally:
         temporary.unlink(missing_ok=True)
 
 
-def _read_actual_refresh_publication(output_dir, *, acknowledged=None):
+def _surface_phase_unlink(path,phase):
+    phase.plan({path:None})
+    phase.attempting()
+    path.unlink(missing_ok=True)
+    phase.written()
+
+
+def _surface_phase_recovery(root,phase):
+    from global_glyph_promotion import PROJECT_TRANSACTION_FILE,_validated_project_journal
+    raw=phase.expected_bytes(Path(root)/PROJECT_TRANSACTION_FILE)
+    if raw is None:
+        return None
+    journal=_validated_project_journal(raw)
+    if journal['state']!='COMMITTED':
+        raise ValueError('SURFACE_PHASE: actual transaction not committed')
+    return journal['transaction_id'],journal['recovery_plan']
+
+
+def _surface_known_json(snapshot,path):
+    """Parse the buffer that established this receipt/owned phase, never disk."""
+    return json_parse_strict(snapshot.expected_bytes(path),path)
+
+
+def _surface_known_db(snapshot,project):
+    return normalize_db(_surface_known_json(snapshot,Path(project)/'人工判定資料庫.json'))
+
+
+def _surface_known_staging(snapshot,root):
+    from actual_review import (_empty_manual_actual_staging,_validate_manual_actual_staging_document,
+                               MANUAL_ACTUAL_STAGING_FILE)
+    path=Path(root)/MANUAL_ACTUAL_STAGING_FILE
+    raw=snapshot.expected_bytes(path)
+    return (_empty_manual_actual_staging() if raw is None else
+            _validate_manual_actual_staging_document(json_parse_strict(raw,path)))
+
+
+def _surface_known_sha(snapshot,path):
+    raw=snapshot.expected_bytes(path)
+    return hashlib.sha256(raw).hexdigest() if raw is not None else None
+
+
+def _surface_phase_source(output_dir,phase):
+    root=project_actual_evidence_root(output_dir)
+    names=(OCCURRENCE_OVERRIDE_FILE,USER_GLYF_FILE,USER_CFF_FILE,GLYPH_CONFLICT_FILE,
+           GLYPH_PROVENANCE_FILE,'global_exact_glyph_promotion_outbox.json')
+    return {name:hashlib.sha256(phase.expected_bytes(root/name)).hexdigest()
+            if phase.expected_bytes(root/name) is not None else None for name in names}
+
+
+def _surface_phase_move(source,target,phase):
+    raw=phase.expected_bytes(source)
+    if raw is None:
+        raise ValueError('SURFACE_PHASE: missing owned staged output')
+    phase.plan({source:None,target:raw})
+    phase.attempting()
+    source.replace(target)
+    phase.written()
+
+
+def _surface_phase_cleanup_stage(stage,phase,*,unpublished=False):
+    """Only the exact artifacts of the existing owned stage may be removed."""
+    original_phase=phase
+    if unpublished:
+        # An external project change must not leak our never-published stage.
+        # Absence must be the original known phase, not a new disk observation.
+        from project_write_admission import ProjectWriteAdmission,SurfaceWritePhase
+        publication=phase.project/ACTUAL_REFRESH_PUBLICATION
+        if (phase.expected_bytes(publication) is not None
+                or str(publication.resolve()) in phase.attempted_paths):
+            raise ValueError('SURFACE_PHASE: published stage is still recovery evidence')
+        receipt=ProjectWriteAdmission(phase.project,
+            tuple((name,raw) for name,raw in phase.files.items() if Path(name).is_relative_to(stage))+
+            ((str(publication.resolve()),None),),phase.profile)
+        phase=SurfaceWritePhase(receipt)
+    phase.recheck()
+    known={Path(name) for name in phase.files if Path(name).is_relative_to(stage)}
+    paths=list(stage.rglob('*'))
+    if any(path.is_symlink() or path.is_junction() for path in paths):
+        raise ValueError('SURFACE_PHASE: linked file in owned stage; retained')
+    actual={path for path in paths if path.is_file()}
+    if not actual.issubset(known):
+        raise ValueError('SURFACE_PHASE: unknown file in owned stage; retained')
+    for path in sorted(actual):
+        _surface_phase_unlink(path,phase)
+        original_phase.files[str(path.resolve())]=None
+    for path in sorted((p for p in stage.rglob('*') if p.is_dir()),key=lambda p:len(p.parts),reverse=True):
+        path.rmdir()
+    stage.rmdir()
+
+
+def _read_actual_refresh_publication(output_dir, *, acknowledged=None, _phase=None):
     """Verify every byte and owner before any interrupted publication write."""
     path = output_dir / ACTUAL_REFRESH_PUBLICATION
-    if not path.exists():
+    if _phase is not None:
+        _phase.recheck()
+    raw=_phase.expected_bytes(path) if _phase is not None else None
+    if (raw is None if _phase is not None else not path.exists()):
         return None
-    journal, digest = json_load_snapshot(path)
+    journal,digest=(json_parse_strict(raw,path),hashlib.sha256(raw).hexdigest()) if _phase is not None else json_load_snapshot(path)
+    def bound_read(candidate):
+        return _phase.expected_bytes(candidate) if _phase is not None else candidate.read_bytes()
+    def bound_sha(candidate):
+        value=bound_read(candidate) if _phase is not None else None
+        return (hashlib.sha256(value).hexdigest() if value is not None else None) if _phase is not None else _refresh_file_sha(candidate)
     keys = {"schema", "phase", "project", "session_id", "token", "plan_sha", "source", "stage", "entries", "cleared_count"}
     if isinstance(journal, dict) and journal.get("phase") == "ACKNOWLEDGING":
         keys.add("ack_sha")
     if (not isinstance(journal, dict) or set(journal) != keys
-            or journal["schema"] != "actual-deferred-refresh/1"
+            or journal["schema"] not in {"actual-deferred-refresh/1", 'actual-deferred-refresh/2'}
             or journal["phase"] not in {"PREPARED", "PUBLISHED", "ACKNOWLEDGING"}
             or journal["project"] != str(output_dir.resolve())
             or not isinstance(journal["stage"], str)
@@ -4475,21 +5100,26 @@ def _read_actual_refresh_publication(output_dir, *, acknowledged=None):
                 raise ValueError("actual refresh publication SHA 格式不符")
         backup = _refresh_owned_path(stage, Path("previous") / str(index))
         if entry["old_sha"] is not None:
-            if not backup.is_file() or sha256_file(backup) != entry["old_sha"]:
+            if not backup.is_file() or bound_sha(backup) != entry["old_sha"]:
                 raise ValueError("actual refresh publication backup SHA 不符")
-            originals[entry["path"]] = backup.read_bytes()
+            originals[entry["path"]] = bound_read(backup)
         elif backup.exists():
             raise ValueError("actual refresh publication unexpected backup")
         target = _refresh_owned_path(output_dir, relative)
         if target.exists() and not target.is_file():
             raise ValueError("actual refresh publication target 不是一般檔案")
-        current = _refresh_file_sha(target)
+        current = bound_sha(target)
         allowed = {entry["old_sha"], entry["new_sha"]} if journal["phase"] == "PREPARED" else {entry["new_sha"]}
         if current not in allowed:
             raise ValueError("actual refresh publication target 已由其他來源變動")
     old_manifest = json_parse_strict(originals.get("校對工作階段.json", b""), path)
     validate_manifest_integrity(old_manifest)
     allowed = {"校對工作階段.json", "人工判定資料庫.json", "待人工確認.json", "pipeline_status.json"}
+    if journal['schema'] == 'actual-deferred-refresh/2':
+        required_surface=str(Path(PROJECT_EVIDENCE_DIR)/PROJECT_ACTUAL_EVIDENCE_DIR/'manual_surface_actual.json')
+        if required_surface not in seen:
+            raise ValueError('actual refresh publication required surface entry missing')
+        allowed.add(required_surface)
     for info in old_manifest["pdfs"]:
         for kind in ("actual", "candidate"):
             relative = descriptor(info, kind)
@@ -4502,23 +5132,25 @@ def _read_actual_refresh_publication(output_dir, *, acknowledged=None):
                 raise ValueError("actual refresh publication backup 與原封印不符")
     if (not seen.issubset(allowed) or not {"校對工作階段.json", "人工判定資料庫.json", "待人工確認.json", "pipeline_status.json"}.issubset(seen)
             or old_manifest["session_id"] != journal["session_id"]
-            or journal["source"] != _refresh_source_snapshot(output_dir)):
+            or journal["source"] != (_surface_phase_source(output_dir,_phase) if _phase is not None else
+                                      _refresh_source_snapshot(output_dir))):
         raise ValueError("actual refresh publication source/allowlist 不符")
-    token = project_refresh_token(project_actual_evidence_root(output_dir))
+    recovery=_surface_phase_recovery(project_actual_evidence_root(output_dir),_phase) if _phase is not None else None
+    token=(recovery[0] if recovery is not None else None) if _phase is not None else project_refresh_token(project_actual_evidence_root(output_dir))
     acknowledged_here = False
     if journal["phase"] == "ACKNOWLEDGING":
         from global_glyph_promotion import _validated_project_journal
         receipt = _refresh_owned_path(stage, Path("ack-committed.json"))
-        if (not receipt.is_file() or sha256_file(receipt) != journal["ack_sha"]):
+        if (not receipt.is_file() or bound_sha(receipt) != journal["ack_sha"]):
             raise ValueError("actual refresh acknowledgement 原件 SHA 不符")
-        original = _validated_project_journal(receipt.read_bytes())
+        original = _validated_project_journal(bound_read(receipt))
         if (original["state"] != "COMMITTED" or original["transaction_id"] != journal["token"]
                 or _hash_review_payload(original["recovery_plan"]) != journal["plan_sha"]):
             raise ValueError("actual refresh acknowledgement 原件 token/plan 不符")
         acknowledged_here = token is None
     if token != journal["token"] and not acknowledged_here:
         raise ValueError("actual refresh publication COMMITTED token 不符")
-    if token is not None and journal["plan_sha"] != _refresh_plan_digest(output_dir):
+    if token is not None and journal["plan_sha"] != (_hash_review_payload(recovery[1]) if _phase is not None else _refresh_plan_digest(output_dir)):
         raise ValueError("actual refresh publication COMMITTED plan 不符")
     if token is None and journal["phase"] == "PREPARED" and journal["plan_sha"] is not None:
         raise ValueError("actual refresh publication unexpected recovery plan")
@@ -4549,10 +5181,11 @@ def _verify_actual_refresh_pdf_binding(output_dir, manifest, *, sealed_manifest=
 
 @bound_operation(project_parameter="output_dir")
 def _resume_actual_refresh_publication(output_dir, *, cleanup=False, acknowledged=None,
-                                       acknowledge=True, _post_ack_guard=None):
+                                       acknowledge=True, _post_ack_guard=None, _phase=None):
     if type(acknowledge) is not bool:
         raise ValueError("actual refresh acknowledgement policy must be boolean")
-    pending = _read_actual_refresh_publication(output_dir, acknowledged=acknowledged)
+    pending = _read_actual_refresh_publication(output_dir, acknowledged=acknowledged,
+                                              **({'_phase':_phase} if _phase is not None else {}))
     if pending is None:
         return
     journal, digest, stage, originals = pending
@@ -4560,57 +5193,84 @@ def _resume_actual_refresh_publication(output_dir, *, cleanup=False, acknowledge
         for entry in reversed(journal["entries"]):
             target = output_dir / entry["path"]
             if entry["old_sha"] is None:
-                target.unlink(missing_ok=True)
+                if _phase is None:
+                    target.unlink(missing_ok=True)
+                else:
+                    _surface_phase_unlink(target,_phase)
             else:
-                _refresh_atomic_bytes(target, originals[entry["path"]])
-    manifest = json_load_strict(output_dir / "校對工作階段.json")
+                _refresh_atomic_bytes(target, originals[entry["path"]],
+                                      **({'_phase':_phase} if _phase is not None else {}))
+    manifest = (_surface_known_json(_phase,output_dir/'校對工作階段.json') if _phase is not None else
+                json_load_strict(output_dir / "校對工作階段.json"))
     validate_manifest_integrity(manifest)
     validate_output_artifact_hashes(manifest, output_dir=output_dir)
     sealed_manifest = json_parse_strict(originals["校對工作階段.json"], output_dir / ACTUAL_REFRESH_PUBLICATION)
     _verify_actual_refresh_pdf_binding(output_dir, manifest, sealed_manifest=sealed_manifest)
     if journal["phase"] != "PREPARED":
-        pending_actual = committed_project_recovery(project_actual_evidence_root(output_dir))
+        pending_actual = (_surface_phase_recovery(project_actual_evidence_root(output_dir),_phase)
+                          if _phase is not None else committed_project_recovery(project_actual_evidence_root(output_dir)))
         recovery_plan = pending_actual[1] if pending_actual is not None else None
         if journal["phase"] == "ACKNOWLEDGING":
             from global_glyph_promotion import _validated_project_journal
-            recovery_plan = _validated_project_journal((stage / "ack-committed.json").read_bytes())["recovery_plan"]
+            raw=_phase.expected_bytes(stage/'ack-committed.json') if _phase is not None else (stage/'ack-committed.json').read_bytes()
+            recovery_plan = _validated_project_journal(raw)["recovery_plan"]
         if recovery_plan is not None:
             _verify_manual_actual_batch_postconditions(
-                materialize_ledger(manifest, load_or_initialize_db(output_dir)), recovery_plan["checked_postconditions"])
+                materialize_ledger(manifest, _surface_known_db(_phase,output_dir) if _phase is not None else
+                                    load_or_initialize_db(output_dir)), recovery_plan["checked_postconditions"])
         _verify_actual_refresh_pdf_binding(output_dir, manifest, sealed_manifest=sealed_manifest)
         if journal["phase"] == "ACKNOWLEDGING":
             if not acknowledge:
-                if sha256_file(output_dir / ACTUAL_REFRESH_PUBLICATION) != digest:
+                if (_surface_known_sha(_phase,output_dir/ACTUAL_REFRESH_PUBLICATION) if _phase is not None else
+                        sha256_file(output_dir / ACTUAL_REFRESH_PUBLICATION)) != digest:
                     raise ValueError("actual refresh publication journal 已變動")
                 return {**journal, "_recovery_plan": recovery_plan}
             if _post_ack_guard is not None:
                 _post_ack_guard()
             if pending_actual is not None:
-                acknowledge_project_refresh(project_actual_evidence_root(output_dir), journal["token"])
+                acknowledge_project_refresh(project_actual_evidence_root(output_dir), journal["token"],
+                                            **({'_phase':_phase} if _phase is not None else {}))
         elif not cleanup or pending_actual is not None:
             return journal
     if _post_ack_guard is not None:
         _post_ack_guard()
     path = output_dir / ACTUAL_REFRESH_PUBLICATION
-    if sha256_file(path) != digest:
+    if (_surface_known_sha(_phase,path) if _phase is not None else sha256_file(path)) != digest:
         raise ValueError("actual refresh publication journal 已變動")
-    path.unlink()
+    if _phase is None:
+        path.unlink()
+    else:
+        # Unchanged workbook copies were not publication entries. Their bytes
+        # still come from the sealed project, never from a fresh stage capture.
+        for info in sealed_manifest['pdfs']:
+            for kind in ('actual','candidate'):
+                copied=stage/descriptor(info,kind)
+                if str(copied.resolve()) not in _phase.files:
+                    _phase.include(copied,_phase.expected_bytes(output_dir/descriptor(info,kind)))
+        _surface_phase_unlink(path,_phase)
     try:
-        shutil.rmtree(stage)
+        if _phase is None:
+            shutil.rmtree(stage)
+        else:
+            _surface_phase_cleanup_stage(stage,_phase)
     except OSError:
         pass  # Successful publication/rollback remains truthful; retain backups.
     if journal["phase"] == "ACKNOWLEDGING":
         return {**journal, "_recovery_plan": recovery_plan}
 
 
-def _acknowledge_actual_refresh(output_dir, token, *, _post_ack_guard=None):
+def _acknowledge_actual_refresh(output_dir, token, *, _post_ack_guard=None, _phase=None):
+    if _phase is None:
+        from project_write_admission import entry_write_phase
+        _phase=entry_write_phase(output_dir)
     with project_delivery_lock(project_actual_evidence_root(output_dir)):
-        return _acknowledge_actual_refresh_locked(output_dir, token, _post_ack_guard=_post_ack_guard)
+        return _acknowledge_actual_refresh_locked(output_dir, token, _post_ack_guard=_post_ack_guard,
+                                                  **({'_phase':_phase} if _phase is not None else {}))
 
 
-def _acknowledge_actual_refresh_locked(output_dir, token, *, _post_ack_guard=None):
+def _acknowledge_actual_refresh_locked(output_dir, token, *, _post_ack_guard=None, _phase=None):
     output_dir = Path(output_dir).resolve()
-    pending = _read_actual_refresh_publication(output_dir)
+    pending = _read_actual_refresh_publication(output_dir,**({'_phase':_phase} if _phase is not None else {}))
     if pending is not None and pending[0]["phase"] not in {"PUBLISHED", "ACKNOWLEDGING"}:
         raise ValueError("actual refresh 未完整發布；未 acknowledgement")
     if pending is not None:
@@ -4618,95 +5278,154 @@ def _acknowledge_actual_refresh_locked(output_dir, token, *, _post_ack_guard=Non
         if token != journal["token"]:
             from global_exact_glyph_library import GlobalLibraryIntentConflictError
             raise GlobalLibraryIntentConflictError("project refresh acknowledgement is stale")
-        manifest = json_load_strict(output_dir / "校對工作階段.json")
+        manifest = (_surface_known_json(_phase,output_dir/'校對工作階段.json') if _phase is not None else
+                    json_load_strict(output_dir / "校對工作階段.json"))
         validate_manifest_integrity(manifest)
         sealed_manifest = json_parse_strict(pending[3]["校對工作階段.json"], output_dir / ACTUAL_REFRESH_PUBLICATION)
         _verify_actual_refresh_pdf_binding(output_dir, manifest, sealed_manifest=sealed_manifest)
         if journal["phase"] == "PUBLISHED":
             from global_glyph_promotion import PROJECT_TRANSACTION_FILE
-            raw = (project_actual_evidence_root(output_dir) / PROJECT_TRANSACTION_FILE).read_bytes()
-            _refresh_atomic_bytes(stage / "ack-committed.json", raw)
+            local_path=project_actual_evidence_root(output_dir)/PROJECT_TRANSACTION_FILE
+            raw = _phase.expected_bytes(local_path) if _phase is not None else local_path.read_bytes()
+            _refresh_atomic_bytes(stage / "ack-committed.json", raw,
+                                  **({'_phase':_phase} if _phase is not None else {}))
             journal.update(phase="ACKNOWLEDGING", ack_sha=hashlib.sha256(raw).hexdigest())
-            json_save(output_dir / ACTUAL_REFRESH_PUBLICATION, journal, expected_sha256=digest)
-    manifest = json_load_strict(output_dir / "校對工作階段.json")
+            json_save(output_dir / ACTUAL_REFRESH_PUBLICATION, journal, expected_sha256=digest,
+                      **({'_phase':_phase} if _phase is not None else {}))
+    manifest = (_surface_known_json(_phase,output_dir/'校對工作階段.json') if _phase is not None else
+                json_load_strict(output_dir / "校對工作階段.json"))
     validate_manifest_integrity(manifest)
     _verify_actual_refresh_pdf_binding(output_dir, manifest,
                                       sealed_manifest=sealed_manifest if pending is not None else None)
-    acknowledge_project_refresh(project_actual_evidence_root(output_dir), token)
+    acknowledge_project_refresh(project_actual_evidence_root(output_dir), token,
+                                **({'_phase':_phase} if _phase is not None else {}))
     if _post_ack_guard is not None:
         _post_ack_guard()
-    _resume_actual_refresh_publication(output_dir, cleanup=True, _post_ack_guard=_post_ack_guard)
+    _resume_actual_refresh_publication(output_dir, cleanup=True, _post_ack_guard=_post_ack_guard,
+                                       **({'_phase':_phase} if _phase is not None else {}))
 
 
 @bound_operation(project_parameter="output_dir")
-def _publish_actual_refresh(output_dir, stage, manifest, *, source, token, before, cleared_count=0, _prewrite_guard=None):
+def _publish_actual_refresh(output_dir, stage, manifest, *, source, token, before, cleared_count=0, _prewrite_guard=None,
+                            _surface_only=False, _phase=None):
     if _prewrite_guard is not None:
         _prewrite_guard()
-    sealed_manifest = json_load_strict(output_dir / "校對工作階段.json")
+    if _phase is not None:
+        _phase.recheck()
+    sealed_manifest = (_surface_known_json(_phase,output_dir/'校對工作階段.json') if _phase is not None else
+                       json_load_strict(output_dir / "校對工作階段.json"))
     validate_manifest_integrity(sealed_manifest)
     _verify_actual_refresh_pdf_binding(output_dir, manifest, sealed_manifest=sealed_manifest)
-    if (source != _refresh_source_snapshot(output_dir)
-            or token != project_refresh_token(project_actual_evidence_root(output_dir))):
+    known_recovery=_surface_phase_recovery(project_actual_evidence_root(output_dir),_phase) if _phase is not None else None
+    if (source != (_surface_phase_source(output_dir,_phase) if _phase is not None else _refresh_source_snapshot(output_dir))
+            or token != ((known_recovery[0] if known_recovery is not None else None) if _phase is not None else
+                         project_refresh_token(project_actual_evidence_root(output_dir)))):
         raise ValueError("actual refresh 來源/COMMITTED token 已變動")
     for relative, digest in before.items():
-        if _refresh_file_sha(_refresh_owned_path(output_dir, Path(relative))) != digest:
+        path=_refresh_owned_path(output_dir, Path(relative))
+        if (_surface_known_sha(_phase,path) if _phase is not None else _refresh_file_sha(path)) != digest:
             raise ValueError("actual refresh 發布前原專案已變動")
     names = []
     for info in manifest["pdfs"]:
         for kind in ("actual", "candidate"):
             relative = descriptor(info, kind)
-            if sha256_file(stage / relative) != before[str(relative)]:
+            if (_surface_known_sha(_phase,stage/relative) if _phase is not None else
+                    sha256_file(stage / relative)) != before[str(relative)]:
                 names.append(str(relative))
     names.extend(["人工判定資料庫.json", "待人工確認.json", "pipeline_status.json", "校對工作階段.json"])
+    if _surface_only:
+        names.insert(0,str(Path(PROJECT_EVIDENCE_DIR)/PROJECT_ACTUAL_EVIDENCE_DIR/'manual_surface_actual.json'))
+    if _phase is not None:
+        _phase.recheck()
     (stage / "previous").mkdir()
     entries = []
     for index, name in enumerate(names):
         old = before[name]
         if old is not None:
-            raw = (output_dir / name).read_bytes()
-            _refresh_atomic_bytes(stage / "previous" / str(index), raw)
-            if sha256_file(stage / "previous" / str(index)) != old:
+            raw = _phase.expected_bytes(output_dir/name) if _phase is not None else (output_dir / name).read_bytes()
+            _refresh_atomic_bytes(stage / "previous" / str(index), raw,
+                                  **({'_phase':_phase} if _phase is not None else {}))
+            if (_surface_known_sha(_phase,stage/'previous'/str(index)) if _phase is not None else
+                    sha256_file(stage / "previous" / str(index))) != old:
                 raise ValueError("actual refresh backup source 已變動")
-        entries.append({"path": name, "old_sha": old, "new_sha": sha256_file(stage / name)})
-    journal = {"schema": "actual-deferred-refresh/1", "phase": "PREPARED",
+        entries.append({"path": name, "old_sha": old, "new_sha": hashlib.sha256(_phase.expected_bytes(stage/name)).hexdigest()
+                        if _phase is not None else sha256_file(stage/name)})
+    phase_plan=_surface_phase_recovery(project_actual_evidence_root(output_dir),_phase) if _phase is not None else None
+    journal = {"schema": 'actual-deferred-refresh/2' if _surface_only else 'actual-deferred-refresh/1', "phase": "PREPARED",
                "project": str(output_dir.resolve()), "session_id": manifest["session_id"],
-               "token": token, "plan_sha": _refresh_plan_digest(output_dir), "source": source,
+               "token": token, "plan_sha": (_hash_review_payload(phase_plan[1]) if phase_plan is not None else None)
+                    if _phase is not None else _refresh_plan_digest(output_dir), "source": source,
                "stage": stage.name, "entries": entries, "cleared_count": cleared_count}
     journal_path = output_dir / ACTUAL_REFRESH_PUBLICATION
-    journal_sha = json_save(journal_path, journal, expected_sha256="")
+    journal_sha = json_save(journal_path, journal, expected_sha256="",
+                             **({'_phase':_phase} if _phase is not None else {}))
     try:
         for name in names:
-            (stage / name).replace(output_dir / name)
-        validate_manifest_integrity(json_load_strict(output_dir / "校對工作階段.json"))
+            if _phase is None:
+                (stage / name).replace(output_dir / name)
+            else:
+                _surface_phase_move(stage/name,output_dir/name,_phase)
+        validate_manifest_integrity(_surface_known_json(_phase,output_dir/'校對工作階段.json') if _phase is not None else
+                                    json_load_strict(output_dir / "校對工作階段.json"))
         validate_output_artifact_hashes(manifest, output_dir=output_dir)
         for entry in entries:
-            if _refresh_file_sha(output_dir / entry["path"]) != entry["new_sha"]:
+            if (_surface_known_sha(_phase,output_dir/entry['path']) if _phase is not None else
+                    _refresh_file_sha(output_dir / entry["path"])) != entry["new_sha"]:
                 raise ValueError("actual refresh 發布後 SHA 不符")
-        pending = committed_project_recovery(project_actual_evidence_root(output_dir))
+        pending = (_surface_phase_recovery(project_actual_evidence_root(output_dir),_phase) if _phase is not None else
+                   committed_project_recovery(project_actual_evidence_root(output_dir)))
         if pending is not None:
             _verify_manual_actual_batch_postconditions(
-                materialize_ledger(manifest, load_or_initialize_db(output_dir)), pending[1]["checked_postconditions"])
+                materialize_ledger(manifest, _surface_known_db(_phase,output_dir) if _phase is not None else
+                                    load_or_initialize_db(output_dir)), pending[1]["checked_postconditions"])
         _verify_actual_refresh_pdf_binding(output_dir, manifest, sealed_manifest=sealed_manifest)
         journal["phase"] = "PUBLISHED"
-        json_save(journal_path, journal, expected_sha256=journal_sha)
+        json_save(journal_path, journal, expected_sha256=journal_sha,
+                   **({'_phase':_phase} if _phase is not None else {}))
     except BaseException:
-        _resume_actual_refresh_publication(output_dir)
+        if _phase is not None:
+            _phase.reconcile()
+        _resume_actual_refresh_publication(output_dir,**({'_phase':_phase} if _phase is not None else {}))
         raise
     if token is None:
-        _resume_actual_refresh_publication(output_dir, cleanup=True)
+        _resume_actual_refresh_publication(output_dir, cleanup=True,
+                                           **({'_phase':_phase} if _phase is not None else {}))
 
 
 @bound_operation(project_parameter="output_dir")
+@project_write_entry(recovery=True, locked=True, profile_only=True)
 def refresh_actual_project(output_dir: Path, *, defer_excel_reports: bool = True,
                            _prewrite_guard=None, _refresh_plan=None, _refresh_status=None,
                            _refresh_acknowledge=True) -> Path:
     """Incrementally re-decode current project after dynamic actual evidence changes."""
     output_dir = Path(output_dir).resolve()
+    import manual_surface_actual as surface
+    from project_write_admission import entry_write_admission,SurfaceWritePhase
+    entry=entry_write_admission(output_dir)
+    current = (json_parse_strict(entry.expected_bytes(output_dir/'校對工作階段.json'),output_dir/'校對工作階段.json')
+               if entry is not None else json_load_strict(output_dir/'校對工作階段.json'))
+    if (defer_excel_reports and surface.enabled(current) and current.get('manual_surface_projection_refresh',{}).get('raw_actual_inputs')
+            == surface.raw_dependencies(project_actual_evidence_root(output_dir),
+                **({'_read_bytes':entry.expected_bytes} if entry is not None else {}))):
+        if _prewrite_guard is not None:
+            _prewrite_guard()
+        # This route projects the existing sealed decoder output. An explicit
+        # run_pipeline_pdfs remains the current decoder/epoch refresh route.
+        result = _surface_projection_refresh(output_dir,
+            (surface.load_snapshot(project_actual_evidence_root(output_dir),current,
+                expected_raw=entry.expected_bytes(project_actual_evidence_root(output_dir)/surface.FILE)).document
+                if entry is not None else surface.load(project_actual_evidence_root(output_dir), current)),
+            acknowledge=_refresh_acknowledge,
+            **({'_phase':SurfaceWritePhase(entry)} if entry is not None else {}))
+        if _refresh_status is not None:
+            _refresh_status['cleared_actual_dependent_event_count'] = result['cleared_actual_dependent_event_count']
+        return _actual_refresh_output_path(output_dir,result,announce=True)
     if defer_excel_reports:
         with project_delivery_lock(project_actual_evidence_root(output_dir)):
             return _stage_actual_refresh(output_dir, _prewrite_guard=_prewrite_guard,
                                          plan=_refresh_plan, status=_refresh_status,
-                                         acknowledge=_refresh_acknowledge)
+                                         acknowledge=_refresh_acknowledge,
+                                         **({'_phase':SurfaceWritePhase(entry)} if entry is not None and entry.profile else {}))
     manifest = json_load_strict(output_dir / "校對工作階段.json")
     validate_manifest_integrity(manifest)
     # Workbooks may now be stale relative to dynamic actual evidence, but must
@@ -4723,19 +5442,22 @@ def refresh_actual_project(output_dir: Path, *, defer_excel_reports: bool = True
 
 
 @bound_operation(project_parameter="output_dir")
-def _stage_actual_refresh(output_dir, *, _prewrite_guard=None, plan=None, status=None, acknowledge=True):
-    published = _resume_actual_refresh_publication(output_dir, acknowledge=acknowledge)
+def _stage_actual_refresh(output_dir, *, _prewrite_guard=None, plan=None, status=None, acknowledge=True, _phase=None):
+    phase_kwargs={'_phase':_phase} if _phase is not None else {}
+    published = _resume_actual_refresh_publication(output_dir, acknowledge=acknowledge, **phase_kwargs)
     if published is not None:
         if published["phase"] == "ACKNOWLEDGING":
             if status is not None:
                 status["cleared_actual_dependent_event_count"] = published["cleared_count"]
             return output_dir / "注音校對_最終報告.xlsx"
-        if project_refresh_token(project_actual_evidence_root(output_dir)) is not None:
+        if (_surface_phase_recovery(project_actual_evidence_root(output_dir),_phase) if _phase is not None else
+                project_refresh_token(project_actual_evidence_root(output_dir))) is not None:
             if status is not None:
                 status["cleared_actual_dependent_event_count"] = published["cleared_count"]
             return output_dir / "注音校對_最終報告.xlsx"
-        _resume_actual_refresh_publication(output_dir, cleanup=True, acknowledge=acknowledge)
-    manifest = json_load_strict(output_dir / "校對工作階段.json")
+        _resume_actual_refresh_publication(output_dir, cleanup=True, acknowledge=acknowledge, **phase_kwargs)
+    manifest = (_surface_known_json(_phase,output_dir/'校對工作階段.json') if _phase is not None else
+                json_load_strict(output_dir / "校對工作階段.json"))
     validate_manifest_integrity(manifest)
     validate_output_artifact_hashes(manifest, output_dir=output_dir)
     from actual_review import dynamic_actual_hashes
@@ -4743,8 +5465,9 @@ def _stage_actual_refresh(output_dir, *, _prewrite_guard=None, plan=None, status
     pdfs = _verify_actual_refresh_pdf_binding(output_dir, manifest)
     if _prewrite_guard is not None:
         _prewrite_guard()
-    token = project_refresh_token(project_actual_evidence_root(output_dir))
-    pending = committed_project_recovery(project_actual_evidence_root(output_dir))
+    pending = (_surface_phase_recovery(project_actual_evidence_root(output_dir),_phase) if _phase is not None else
+               committed_project_recovery(project_actual_evidence_root(output_dir)))
+    token = (pending[0] if pending is not None else None) if _phase is not None else project_refresh_token(project_actual_evidence_root(output_dir))
     if plan is None and pending is not None:
         plan = pending[1]
     if plan is not None:
@@ -4752,11 +5475,18 @@ def _stage_actual_refresh(output_dir, *, _prewrite_guard=None, plan=None, status
         plan = validate_post_commit_recovery_plan(plan)
         if pending is not None and plan != pending[1]:
             raise ValueError("actual refresh recovery plan 與 COMMITTED 不符")
-    source = _refresh_source_snapshot(output_dir)
+    source = _surface_phase_source(output_dir,_phase) if _phase is not None else _refresh_source_snapshot(output_dir)
     names = ["校對工作階段.json", "人工判定資料庫.json", "待人工確認.json", "pipeline_status.json"]
     names.extend(str(relative) for index, kind, relative, sha in bind_workbooks(output_dir, manifest))
-    before = {name: _refresh_file_sha(output_dir / name) for name in names}
+    if _phase is not None:
+        names.append(str(Path(PROJECT_EVIDENCE_DIR)/PROJECT_ACTUAL_EVIDENCE_DIR/'manual_surface_actual.json'))
+    before = {name: (_surface_known_sha(_phase,output_dir/name) if _phase is not None else
+                     _refresh_file_sha(output_dir / name)) for name in names}
+    if _phase is not None:_phase.recheck()
     stage = Path(tempfile.mkdtemp(prefix=".ar-", dir=output_dir.parent))
+    from project_write_admission import owned_refresh_stage
+    stage_scope = owned_refresh_stage(stage, output_dir, **phase_kwargs)
+    stage_scope.__enter__()
     try:
         staged_manifest = _refresh_rebase_manifest(manifest, output_dir, stage)
         for name in names:
@@ -4765,46 +5495,118 @@ def _stage_actual_refresh(output_dir, *, _prewrite_guard=None, plan=None, status
             target = stage / name
             target.parent.mkdir(parents=True, exist_ok=True)
             if before[name] is not None:
-                shutil.copyfile(output_dir / name, target)
+                if _phase is None:shutil.copyfile(output_dir / name, target)
+                else:target.write_bytes(_phase.expected_bytes(output_dir/name))
         if before["人工判定資料庫.json"] is None:
             json_save(stage / "人工判定資料庫.json", normalize_db({}))
-        json_save(stage / "校對工作階段.json", staged_manifest)
-        db = load_or_initialize_db(stage)
+        json_save(stage / "校對工作階段.json", staged_manifest,**phase_kwargs)
+        if _phase is not None:
+            _phase.include(stage/'人工判定資料庫.json',_phase.expected_bytes(output_dir/'人工判定資料庫.json'))
+            _phase.include(stage/str(Path(PROJECT_EVIDENCE_DIR)/PROJECT_ACTUAL_EVIDENCE_DIR/'manual_surface_actual.json'),
+                           _phase.expected_bytes(project_actual_evidence_root(output_dir)/'manual_surface_actual.json'))
+        db = _surface_known_db(_phase,stage) if _phase is not None else load_or_initialize_db(stage)
         removed = 0
         if plan is not None:
             ledger = materialize_ledger(manifest, db)
-            removed = _clear_actual_dependent_events(stage, ledger, set(plan["affected_occurrence_ids"]))
+            removed = _clear_actual_dependent_events(stage, ledger, set(plan["affected_occurrence_ids"]),**phase_kwargs)
+        def recheck_original():
+            if _prewrite_guard is not None:_prewrite_guard()
+            if _phase is not None:_phase.recheck()
+        producer_paths=None
+        if _phase is not None:
+            # Finite paths from the original seeds and this existing producer's
+            # named workbook/summary/lock outputs, never a wildcard own claim.
+            producer_paths={stage/name for name in names}
+            producer_paths.update(actual_workbook_path(stage/'01_實際注音',pdf) for pdf in pdfs)
+            producer_paths.update(candidate_workbook_path(stage/'02_候選報告',pdf) for pdf in pdfs)
+            producer_paths.update({stage/'01_實際注音'/'CFF未見家族跨檔批次零對照自舉_總報告.xlsx',
+                project_actual_evidence_root(stage)/'.global_exact_glyph_delivery.lock'})
+            if any(path.is_symlink() or path.is_junction() for path in stage.rglob('*')):
+                raise ValueError('owned raw stage contains a link')
+            if any(path not in producer_paths for path in stage.rglob('*') if path.is_file()):
+                raise ValueError('owned raw stage contains an unknown pre-producer file')
         run_pipeline_pdfs(pdfs, stage, session_id_override=manifest["session_id"],
                           defer_excel_reports=True, _source_project_dir=output_dir,
-                          **({"_prewrite_guard": _prewrite_guard} if _prewrite_guard is not None else {}))
-        updated = json_load_strict(stage / "校對工作階段.json")
+                          **({'_stage_phase':_phase} if _phase is not None else {}),
+                          **({"_prewrite_guard": recheck_original} if _phase is not None or _prewrite_guard is not None else {}))
+        if _phase is not None:
+            recheck_original()
+            # One output-buffer set from this existing producer, before any
+            # logical consumer. include binds each actual read, including ABA.
+            produced={target:target.read_bytes() for target in stage.rglob('*') if target.is_file()}
+            if any(target not in producer_paths for target in produced):
+                raise ValueError('owned raw producer output roster contains an unknown file')
+            for target,raw in produced.items():_phase.include(target,raw)
+            _phase.recheck()
+        updated = _surface_known_json(_phase,stage/'校對工作階段.json') if _phase is not None else json_load_strict(stage / "校對工作階段.json")
         validate_manifest_integrity(updated)
         validate_output_artifact_hashes(updated, output_dir=stage)
+        import manual_surface_actual as surface
+        if surface.enabled(updated):
+            document=(surface.load_snapshot(project_actual_evidence_root(output_dir),manifest,
+                expected_raw=_phase.expected_bytes(project_actual_evidence_root(output_dir)/surface.FILE)).document
+                if _phase is not None else surface.load(project_actual_evidence_root(output_dir),manifest))
+            surface.verify_sources(document,updated,output_dir)
+            updated['manual_surface_actual_projection']=surface.projection(document)
+            updated['manual_surface_projection_refresh']={
+                'contract':surface.PROJECTION,'automatic_decoder_cache_revalidated':True,
+                'origin_manifest_sha256':manifest['manual_surface_projection_refresh']['origin_manifest_sha256'],
+                'raw_actual_inputs':surface.raw_dependencies(project_actual_evidence_root(output_dir),
+                    **({'_read_bytes':_phase.expected_bytes} if _phase is not None else {})),
+                'raw_decoder_seals':'current explicit decoder run; surface evidence remains a separate occurrence projection'}
+            seal_manifest(updated)
         identities = lambda value: sorted((entry["occurrence_id"], entry["review_id"]) for entry in value.get("records", []))
         if (updated.get("session_id") != manifest["session_id"]
                 or identities(updated) != identities(manifest)
                 or sorted(updated.get("actual_source_ids", [])) != sorted(manifest.get("actual_source_ids", []))):
             raise ValueError("actual refresh stage 改變原 session/occurrence/review identity")
-        refreshed_db = load_or_initialize_db(stage)
+        if _phase is not None:
+            expected=lambda row:{key:value for key,value in row.items() if key.startswith('expected')}
+            if ([expected(row) for row in updated['records']]!=[expected(row) for row in manifest['records']]
+                    or {key:value for key,value in updated.items() if key.startswith('expected')}!=
+                       {key:value for key,value in manifest.items() if key.startswith('expected')}):
+                raise ValueError('ordinary actual producer changed independent expected evidence')
+        refreshed_db = _surface_known_db(_phase,stage) if _phase is not None else load_or_initialize_db(stage)
         ledger = materialize_ledger(updated, refreshed_db)
         if plan is not None:
             _verify_manual_actual_batch_postconditions(ledger, plan["checked_postconditions"])
         final = _refresh_rebase_manifest(updated, stage, output_dir)
-        json_save(stage / "校對工作階段.json", final)
-        save_pending_json(stage, final, refreshed_db)
-        pipeline_status = json_load_strict(stage / "pipeline_status.json")
+        json_save(stage / "校對工作階段.json", final,**phase_kwargs)
+        save_pending_json(stage, final, refreshed_db,**phase_kwargs)
+        pipeline_status = _surface_known_json(_phase,stage/'pipeline_status.json') if _phase is not None else json_load_strict(stage / "pipeline_status.json")
         pipeline_status["user_report"] = str(output_dir / "注音校對_最終報告.xlsx")
         pipeline_status["technical_audit_report"] = str(output_dir / "注音校對_技術稽核.xlsx")
-        json_save(stage / "pipeline_status.json", pipeline_status)
+        json_save(stage / "pipeline_status.json", pipeline_status,**phase_kwargs)
+        if _phase is not None:
+            # Existing producer's sealed output is the first stage-output
+            # contract. Freeze its complete bytes once; original project/J
+            # remain bound to their earlier phase throughout production.
+            recheck_original()
+            _phase.recheck()
+            keep={stage/name for name in ('校對工作階段.json','人工判定資料庫.json','待人工確認.json','pipeline_status.json')}
+            keep.add(project_actual_evidence_root(stage)/'manual_surface_actual.json')
+            for info in final['pdfs']:
+                keep.update(stage/descriptor(info,kind) for kind in ('actual','candidate'))
+            actual={path for path in stage.rglob('*') if path.is_file()}
+            if actual-set(producer_paths):raise ValueError('unknown stage file before publication; no cleanup')
+            for target in sorted(actual-keep):
+                # All were named before this invocation and bound to the
+                # completed producer's bytes. Original publication is ABSENT.
+                if _phase.expected_bytes(output_dir/ACTUAL_REFRESH_PUBLICATION) is not None:
+                    raise ValueError('ordinary stage already has publication ownership')
+                _surface_phase_unlink(target,_phase)
         _publish_actual_refresh(output_dir, stage, final, source=source, token=token,
-                                before=before, cleared_count=removed, _prewrite_guard=_prewrite_guard)
+                                before=before, cleared_count=removed, _prewrite_guard=_prewrite_guard,
+                                _surface_only=_phase is not None, **phase_kwargs)
         if status is not None:
             status["cleared_actual_dependent_event_count"] = removed
         return output_dir / "注音校對_最終報告.xlsx"
     finally:
-        if not (output_dir / ACTUAL_REFRESH_PUBLICATION).exists():
+        stage_scope.__exit__(None, None, None)
+        if not (output_dir / ACTUAL_REFRESH_PUBLICATION).exists() and stage.exists():
             try:
-                shutil.rmtree(stage)
+                if _phase is None:shutil.rmtree(stage)
+                else:_surface_phase_cleanup_stage(stage,_phase,unpublished=True)
             except OSError:
                 pass
 
@@ -4819,6 +5621,7 @@ def _validate_actual_import_target(output_dir: Path, manifest, db):
 
 
 @bound_operation(project_parameter="output_dir")
+@project_write_entry(recovery=True,locked=True,profile_only=True)
 def import_actual_gpt_decisions(output_dir: Path, xlsx: Path) -> tuple[int, int, Path]:
     from pdf_portability import _stable_excel_import
     output_dir = resolve_existing_project_dir(Path(output_dir))
@@ -4834,7 +5637,7 @@ def _import_actual_gpt_decisions_snapshot(output_dir: Path, xlsx: Path, *,
     from pdf_portability import INCOMPLETE_FILE
     if (output_dir / INCOMPLETE_FILE).exists():
         _reject_incomplete_portable_project(output_dir)
-    manifest = json_load_strict(output_dir / "校對工作階段.json")
+    manifest = _ordinary_entry_manifest(output_dir)
     validate_manifest_integrity(manifest)
     validate_output_artifact_hashes(manifest, output_dir=output_dir)
     metadata = workbook_metadata(Path(xlsx), "匯入中繼資料")
@@ -4856,7 +5659,7 @@ def _import_same_session_actual_snapshot(output_dir: Path, xlsx: Path, *,
     # The routing read is advisory. Reload the complete same-session target
     # under the lock held through its transaction and publication.
     _reject_incomplete_portable_project(output_dir)
-    manifest = json_load_strict(output_dir / "校對工作階段.json")
+    manifest = _ordinary_entry_manifest(output_dir)
     validate_manifest_integrity(manifest)
     validate_output_artifact_hashes(manifest, output_dir=output_dir)
     readonly_db = _read_actual_source_db(output_dir)
@@ -4864,7 +5667,7 @@ def _import_same_session_actual_snapshot(output_dir: Path, xlsx: Path, *,
     validate_actual_sample_profile(xlsx, readonly_groups, output_dir,
                                   require_content_proof=bool(manifest.get("pdfs")), source_manifest=manifest)
     recover_pending_project_actual_write(project_actual_evidence_root(output_dir))
-    db = load_or_initialize_db(output_dir)
+    db = _ordinary_entry_db(output_dir)
     ledger = materialize_ledger(manifest, db)
     groups = build_actual_review_groups(ledger)
     def prewrite_guard():
@@ -4893,6 +5696,7 @@ def _import_same_session_actual_snapshot(output_dir: Path, xlsx: Path, *,
 
 
 @bound_operation(project_parameter="output_dir")
+@project_write_entry(recovery=True, locked=True, profile_only=True)
 def apply_manual_actual_correction(
     output_dir: Path,
     review_id: str,
@@ -4902,19 +5706,24 @@ def apply_manual_actual_correction(
 ) -> tuple[dict[str, Any], Path]:
     """Apply one human visual actual correction and immediately refresh project."""
     output_dir = Path(output_dir)
-    manifest = json_load_strict(output_dir / "校對工作階段.json")
+    manifest = _ordinary_entry_manifest(output_dir)
     validate_manifest_integrity(manifest)
     validate_output_artifact_hashes(manifest, output_dir=output_dir)
     recover_pending_project_actual_write(project_actual_evidence_root(output_dir))
-    db = load_or_initialize_db(output_dir)
+    db = _ordinary_entry_db(output_dir)
     ledger = materialize_ledger(manifest, db)
     entry = next((row for row in ledger if str(row.get("review_id") or "") == str(review_id)), None)
     if entry is None:
         raise ValueError("找不到目前 review_id；請重新開啟人工校對畫面")
+    if entry.get('manual_surface_actual') is not None:
+        raise ValueError('此位置已有獨立人工表面 actual；請使用表面證據編輯，不能改成 glyph learning')
     group = build_actual_group_for_entry(ledger, entry)
     checked = list(checked_occurrence_ids) if checked_occurrence_ids else [entry["occurrence_id"]]
     from pdf_portability import actual_excel_conflict_notes
-    conflict_note = actual_excel_conflict_notes(output_dir, manifest, db, checked)
+    from project_write_admission import entry_write_phase
+    phase=entry_write_phase(output_dir)
+    conflict_note = actual_excel_conflict_notes(output_dir, manifest, db, checked,
+        **({'_read_bytes':phase.expected_bytes} if phase is not None else {}))
     if conflict_note:
         note = f"{note}；{conflict_note}" if note else conflict_note
     transaction_result = apply_direct_visual_actual_batch(
@@ -4937,8 +5746,8 @@ def apply_manual_actual_correction(
     # show the submitted actual at the same occurrence; otherwise surface a
     # deterministic error instead of silently leaving the same review card.
     try:
-        refreshed_manifest = json_load_strict(output_dir / "校對工作階段.json")
-        refreshed_db = load_or_initialize_db(output_dir)
+        refreshed_manifest = _ordinary_entry_manifest(output_dir)
+        refreshed_db = _ordinary_entry_db(output_dir)
         refreshed_ledger = materialize_ledger(refreshed_manifest, refreshed_db)
         target_occurrence_id = str(entry.get("occurrence_id") or "")
         refreshed_entry = next(
@@ -5094,20 +5903,493 @@ def _verify_manual_actual_batch_postconditions(
             )
 
 
+def _surface_recovery_pending(output_dir, *, _snapshot=None):
+    from global_glyph_promotion import PROJECT_TRANSACTION_FILE, _validated_project_journal
+    path = project_actual_evidence_root(output_dir)/PROJECT_TRANSACTION_FILE
+    raw=_snapshot.expected_bytes(path) if _snapshot is not None else path.read_bytes() if path.is_file() else None
+    if raw is None:
+        return False
+    journal = _validated_project_journal(raw)
+    return journal['schema_version']=='2.0' and journal['owner']['operation']=='surface-only'
+
+
+def _recover_surface_phase(output_dir,phase,*,acknowledge):
+    retained,cleared=_retained_phase_committed_authority(output_dir,phase)
+    try:
+        return _recover_surface_phase_owned(output_dir,phase,acknowledge=acknowledge)
+    except ManualActualPostApplyError:
+        raise
+    except Exception as exc:
+        if retained is not None:
+            raise ManualActualPostApplyError('surface_committed_recovery',exc,
+                batch_result={'project_actual_commit':'COMMITTED','project_refresh':'PENDING',
+                    'project_refresh_token':retained[0],'recovery_plan':retained[1],
+                    'affected_occurrence_ids':retained[1]['affected_occurrence_ids'],
+                    'global_promotion_delivery':{'status':'NOT_APPLICABLE_SURFACE_ONLY'}},
+                cleared_event_count=cleared) from exc
+        raise
+
+
+def _recover_surface_phase_owned(output_dir,phase,*,acknowledge):
+    import manual_surface_actual as surface
+    import global_glyph_promotion as promotion
+    from pdf_portability import INCOMPLETE_FILE
+    root=project_actual_evidence_root(output_dir)
+    with project_delivery_lock(root,_admission=phase.receipt()):
+        phase.recheck()
+        if acknowledge and (output_dir/INCOMPLETE_FILE).exists():
+            raise ValueError('專案未完成標記仍存在；請先使用所屬交易的恢復入口，未 acknowledgement')
+        promotion.recover_project_actual_transaction(root,_phase=phase)
+        phase.recheck()
+        publication=_read_actual_refresh_publication(output_dir,_phase=phase)
+        if publication is not None:
+            resumed=_resume_actual_refresh_publication(output_dir,acknowledge=acknowledge,_phase=phase)
+            phase.recheck()
+            if resumed is not None:
+                if resumed['phase']=='PUBLISHED' and resumed['token'] is not None and acknowledge:
+                    _acknowledge_actual_refresh(output_dir,resumed['token'],_phase=phase)
+                elif resumed['token'] is None:
+                    _resume_actual_refresh_publication(output_dir,cleanup=True,acknowledge=acknowledge,_phase=phase)
+                return {'project_actual_commit':'COMMITTED','project_refresh':'SUCCESS',
+                        'surface_projection_refresh':True,'automatic_decoder_cache_revalidated':False,
+                        'global_promotion_delivery':{'status':'NOT_APPLICABLE_SURFACE_ONLY'},
+                        'cleared_actual_dependent_event_count':resumed['cleared_count'],'refresh_performed':True}
+            if _surface_phase_recovery(root,phase) is None:
+                return {'project_actual_commit':'NOT_COMMITTED','project_refresh':'ROLLED_BACK',
+                        'global_promotion_delivery':{'status':'NOT_APPLICABLE_SURFACE_ONLY'}}
+        if _surface_phase_recovery(root,phase) is None:
+            return None
+        manifest=json_parse_strict(phase.expected_bytes(output_dir/'校對工作階段.json'),output_dir/'校對工作階段.json')
+        document=surface.load_snapshot(root,manifest,expected_raw=phase.expected_bytes(root/surface.FILE)).document
+        return _surface_projection_refresh(output_dir,document,acknowledge=acknowledge,_phase=phase)
+
+
+def _surface_admission_after_owned_change(output_dir, admission, replacements, *, removed_stage=None):
+    """Advance only a proven surface publication/rollback phase, never drift."""
+    from project_write_admission import ProjectWriteAdmission, capture_project_write_admission
+    expected = {name:raw for name,raw in admission.files
+                if removed_stage is None or not Path(name).is_relative_to(removed_stage)}
+    expected.update((str(Path(name).resolve()),raw) for name,raw in replacements.items())
+    transitioned = ProjectWriteAdmission(Path(output_dir).resolve(),tuple(sorted(expected.items())),admission.profile,
+        workbook_roster=admission.workbook_roster,integrity_paths=admission.integrity_paths)
+    transitioned.recheck()
+    current = capture_project_write_admission(output_dir,recovery=True)
+    # A temporary valid change during recapture must not become a new baseline.
+    for name,raw in current.files:
+        if name in expected and raw != expected[name]:
+            raise ValueError('SURFACE_CONTRACT: owned transition recaptured external bytes')
+    transitioned.recheck()
+    current.recheck()
+    return current
+
+
+def _surface_projection_refresh(output_dir, document, *, enable=False, acknowledge=True,
+                                _conversion_admission=None, _phase=None):
+    """Publish only the independent surface projection; retain decoder seals.
+
+    This uses the existing refresh publication journal and owned stage. It does
+    not call a decoder, deliver an outbox or label old caches current.
+    """
+    import manual_surface_actual as surface
+    from actual_source_visual_safety import source_visual_operation
+    from project_write_admission import capture_project_write_admission,SurfaceWritePhase,entry_write_admission
+    output_dir = Path(output_dir).resolve()
+    phase=_phase if _phase is not None else SurfaceWritePhase(
+        entry_write_admission(output_dir) or capture_project_write_admission(output_dir,recovery=True))
+    if type(phase) is not SurfaceWritePhase or phase.project!=output_dir:
+        raise ValueError('SURFACE_PHASE: wrong continuation owner')
+    phase.recheck()
+    admission=phase.receipt()
+    root = project_actual_evidence_root(output_dir)
+    with source_visual_operation(), project_delivery_lock(root,_admission=admission):
+        admission.recheck()
+        publication = _read_actual_refresh_publication(output_dir,_phase=phase)
+        admission.recheck()
+        resumed = _resume_actual_refresh_publication(output_dir, acknowledge=acknowledge,_phase=phase)
+        phase.recheck()
+        if resumed is not None:
+            if resumed['phase']=='PUBLISHED' and resumed['token'] is not None and acknowledge:
+                _acknowledge_actual_refresh(output_dir,resumed['token'],_phase=phase)
+            elif resumed['token'] is None:
+                _resume_actual_refresh_publication(output_dir,cleanup=True, acknowledge=acknowledge,_phase=phase)
+            return {'project_actual_commit':'COMMITTED','project_refresh':'SUCCESS',
+                    'surface_projection_refresh':True,'automatic_decoder_cache_revalidated':False,
+                    'global_promotion_delivery':{'status':'NOT_APPLICABLE_SURFACE_ONLY'},
+                    'cleared_actual_dependent_event_count':resumed['cleared_count'],'refresh_performed':True}
+        if publication is not None:
+            # Only the validated PREPARED owner's rollback may replace the
+            # original receipt. Compare its exact permitted transition first;
+            # unrelated drift must never become a newly admitted baseline.
+            if publication[0]['phase'] != 'PREPARED':
+                raise ValueError('SURFACE_CONTRACT: unexpected publication recovery phase')
+            admission=phase.receipt()
+        manifest = json_parse_strict(admission.expected_bytes(output_dir/'校對工作階段.json'),
+                                     output_dir/'校對工作階段.json')
+        validate_manifest_integrity(manifest)
+        if not enable and not surface.enabled(manifest):
+            raise ValueError('SURFACE_CONTRACT: explicit format conversion required')
+        raw_dependencies=surface.raw_dependencies(root,_read_bytes=phase.expected_bytes)
+        if (not enable and manifest.get('manual_surface_projection_refresh',{}).get('raw_actual_inputs')
+                != raw_dependencies):
+            raise ValueError('SURFACE_CONTRACT: raw actual evidence changed; finish normal decoder refresh first')
+        surface.validate_document(document,session_id=manifest['session_id'])
+        snapshot=surface.load_snapshot(root,manifest,expected_raw=admission.expected_bytes(root/surface.FILE))
+        if (document != (surface.empty(manifest['session_id']) if enable else snapshot.document)
+                or (enable and snapshot.document is not None)):
+            raise ValueError('SURFACE_CONTRACT: publication document differs from admitted store')
+        surface.verify_sources(document,manifest,output_dir)
+        _verify_actual_refresh_pdf_binding(output_dir,manifest)
+        observed_source = _refresh_source_snapshot(output_dir)
+        phase.recheck()
+        source=_surface_phase_source(output_dir,phase)
+        if observed_source!=source:
+            raise ValueError('SURFACE_PHASE: source buffer differs from original receipt')
+        actual_recovery=_surface_phase_recovery(root,phase)
+        token=actual_recovery[0] if actual_recovery is not None else None
+        relative_surface = str(Path(PROJECT_EVIDENCE_DIR)/PROJECT_ACTUAL_EVIDENCE_DIR/surface.FILE)
+        names = ['校對工作階段.json','人工判定資料庫.json','待人工確認.json','pipeline_status.json',relative_surface]
+        names.extend(str(relative) for _,_,relative,_ in bind_workbooks(output_dir,manifest))
+        before = {name:hashlib.sha256(phase.expected_bytes(output_dir/name)).hexdigest()
+                  if phase.expected_bytes(output_dir/name) is not None else None for name in names}
+        # Bridge the initial read-only receipt to these later snapshots. A
+        # syntactically valid newer seal/CSV is still an external modification.
+        admission.recheck()
+        stage = Path(tempfile.mkdtemp(prefix='.ar-',dir=output_dir.parent))
+        from project_write_admission import owned_refresh_stage
+        stage_scope=owned_refresh_stage(stage,output_dir,_phase=phase)
+        stage_scope.__enter__()
+        try:
+            for name in names:
+                if name in ('校對工作階段.json','待人工確認.json','pipeline_status.json',relative_surface):
+                    continue
+                target=stage/name; target.parent.mkdir(parents=True,exist_ok=True)
+                if before[name] is not None:
+                    _refresh_atomic_bytes(target,phase.expected_bytes(output_dir/name),_phase=phase)
+            if before['人工判定資料庫.json'] is None:
+                json_save(stage/'人工判定資料庫.json',normalize_db({}),_phase=phase)
+            updated = _refresh_rebase_manifest(manifest,output_dir,stage)
+            updated[surface.MARKER]=copy.deepcopy(surface.PROJECT_MARKER)
+            updated['manual_surface_actual_projection']=surface.projection(document)
+            updated['manual_surface_projection_refresh']={
+                'contract':surface.PROJECTION, 'automatic_decoder_cache_revalidated':False,
+                'origin_manifest_sha256':manifest['manifest_integrity_sha256'] if enable else
+                    manifest['manual_surface_projection_refresh']['origin_manifest_sha256'],
+                'raw_actual_inputs':raw_dependencies,
+                'raw_decoder_seals':'retained unchanged; surface evidence is a separate occurrence projection'}
+            seal_manifest(updated)
+            json_save(stage/'校對工作階段.json',updated,_phase=phase)
+            target=stage/relative_surface;target.parent.mkdir(parents=True,exist_ok=True)
+            _refresh_atomic_bytes(target,surface.bytes_for(document),_phase=phase)
+            db=_surface_known_json(phase,stage/'人工判定資料庫.json')
+            pending=_surface_phase_recovery(root,phase)
+            removed=0
+            if pending is not None:
+                plan=pending[1]
+                original_ledger=materialize_ledger(manifest,db)
+                # Existing expected-only events remain intact; only a final
+                # conclusion bound to an old actual is revoked by its service.
+                target_ids=set(plan['affected_occurrence_ids'])
+                dependent=any(db.get('events',{}).get(row['review_id'],{}).get('action')=='確認現版差異'
+                    for row in original_ledger if row['occurrence_id'] in target_ids)
+                if dependent:
+                    removed=_clear_actual_dependent_events(stage,original_ledger,target_ids,_phase=phase)
+                    db=_surface_known_json(phase,stage/'人工判定資料庫.json')
+                _verify_manual_actual_batch_postconditions(materialize_ledger(updated,db),plan['checked_postconditions'])
+            save_pending_json(stage,updated,db,_phase=phase)
+            status_path=output_dir/'pipeline_status.json'
+            status_raw=phase.expected_bytes(status_path)
+            status=json_parse_strict(status_raw,status_path) if status_raw is not None else {}
+            if not isinstance(status,dict):
+                raise ValueError('SURFACE_CONTRACT: pipeline status root invalid')
+            status=copy.deepcopy(status)
+            projected_ledger=materialize_ledger(updated,db)
+            reconciliation=reconcile_ledger(projected_ledger,updated.get('actual_source_ids') or [])
+            gate=completion_gate(projected_ledger,reconciliation,updated.get('regression_gate') or {},source_validation_ok=True)
+            from pdf_portability import hold_actual_excel_completion, hold_expected_conflict_completion
+            gate=hold_actual_excel_completion(output_dir,updated,db,gate,_read_bytes=phase.expected_bytes)
+            gate=hold_expected_conflict_completion(output_dir,updated,db,gate,_read_bytes=phase.expected_bytes)
+            gate=surface.hold_completion(updated,gate)
+            status.update(status='PROCESSING_FINISHED',manual_surface_projection_refreshed=True,
+                          automatic_decoder_cache_revalidated=False,completion_gate=gate,
+                          reconciliation={'ok':reconciliation.ok,'errors':list(reconciliation.errors),**reconciliation.details},
+                          status_text='人工表面證據已更新；保留原解碼輸出，尚未完成當前 decoder 全專案驗證。')
+            json_save(stage/'pipeline_status.json',status,_phase=phase)
+            final=_refresh_rebase_manifest(updated,stage,output_dir)
+            seal_manifest(final)
+            json_save(stage/'校對工作階段.json',final,_phase=phase)
+            from actual_source_visual_safety import recheck_current_sources
+            recheck_current_sources()
+            conversion_bytes = None
+            if _conversion_admission is not None:
+                if not enable or token is not None:
+                    raise ValueError('SURFACE_CONTRACT: continuation requires an owned explicit conversion')
+                # Capture our exact staged outputs before publication, rather
+                # than accepting whatever valid data appears after it.
+                conversion_bytes=True
+            _publish_actual_refresh(output_dir,stage,final,source=source,token=token,before=before,
+                                    cleared_count=removed,_surface_only=True,_prewrite_guard=recheck_current_sources,_phase=phase)
+            phase.recheck()
+            if token is not None and acknowledge:
+                _acknowledge_actual_refresh(output_dir,token,_phase=phase)
+            if conversion_bytes is not None:
+                phase.profile=True
+                _conversion_admission['receipt']=phase.receipt()
+            return {'project_actual_commit':'COMMITTED','project_refresh':'SUCCESS',
+                    'surface_projection_refresh':True,'automatic_decoder_cache_revalidated':False,
+                    'global_promotion_delivery':{'status':'NOT_APPLICABLE_SURFACE_ONLY'},
+                    'cleared_actual_dependent_event_count':removed,'refresh_performed':True}
+        finally:
+            stage_scope.__exit__(None,None,None)
+            if stage.exists() and not (output_dir/ACTUAL_REFRESH_PUBLICATION).exists():
+                try:
+                    _surface_phase_cleanup_stage(stage,phase,unpublished=True)
+                except ValueError:
+                    pass  # Foreign state is retained; never re-admit it for cleanup.
+
+
+@project_write_entry(surface_conversion=True)
+def enable_surface_actual_project(output_dir: Path, *, confirmation: bool, _conversion_admission=None):
+    """Explicit, traceable opt-in; callers must not invoke this on open/retry."""
+    if confirmation is not True:
+        raise ValueError('SURFACE_CONTRACT: explicit new-format confirmation required')
+    from project_write_admission import capture_project_write_admission,entry_write_admission
+    admission=entry_write_admission(output_dir) or capture_project_write_admission(output_dir)
+    return _enable_surface_actual_project(output_dir,admission,_conversion_admission=_conversion_admission)
+
+
+def _enable_surface_actual_project(output_dir,admission,*,_conversion_admission=None):
+    """The same conversion body consumes its caller's original receipt."""
+    from project_write_admission import ProjectWriteAdmission,SurfaceWritePhase
+    output_dir=Path(output_dir).resolve()
+    if type(admission) is not ProjectWriteAdmission or admission.project!=output_dir:
+        raise ValueError('SURFACE_PHASE: conversion requires its original project receipt')
+    admission.recheck()
+    import manual_surface_actual as surface
+    root=project_actual_evidence_root(output_dir)
+    manifest=_surface_known_json(admission,output_dir/'校對工作階段.json')
+    existing=surface.load_snapshot(root,manifest,expected_raw=admission.expected_bytes(root/surface.FILE)).document
+    if existing is not None:
+        return {'already_enabled':True,'warning':surface.UNSUPPORTED_WARNING}
+    phase=SurfaceWritePhase(admission)
+    if _surface_phase_recovery(root,phase) is not None:
+        raise ValueError('SURFACE_CONTRACT: finish existing actual recovery before conversion')
+    with project_delivery_lock(root,_admission=admission):
+        admission.recheck()
+        result=_surface_projection_refresh(output_dir,surface.empty(manifest['session_id']),enable=True,
+                                           _conversion_admission=_conversion_admission,_phase=phase)
+    return {**result,'warning':surface.UNSUPPORTED_WARNING}
+
+
+def prepare_surface_actual_correction(output_dir: Path, review_id: str):
+    from project_write_admission import capture_project_write_admission
+    receipt=capture_project_write_admission(output_dir)
+    return _prepare_surface_actual_correction(output_dir,review_id,receipt)
+
+
+def _prepare_surface_actual_correction(output_dir,review_id,receipt):
+    import manual_surface_actual as surface
+    from actual_source_visual_safety import surface_visual_proof
+    from project_write_admission import ProjectWriteAdmission
+    output_dir=Path(output_dir).resolve()
+    if type(receipt) is not ProjectWriteAdmission or receipt.project!=output_dir:
+        raise ValueError('SURFACE_PHASE: preview requires its original project receipt')
+    receipt.recheck()
+    manifest=_surface_known_json(receipt,output_dir/'校對工作階段.json')
+    entry=next((x for x in manifest['records'] if x['review_id']==review_id),None)
+    if entry is None:
+        raise ValueError('SURFACE_CONTRACT: review identity not in sealed roster')
+    proof=surface_visual_proof(entry,pdf=_resolve_pdf_path(entry,output_dir),session_id=manifest['session_id'])
+    receipt.recheck()
+    return {'proof':proof,'requires_format_conversion':not surface.enabled(manifest),
+            'warning':surface.UNSUPPORTED_WARNING,'reading':''}
+
+
+@project_write_entry(surface_conversion=True)
+def stage_surface_actual_correction(output_dir: Path, review_id: str, reading: str, *, proof,
+                                    actor: str, whole_unit_readable: bool,
+                                    target_character_matches: bool, reading_from_original: bool,
+                                    enable_format: bool=False):
+    from actual_source_visual_safety import source_visual_write_result
+    return source_visual_write_result(lambda:_stage_surface_actual_correction(
+        Path(output_dir),review_id,reading,proof=proof,actor=actor,
+        whole_unit_readable=whole_unit_readable,target_character_matches=target_character_matches,
+        reading_from_original=reading_from_original,enable_format=enable_format),commit_state='STAGED_REFRESH_PENDING')
+
+
+def _stage_surface_actual_correction(output_dir,review_id,reading,**claims):
+    import manual_surface_actual as surface
+    from project_write_admission import capture_project_write_admission,entry_write_admission
+    from actual_source_visual_safety import recheck_current_sources
+    receipt=entry_write_admission(output_dir) or capture_project_write_admission(output_dir)
+    preview=_prepare_surface_actual_correction(output_dir,review_id,receipt)
+    if preview['proof'] != claims['proof']:
+        raise ValueError('SURFACE_CONTRACT: original preview changed before human input was saved')
+    if preview['requires_format_conversion']:
+        if claims['enable_format'] is not True:
+            raise ValueError('SURFACE_CONTRACT: explicit format conversion required')
+    manifest=json_parse_strict(receipt.expected_bytes(output_dir/'校對工作階段.json'),
+                               output_dir/'校對工作階段.json')
+    root=project_actual_evidence_root(output_dir)
+    if _surface_known_staging(receipt,root)['staged_groups']:
+        raise ValueError('SURFACE_CONTRACT: finish ordinary glyph staging before surface-only staging')
+    record=surface.record_for(claims['proof'],reading,actor=claims['actor'],
+        whole_unit_readable=claims['whole_unit_readable'],target_character_matches=claims['target_character_matches'],
+        reading_from_original=claims['reading_from_original'])
+    with project_delivery_lock(root,_admission=receipt):
+        receipt.recheck()
+        if preview['requires_format_conversion']:
+            # Every input and source was proven before this first write. Keep
+            # the same lock through conversion and the staging publication.
+            conversion={}
+            _enable_surface_actual_project(output_dir,receipt,_conversion_admission=conversion)
+            receipt=conversion['receipt']
+            manifest=json_parse_strict(receipt.expected_bytes(output_dir/'校對工作階段.json'),
+                                       output_dir/'校對工作階段.json')
+        snapshot=surface.load_snapshot(root,manifest,expected_raw=receipt.expected_bytes(root/surface.FILE))
+        document=copy.deepcopy(snapshot.document)
+        oid=record['proof']['source']['occurrence_id']
+        applied=next((x for x in document['records'] if x['proof']['source']['occurrence_id']==oid),None)
+        if applied and applied['proof']==record['proof'] and applied['reading']==record['reading']:
+            receipt.recheck()
+            return {'already_applied':True,'surface_pending_count':len(document['pending'])}
+        document['pending']=[x for x in document['pending'] if x['proof']['source']['occurrence_id']!=oid]+[record]
+        document['pending'].sort(key=lambda x:x['proof']['source']['occurrence_id'])
+        document['revision']+=1
+        recheck_current_sources()
+        _refresh_atomic_bytes(root/surface.FILE,surface.bytes_for(document),expected_raw=snapshot.raw,
+                               _prewrite_guard=receipt.recheck)
+        return {'surface_pending_count':len(document['pending']),'staged_occurrence_id':oid}
+
+
+@project_write_entry(recovery=True, locked=True)
+def apply_staged_surface_actual_corrections(output_dir: Path):
+    from actual_source_visual_safety import source_visual_write_result
+    return source_visual_write_result(lambda:_apply_staged_surface_actual_corrections(Path(output_dir)),
+                                     commit_state='COMMITTED_REFRESH_PENDING')
+
+
+def _apply_staged_surface_actual_corrections(output_dir, *, _admission=None):
+    import manual_surface_actual as surface
+    import global_glyph_promotion as promotion
+    from project_write_admission import capture_project_write_admission,SurfaceWritePhase,entry_write_admission,ProjectWriteAdmission
+    from actual_source_visual_safety import recheck_current_sources
+    root=project_actual_evidence_root(output_dir)
+    admission=(_admission if _admission is not None else
+               entry_write_admission(output_dir) or capture_project_write_admission(output_dir,recovery=True))
+    if type(admission) is not ProjectWriteAdmission or admission.project!=Path(output_dir).resolve():
+        raise ValueError('SURFACE_PHASE: apply requires its original project receipt')
+    with project_delivery_lock(root,_admission=admission):
+        admission.recheck()
+        phase=SurfaceWritePhase(admission)
+        journal_raw=admission.expected_bytes(root/promotion.PROJECT_TRANSACTION_FILE)
+        journal=promotion._validated_project_journal(journal_raw) if journal_raw is not None else None
+        admission.recheck()
+        recovered=promotion.recover_project_actual_transaction(root,_phase=phase)
+        if recovered=='PREPARED':
+            admission=phase.receipt()
+        phase.recheck()
+        manifest=json_parse_strict(admission.expected_bytes(output_dir/'校對工作階段.json'),
+                                   output_dir/'校對工作階段.json')
+        snapshot=surface.load_snapshot(root,manifest,expected_raw=admission.expected_bytes(root/surface.FILE))
+        document=copy.deepcopy(snapshot.document)
+        local_raw=phase.expected_bytes(root/promotion.PROJECT_TRANSACTION_FILE)
+        local=promotion._validated_project_journal(local_raw) if local_raw is not None else None
+        if local is not None and local['state']=='COMMITTED' and local['owner']['operation']=='surface-only':
+            return _surface_projection_refresh(output_dir,document,_phase=phase)
+        if _surface_known_staging(admission,root)['staged_groups']:
+            raise ValueError('SURFACE_CONTRACT: mixed surface/glyph batch is unsupported')
+        if not document['pending']:
+            admission.recheck()
+            return {'applied_group_count':0,'surface_applied_count':0,'refresh_performed':False,
+                    'affected_pdf_names':[],
+                    'global_promotion_delivery':{'status':'NOT_APPLICABLE_SURFACE_ONLY'}}
+        if manifest.get('manual_surface_projection_refresh',{}).get('raw_actual_inputs') != surface.raw_dependencies(root,
+                _read_bytes=phase.expected_bytes):
+            raise ValueError('SURFACE_CONTRACT: raw actual evidence changed; finish normal decoder refresh first')
+        surface.verify_sources(document,manifest,output_dir)
+        roster={x['occurrence_id']:x for x in manifest['records']}
+        results=[]
+        for item in document['pending']:
+            oid=item['proof']['source']['occurrence_id'];entry=roster[oid]
+            from actual_review import actual_group_identity
+            identity=actual_group_identity(entry)
+            from exact_glyph_identity import actual_group_id
+            results.append({'group_id':actual_group_id(identity),'verified_occurrence_ids':[oid],
+                            'affected_occurrence_ids':[oid],'reading':item['reading']})
+        document=surface.apply_pending(document)
+        recheck_current_sources()
+        admission.recheck()
+        try:
+            with promotion.direct_visual_project_transaction(root,operation='surface-only',
+                    _prewrite_guard=admission.recheck,_surface_preimage=snapshot.raw,
+                    _surface_plan=promotion.post_commit_recovery_plan_from_results(results),
+                    _surface_origin_sha=manifest['manifest_integrity_sha256'],_phase=phase) as bind:
+                # The journal is this transaction's legitimate first write.
+                def recheck_surface_write():
+                    phase.recheck()
+                    recheck_current_sources()
+                _refresh_atomic_bytes(root/surface.FILE,surface.bytes_for(document),expected_raw=snapshot.raw,
+                                       _prewrite_guard=recheck_surface_write,_phase=phase)
+                bind(promotion.post_commit_recovery_plan_from_results(results))
+        except Exception as exc:
+            # Only a completed own journal replacement advances this known
+            # phase to COMMITTED. Never infer durability from the current disk.
+            own_raw=phase.expected_bytes(root/promotion.PROJECT_TRANSACTION_FILE)
+            if own_raw is not None and promotion._validated_project_journal(own_raw)['state']=='COMMITTED':
+                raise ManualActualPostApplyError('surface_transaction_commit',exc,
+                    batch_result={'project_actual_commit':'COMMITTED','group_results':results,
+                                  'global_promotion_delivery':{'status':'NOT_APPLICABLE_SURFACE_ONLY'}},
+                    cleared_event_count=None) from exc
+            raise
+        try:
+            refreshed=_surface_projection_refresh(output_dir,document,_phase=phase)
+        except Exception as exc:
+            raise ManualActualPostApplyError('surface_projection_refresh',exc,
+                batch_result={'project_actual_commit':'COMMITTED','group_results':results,
+                              'global_promotion_delivery':{'status':'NOT_APPLICABLE_SURFACE_ONLY'}},
+                cleared_event_count=None) from exc
+        return {**refreshed,'applied_group_count':len(results),'surface_applied_count':len(results),
+                'affected_pdf_names':sorted({roster[item['verified_occurrence_ids'][0]]['pdf_name'] for item in results}),
+                'affected_occurrence_ids':sorted(x['verified_occurrence_ids'][0] for x in results)}
+
+
 @bound_operation(project_parameter="output_dir")
 def apply_staged_manual_actual_corrections(output_dir: Path) -> dict[str, Any]:
     """Apply the durable GUI queue once, clear once, refresh once, then verify."""
     output_dir = Path(output_dir)
-    manifest = json_load_strict(output_dir / "校對工作階段.json")
+    import manual_surface_actual as surface
+    from project_write_admission import has_surface_indicators,entry_write_admission,capture_project_write_admission
+    ordinary_phase=None
+    if has_surface_indicators(output_dir):
+        original=entry_write_admission(output_dir) or capture_project_write_admission(output_dir,recovery=True)
+        original.require_writable()
+        from global_glyph_promotion import profile_write_phase
+        from project_write_admission import SurfaceWritePhase
+        ordinary_phase=profile_write_phase(project_actual_evidence_root(output_dir),SurfaceWritePhase(original))
+        surface_manifest=_surface_known_json(original,output_dir/'校對工作階段.json')
+        actual_root=project_actual_evidence_root(output_dir)
+        surface_document=surface.load_snapshot(actual_root,surface_manifest,
+            expected_raw=original.expected_bytes(actual_root/surface.FILE)).document
+        if surface_document is not None and (surface_document['pending'] or
+                _surface_recovery_pending(output_dir,_snapshot=original)):
+            from actual_source_visual_safety import source_visual_write_result
+            return source_visual_write_result(lambda:_apply_staged_surface_actual_corrections(
+                output_dir,_admission=original),commit_state='COMMITTED_REFRESH_PENDING')
+        original.recheck()
+    manifest = (_surface_known_json(ordinary_phase,output_dir/'校對工作階段.json') if ordinary_phase is not None else
+                json_load_strict(output_dir / "校對工作階段.json"))
     validate_manifest_integrity(manifest)
     validate_output_artifact_hashes(manifest, output_dir=output_dir)
-    recover_pending_project_actual_write(project_actual_evidence_root(output_dir))
+    recover_pending_project_actual_write(project_actual_evidence_root(output_dir),
+        **({'_phase':ordinary_phase} if ordinary_phase is not None else {}))
+    if ordinary_phase is not None and _surface_phase_recovery(project_actual_evidence_root(output_dir),ordinary_phase) is not None:
+        return _recover_direct_profile_phase(output_dir,ordinary_phase,acknowledge=True)
     if committed_project_recovery(project_actual_evidence_root(output_dir)) is not None:
         return recover_committed_actual_project(output_dir)
-    db = load_or_initialize_db(output_dir)
+    db = _surface_known_db(ordinary_phase,output_dir) if ordinary_phase is not None else load_or_initialize_db(output_dir)
     pre_refresh_ledger = materialize_ledger(manifest, db)
     actual_root = project_actual_evidence_root(output_dir)
-    staging = load_manual_actual_staging(actual_root)
+    staging = _surface_known_staging(ordinary_phase,actual_root) if ordinary_phase is not None else load_manual_actual_staging(actual_root)
     frozen_staged_decisions = list(staging.get("staged_groups") or [])
     live_groups = _current_live_groups_for_staged_manual_actual(
         pre_refresh_ledger,
@@ -5119,9 +6401,17 @@ def apply_staged_manual_actual_corrections(output_dir: Path) -> dict[str, Any]:
         batch_result = dict(apply_staged_manual_actual_batch(
             actual_root, live_groups,
             source_context=_global_direct_source_context(output_dir, manifest),
+            **({'_phase':ordinary_phase} if ordinary_phase is not None else {}),
         ))
     else:
-        batch_result = dict(apply_staged_manual_actual_batch(actual_root, live_groups))
+        batch_result = dict(apply_staged_manual_actual_batch(actual_root, live_groups,
+            **({'_phase':ordinary_phase} if ordinary_phase is not None else {})))
+    if ordinary_phase is not None:
+        pending=_surface_phase_recovery(actual_root,ordinary_phase)
+        if pending is not None:
+            return {**batch_result,**_recover_direct_profile_phase(output_dir,ordinary_phase,acknowledge=True)}
+        return {**batch_result,'cleared_actual_dependent_event_count':0,'refresh_performed':False,
+                'refresh_report':'','postcondition_checked_occurrence_ids':[]}
     if committed_project_recovery(actual_root) is not None:
         return {**batch_result, **recover_committed_actual_project(output_dir)}
     _deliver_after_actual_commit(output_dir, batch_result)
@@ -5236,6 +6526,7 @@ def run_pipeline(input_path: Path, output_dir: Path) -> Path:
     return run_pipeline_pdfs(pdfs, output_dir)
 
 
+@project_write_entry(allow_new=True)
 def run_pipeline_pdfs(
     pdfs: list[Path],
     output_dir: Path,
@@ -5245,13 +6536,21 @@ def run_pipeline_pdfs(
     runtime_root: Path | None = None,
     _prewrite_guard=None,
     _source_project_dir: Path | None = None,
+    _stage_phase=None,
 ) -> Path:
+    if _stage_phase is not None:
+        if (_source_project_dir is None or Path(_source_project_dir).resolve()!=_stage_phase.project
+                or output_dir.resolve()==_stage_phase.project or not output_dir.name.startswith('.ar-')):
+            raise ValueError('owned ordinary raw stage phase has a foreign source/target')
+        _stage_phase.recheck()
     if _prewrite_guard is not None:
         _prewrite_guard()
+    from project_write_admission import begin_owned_transfer_write
     pdfs = [Path(pdf).resolve() for pdf in pdfs]
     root=Path(runtime_root or Path(__file__).resolve().parent).resolve()
     source_validation = validate_asset_manifest(root)
     if not source_validation.get("ok"):
+        begin_owned_transfer_write(output_dir)
         blocked_path = write_pipeline_blocked(output_dir, source_validation, "SOURCE_INVALID")
         raise SourceValidationError(f"核心資料來源驗證失敗；處理被阻擋：{blocked_path}")
     try:
@@ -5268,6 +6567,7 @@ def run_pipeline_pdfs(
                 f"global exact glyph source validation failed：{type(exc).__name__}: {exc}",
             ],
         }
+        begin_owned_transfer_write(output_dir)
         blocked_path = write_pipeline_blocked(
             output_dir,
             blocked_report,
@@ -5277,6 +6577,7 @@ def run_pipeline_pdfs(
             f"global exact glyph 資料來源驗證失敗；處理被阻擋：{blocked_path}"
         ) from exc
 
+    begin_owned_transfer_write(output_dir)
     output_dir.mkdir(parents=True,exist_ok=True)
     actual_dir=output_dir/"01_實際注音"; cand_dir=output_dir/"02_候選報告"
     actual_dir.mkdir(exist_ok=True); cand_dir.mkdir(exist_ok=True)
@@ -5290,7 +6591,11 @@ def run_pipeline_pdfs(
     # later PDFs look stale.
     try:
         dynamic_snapshot = load_dynamic_actual_snapshot(dynamic_actual_root, read_only=_source_project_dir is not None)
-        baseline_manifest = load_reuse_baseline_manifest(output_dir)
+        baseline_manifest = (_surface_known_json(_stage_phase,output_dir/'校對工作階段.json') if _stage_phase is not None
+                             else load_reuse_baseline_manifest(output_dir))
+        if _stage_phase is not None:
+            validate_manifest_integrity(baseline_manifest)
+            validate_output_artifact_hashes(baseline_manifest,output_dir=output_dir)
         expected_chain_fingerprint = compute_expected_asset_fingerprint(
             root,
             source_validation,
@@ -5469,17 +6774,36 @@ def run_pipeline_pdfs(
         if session_id_override:
             manifest["session_id"] = str(session_id_override)
             seal_manifest(manifest)
+        import manual_surface_actual as surface
+        if baseline_manifest is not None and surface.enabled(baseline_manifest):
+            # Raw output still uses its decoder epoch. The exact occurrence
+            # projection survives a legal explicit current-decoder rebuild.
+            document = (surface.load_snapshot(dynamic_actual_root,baseline_manifest,
+                expected_raw=_stage_phase.expected_bytes(dynamic_actual_root/surface.FILE)).document
+                if _stage_phase is not None else surface.load(dynamic_actual_root, baseline_manifest))
+            surface.verify_sources(document, manifest, output_dir)
+            manifest[surface.MARKER] = copy.deepcopy(surface.PROJECT_MARKER)
+            manifest['manual_surface_actual_projection'] = surface.projection(document)
+            manifest['manual_surface_projection_refresh'] = {
+                'contract':surface.PROJECTION,'automatic_decoder_cache_revalidated':True,
+                'origin_manifest_sha256':baseline_manifest['manual_surface_projection_refresh']['origin_manifest_sha256'],
+                'raw_actual_inputs':surface.raw_dependencies(dynamic_actual_root,
+                    **({'_read_bytes':_stage_phase.expected_bytes} if _stage_phase is not None else {})),
+                'raw_decoder_seals':'current explicit decoder run; surface evidence remains a separate occurrence projection'}
+            seal_manifest(manifest)
         dynamic_snapshot.assert_current(dynamic_actual_root)
         with project_delivery_lock(project_actual_evidence_root(output_dir)):
             if _prewrite_guard is not None:
                 _prewrite_guard()
             dynamic_snapshot.assert_current(dynamic_actual_root)
-            json_save(output_dir/"校對工作階段.json",manifest)
-            db=load_or_initialize_db(output_dir)
+            json_save(output_dir/"校對工作階段.json",manifest,
+                **({'_phase':_stage_phase} if _stage_phase is not None else {}))
+            db=_surface_known_db(_stage_phase,output_dir) if _stage_phase is not None else load_or_initialize_db(output_dir)
             if _prewrite_guard is not None:
                 _prewrite_guard()
             dynamic_snapshot.assert_current(dynamic_actual_root)
-            json_save(output_dir/"人工判定資料庫.json",db)
+            json_save(output_dir/"人工判定資料庫.json",db,
+                **({'_phase':_stage_phase} if _stage_phase is not None else {}))
             if _prewrite_guard is not None:
                 _prewrite_guard()
             dynamic_snapshot.assert_current(dynamic_actual_root)
@@ -5488,8 +6812,10 @@ def run_pipeline_pdfs(
             reconciliation = reconcile_ledger(ledger, manifest.get("actual_source_ids") or [])
             gate = completion_gate(ledger, reconciliation, manifest.get("regression_gate") or {}, source_validation_ok=True)
             from pdf_portability import hold_actual_excel_completion, hold_expected_conflict_completion
-            gate = hold_actual_excel_completion(_source_project_dir or output_dir, manifest, db, gate)
-            gate = hold_expected_conflict_completion(_source_project_dir or output_dir, manifest, db, gate)
+            reader={'_read_bytes':_stage_phase.expected_bytes} if _stage_phase is not None else {}
+            gate = hold_actual_excel_completion(_source_project_dir or output_dir, manifest, db, gate,**reader)
+            gate = hold_expected_conflict_completion(_source_project_dir or output_dir, manifest, db, gate,**reader)
+            gate = surface.hold_completion(manifest,gate)
             if _prewrite_guard is not None:
                 _prewrite_guard()
             dynamic_snapshot.assert_current(dynamic_actual_root)
@@ -5587,9 +6913,14 @@ def _refresh_manifest_from_outputs_legacy_disabled(output_dir: Path, old_manifes
 
 @_serialized_user_project_entry
 @bound_operation(project_parameter="output_dir")
-def regenerate_report(output_dir: Path) -> Path:
-    _reject_incomplete_portable_project(output_dir)
-    old_manifest=json_load_strict(output_dir/"校對工作階段.json")
+def regenerate_report(output_dir: Path, *, _phase=None) -> Path:
+    if _phase is None:
+        from project_write_admission import entry_write_phase
+        _phase=entry_write_phase(output_dir)
+    _reject_incomplete_portable_project(output_dir,**({'_phase':_phase} if _phase is not None else {}))
+    old_manifest=_surface_known_json(_phase,output_dir/'校對工作階段.json') if _phase is not None else json_load_strict(output_dir/"校對工作階段.json")
+    if _phase is not None and _surface_phase_recovery(project_actual_evidence_root(output_dir),_phase) is not None:
+        raise ValueError('finish pending actual refresh before report regeneration')
     validate_manifest_integrity(old_manifest)
     validate_output_artifact_hashes(old_manifest, output_dir=output_dir)
     if (
@@ -5601,7 +6932,7 @@ def regenerate_report(output_dir: Path) -> Path:
     root = Path(__file__).resolve().parent
     source_validation = validate_asset_manifest(root)
     if not source_validation.get("ok"):
-        write_pipeline_blocked(output_dir, source_validation, "SOURCE_INVALID_DURING_REGENERATE")
+        if _phase is None:write_pipeline_blocked(output_dir, source_validation, "SOURCE_INVALID_DURING_REGENERATE")
         raise SourceValidationError("資料來源驗證失敗；未覆寫上一份最終報告")
     try:
         global_snapshot = GlobalExactGlyphRepository.resolved().load_snapshot()
@@ -5614,13 +6945,10 @@ def regenerate_report(output_dir: Path) -> Path:
                 f"global exact glyph source validation failed：{type(exc).__name__}: {exc}",
             ],
         }
-        write_pipeline_blocked(
-            output_dir,
-            blocked_report,
-            "GLOBAL_EXACT_SOURCE_INVALID_DURING_REGENERATE",
-        )
+        if _phase is None:
+            write_pipeline_blocked(output_dir,blocked_report,"GLOBAL_EXACT_SOURCE_INVALID_DURING_REGENERATE")
         raise SourceValidationError("global exact glyph 資料來源驗證失敗；未覆寫最終報告") from exc
-    dynamic_actual_root = initialize_project_actual_evidence(output_dir, root)
+    dynamic_actual_root = project_actual_evidence_root(output_dir) if _phase is not None else initialize_project_actual_evidence(output_dir, root)
     dynamic_snapshot = load_dynamic_actual_snapshot(dynamic_actual_root, read_only=True)
     pdfs = _resolve_session_pdfs(output_dir, old_manifest)
     fingerprints = {}
@@ -5656,30 +6984,41 @@ def regenerate_report(output_dir: Path) -> Path:
         sealed_workbook_manifest=old_manifest,
     )
     manifest = _carry_forward_cross_version_identity(manifest, old_manifest)
-    db = load_or_initialize_db(output_dir)
+    db = _surface_known_db(_phase,output_dir) if _phase is not None else load_or_initialize_db(output_dir)
     materialize_ledger(manifest, db)
-    _reject_incomplete_portable_project(output_dir)
+    _reject_incomplete_portable_project(output_dir,**({'_phase':_phase} if _phase is not None else {}))
     from pdf_portability import validate_conflict_state
-    if validate_conflict_state(output_dir, old_manifest, db):
+    if validate_conflict_state(output_dir, old_manifest, db,**({'_read_bytes':_phase.expected_bytes} if _phase is not None else {})):
         raise ValueError("專案出現未裁決衝突；未重新發布")
     validate_output_artifact_hashes(old_manifest, output_dir=output_dir)
     # _serialized_user_project_entry already owns the dynamic project lock.
     dynamic_snapshot.assert_current(dynamic_actual_root)
+    if _phase is not None:
+        # Preserve the original complete sealed surface view. The existing
+        # collector still verifies current per-PDF cache/fingerprint truth;
+        # a changed raw result must use its actual refresh owner instead.
+        if (manifest['records']!=old_manifest['records'] or manifest['actual_source_ids']!=old_manifest['actual_source_ids']):
+            raise ValueError('raw report cache differs from sealed actual; run normal actual refresh')
+        _phase.recheck()
+        return generate_report(output_dir,old_manifest,db,_phase=_phase)
     json_save(output_dir/"校對工作階段.json",manifest)
     save_pending_json(output_dir,manifest,db)
     return generate_report(output_dir,manifest,db)
 
 
-def _reject_incomplete_portable_project(output_dir: Path) -> None:
+def _reject_incomplete_portable_project(output_dir: Path, *, _phase=None) -> None:
     from pdf_portability import INCOMPLETE_FILE, actual_excel_conflict_state
 
-    if (Path(output_dir) / INCOMPLETE_FILE).exists():
+    if (_phase.expected_bytes(Path(output_dir)/INCOMPLETE_FILE) is not None if _phase is not None else
+            (Path(output_dir) / INCOMPLETE_FILE).exists()):
         raise ValueError("跨電腦接續未完成；不得匯入判定、重新產生一般報告或修復專案")
-    if (Path(output_dir) / "跨Excel_actual衝突.json").exists():
-        manifest = json_load_strict(Path(output_dir) / "校對工作階段.json")
+    if (_phase.expected_bytes(Path(output_dir)/'跨Excel_actual衝突.json') is not None if _phase is not None else
+            (Path(output_dir) / "跨Excel_actual衝突.json").exists()):
+        manifest = _surface_known_json(_phase,Path(output_dir)/'校對工作階段.json') if _phase is not None else json_load_strict(Path(output_dir) / "校對工作階段.json")
         validate_manifest_integrity(manifest)
-        db = load_or_initialize_db(output_dir)
-        if actual_excel_conflict_state(output_dir, manifest, db):
+        db = _surface_known_db(_phase,output_dir) if _phase is not None else load_or_initialize_db(output_dir)
+        if actual_excel_conflict_state(output_dir, manifest, db,
+                **({'_read_bytes':_phase.expected_bytes} if _phase is not None else {})):
             raise ValueError("Excel actual 衝突尚未在原頁重新核對；不得匯出、重新產生一般報告或修復專案")
 
 
@@ -5798,7 +7137,12 @@ def main():
     ap.add_argument("--continue-from-project",help="以來源專案與當地 PDF 建立新的接續專案")
     ap.add_argument("--merge-with-project",help="接續時一併匯入另一來源專案，原兩專案均不修改")
     ap.add_argument("--local-pdf",help="跨電腦接續時指定當地下載的 PDF")
+    ap.add_argument("--source-pdf-alias", action="append", nargs=4,
+                    metavar=("SOURCE_PROJECT", "SESSION", "SEALED_SHA256", "PDF_PATH"),
+                    help="接續時明確指定同 SHA 的改名／移動原 PDF，可重複指定")
     args=ap.parse_args()
+    if args.source_pdf_alias and not args.continue_from_project:
+        ap.error("--source-pdf-alias 僅適用 --continue-from-project")
     if args.report_only or args.repair_project or args.export_gpt or args.import_gpt or args.import_gpt_auto or args.export_actual_gpt or args.import_actual_gpt or args.refresh_actual or args.prepare_portable or args.attach_portable_excel or args.resume_portable_excel or args.continue_from_project:
         if not args.output_dir: raise SystemExit("此操作需要 -o 輸出資料夾")
         if args.continue_from_project:
@@ -5808,7 +7152,13 @@ def main():
             sources = [Path(args.continue_from_project)]
             if args.merge_with_project:
                 sources.append(Path(args.merge_with_project))
-            print(json.dumps(merge_projects(sources, Path(args.local_pdf), Path(args.output_dir)), ensure_ascii=False))
+            aliases = [dict(zip(("source_project", "session_id", "pdf_sha256", "path"), values))
+                       for values in (args.source_pdf_alias or ())]
+            result = merge_projects(sources, Path(args.local_pdf), Path(args.output_dir),
+                                    source_pdf_aliases=aliases)
+            if result.get("source_cleanup_error"):
+                print(f"已保存接續專案；來源清理警示：{result['source_cleanup_error']}", flush=True)
+            print(json.dumps(result, ensure_ascii=False))
             return 0
         requested_outdir = Path(args.output_dir)
         outdir = resolve_existing_project_dir(requested_outdir)
@@ -5882,7 +7232,7 @@ def main():
                             flush=True,
                         )
                 except Exception as exc:
-                    state = "COMMITTED_REFRESH_PENDING" if isinstance(exc, ManualActualPostApplyError) else "UNKNOWN"
+                    state = "COMMITTED_REFRESH_PENDING" if isinstance(exc, ManualActualPostApplyError) else getattr(exc, "commit_state", "UNKNOWN")
                     print(f"本次多檔匯入已完成 {completed_files}/{len(planned)} 檔；目前檔案未完整完成，狀態 {state}。"
                           "先前完成檔案保留，請依交易／恢復紀錄核對。", flush=True)
                     _cli_operation_event(outdir, "本檔未完整完成；先前完成檔案保留", completed_files=completed_files, total_files=len(planned), commit_state=state)
@@ -5896,7 +7246,7 @@ def main():
                 n, removed, report = import_actual_gpt_decisions(outdir, Path(args.import_actual_gpt))
             except Exception as exc:
                 _cli_operation_event(outdir, "actual 匯入未完整完成", commit_state=
-                    "COMMITTED_REFRESH_PENDING" if isinstance(exc, ManualActualPostApplyError) else "UNKNOWN")
+                    "COMMITTED_REFRESH_PENDING" if isinstance(exc, ManualActualPostApplyError) else getattr(exc, "commit_state", "UNKNOWN"))
                 raise
             _cli_operation_event(outdir, "actual 判定處理完成", completed_files=1, commit_state="FILE_COMPLETED")
             print(f"匯入 actual {n} 組；撤銷 {removed} 筆依賴舊 actual 的人工事件。\n{report}")

@@ -57,10 +57,10 @@ class DeliveryRecoveryServiceTests(unittest.TestCase):
     def inspect(self, **kwargs):
         return service.inspect_delivery_recovery(self.project, repository=self.repo, **kwargs)
 
-    def commit(self):
+    def commit(self, intents=None):
         with promotion.direct_visual_project_transaction(self.root) as bind:
             bind(plan())
-            promotion.enqueue_promotion_intents(self.root, [intent()])
+            promotion.enqueue_promotion_intents(self.root, [intent()] if intents is None else intents)
 
     def test_no_selection_does_not_resolve_or_read(self):
         with patch.object(lib.GlobalExactGlyphRepository, "resolved", side_effect=AssertionError("resolve")), \
@@ -347,8 +347,17 @@ class DeliveryRecoveryServiceTests(unittest.TestCase):
         self.assertEqual(result.items[0].status, "PENDING")
 
     def test_all_inspection_and_filtering_preserve_project_bytes_and_logical_database(self):
-        self.commit()
-        promotion.deliver_pending_promotion_outbox(self.root, self.repo)
+        from tests.test_global_promotion_v580 import genuine_promotion_sources
+        from actual_review import build_actual_group_for_entry
+        members, context = genuine_promotion_sources(self.base / "source", count=1)
+        group = build_actual_group_for_entry(members, members[0])
+        intents, admissions = promotion.direct_visual_intents(group, "ㄅ", [members[0]["occurrence_id"]], context)
+        self.assertEqual(len(intents), 1)
+        self.assertEqual(admissions[0]["status"], "ELIGIBLE")
+        self.commit(intents)
+        delivered = promotion.deliver_pending_promotion_outbox(self.root, self.repo,
+            source_context=context, source_entries=members)
+        self.assertEqual(delivered["status"], "DELIVERED")
         before = project_bytes(self.project)
         before_rows = {table: sql_rows(self.repo, table) for table in lib._REQUIRED_COLUMNS}
         before_db = durable_bytes(self.repo)

@@ -43,6 +43,20 @@ def create_visual_fixture(folder: Path):
             page.insert_text((x, y + 45), f"位置 {n}", fontname="china-t", fontsize=10)
         doc.save(pdf)
     sha = hashlib.sha256(pdf.read_bytes()).hexdigest()
+    from export_pdf_text_diagnostics import build_font_lookup, normalize_basefont, resolve_font
+    bindings = []
+    with fitz.open(pdf) as document:
+        lookup = build_font_lookup(document[0].get_fonts(full=True))
+        for expected_char, x, y in roster:
+            matches = []
+            for span in document[0].get_texttrace():
+                xref, *_ = resolve_font(lookup, normalize_basefont(span["font"]))
+                for drawn in span["chars"]:
+                    if drawn[0] == ord(expected_char) and abs(drawn[2][0] - x) < .001 and abs(drawn[2][1] - (y + 22)) < .001:
+                        matches.append({"font": span["font"], "font_xref": xref,
+                            "glyph_id_字形索引": drawn[1], **dict(zip(("x0", "y0", "x1", "y1"), drawn[3]))})
+            assert len(matches) == 1
+            bindings.append(matches[0])
     entries = []
     for n, (char, x, y) in enumerate(roster, 1):
         source = {"pdf": str(pdf), "pdf_name": pdf.name, "pdf_sha256": sha,
@@ -50,6 +64,7 @@ def create_visual_fixture(folder: Path):
                   "font": "isolated", "font_xref": 1, "glyph_id_字形索引": n,
                   "x0": x, "y0": y, "x1": x + 37, "y1": y + 27,
                   "source_row_number": n, "所在行": f"各自保存的不同語境 {n}", "局部詞境": f"詞語 {n}"}
+        source.update(bindings[n - 1])
         ol.prepare_occurrence_rows(sha, [source])
         classified = {"actual": "ㄨㄛˇ" if n <= 3 else "", "actual_evidence": "explicit isolated actual" if n <= 3 else "",
                       "expected_set": [] if n <= 3 else ["ㄨㄛˇ"],
@@ -82,8 +97,10 @@ class PreviewGeometryTests(unittest.TestCase):
                     page.draw_rect(fitz.Rect(220, 80, 250, 110), fill=(0, 0, 0))
                     page.set_rotation(rotation)
                     doc.save(path)
+                # This rectangle tests geometry/pixels only, not a claimed Han
+                # occurrence. Real character records are re-proved separately.
                 entry = {"pdf": str(path), "physical_page": 1, "x0": 100, "y0": 80, "x1": 130, "y1": 110,
-                         "occurrence_id": "fixed-id", "review_id": "fixed-review", "char": "我"}
+                         "occurrence_id": "fixed-id", "review_id": "fixed-review"}
                 before = path.read_bytes(), copy.deepcopy(entry)
                 pix, box, _ = display.occurrence_preview(entry, padding=(10, 20), scale=1.5)
                 cx, cy = crops[rotation]
@@ -226,7 +243,14 @@ class VisualGuiTests(unittest.TestCase):
         app.next()
         self.assertEqual(app.current()['source_row_number'], 3)
         self.assertNotEqual(first_target, app.image.target)
-        app.render({**app.current(), 'pdf': str(self.folder / 'missing.pdf')})
+        missing=str(self.folder / 'missing.pdf')
+        # A retained same-SHA source is a legal finite relocation, not a failure.
+        app.render({**app.current(),'pdf':missing})
+        self.assertIsNotNone(app.image.target)
+        unavailable=copy.deepcopy(app.current())
+        unavailable['pdf']=missing
+        unavailable['source_record']['pdf']=missing
+        app.render(unavailable)
         self.assertIsNone(app.image.target)
         self.assertIsNone(app.image.photo)
         self.assertIsNone(app._rendered_review_id)

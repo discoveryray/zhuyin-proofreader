@@ -8,6 +8,8 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from tests.actual_source_test_support import register_fixture_glyph, source_entry
+
 import actual_review
 from actual_review import (
     GLYPH_CONFLICT_FILE,
@@ -26,10 +28,10 @@ from actual_review import (
 )
 
 
-SHA_A = "1" * 64
-SHA_B = "2" * 64
-SHA_C = "3" * 64
-SHA_D = "4" * 64
+SHA_A = register_fixture_glyph("batch-a")
+SHA_B = register_fixture_glyph("batch-b")
+SHA_C = register_fixture_glyph("batch-c")
+SHA_D = register_fixture_glyph("batch-d")
 AUTHORITATIVE_FILES = (
     OCCURRENCE_OVERRIDE_FILE,
     USER_GLYF_FILE,
@@ -50,7 +52,7 @@ def entry(
     pdf_name: str,
     x0: float,
 ) -> dict:
-    return {
+    result = {
         "occurrence_id": occurrence_id,
         "review_id": "review-" + occurrence_id,
         "state": "ACTUAL_DECODE_ERROR",
@@ -73,6 +75,14 @@ def entry(
             "預期注音": "SECRET_EXPECTED_SOURCE",
         },
     }
+    genuine = source_entry(glyph_sha256, occurrence_id=occurrence_id, pdf_name=pdf_name, x0=x0)
+    # The argument selects an isolated glyph seed. The saved PDF supplies
+    # its exact raw digest; retain only the non-identity fixture sentinels.
+    source = {key: value for key, value in result["source_record"].items()
+              if key != "TTF字形SHA256"}
+    result.update(genuine)
+    result["source_record"].update(source)
+    return result
 
 
 def group(prefix: str, glyph_sha256: str, *, count: int = 1, pdf_name: str | None = None) -> dict:

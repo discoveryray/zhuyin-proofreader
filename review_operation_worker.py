@@ -10,6 +10,7 @@ import copy
 import atexit
 import hashlib
 import json
+import math
 import multiprocessing
 import os
 import struct
@@ -38,6 +39,10 @@ _PAYLOAD_FIELDS = {
     "prepare_actual": ({"review_id", "expected_manifest", "expected_db"}, {"review_id", "expected_manifest", "expected_db"}),
     "stage_actual": ({"review_id", "reading", "checked_occurrence_ids", "expected_manifest", "expected_db"},
                      {"review_id", "reading", "checked_occurrence_ids", "note", "expected_manifest", "expected_db"}),
+    "stage_surface": ({"review_id", "reading", "proof", "actor", "whole_unit_readable", "target_character_matches",
+                       "reading_from_original", "enable_format", "expected_manifest", "expected_db"},
+                      {"review_id", "reading", "proof", "actor", "whole_unit_readable", "target_character_matches",
+                       "reading_from_original", "enable_format", "expected_manifest", "expected_db"}),
     "actual_summary": (set(), {"expected_manifest", "expected_db", "recovery_only"}),
     "apply_actual": (set(), {"expected_manifest", "expected_db", "recovery_only", "expected_recovery"}),
     "report": ({"expected_manifest", "expected_db"}, {"expected_manifest", "expected_db"}),
@@ -71,7 +76,8 @@ def validate_payload(operation, payload):
     for key in ("expected_manifest", "expected_db"):
         if key in payload and type(payload[key]) is not dict:
             raise ValueError("review displayed project must be an object")
-    for key in ("recovery_only", "defer_staging_validation"):
+    for key in ("recovery_only", "defer_staging_validation", "whole_unit_readable", "target_character_matches",
+                "reading_from_original", "enable_format"):
         if key in payload and type(payload[key]) is not bool:
             raise ValueError("review payload boolean field invalid")
     if operation == "apply_actual":
@@ -137,9 +143,20 @@ class ReviewOperationState:
             self.service = self.service.with_invalidated_cache()
             self.snapshots.clear()
             return None
-        if operation in {"reload", "actual_summary", "prepare_actual", "stage_actual", "report", "apply_actual"}:
+        if operation in {"reload", "actual_summary", "prepare_actual", "stage_actual", "stage_surface", "report", "apply_actual"}:
             expected = {key: payload[key] for key in ("expected_manifest", "expected_db")
                         if key in payload}
+            if operation == 'stage_surface':
+                # The service's resume lock is a write boundary too. Reject
+                # bad first input/proof/consent before entering that service.
+                import manual_surface_actual as surface
+                prepared=sp.prepare_surface_actual_correction(self.output_dir,payload['review_id'])
+                if prepared['proof'] != payload['proof']:
+                    raise ValueError('SURFACE_CONTRACT: preview proof differs before service admission')
+                if prepared['requires_format_conversion'] and payload['enable_format'] is not True:
+                    raise ValueError('SURFACE_CONTRACT: explicit format conversion required')
+                surface.record_for(payload['proof'],payload['reading'],actor=payload['actor'],
+                    **{key:payload[key] for key in ('whole_unit_readable','target_character_matches','reading_from_original')})
             # Caller dictionaries only describe what was displayed. The existing
             # service compares them with fully verified durable bytes.
             if not payload.get("recovery_only"):
@@ -168,11 +185,22 @@ class ReviewOperationState:
                 group = build_actual_group_for_entry(snapshot.ledger, entry)
                 summary = self.service.validate_resume_staging(snapshot)
                 view = self.service._conflicts.review_view(snapshot.db, snapshot.ledger)
-                return dict(group=group, summary=summary, ledger=view)
+                from actual_review import actual_visual_source_safety
+                safety = actual_visual_source_safety(entry, self.output_dir)
+                surface = None
+                if not safety['location_readable'] or entry.get('manual_surface_actual') is not None:
+                    # Exact native eligibility is re-proven; an unsafe/unknown
+                    # slot is not made eligible by the presence of pixels.
+                    surface = sp.prepare_surface_actual_correction(self.output_dir, payload['review_id'])
+                return dict(group=group, summary=summary, ledger=view, surface=surface)
             if operation == "stage_actual":
                 progress("正在保存 actual 暫存")
                 sp.stage_manual_actual_correction(self.output_dir, payload["review_id"],
                     payload["reading"], payload["checked_occurrence_ids"], payload.get("note", ""))
+            elif operation == 'stage_surface':
+                progress('正在保存單一位置人工表面 actual')
+                result = sp.stage_surface_actual_correction(self.output_dir,
+                    **{key:value for key,value in payload.items() if key not in ('expected_manifest','expected_db')})
             elif operation == "report":
                 progress("正在更新 Excel 報告")
                 result = sp.regenerate_report(self.output_dir)
@@ -188,7 +216,7 @@ class ReviewOperationState:
             # A successful actual apply/report can establish a new sealed
             # session. No pre-mutation actual snapshot is used for the result.
             try:
-                if operation != "stage_actual":
+                if operation not in {"stage_actual", "stage_surface"}:
                     self.service = ReviewSaveService(self.output_dir, evidence_anchor=self.service.evidence_anchor)
                 else:
                     self.service = self.service.with_invalidated_cache()
@@ -197,7 +225,7 @@ class ReviewOperationState:
                 summary = self.service.validate_resume_staging(snapshot)
                 view = self.service._conflicts.review_view(snapshot.db, snapshot.ledger)
             except Exception as exc:
-                status = {"stage_actual": "STAGED_REFRESH_PENDING", "report": "REPORT_SAVED_REFRESH_PENDING",
+                status = {"stage_actual": "STAGED_REFRESH_PENDING", "stage_surface": "STAGED_REFRESH_PENDING", "report": "REPORT_SAVED_REFRESH_PENDING",
                           "apply_actual": "COMMITTED_REFRESH_PENDING"}[operation]
                 raise ReviewOperationError(str(exc), commit_state=status) from exc
             return dict(result=str(result) if operation == "report" else result if operation == "apply_actual" else None,
@@ -349,35 +377,79 @@ def preview_png(entry, *, padding, output_dir, display_width):
     """Called only by the isolated raster child, with the real preview service."""
     from review_display import occurrence_preview
     from actual_review import _resolve_pdf_path
+    from actual_source_visual_safety import source_visual_operation
     path = _resolve_pdf_path(entry, output_dir)
-    before = path.read_bytes()
-    digest = hashlib.sha256(before).hexdigest()
-    if digest != entry.get("pdf_sha256"):
-        raise ValueError("預覽來源 PDF 與封印不符")
-    pixmap, target, notice = occurrence_preview(entry, padding=padding,
-        output_dir=output_dir, display_width=display_width)
-    if path.read_bytes() != before:
-        raise ValueError("预覽期間來源 PDF 已變更")
+    with source_visual_operation() as operation:
+        before = operation.read_source(path, entry.get("pdf_sha256"))
+        digest = entry["pdf_sha256"]
+        details = occurrence_preview(entry, padding=padding,
+            output_dir=output_dir, display_width=display_width, return_details=True)
+        pixmap = details["pixmap"]
+        # The pixels come from immutable, SHA-proved bytes. Check revision at
+        # publication; writers independently re-read the complete source seal.
+        if operation.read_source(path, digest) != before:
+            raise ValueError("预覽期間來源 PDF 已變更")
     return dict(png=pixmap.tobytes("png"), width=pixmap.width, height=pixmap.height,
-                target=target, notice=notice, pid=os.getpid(), source_sha256=digest,
+                target=details["target"], warning_target=details["warning_target"],
+                diagnostic=details["diagnostic"], notice=details["notice"],
+                physical_page=entry.get("physical_page"), pdf_name=entry.get("pdf_name"),
+                pid=os.getpid(), source_sha256=digest,
                 review_id=entry.get("review_id"), occurrence_id=entry.get("occurrence_id"))
 
 
 def _preview_child(connection, payload):
+    from actual_source_visual_safety import SourceVisualOperation
+    operation = owner = None
     try:
         while payload is not None:
             try:
+                entry = payload["entry"]
+                current_owner = (payload["output_dir"], entry.get("pdf_sha256"), entry.get("physical_page"))
+                if current_owner != owner:
+                    if operation is not None:
+                        retired, operation, owner = operation, None, None
+                        retired.__exit__(None, None, None)
+                    fresh = SourceVisualOperation()
+                    fresh.__enter__()
+                    operation = fresh
+                    owner = current_owner
                 connection.send((preview_png(**payload), None))
             except Exception as exc:
+                if operation is not None:
+                    retired, operation, owner = operation, None, None
+                    retired.__exit__(None, None, None)
                 connection.send((None, str(exc)))
             payload = connection.recv()
     except (EOFError, BrokenPipeError):
         pass
     finally:
+        if operation is not None:
+            operation.__exit__(None, None, None)
         connection.close()
 
 
 def validate_preview_png(value):
+    # These display fields never substitute for the shared prewrite source
+    # proof. Keep an unsafe/warning result from becoming a UI-ready target.
+    diagnostic = value.get("diagnostic")
+    if diagnostic is not None:
+        if (type(diagnostic) is not dict or type(diagnostic.get("location_readable")) is not bool
+                or type(diagnostic.get("donor_eligible")) is not bool):
+            raise ValueError("預覽來源診斷不完整")
+        if not diagnostic["location_readable"] and value.get("target") is not None:
+            raise ValueError("不可確認的警示不能提供確認目標")
+    if value.get("warning_target") is not None and value.get("target") is not None:
+        raise ValueError("警示框與確認目標不能混用")
+    for key in ("target", "warning_target"):
+        region = value.get(key)
+        if region is not None and (type(region) not in (tuple,list) or len(region) != 4
+                or any(type(item) not in (int,float) or not math.isfinite(item) for item in region)
+                or region[2] <= region[0] or region[3] <= region[1]):
+            raise ValueError("預覽定位框無效")
+    physical_page = value.get("physical_page")
+    if physical_page is not None and (type(physical_page) not in (int,float)
+            or not math.isfinite(physical_page) or int(physical_page) != physical_page or physical_page < 1):
+        raise ValueError("預覽實體頁碼無效")
     raw = value["png"]
     if (not isinstance(raw, bytes) or raw[:8] != b"\x89PNG\r\n\x1a\n"
             or raw[12:16] != b"IHDR" or raw[8:12] != b"\x00\x00\x00\r" or len(raw) < 33):

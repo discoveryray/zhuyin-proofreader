@@ -360,6 +360,8 @@ class _ReviewDialog(tk.Toplevel):
                 value = self.__dict__.pop(name, None)
                 if isinstance(value, list):
                     value.clear()
+                elif isinstance(value, dict):
+                    value.clear()
 
 
 def expected_conflict_summary(entry):
@@ -510,11 +512,112 @@ def actual_review_samples(entry, group, *, verified_checked_occurrence_ids=()):
     return members
 
 
+ACTUAL_SAMPLE_PAGE_SIZE = 20
+
+
+def actual_sample_page_indices(count, page):
+    if page < 0 or page * ACTUAL_SAMPLE_PAGE_SIZE >= count:
+        return ()
+    return tuple(range(page * ACTUAL_SAMPLE_PAGE_SIZE, min(count, (page + 1) * ACTUAL_SAMPLE_PAGE_SIZE)))
+
+
+class OccurrenceCheckState:
+    """Occurrence-owned data; only the currently mounted page owns Tcl variables."""
+    def __init__(self, occurrence_id):
+        self.occurrence_id, self.value, self.variable = occurrence_id, False, None
+
+    def get(self):
+        return bool(self.variable.get()) if self.variable is not None else self.value
+
+    def set(self, value):
+        self.value = bool(value)
+        if self.variable is not None:
+            self.variable.set(self.value)
+
+    def bind(self, variable):
+        self.variable = variable
+        variable.set(self.value)
+
+    def unbind(self):
+        self.value = self.get()
+        self.variable = None
+
+
+def surface_input_result(prepared, *, reading, actor, confirmations):
+    """Plain-data dialog validation; never initializes reading from expected."""
+    from manual_surface_actual import record_for
+    keys = ('whole_unit_readable','target_character_matches','reading_from_original')
+    if set(confirmations) != set(keys):
+        raise ValueError('請逐項確認原頁最終畫面')
+    record = record_for(prepared['proof'], reading, actor=actor, **confirmations)
+    return dict(reading=record['reading'], proof=prepared['proof'], actor=actor,
+                enable_format=prepared['requires_format_conversion'], **confirmations)
+
+
+class SurfaceActualDialog(_ReviewDialog):
+    """One sealed original final surface, with explicit human attestations."""
+    _variable_attributes = ('reading','actor','confirmations')
+    _widget_attributes = ('body_canvas','photos')
+
+    def __init__(self, parent, entry, prepared):
+        super().__init__(parent)
+        self.result = None
+        self.prepared = prepared
+        self.title('單一位置人工表面 actual')
+        apply_screen_safe_geometry(self, 980, 780, min_width=720, min_height=520)
+        self.transient(parent)
+        self.grab_set()
+        footer = ActionRows(self)
+        footer.pack(side='bottom',fill='x')
+        footer.set_items([tk.Button(footer,text='暫存本位置 actual',command=self.submit),
+                          tk.Button(footer,text='取消',command=self.destroy)])
+        body,self.body_canvas = create_scrollable_body(self)
+        WrappedLabel(body,text=prepared['warning'],fg='#9a4100').pack(fill='x',padx=14,pady=8)
+        WrappedLabel(body,text=f"僅此位置：{entry.get('char','')}；自動解碼原值：{prepared['proof']['automatic_actual'] or '未解碼'}。疊蓋警示保留，不學習或傳播。"
+            ).pack(fill='x',padx=14)
+        self.photos=[]
+        for key,title,subsample in [('page_png','原頁最終畫面',2),('target_png','目標最終畫面',1)]:
+            WrappedLabel(body,text=title).pack(fill='x',padx=14)
+            photo=tk.PhotoImage(master=self,data=prepared['proof']['render'][key])
+            if subsample>1:
+                photo=photo.subsample(subsample,subsample)
+            self.photos.append(photo)
+            tk.Label(body,image=photo).pack(padx=14,pady=5)
+        self.reading=tk.StringVar(master=self,value='')
+        self.actor=tk.StringVar(master=self,value='')
+        WrappedLabel(body,text='依原頁輸入實際注音（不提供應標答案）').pack(fill='x',padx=14)
+        scrollable_entry(body,self.reading).pack(fill='x',padx=14)
+        WrappedLabel(body,text='人工核對者紀錄').pack(fill='x',padx=14)
+        scrollable_entry(body,self.actor).pack(fill='x',padx=14)
+        self.confirmations={}
+        for key,text in [('whole_unit_readable','我看過上方最終畫面，整個字與注音清楚可讀'),
+                         ('target_character_matches','我確認最終畫面的目標字與此位置一致'),
+                         ('reading_from_original','讀音是我依原頁自行輸入，未使用應標答案')]:
+            variable=tk.BooleanVar(master=self,value=False)
+            self.confirmations[key]=variable
+            tk.Checkbutton(body,text=text,variable=variable,wraplength=850,anchor='w').pack(fill='x',padx=14,pady=4)
+        self.wait_window(self)
+
+    def submit(self):
+        try:
+            value=surface_input_result(self.prepared,reading=self.reading.get(),actor=self.actor.get().strip(),
+                confirmations={key:variable.get() for key,variable in self.confirmations.items()})
+            if value['enable_format'] and not messagebox.askyesno('明確轉換專案格式',
+                    self.prepared['warning']+'\n確認轉換此專案並保留版本化證據？',parent=self):
+                return
+        except ValueError as exc:
+            messagebox.showerror('尚未完成原頁確認',str(exc),parent=self)
+            return
+        self.result=value
+        self.destroy()
+
+
 class ActualReadingDialog(_ReviewDialog):
     """Human visual confirmation for the actual evidence chain only."""
     _variable_attributes = ("checked_vars", "reading", "note")
     _widget_attributes = ("body_canvas", "previews", "preview_slots", "preview_buttons",
-                          "check_buttons", "preview_guidance", "_body_scrollbar")
+                          "check_buttons", "preview_guidance", "_body_scrollbar", "_sample_frames",
+                          "sample_container", "page_navigation", "page_label", "previous_page_button", "next_page_button")
     _PREVIEW_READY_RETRIES = 40
 
     def __init__(self, parent, entry, group, output_dir: Path, *, wait: bool = True,
@@ -548,6 +651,18 @@ class ActualReadingDialog(_ReviewDialog):
             self, text="", fg="#555555", justify="left", wraplength=900,
         )
         self.preview_guidance.pack(side="bottom", fill="x", padx=16, pady=(2, 4))
+        form = tk.LabelFrame(self, text="實際注音")
+        form.pack(side="bottom", fill="x", padx=16, pady=8)
+        self.reading = tk.StringVar(master=self, value="")
+        self.note = tk.StringVar(master=self, value="")
+        WrappedLabel(form, text=f"程式目前 actual：{entry.get('actual') or '尚未辨識'}").grid(row=0,column=0,columnspan=2,sticky="ew",padx=8,pady=(8,4))
+        WrappedLabel(form, text="原頁真正 actual：", width_fraction=0.25).grid(row=1,column=0,sticky="ew",padx=8,pady=4)
+        scrollable_entry(form, self.reading).grid(row=1,column=1,sticky="ew",padx=8,pady=4)
+        WrappedLabel(form, text="備註（可空白）：", width_fraction=0.25).grid(row=2,column=0,sticky="ew",padx=8,pady=4)
+        scrollable_entry(form, self.note).grid(row=2,column=1,sticky="ew",padx=8,pady=(4,8))
+        form.columnconfigure(0, weight=1, uniform="actual-form")
+        form.columnconfigure(1, weight=3, uniform="actual-form")
+
         body, self.body_canvas = create_scrollable_body(self)
         self._body_scrollbar = next(
             child for child in self.body_canvas.master.winfo_children() if isinstance(child, ttk.Scrollbar)
@@ -576,7 +691,7 @@ class ActualReadingDialog(_ReviewDialog):
         else:
             load_instruction = "先載入目前位置 A，請看圖並親自勾選。"
         self.preview_guidance.configure(
-            text=f"本群組共 {len(self.samples)} 個位置：向下捲查看各張原頁與其下方的勾選框；"
+            text=f"本群組共 {len(self.samples)} 個位置：翻頁查看各張原頁與其下方的勾選框；"
                  f"A 必須核對。{load_instruction}",
         )
         target_char = str(entry.get("char") or "")
@@ -590,67 +705,36 @@ class ActualReadingDialog(_ReviewDialog):
         self._viewed_target = [False] * len(self.samples)
         WrappedLabel(
             body,
-            text=(f"本核對群組共有 {len(self.samples)} 個位置，全部列在下方；同頁不同位置仍分開列出。"
+            text=(f"本核對群組共有 {len(self.samples)} 個位置，每頁最多 20 筆；同頁不同位置仍分開列出。"
                   + (f"其中 {other_char_count} 個位置的文字與目前字不同，但屬於同一 exact 字形群組；"
                      "請個別看原頁確認，不能依字形推定讀音。" if other_char_count else "") +
                   "請向下捲到原頁圖片及其下方的勾選框，逐個位置核對。"
                   f"為避免大量 PDF 影像使視窗停住，{load_instruction}"
-                  "同時最多保留 A 與一張其他位置的影像。已核對並暫存的位置仍列出，但不必重做。"),
+                  "每頁同時最多保留兩張影像。已核對並暫存的位置仍列出，但不必重做。"),
             fg="#555555", justify="left", wraplength=900,
         ).pack(fill="x", anchor="w", padx=16, pady=(0, 8))
 
-        self.checked_vars = []
-        for i, sample in enumerate(self.samples, 1):
-            index = i - 1
-            label = chr(64 + i) if i <= 26 else str(i)
-            different_char = str(sample.get("char") or "") != target_char
-            frame = tk.LabelFrame(
-                body,
-                text=f"樣本 {label}" + ("（目前位置，必須核對）" if i == 1 else
-                                        "（字不同，須個別確認）" if different_char else ""),
-            )
-            frame.pack(fill="x", padx=16, pady=6)
-            info = f"{sample.get('pdf_name','')}  課本頁 {sample.get('printed_page','')}  字：{sample.get('char','')}  occurrence：{sample.get('occurrence_id','')}"
-            WrappedLabel(frame, text=info).pack(fill="x", padx=8, pady=(6, 2))
-            self.previews.append(None)
-            self.sample_available.append(False)
-            self._preview_ready_after.append(None)
-            slot = tk.Frame(frame)
-            slot.pack(fill="x", padx=8)
-            self.preview_slots.append(slot)
-            button = tk.Button(frame, text="顯示原頁", command=lambda j=index: self.show_sample_preview(j))
-            button.pack(anchor="w", padx=8, pady=(2, 4))
-            self.preview_buttons.append(button)
-            var = tk.BooleanVar(master=self, value=False)
-            self.checked_vars.append(var)
-            if self.previously_checked[index]:
-                WrappedLabel(frame, text="已直接核對並暫存；本次不必重新勾選。", fg="#555555").pack(fill="x", padx=8, pady=(2, 7))
-                self.check_buttons.append(None)
-            else:
-                check = wrap_checkbutton(tk.Checkbutton(
-                    frame, text="我已直接核對這張 PDF 原頁", variable=var, state="disabled",
-                ))
-                check.pack(fill="x", padx=8, pady=(2, 7))
-                self.check_buttons.append(check)
+        count = len(self.samples)
+        self.checked_vars = [OccurrenceCheckState(sample["occurrence_id"]) for sample in self.samples]
+        self.previews = [None] * count
+        self.sample_available = [False] * count
+        self._preview_ready_after = [None] * count
+        self.preview_slots = [None] * count
+        self.preview_buttons = [None] * count
+        self.check_buttons = [None] * count
+        self._sample_frames = []
+        self.sample_page = 0
+        self.page_navigation = ActionRows(body)
+        self.page_navigation.pack(fill="x", padx=16)
+        self.previous_page_button = tk.Button(self.page_navigation, text="上一頁", command=lambda: self.show_sample_page(self.sample_page - 1))
+        self.next_page_button = tk.Button(self.page_navigation, text="下一頁", command=lambda: self.show_sample_page(self.sample_page + 1))
+        self.page_navigation.set_items([self.previous_page_button, self.next_page_button])
+        self.page_label = WrappedLabel(body)
+        self.page_label.pack(fill="x", padx=16)
+        self.sample_container = tk.Frame(body)
+        self.sample_container.pack(fill="x")
 
-        form = tk.LabelFrame(body, text="實際注音")
-        form.pack(fill="x", padx=16, pady=8)
-        self.reading = tk.StringVar(master=self, value="")
-        self.note = tk.StringVar(master=self, value="")
-        WrappedLabel(form, text=f"程式目前 actual：{entry.get('actual') or '尚未辨識'}").grid(row=0,column=0,columnspan=2,sticky="ew",padx=8,pady=(8,4))
-        WrappedLabel(form, text="原頁真正 actual：", width_fraction=0.25).grid(row=1,column=0,sticky="ew",padx=8,pady=4)
-        scrollable_entry(form, self.reading).grid(row=1,column=1,sticky="ew",padx=8,pady=4)
-        WrappedLabel(form, text="備註（可空白）：", width_fraction=0.25).grid(row=2,column=0,sticky="ew",padx=8,pady=4)
-        scrollable_entry(form, self.note).grid(row=2,column=1,sticky="ew",padx=8,pady=(4,8))
-        form.columnconfigure(0, weight=1, uniform="actual-form")
-        form.columnconfigure(1, weight=3, uniform="actual-form")
-
-        if self.samples:
-            self.show_sample_preview(0)
-        if len(self.samples) == 2:
-            # Preserve the two-sample visual layout contract without eagerly
-            # rasterizing a larger exact group or checking B on the user's behalf.
-            self.show_sample_preview(1)
+        self.show_sample_page(0)
         kind = str(group.get("kind") or "")
         checked_peers = set(verified_checked_occurrence_ids) & {
             str(member.get("occurrence_id") or "") for member in group.get("members") or []
@@ -668,6 +752,66 @@ class ActualReadingDialog(_ReviewDialog):
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         if wait:
             self.wait_window(self)
+
+    def show_sample_page(self, page):
+        indices = actual_sample_page_indices(len(self.samples), page)
+        if not indices and self.samples:
+            return
+        # Snapshot checkbox values before Tcl variables/widgets are destroyed.
+        for index in getattr(self, "_page_indices", ()):
+            self.checked_vars[index].unbind()
+            self._cancel_preview_ready(index)
+            if self.previews[index] is not None:
+                self.previews[index].destroy()
+            self.previews[index] = self.preview_slots[index] = None
+            self.preview_buttons[index] = self.check_buttons[index] = None
+        if self._visibility_after is not None:
+            self.after_cancel(self._visibility_after)
+            self._visibility_after = None
+        for frame in self._sample_frames:
+            frame.destroy()
+        self._sample_frames.clear()
+        self._active_peer = None
+        self.sample_page, self._page_indices = page, indices
+        target_char = str(self.entry.get("char") or "")
+        for index in indices:
+            sample = self.samples[index]
+            number = index + 1
+            label = chr(64 + number) if number <= 26 else str(number)
+            different = str(sample.get("char") or "") != target_char
+            frame = tk.LabelFrame(self.sample_container, text=f"樣本 {label}" +
+                ("（目前位置，必須核對）" if index == 0 else "（字不同，須個別確認）" if different else ""))
+            frame.pack(fill="x", padx=16, pady=6)
+            self._sample_frames.append(frame)
+            info = (f"{sample.get('pdf_name', '')}  實體頁 {sample.get('physical_page', '')}  "
+                    f"課本頁 {sample.get('printed_page', '')}  字：{sample.get('char', '')}  "
+                    f"occurrence：{sample.get('occurrence_id', '')}")
+            WrappedLabel(frame, text=info).pack(fill="x", padx=8, pady=(6, 2))
+            slot = tk.Frame(frame)
+            slot.pack(fill="x", padx=8)
+            self.preview_slots[index] = slot
+            button = tk.Button(frame, text="顯示原頁", command=lambda j=index: self.show_sample_preview(j))
+            button.pack(anchor="w", padx=8, pady=(2, 4))
+            self.preview_buttons[index] = button
+            if self.previously_checked[index]:
+                WrappedLabel(frame, text="已直接核對並暫存；本次不必重新勾選。", fg="#555555").pack(fill="x", padx=8)
+            else:
+                var = tk.BooleanVar(master=self, value=self.checked_vars[index].get())
+                self.checked_vars[index].bind(var)
+                check = wrap_checkbutton(tk.Checkbutton(frame, text="我已直接核對這張 PDF 原頁", variable=var,
+                    state="normal" if self.sample_available[index] and self._viewed_target[index] else "disabled"))
+                check.pack(fill="x", padx=8, pady=(2, 7))
+                self.check_buttons[index] = check
+        pages = max(1, (len(self.samples) + ACTUAL_SAMPLE_PAGE_SIZE - 1) // ACTUAL_SAMPLE_PAGE_SIZE)
+        self.page_label.configure(text=f"第 {page + 1} / {pages} 頁；位置 {indices[0] + 1 if indices else 0}–{indices[-1] + 1 if indices else 0} / {len(self.samples)}")
+        self.previous_page_button.configure(state="normal" if page > 0 else "disabled")
+        self.next_page_button.configure(state="normal" if page + 1 < pages else "disabled")
+        self.body_canvas.yview_moveto(0)
+        self.body_canvas.request_layout()
+        if page == 0 and self.samples and not self.checked_vars[0].get():
+            self.show_sample_preview(0)
+        if page == 0 and len(self.samples) == 2 and not self.checked_vars[1].get():
+            self.show_sample_preview(1)
 
     def _cancel_preview_ready(self, index):
         pending = self._preview_ready_after[index]
@@ -718,9 +862,9 @@ class ActualReadingDialog(_ReviewDialog):
                 self.check_buttons[index].configure(state="normal")
 
     def _check_preview_ready(self, index, preview, remaining):
-        self._preview_ready_after[index] = None
-        if not self.winfo_exists() or self.previews[index] is not preview:
+        if self._destroying or not self.winfo_exists() or self.previews[index] is not preview:
             return
+        self._preview_ready_after[index] = None
         if self._preview_drawn_for_sample(index, preview):
             self._schedule_visibility_check()
             return
@@ -747,14 +891,22 @@ class ActualReadingDialog(_ReviewDialog):
             # Native/Tcl owner destruction does not call Python destroy().
             # Cancel callbacks before the shared handler drops widget refs.
             self._cancel_owned_preview_callbacks()
+            for state in getattr(self, "checked_vars", ()):
+                if isinstance(state, OccurrenceCheckState):
+                    state.unbind()
         super()._release_resources(event)
 
     def destroy(self):
         self._cancel_owned_preview_callbacks()
+        for state in self.checked_vars:
+            if isinstance(state, OccurrenceCheckState):
+                state.unbind()
         super().destroy()
 
     def show_sample_preview(self, index):
         """Render on demand, retaining at most A and one peer PDF image."""
+        if self.preview_slots[index] is None:
+            return
         if index and self._active_peer is not None and self._active_peer != index:
             previous = self._active_peer
             self._cancel_preview_ready(previous)
@@ -785,6 +937,8 @@ class ActualReadingDialog(_ReviewDialog):
             self.previews[index] = preview
 
         def unavailable():
+            if self._destroying or self.previews[index] is not preview:
+                return
             self._cancel_preview_ready(index)
             self.sample_available[index] = False
             self._viewed_target[index] = False
@@ -792,7 +946,10 @@ class ActualReadingDialog(_ReviewDialog):
             check = self.check_buttons[index]
             if check is not None:
                 check.configure(state="disabled")
-            self.preview_buttons[index].configure(text="原頁無法顯示，請重新載入")
+            if self.preview_buttons[index] is not None:
+                self.preview_buttons[index].configure(text=(
+                    "位置有警示，不能確認；可重新載入" if getattr(preview, "warning_target", None) is not None
+                    else "原頁未完成可靠檢查；可重新載入"))
 
         preview.on_failure = unavailable
         preview.on_invalidated = unavailable
@@ -1136,6 +1293,9 @@ class ReviewApp:
         self._start_staging_validation(result["snapshot"])
         self.show()
         _review_log("[人工校對] 已載入，可以開始校對")
+        from manual_surface_actual import enabled, UNSUPPORTED_WARNING
+        if enabled(self.manifest):
+            messagebox.showwarning('專案格式相容性',UNSUPPORTED_WARNING,parent=self.root)
         if result["source_actual_pending"]:
             messagebox.showwarning(
                 "來源 actual 暫存待重新核對",
@@ -1860,6 +2020,8 @@ class ReviewApp:
                 self.last_expected_review_id = None
             try:
                 self._restore_save_controls()
+                if getattr(result, "cleanup_error", None):
+                    raise RuntimeError(result.cleanup_error)
                 if error is not None:
                     raise error
                 self._publish_staging_summary(result.staging_summary)
@@ -2023,6 +2185,9 @@ class ReviewApp:
     def _confirm_difference_entry(self, entry):
         if entry.get("state") != "DIFFERENCE_PENDING_CONFIRMATION":
             return
+        if getattr(self, "_rendered_review_id", None) != entry.get("review_id"):
+            messagebox.showerror("無法確認教材錯誤", "目前位置原頁尚未可靠顯示；本筆仍待處理", parent=self.root)
+            return
         try:
             confirmation = build_gui_confirmation(entry)
         except InvalidTransitionError as exc:
@@ -2105,16 +2270,19 @@ class ReviewApp:
                 return
             self._review_action_in_progress = True
             try:
-                dialog = ActualReadingDialog(self.root, entry, value["group"], self.output_dir,
-                    verified_checked_occurrence_ids=self.staged_checked_occurrence_ids
-                    if not value["summary"].get("staging_error") else ())
+                if value.get('surface') is not None:
+                    dialog = SurfaceActualDialog(self.root, entry, value['surface'])
+                else:
+                    dialog = ActualReadingDialog(self.root, entry, value["group"], self.output_dir,
+                        verified_checked_occurrence_ids=self.staged_checked_occurrence_ids
+                        if not value["summary"].get("staging_error") else ())
             finally:
                 self._review_action_in_progress = False
             if not dialog.result:
                 return
             request = dict(payload, **dialog.result)
             def stage(progress):
-                return service.invoke("stage_actual", request, progress=progress)
+                return service.invoke('stage_surface' if value.get('surface') is not None else "stage_actual", request, progress=progress)
             def staged(result):
                 self._last_actual_staged = True
                 self.manifest, self.db = result["snapshot"].manifest, result["snapshot"].db
@@ -2459,8 +2627,12 @@ class ReviewApp:
         try:
             if can_confirm_current_expected(entry):
                 getattr(self, "_confirm_current_expected_button", self.primary).config(state="disabled")
+            if entry.get("state") == "DIFFERENCE_PENDING_CONFIRMATION":
+                self.primary.config(state="disabled")
             if self.image.load(entry):
                 self._rendered_review_id = entry.get("review_id")
+                if entry.get("state") == "DIFFERENCE_PENDING_CONFIRMATION":
+                    self.primary.config(state="normal")
             elif can_confirm_current_expected(entry):
                 getattr(self, "_confirm_current_expected_button", self.primary).config(state="disabled")
         finally:
@@ -2472,12 +2644,16 @@ class ReviewApp:
         if (entry and preview is self.image and preview._entry == entry and preview.photo is not None
                 and preview.target is not None and not self._save_busy()):
             self._rendered_review_id = entry.get("review_id")
+            if entry.get("state") == "DIFFERENCE_PENDING_CONFIRMATION":
+                self.primary.config(state="normal")
             if can_confirm_current_expected(entry):
                 getattr(self, "_confirm_current_expected_button", self.primary).config(state="normal")
 
     def _preview_failed(self):
         self._rendered_review_id = None
         entry = self.current()
+        if entry and entry.get("state") == "DIFFERENCE_PENDING_CONFIRMATION":
+            self.primary.config(state="disabled")
         if entry and can_confirm_current_expected(entry):
             getattr(self, "_confirm_current_expected_button", self.primary).config(state="disabled")
 

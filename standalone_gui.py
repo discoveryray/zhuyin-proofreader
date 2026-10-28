@@ -189,6 +189,38 @@ def project_status_text(folder: Path) -> str:
     return project_status_details(folder)[0]
 
 
+def project_status_revision(folder: Path):
+    """Cheap refresh hint for exactly the inputs read by project_status_details.
+
+    This is display invalidation metadata, never an integrity fingerprint or
+    completion evidence. The existing service still parses/validates status.
+    """
+    names = ["pipeline_status.json", "校對工作階段.json", "人工判定資料庫.json",
+             "跨電腦接續未完成.json", "來源actual待重新核對.json",
+             "跨專案判定衝突.json", "跨Excel_actual衝突.json"]
+    if (Path(folder) / "跨Excel_actual衝突.json").exists():
+        # The conflict reader additionally inspects these project-local files.
+        # Ledger materialization uses only the already loaded manifest and DB;
+        # it does not read workbooks, PDFs or runtime assets in this status path.
+        import actual_review as ar
+        import standalone_proofread as sp
+        from global_glyph_promotion import PROJECT_TRANSACTION_FILE
+        root = sp.project_actual_evidence_root(folder)
+        names.extend(str((root / name).relative_to(Path(folder).resolve()))
+                     for name in (ar.OCCURRENCE_OVERRIDE_FILE, ar.GLYPH_PROVENANCE_FILE,
+                                  PROJECT_TRANSACTION_FILE))
+    revision = []
+    for name in names:
+        try:
+            value = (Path(folder) / name).stat()
+        except FileNotFoundError:
+            revision.append((name, None))
+        else:
+            revision.append((name, value.st_mtime_ns, value.st_ctime_ns,
+                             value.st_size, value.st_ino, value.st_mode))
+    return tuple(revision)
+
+
 def review_child_worker(cmd, env, messages, token):
     """Drain child diagnostics and report exit without touching launcher Tk."""
     tail = ""
@@ -280,6 +312,7 @@ class App:
 
         self._build_proof_tab()
         self._build_diff_tab()
+        self._install_notebook_layout()
 
         self.run_status = WrappedLabel(body, text="就緒", anchor="w", justify="left", fg="#555555")
         self.run_status.pack(fill="x", padx=14, pady=(2, 8))
@@ -396,6 +429,47 @@ class App:
             self.log_frame.pack(fill="both", expand=True, padx=12, pady=(0, 10))
         else:
             self.log_frame.pack_forget()
+        self.body_canvas.request_layout()
+
+    def _install_notebook_layout(self):
+        # Notebook's default request is the tallest *any* tab, including an
+        # unmapped tab whose wrapping controls have not received their width.
+        # Follow only the selected tab's natural request; the canvas supplies
+        # scrolling when that content exceeds the viewport.
+        self._notebook_layout_pending = None
+        def bind_content(widget):
+            widget.bind("<Configure>", self._schedule_notebook_layout, add="+")
+            widget.bind("<Map>", self._schedule_notebook_layout, add="+")
+            for child in widget.winfo_children():
+                bind_content(child)
+        bind_content(self.notebook)
+        self.notebook.bind("<<NotebookTabChanged>>", self._schedule_notebook_layout, add="+")
+        self.notebook.bind("<Destroy>", self._dispose_notebook_layout, add="+")
+        self._schedule_notebook_layout()
+
+    def _schedule_notebook_layout(self, _event=None):
+        if self._notebook_layout_pending is None:
+            self._notebook_layout_pending = self.notebook.after_idle(self._fit_notebook_height)
+
+    def _fit_notebook_height(self):
+        self._notebook_layout_pending = None
+        if not self.notebook.winfo_exists() or self.notebook.winfo_width() <= 1:
+            return
+        selected = self.notebook.select()
+        if not selected:
+            return
+        tab = self.notebook.nametowidget(selected)
+        if tab.winfo_width() <= 1:
+            return
+        height = tab.winfo_reqheight()
+        if int(self.notebook.cget("height")) != height:
+            self.notebook.configure(height=height)
+            self.body_canvas.request_layout()
+
+    def _dispose_notebook_layout(self, event):
+        if event.widget is self.notebook and self._notebook_layout_pending is not None:
+            self.notebook.after_cancel(self._notebook_layout_pending)
+            self._notebook_layout_pending = None
 
     def _build_diff_tab(self):
         self.prev_input = tk.StringVar()
@@ -474,9 +548,14 @@ class App:
     def _invalidate_project_status(self):
         self._status_generation = getattr(self, "_status_generation", 0) + 1
         self._status_request = None
+        self._status_revision = None
         self.project_diagnostics = "正在驗證目前專案狀態；先前狀態已過期。"
         if hasattr(self, "project_status"):
-            self.project_status.config(text="正在驗證目前專案狀態…")
+            self._set_project_status_text("正在驗證目前專案狀態…")
+
+    def _set_project_status_text(self, text):
+        if self.project_status.cget("text") != text:
+            self.project_status.config(text=text)
 
     def _status_selection_changed(self, *_args):
         # A write trace also retires A -> B -> A and same-value reselection,
@@ -492,16 +571,17 @@ class App:
             self._invalidate_project_status()
         if not out:
             self.project_diagnostics = "尚未選擇校對專案資料夾"
-            self.project_status.config(text="尚未選擇校對專案資料夾。")
+            self._set_project_status_text("尚未選擇校對專案資料夾。")
             return
         normalized = normalize_existing_project_folder(Path(out))
         if normalized != Path(out):
             self.output.set(str(normalized))
         project = str(normalized.resolve())
         if getattr(self, "_status_request", None) is None:
+            if project_status_revision(normalized) == getattr(self, "_status_revision", None):
+                return
             self._status_request = (uuid.uuid4().hex,
                                     getattr(self, "_status_generation", 0), project)
-            self.project_status.config(text="正在驗證目前專案狀態…")
         self._start_status_reader()
 
     def _start_status_reader(self):
@@ -515,17 +595,33 @@ class App:
             return
         messages = self.q
         previous = getattr(self, "_status_service", None)
-        service = previous if previous is not None and str(previous.output_dir) == project else ReviewProcessService(project)
+        service = (previous if previous is not None and str(previous.output_dir) == project
+                   and not getattr(self, "_status_service_failed", False)
+                   else ReviewProcessService(project))
         self._status_service = service
+        self._status_service_failed = False
         self._status_reader_request = request
         def worker():
+            revision = None
+            failed = False
             try:
                 if previous is not None and previous is not service:
                     previous.close()
+                before = project_status_revision(Path(project))
                 summary, details = service.invoke("project_status", {})
+                after = project_status_revision(Path(project))
+                if before == after:
+                    revision = after
             except Exception as exc:
+                failed = True
                 summary, details = _UNKNOWN_PROGRESS, str(exc)
-            messages.put(("__STATUS__", request, summary, details))
+                # Keep uncertainty until a change or explicit retry; do not
+                # repeatedly invoke a failed reader every half second.
+                try:
+                    revision = project_status_revision(Path(project))
+                except OSError:
+                    pass
+            messages.put(("__STATUS__", request, summary, details, revision, failed))
         try:
             threading.Thread(target=worker, daemon=False).start()
         except Exception:
@@ -554,7 +650,8 @@ class App:
         try:
             self.refresh_project_status(new_request=False)
         except Exception as exc:
-            self.project_status.config(text=_UNKNOWN_PROGRESS)
+            self._status_revision = None
+            self._set_project_status_text(_UNKNOWN_PROGRESS)
             self.project_diagnostics = str(exc)
         finally:
             self.root.after(500, self.poll_project_status)
@@ -634,6 +731,8 @@ class App:
         self.start(self.proof_cmd(["--prepare-portable", "-o", out]))
 
     def continue_portable(self):
+        current = self.output.get().strip()
+        generation = getattr(self, "_status_generation", None)
         source = filedialog.askdirectory(title="選擇從另一台電腦帶來的專案")
         if not source:
             return
@@ -643,12 +742,43 @@ class App:
         target = filedialog.askdirectory(title="選擇空的資料夾保存接續專案")
         if not target:
             return
+        alias_args = self._portable_alias_args([source], current, generation)
+        if alias_args is None:
+            return
         self.input.set(local_pdf)
         self.output.set(target)
-        self.start(self.proof_cmd(["--continue-from-project", source, "--local-pdf", local_pdf, "-o", target]))
+        self.start(self.proof_cmd(["--continue-from-project", source, "--local-pdf", local_pdf,
+                                   "-o", target, *alias_args]))
+
+    def _portable_alias_args(self, sources, original_output, generation):
+        """Collect explicit original-byte aliases before changing selection."""
+        from pdf_portability import source_pdf_alias_requests, validate_source_pdf_aliases
+        aliases = []
+        try:
+            for request in source_pdf_alias_requests(sources):
+                path = filedialog.askopenfilename(
+                    title=(f"指定原 PDF 別名：{request['pdf_name']}；來源專案：{request['source_project']}；"
+                           f"session：{request['session_id']}；原封印 SHA256：{request['pdf_sha256']}"),
+                    filetypes=[("PDF", "*.pdf")],
+                )
+                if not path:
+                    return None
+                aliases.append({key: request[key] for key in ("source_project", "session_id", "pdf_sha256")}
+                               | {"path": path})
+            validate_source_pdf_aliases(sources, aliases)
+            if (self.output.get().strip() != original_output
+                    or getattr(self, "_status_generation", None) != generation):
+                raise ValueError("選檔期間目前專案已變更；請重新選擇接續來源與目的地。")
+        except Exception as exc:
+            messagebox.showerror("無法確認原 PDF 來源", str(exc))
+            return None
+        return [token for alias in aliases for token in (
+            "--source-pdf-alias", alias["source_project"], alias["session_id"],
+            alias["pdf_sha256"], alias["path"])]
 
     def import_project_decisions(self):
         current = self.output.get().strip()
+        generation = getattr(self, "_status_generation", None)
         if not current:
             messagebox.showerror("缺少專案資料夾", "請先選擇目前的校對專案。")
             return
@@ -661,10 +791,13 @@ class App:
         merged = filedialog.askdirectory(title="選擇空的資料夾保存合併後專案")
         if not merged:
             return
+        alias_args = self._portable_alias_args([current, source], current, generation)
+        if alias_args is None:
+            return
         self.input.set(local_pdf)
         self.output.set(merged)
         self.start(self.proof_cmd(["--continue-from-project", current, "--merge-with-project", source,
-                                   "--local-pdf", local_pdf, "-o", merged]))
+                                   "--local-pdf", local_pdf, "-o", merged, *alias_args]))
 
     # Backward-compatible method names: even if an old shortcut/menu binding
     # reaches one of these, workbook type is still auto-detected.
@@ -892,13 +1025,27 @@ class App:
                     owned_reader = request is not None and request == getattr(self, "_status_reader_request", None)
                     if owned_reader:
                         self._status_reader_request = None
+                        self._status_service_failed = x[5]
                     if (owned_reader and request == getattr(self, "_status_request", None)
                             and request[1] == getattr(self, "_status_generation", 0)
                             and self._project_key(self.output.get().strip() or ".") == self._project_key(request[2])
                             and self._project_key(request[2]) not in getattr(self, "_project_operations", {})):
                         self._status_request = None
-                        self.project_status.config(text=x[2])
-                        self.project_diagnostics = x[3]
+                        revision = x[4]
+                        try:
+                            current_revision = project_status_revision(Path(request[2]))
+                        except OSError as exc:
+                            current_revision = None
+                            revision_error = str(exc)
+                        else:
+                            revision_error = "讀取期間專案狀態改變或無法確認；正在重新核對。"
+                        self._status_revision = revision if revision == current_revision else None
+                        if revision is not None and revision == current_revision:
+                            self._set_project_status_text(x[2])
+                            self.project_diagnostics = x[3]
+                        else:
+                            self._set_project_status_text(_UNKNOWN_PROGRESS)
+                            self.project_diagnostics = revision_error
                     if owned_reader:
                         self._start_status_reader()
                 elif isinstance(x, tuple) and x and x[0].startswith("__OP_"):
