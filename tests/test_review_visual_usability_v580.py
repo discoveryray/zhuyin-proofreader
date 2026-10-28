@@ -243,7 +243,14 @@ class VisualGuiTests(unittest.TestCase):
         app.next()
         self.assertEqual(app.current()['source_row_number'], 3)
         self.assertNotEqual(first_target, app.image.target)
-        app.render({**app.current(), 'pdf': str(self.folder / 'missing.pdf')})
+        missing=str(self.folder / 'missing.pdf')
+        # A retained same-SHA source is a legal finite relocation, not a failure.
+        app.render({**app.current(),'pdf':missing})
+        self.assertIsNotNone(app.image.target)
+        unavailable=copy.deepcopy(app.current())
+        unavailable['pdf']=missing
+        unavailable['source_record']['pdf']=missing
+        app.render(unavailable)
         self.assertIsNone(app.image.target)
         self.assertIsNone(app.image.photo)
         self.assertIsNone(app._rendered_review_id)

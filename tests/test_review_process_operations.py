@@ -286,9 +286,15 @@ def test_post_success_refresh_boundaries_preserve_known_operation_state(tmp_path
     import review_save_service as services
     from review_operation_worker import ReviewOperationState
     manifest, row = fixture(tmp_path)
-    monkeypatch.setattr(sp, "stage_manual_actual_correction", lambda *a, **k: None)
-    monkeypatch.setattr(sp, "regenerate_report", lambda *a, **k: "saved.xlsx")
-    monkeypatch.setattr(sp, "apply_staged_manual_actual_corrections", lambda *a, **k: {})
+    returned={'backend':False}
+    def declared(value):
+        def backend(*args,**kwargs):
+            returned['backend']=True
+            return value
+        return backend
+    monkeypatch.setattr(sp, "stage_manual_actual_correction", declared(None))
+    monkeypatch.setattr(sp, "regenerate_report", declared("saved.xlsx"))
+    monkeypatch.setattr(sp, "apply_staged_manual_actual_corrections", declared({}))
     real_factory = services.ReviewSaveService
     fault_calls = []
     def fail(*a, **k):
@@ -299,6 +305,7 @@ def test_post_success_refresh_boundaries_preserve_known_operation_state(tmp_path
                               ("apply_actual", "COMMITTED_REFRESH_PENDING")):
         for boundary in ("service", "view"):
             fault_calls.clear()
+            returned['backend']=False
             service = real_factory(tmp_path)
             snapshot = service.load_resume_snapshot()
             payload = dict(expected_manifest=manifest, expected_db=snapshot.db)
@@ -311,14 +318,21 @@ def test_post_success_refresh_boundaries_preserve_known_operation_state(tmp_path
                     if operation == "stage_actual":
                         faults.setattr(service, "with_invalidated_cache", fail)
                     else:
-                        faults.setattr(services, "ReviewSaveService", fail)
+                        def fail_after_backend(*args,**kwargs):
+                            return fail(*args,**kwargs) if returned['backend'] else real_factory(*args,**kwargs)
+                        faults.setattr(services, "ReviewSaveService", fail_after_backend)
                 else:
                     def replacement_factory(*args, **kwargs):
                         # Preserve the real service's source anchor and all caller
                         # arguments; inject only the post-success view fault.
                         replacement = real_factory(*args, **kwargs)
-                        replacement.load_resume_snapshot()
-                        faults.setattr(replacement._conflicts, "review_view", fail)
+                        if returned['backend']:
+                            load=replacement.load_resume_snapshot
+                            def loaded(*a,**k):
+                                snapshot=load(*a,**k)
+                                faults.setattr(replacement._conflicts,"review_view",fail)
+                                return snapshot
+                            faults.setattr(replacement,'load_resume_snapshot',loaded)
                         return replacement
                     if operation == "stage_actual":
                         faults.setattr(service, "with_invalidated_cache", lambda: replacement_factory(
@@ -327,6 +341,7 @@ def test_post_success_refresh_boundaries_preserve_known_operation_state(tmp_path
                         faults.setattr(services, "ReviewSaveService", replacement_factory)
                 with pytest.raises(ReviewOperationError, match="post-success") as error:
                     state.dispatch(operation, payload, lambda phase: None, lambda: False)
+                assert returned['backend'] is True
                 assert len(fault_calls) == 1
                 assert error.value.commit_state == status
 

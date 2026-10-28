@@ -1303,15 +1303,23 @@ def test_failed_continue_keeps_source_and_marks_target_incomplete(tmp_path):
     project(source, first, session="source", event_positions=(0,))
     portable.prepare_portable_project(source)
     source_db = (source / "人工判定資料庫.json").read_bytes()
-    with patch.object(sp, "run_pipeline_pdfs", side_effect=OSError("write failed")):
+    with patch.object(sp, "run_pipeline_pdfs", side_effect=OSError("write failed")) as failed_pipeline:
         with pytest.raises(OSError, match="write failed"):
             portable.continue_project(source, local, target)
+    failed_pipeline.assert_called_once()
     assert (source / "人工判定資料庫.json").read_bytes() == source_db
     assert (target / portable.INCOMPLETE_FILE).is_file()
     from standalone_gui import project_status_details
     assert "未完成" in project_status_details(target)[0]
+    # This isolated fixture's prior operation is over. Remove only its own
+    # operational lock, proving refusal precedes creation of a new lock.
+    lock=sp.project_actual_evidence_root(target)/'.global_exact_glyph_delivery.lock'
+    lock.unlink(missing_ok=True)
+    before_refusal={path:path.read_bytes() for path in target.rglob('*') if path.is_file()}
     with pytest.raises(ValueError, match="接續未完成"):
         ReviewSaveService(target).save_event("any", {"action": "保留待人工"})
+    assert not lock.exists()
+    assert {path:path.read_bytes() for path in target.rglob('*') if path.is_file()}==before_refusal
 
 
 def test_sealed_but_incomplete_target_cannot_be_reexported(tmp_path):
@@ -1349,18 +1357,26 @@ def test_report_publication_failure_retains_data_and_blocks_partial_target(tmp_p
     project(source, first, session="A", event_positions=(0,))
     project(target, local, session="B")
     before = (source / "人工判定資料庫.json").read_bytes()
-    with patch.object(portable, "_publish_portable_outputs", side_effect=OSError("report disk full")):
+    with patch.object(portable, "_publish_portable_outputs", side_effect=OSError("report disk full")) as failed_report:
         with pytest.raises(OSError, match="report disk full"):
             portable.import_project_decisions(source, target)
     assert (source / "人工判定資料庫.json").read_bytes() == before
+    failed_report.assert_called_once()
     assert len(sp.json_load_strict(target / "人工判定資料庫.json")["events"]) == 1
     assert (target / portable.INCOMPLETE_FILE).exists()
     from standalone_gui import project_status_details
     assert "未完成" in project_status_details(target)[0]
     with pytest.raises(ValueError, match="接續未完成"):
         portable.prepare_portable_project(target)
+    # This isolated fixture's prior operation is over. Remove only its own
+    # operational lock, proving refusal precedes creation of a new lock.
+    lock=sp.project_actual_evidence_root(target)/'.global_exact_glyph_delivery.lock'
+    lock.unlink(missing_ok=True)
+    before_refusal={path:path.read_bytes() for path in target.rglob('*') if path.is_file()}
     with pytest.raises(ValueError, match="接續未完成"):
         ReviewSaveService(target).save_event("any", {"action": "保留待人工"})
+    assert not lock.exists()
+    assert {path:path.read_bytes() for path in target.rglob('*') if path.is_file()}==before_refusal
 
 
 def test_tampered_source_actual_override_cannot_be_imported(tmp_path):
@@ -1862,3 +1878,65 @@ def test_duplicate_carries_source_conflict_adjudication_across_hops(tmp_path):
     portable.import_project_decisions(d, e)
     e_event = next(iter(sp.json_load_strict(e / "人工判定資料庫.json")["events"].values()))
     assert e_event["portability_source"]["prior_duplicate_sources"][0]["source_conflict_resolution"] == c_event["portability_conflict_resolution"]
+
+
+@pytest.mark.parametrize("drift", ["extra", "marker", "source"])
+def test_owned_continue_rechecks_original_prefix_before_first_producer_write(tmp_path, monkeypatch, drift):
+    monkeypatch.setenv('LOCALAPPDATA',str(tmp_path/'isolated-user'))
+    first,local=tmp_path/'first.pdf',tmp_path/'local.pdf'
+    pdf(first,title='A');pdf(local,title='B')
+    source,target=tmp_path/'source',tmp_path/'target'
+    project(source,first,session='legacy-source')
+    portable.prepare_portable_project(source)
+    lock='_專案證據/actual/.global_exact_glyph_delivery.lock'
+    def files(root):
+        return {str(path.relative_to(root)).replace('\\','/'):path.read_bytes()
+                for path in root.rglob('*') if path.is_file()
+                and str(path.relative_to(root)).replace('\\','/')!=lock}
+    initial_source=files(source)
+    injected=[]
+    real=sp.validate_asset_manifest
+    def validate(root):
+        result=real(root)
+        assert result['ok']
+        # The actual decorated producer has been admitted, but no producer
+        # directory, CSV, status, workbook or manifest has been written yet.
+        assert (target/portable.INCOMPLETE_FILE).is_file()
+        assert not (target/'校對工作階段.json').exists()
+        if drift=='extra':(target/'foreign.txt').write_bytes(b'foreign target bytes')
+        elif drift=='marker':
+            value=sp.json_load_strict(target/portable.INCOMPLETE_FILE)
+            value['reason']='another valid marker owner'
+            sp.json_save(target/portable.INCOMPLETE_FILE,value)
+        else:local.write_bytes(local.read_bytes()+b'\nexternal PDF edit\n')
+        injected.append((files(target),local.read_bytes()))
+        return result
+    with patch.object(sp,'validate_asset_manifest',side_effect=validate):
+        with pytest.raises(ValueError):portable.continue_project(source,local,target)
+    assert len(injected)==1
+    assert files(target)==injected[0][0]
+    assert local.read_bytes()==injected[0][1]
+    assert files(source)==initial_source
+    assert not (target/'校對工作階段.json').exists()
+    assert not (target/'01_實際注音').exists()
+
+
+def test_legal_legacy_project_save_preserves_expected_identity_and_sources(tmp_path):
+    source=tmp_path/'source.pdf';pdf(source,title='legacy',genuine_source=True)
+    root=tmp_path/'project'
+    manifest,_=project(root,source,session='legal-legacy',genuine_source=True)
+    before={path:path.read_bytes() for path in root.rglob('*') if path.is_file()}
+    pdf_before=source.read_bytes()
+    selected=manifest['records'][0]['review_id']
+    ReviewSaveService(root).save_event(selected,{'action':'確認非校對範圍',
+        'exclusion_reason':'isolated legacy regression','exclusion_evidence':'original page visual source'})
+    assert source.read_bytes()==pdf_before
+    assert all(path.read_bytes()==raw for path,raw in before.items()
+               if path.name!='人工判定資料庫.json')
+    current=sp.json_load_strict(root/'校對工作階段.json')
+    assert current==manifest and 'manual_surface_actual_contract' not in current
+    saved=sp.json_load_strict(root/'人工判定資料庫.json')
+    assert set(saved['events'])=={selected}
+    assert saved['events'][selected]['action']=='確認非校對範圍'
+    reopened=ReviewSaveService(root).load_resume_snapshot()
+    assert len(reopened.ledger)==len(manifest['records'])

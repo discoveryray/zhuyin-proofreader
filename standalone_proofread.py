@@ -376,7 +376,46 @@ def _publish_local_actual_conflict_resolution(output_dir: Path, report: Path, *,
     return regenerate_report(output_dir,**({'_phase':_phase} if _phase is not None else {}))
 
 
+def _confirmed_recovery_entry(function):
+    """Validate the user's complete durable owner before format dispatch/locks.
+
+    This is only an identity preflight. Admission and the locked owner check
+    still validate original sources and recheck the actual recovery bytes.
+    """
+    @wraps(function)
+    def run(output_dir, *, acknowledge=True, expected_recovery=None):
+        if expected_recovery is not None:
+            from global_glyph_promotion import (_validated_project_journal,
+                validate_post_commit_recovery_plan,PROJECT_TRANSACTION_FILE,library)
+            from project_write_admission import _bytes
+            try:
+                if (type(expected_recovery) not in (tuple,list) or len(expected_recovery)!=2
+                        or type(expected_recovery[0]) is not str):
+                    raise ValueError('invalid confirmed recovery identity')
+                validate_post_commit_recovery_plan(expected_recovery[1])
+            except (ValueError,library.GlobalLibraryValidationError) as exc:
+                raise ValueError('已提交 actual 復原紀錄已變更；未套用新暫存') from exc
+            root=project_actual_evidence_root(Path(output_dir))
+            raw=_bytes(root/PROJECT_TRANSACTION_FILE)
+            known=None
+            try:
+                if raw is not None:
+                    journal=_validated_project_journal(raw)
+                    if journal['state']=='COMMITTED':known=(journal['transaction_id'],journal['recovery_plan'])
+                else:
+                    publication=_read_actual_refresh_publication(Path(output_dir))
+                    if publication is not None and publication[0]['phase']=='ACKNOWLEDGING':
+                        journal=_validated_project_journal(_bytes(publication[2]/'ack-committed.json'))
+                        if journal['state']=='COMMITTED':known=(journal['transaction_id'],journal['recovery_plan'])
+            except library.GlobalLibraryValidationError as exc:
+                raise ValueError('已提交 actual 復原紀錄已變更；未套用新暫存') from exc
+            _require_expected_committed_recovery(expected_recovery,known)
+        return function(output_dir,acknowledge=acknowledge,expected_recovery=expected_recovery)
+    return run
+
+
 @bound_operation(project_parameter="output_dir")
+@_confirmed_recovery_entry
 @project_write_entry(recovery=True, locked=True, profile_only=True, owned_surface_recovery=True)
 def recover_committed_actual_project(output_dir: Path, *, acknowledge: bool = True, expected_recovery=None):
     """Explicit restart recovery; staging is never reapplied here.
@@ -5931,7 +5970,8 @@ def _surface_admission_after_owned_change(output_dir, admission, replacements, *
     expected = {name:raw for name,raw in admission.files
                 if removed_stage is None or not Path(name).is_relative_to(removed_stage)}
     expected.update((str(Path(name).resolve()),raw) for name,raw in replacements.items())
-    transitioned = ProjectWriteAdmission(Path(output_dir).resolve(),tuple(sorted(expected.items())),admission.profile)
+    transitioned = ProjectWriteAdmission(Path(output_dir).resolve(),tuple(sorted(expected.items())),admission.profile,
+        workbook_roster=admission.workbook_roster,integrity_paths=admission.integrity_paths)
     transitioned.recheck()
     current = capture_project_write_admission(output_dir,recovery=True)
     # A temporary valid change during recapture must not become a new baseline.
@@ -6505,10 +6545,12 @@ def run_pipeline_pdfs(
         _stage_phase.recheck()
     if _prewrite_guard is not None:
         _prewrite_guard()
+    from project_write_admission import begin_owned_transfer_write
     pdfs = [Path(pdf).resolve() for pdf in pdfs]
     root=Path(runtime_root or Path(__file__).resolve().parent).resolve()
     source_validation = validate_asset_manifest(root)
     if not source_validation.get("ok"):
+        begin_owned_transfer_write(output_dir)
         blocked_path = write_pipeline_blocked(output_dir, source_validation, "SOURCE_INVALID")
         raise SourceValidationError(f"核心資料來源驗證失敗；處理被阻擋：{blocked_path}")
     try:
@@ -6525,6 +6567,7 @@ def run_pipeline_pdfs(
                 f"global exact glyph source validation failed：{type(exc).__name__}: {exc}",
             ],
         }
+        begin_owned_transfer_write(output_dir)
         blocked_path = write_pipeline_blocked(
             output_dir,
             blocked_report,
@@ -6534,6 +6577,7 @@ def run_pipeline_pdfs(
             f"global exact glyph 資料來源驗證失敗；處理被阻擋：{blocked_path}"
         ) from exc
 
+    begin_owned_transfer_write(output_dir)
     output_dir.mkdir(parents=True,exist_ok=True)
     actual_dir=output_dir/"01_實際注音"; cand_dir=output_dir/"02_候選報告"
     actual_dir.mkdir(exist_ok=True); cand_dir.mkdir(exist_ok=True)

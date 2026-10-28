@@ -18,6 +18,7 @@ _ACTIVE = ContextVar('project_write_admission', default=())
 _CREATING = ContextVar('project_creation_admission', default=())
 _ENTRY_RECEIPTS = ContextVar('surface_entry_receipts', default=())
 _ENTRY_PHASES = ContextVar('profile_entry_phases', default=())
+_TRANSFER_CREATION = ContextVar('owned_transfer_creation', default=None)
 
 
 def entry_write_admission(project):
@@ -65,6 +66,86 @@ def owned_refresh_stage(stage, source, *, _phase=None):
         _CREATING.reset(token)
 
 
+@dataclass(frozen=True)
+class _FreshTransferTarget:
+    project: Path
+    directory_identity: tuple | None
+
+
+def capture_fresh_transfer_target(project):
+    """Read-only origin, before the transfer lock creates its own prefix."""
+    project=Path(project).resolve()
+    if project.is_symlink() or project.is_junction():
+        raise ValueError('PROJECT_WRITE_ADMISSION: linked transfer target')
+    if project.exists():
+        if not project.is_dir() or any(project.iterdir()):
+            raise ValueError('接續目標資料夾必須為空，避免覆寫既有成果')
+        stat=project.stat()
+        identity=(stat.st_dev,stat.st_ino)
+    else:
+        identity=None
+    return _FreshTransferTarget(project,identity)
+
+
+class _TransferCreation:
+    def __init__(self, origin, marker_sha, source_guard):
+        if type(origin) is not _FreshTransferTarget:
+            raise ValueError('PROJECT_WRITE_ADMISSION: original empty transfer target required')
+        self.origin=origin
+        self.marker_sha=marker_sha
+        self.source_guard=source_guard
+        self.claimed=False
+        self.started=False
+
+    def recheck(self):
+        from global_glyph_promotion import _ACTIVE_LOCKS
+        from pdf_portability import INCOMPLETE_FILE
+        project=self.origin.project
+        actual=project/'_專案證據'/'actual'
+        if not _ACTIVE_LOCKS.get(str(actual)):
+            raise ValueError('PROJECT_WRITE_ADMISSION: owned transfer lock required')
+        if self.origin.directory_identity is not None:
+            stat=project.stat()
+            if (stat.st_dev,stat.st_ino)!=self.origin.directory_identity:
+                raise ValueError('PROJECT_WRITE_ADMISSION: transfer target directory changed')
+        marker=project/INCOMPLETE_FILE
+        expected={project/'_專案證據',actual,actual/'.global_exact_glyph_delivery.lock',marker}
+        paths=set(project.rglob('*'))
+        if paths!=expected or any(path.is_symlink() or path.is_junction() for path in paths):
+            raise ValueError('PROJECT_WRITE_ADMISSION: fresh transfer namespace changed before write')
+        raw=_bytes(marker)
+        if raw is None or hashlib.sha256(raw).hexdigest()!=self.marker_sha:
+            raise ValueError('PROJECT_WRITE_ADMISSION: transfer marker changed before write')
+        self.source_guard()
+
+
+@contextmanager
+def owned_transfer_creation(origin, marker_sha, source_guard):
+    """Continue only this empty-origin transfer's lock + own marker prefix.
+
+    The marker alone grants nothing. This capability is private, single-use,
+    under the existing transfer lock, and checked again at the first producer
+    side effect. Subsequent outputs belong to the existing producer contract.
+    """
+    capability=_TransferCreation(origin,marker_sha,source_guard)
+    capability.recheck()
+    token=_TRANSFER_CREATION.set(capability)
+    try:
+        yield
+    finally:
+        _TRANSFER_CREATION.reset(token)
+
+
+def begin_owned_transfer_write(project):
+    capability=_TRANSFER_CREATION.get()
+    if capability is not None and Path(project).resolve()==capability.origin.project:
+        if not capability.claimed:
+            raise ValueError('PROJECT_WRITE_ADMISSION: transfer producer not admitted')
+        if not capability.started:
+            capability.recheck()
+            capability.started=True
+
+
 def _bytes(path):
     path = Path(path)
     if path.is_symlink() or path.is_junction():
@@ -83,6 +164,7 @@ class ProjectWriteAdmission:
     profile: bool = False
     write_block: str | None = None
     workbook_roster: tuple | None = None
+    integrity_paths: tuple = ()
 
     def expected_bytes(self, path):
         name = str(Path(path).resolve())
@@ -98,7 +180,8 @@ class ProjectWriteAdmission:
                 raise ValueError('PROJECT_WRITE_ADMISSION: workbook role namespace changed before write')
         for name, expected in self.files:
             if _bytes(Path(name)) != expected:
-                raise ValueError('PROJECT_WRITE_ADMISSION: source changed before write: ' + name)
+                raise ValueError(('SOURCE_INVALID／DATA_INTEGRITY_ERROR: ' if name in self.integrity_paths else '')
+                    + 'PROJECT_WRITE_ADMISSION: source changed before write: ' + name)
 
     def require_writable(self):
         if self.write_block:
@@ -119,6 +202,7 @@ class SurfaceWritePhase:
         self.project=receipt.project
         self.profile=receipt.profile
         self.workbook_roster=receipt.workbook_roster
+        self.integrity_paths=receipt.integrity_paths
         self.files=dict(receipt.files)
         self.pending=None
         self.attempted_paths=set()
@@ -134,7 +218,7 @@ class SurfaceWritePhase:
 
     def receipt(self):
         return ProjectWriteAdmission(self.project,tuple(sorted(self.files.items())),self.profile,
-            workbook_roster=self.workbook_roster)
+            workbook_roster=self.workbook_roster,integrity_paths=self.integrity_paths)
 
     def recheck(self):
         self.receipt().recheck()
@@ -438,7 +522,9 @@ def capture_project_write_admission(output_dir, *, allow_new=False, recovery=Fal
                 write_block='legacy new-profile journal/2 direct pending lacks exact afterimages; read-only, no automatic upgrade/recovery'
         receipt = ProjectWriteAdmission(project, tuple(sorted((str(path), raw) for path, raw in captured.items())),
                                         profile=surface.enabled(manifest),write_block=write_block,
-                                        workbook_roster=workbook_roster)
+                                        workbook_roster=workbook_roster,
+                                        integrity_paths=tuple(str(Path(path)) for path in
+                                            [*binder._source_specs,*binder._artifact_specs,*(path for path,_ in runtime)]))
         if surface_entry:
             from pdf_portability import actual_excel_conflict_state,validate_conflict_state,ACTUAL_EXCEL_CONFLICT_FILE,CONFLICT_FILE
             checked_db=sp.normalize_db(sp.json_parse_strict(captured[db_path],db_path))
@@ -466,6 +552,17 @@ def project_write_entry(*, allow_new=False, recovery=False, locked=False, surfac
         def run(*args, **kwargs):
             arguments = signature.bind(*args, **kwargs).arguments
             project = Path(arguments['output_dir']).resolve()
+            capability=_TRANSFER_CREATION.get()
+            if allow_new and capability is not None and capability.origin.project==project:
+                if capability.claimed:
+                    raise ValueError('PROJECT_WRITE_ADMISSION: transfer producer already claimed')
+                capability.recheck()
+                capability.claimed=True
+                token=_CREATING.set((*_CREATING.get(),project))
+                try:
+                    return function(*args,**kwargs)
+                finally:
+                    _CREATING.reset(token)
             if profile_only and not has_surface_indicators(project):
                 # The existing local-transaction source-context contract is
                 # not a full project schema. Its original reader stays owner.

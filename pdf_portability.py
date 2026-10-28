@@ -3886,6 +3886,8 @@ def _merge_projects_with_visual_sources(source_dirs, local_pdf, target_dir, *, s
     target_dir = Path(target_dir).resolve()
     if target_dir.exists() and any(target_dir.iterdir()):
         raise ValueError("接續目標資料夾必須為空，避免覆寫既有成果")
+    from project_write_admission import capture_fresh_transfer_target
+    target_origin=capture_fresh_transfer_target(target_dir)
     # Invalid source/preflight must not create even a lock-only target.
     source_pdfs = _SourcePdfBindings(source_dirs, source_pdf_aliases)
     with source_visual_operation() as operation:
@@ -3893,10 +3895,11 @@ def _merge_projects_with_visual_sources(source_dirs, local_pdf, target_dir, *, s
     _preflight_merge_sources(source_dirs, local_pdf, source_pdfs=source_pdfs)
     source_pdfs.recheck()
     with _project_transfer_locks(*source_dirs, target_dir):
-        return _merge_projects_locked(source_dirs, local_pdf, target_dir, source_pdfs=source_pdfs)
+        return _merge_projects_locked(source_dirs, local_pdf, target_dir, source_pdfs=source_pdfs,
+                                      _target_origin=target_origin)
 
 
-def _merge_projects_locked(source_dirs, local_pdf: Path, target_dir: Path, *, source_pdfs):
+def _merge_projects_locked(source_dirs, local_pdf: Path, target_dir: Path, *, source_pdfs, _target_origin):
     """Build a new project from local bytes and merge one or two source projects.
 
     The existing projects are read-only. The first source's decision wins only
@@ -3938,8 +3941,10 @@ def _merge_projects_locked(source_dirs, local_pdf: Path, target_dir: Path, *, so
             validate_sources()
             _assert_actual_marker_owner(marker, marker_sha)
         _assert_actual_marker_owner(marker, marker_sha)
-        sp.run_pipeline_pdfs([local_pdf], target_dir,
-                             _prewrite_guard=validate_target_write)
+        from project_write_admission import owned_transfer_creation
+        with owned_transfer_creation(_target_origin,marker_sha,validate_target_write):
+            sp.run_pipeline_pdfs([local_pdf], target_dir,
+                                 _prewrite_guard=validate_target_write)
         validate_target_write()
         _assert_actual_marker_owner(marker, marker_sha)
         target_manifest, _ = _load_project(target_dir, allow_incomplete=True)

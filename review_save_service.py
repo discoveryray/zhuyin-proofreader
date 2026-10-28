@@ -218,6 +218,10 @@ class ReviewSaveService:
 
     def save_event(self, review_id, event, *, expected_manifest=None, expected_db=None,
                    defer_staging_validation=False, progress=None, confirm_current_actual_snapshot=None):
+        # Public review saves cannot take ownership of a transfer's marker.
+        # Reject before admission/identity lookup and before creating a lock.
+        if (self.output_dir / "跨電腦接續未完成.json").exists():
+            raise StaleReviewProjectError("跨電腦接續未完成；未保存人工判定")
         from project_write_admission import capture_project_write_admission
         admission = capture_project_write_admission(self.output_dir)
         self._preflight_displayed_context(admission,expected_manifest,expected_db,review_id=review_id)

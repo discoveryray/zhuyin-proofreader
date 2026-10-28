@@ -702,7 +702,7 @@ def recover_project_actual_transaction(root: Path, *, _phase=None):
             restored[str((root/surface.FILE).resolve())]=before
             if _phase is None:
                 ProjectWriteAdmission(admission.project,tuple(sorted(restored.items())),admission.profile,
-                    workbook_roster=admission.workbook_roster).recheck()
+                    workbook_roster=admission.workbook_roster,integrity_paths=admission.integrity_paths).recheck()
             else:
                 _phase.recheck()
         if _phase is not None:

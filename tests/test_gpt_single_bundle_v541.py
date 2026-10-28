@@ -78,6 +78,7 @@ class GptSingleBundleV541Tests(unittest.TestCase):
                 "version": sp.VERSION,
                 "session_id": "s1",
                 "session_schema_version": sp.SESSION_SCHEMA_VERSION,
+                "ledger_schema_version": sp.LEDGER_SCHEMA_VERSION,
                 "workbook_schema_version": sp.WORKBOOK_SCHEMA_VERSION,
                 "review_id_schema_version": sp.REVIEW_ID_SCHEMA_VERSION,
                 "pdfs": [],
@@ -132,12 +133,15 @@ class GptSingleBundleV541Tests(unittest.TestCase):
                 "workbook_schema_version": sp.WORKBOOK_SCHEMA_VERSION,
                 "review_id_schema_version": sp.REVIEW_ID_SCHEMA_VERSION,
             }
-            group = {"group_id": "agr_" + "1" * 24, "members": [entry], "kind": "OCCURRENCE_ONLY", "exact_key": ("occ_" + hashlib.sha256(b"occ1").hexdigest()), "occurrence_count": 1}
+            group = sp.build_actual_group_for_entry([entry],entry)
             # The shared prewrite guard rereads the durable DB and ledger.
             # Keep this orchestration fixture stable across those reads, then
             # expose the changed actual only after the mocked apply has run.
             db = sp.normalize_db({})
             sp.json_save(folder / "人工判定資料庫.json", db)
+            # Bind the actual source to the same immutable occurrence inventory.
+            manifest['records']=[dict(entry)]
+            sp.json_save(folder / '校對工作階段.json',sp.seal_manifest(manifest))
             original_db = (folder / "人工判定資料庫.json").read_bytes()
             with patch.object(sp, "load_or_initialize_db", return_value=db), \
                  patch.object(sp, "materialize_ledger", side_effect=lambda *_args:

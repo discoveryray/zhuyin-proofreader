@@ -884,8 +884,32 @@ class GroupedCollectionTests(unittest.TestCase):
                 audit._bounded_callable_alias(caller, owner, "save")
         with patch.object(service.ReviewSaveService, "save_event", tkinter.Tk), self.assertRaises(ValueError):
             audit._bounded_callable_alias(caller, owner, "save")
-        with patch.object(service.ReviewSaveService, "_save", tkinter.Tk):
-            self.assertTrue(audit.callable_uses_tk(caller, owner))
+        # Full generic traversal has an explicit cold-provider contract. A
+        # warm surface provider makes unrelated product return inference
+        # combinatorial; keep this exact sentinel in its own interpreter.
+        # Parent target/pin/drift checks above still use the actual warm state.
+        source = r'''import sys,json
+from pathlib import Path
+from unittest.mock import patch
+sys.path.insert(0,str(Path.cwd()/'tests'))
+import tkinter
+from scripts import test_entrypoint_audit as audit
+import test_review_async_save as fixture
+import review_save_service as service
+import actual_source_visual_safety as source_safety
+assert Path(source_safety.__file__).resolve()==(audit.ROOT/'actual_source_visual_safety.py').resolve()
+assert audit.loaded_source_module('manual_surface_actual') is None
+owner=fixture.AsyncReviewSaveTests
+caller=owner.test_worker_keeps_ui_unlocked_but_guards_all_mutating_actions_and_debounce
+with patch.object(service.ReviewSaveService,'_save',tkinter.Tk):
+    value=audit.callable_uses_tk(caller,owner)
+    assert value is True
+print(json.dumps({'sentinel_value':value}))
+'''
+        result = subprocess.run([sys.executable,'-B','-X','utf8','-c',source],
+                                cwd=ROOT,capture_output=True,text=True,timeout=30)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+        self.assertTrue(json.loads(result.stdout)['sentinel_value'])
 
     def test_async_save_adapter_explicit_provider_load_works_in_cold_process(self):
         source = r'''

@@ -110,7 +110,10 @@ def make_project(base: Path) -> Path:
         path.write_bytes(("sealed-controller-" + kind).encode())
         info[kind + "_workbook"] = str(path)
         info[kind + "_workbook_sha256"] = sp.sha256_file(path)
-    manifest = sp.seal_manifest({"pdfs": [info], "records": []})
+    manifest = sp.seal_manifest({'version':sp.VERSION,'session_id':'isolated-staging-controller',
+        'session_schema_version':sp.SESSION_SCHEMA_VERSION,'ledger_schema_version':sp.LEDGER_SCHEMA_VERSION,
+        'workbook_schema_version':sp.WORKBOOK_SCHEMA_VERSION,'review_id_schema_version':sp.REVIEW_ID_SCHEMA_VERSION,
+        "pdfs": [info], "records": []})
     sp.json_save(output_dir / "校對工作階段.json", manifest)
     sp.json_save(output_dir / "人工判定資料庫.json", sp.normalize_db({}))
     return output_dir
@@ -135,7 +138,9 @@ def attach_source_bytes(output_dir, ledger):
 
 def seal_resume_fixture(output_dir, ledger):
     """Give synthetic ledger samples the real resume reader's durable inputs."""
+    original=sp.json_load_strict(output_dir / '校對工作階段.json')
     manifest = sp.seal_manifest({
+        'version':sp.VERSION,'session_id':original.get('session_id','isolated-staging-controller'),
         "session_schema_version": sp.SESSION_SCHEMA_VERSION,
         "ledger_schema_version": sp.LEDGER_SCHEMA_VERSION,
         "workbook_schema_version": sp.WORKBOOK_SCHEMA_VERSION,
@@ -226,6 +231,7 @@ class ManualActualGuiStagingServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output_dir = make_project(Path(directory))
             ledger = [entry("occ-a", "a" * 64, pdf_name="book.pdf")]
+            seal_resume_fixture(output_dir,ledger)
             root = actual_root(output_dir)
             root.mkdir(parents=True)
             # Preserve a mix of existing bytes and legitimate absence.
@@ -245,9 +251,25 @@ class ManualActualGuiStagingServiceTests(unittest.TestCase):
             before_artifacts = snapshot_paths(artifact_paths)
             before_authoritative = snapshot_paths(authoritative_paths)
 
+            # Keep the original two body validations observable while every
+            # newly added admission/binder validation also calls the real guard.
+            import inspect
+            manifest_check=MagicMock()
+            admission_checks=[]
+            real_manifest_guard=sp.validate_manifest_integrity
+            def observe_manifest(value):
+                real_manifest_guard(value)
+                frame=inspect.currentframe().f_back
+                caller=frame.f_code.co_name
+                admission=False
+                while frame is not None:
+                    admission=admission or frame.f_code.co_name=='capture_project_write_admission'
+                    frame=frame.f_back
+                if admission:admission_checks.append(caller)
+                else:manifest_check(value)
             with (
                 patch.object(sp, "materialize_ledger", return_value=ledger),
-                patch.object(sp, "validate_manifest_integrity", wraps=sp.validate_manifest_integrity) as manifest_check,
+                patch.object(sp, "validate_manifest_integrity", new=observe_manifest),
                 patch.object(sp, "validate_output_artifact_hashes", wraps=sp.validate_output_artifact_hashes) as artifact_check,
                 patch.object(sp, "apply_verified_actual_group") as single_apply,
                 patch.object(sp, "apply_staged_manual_actual_batch") as batch_apply,
@@ -276,6 +298,7 @@ class ManualActualGuiStagingServiceTests(unittest.TestCase):
             self.assertEqual(snapshot_paths(authoritative_paths), before_authoritative)
             self.assertEqual(manifest_check.call_count, 2)
             self.assertEqual(manifest_check.call_args_list[0], manifest_check.call_args_list[1])
+            self.assertEqual(admission_checks,['capture_project_write_admission','bind_workbooks'])
             artifact_check.assert_called_once()
             for forbidden in (
                 single_apply, batch_apply, clear_events, refresh, pipeline,
@@ -287,6 +310,7 @@ class ManualActualGuiStagingServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output_dir = make_project(Path(directory))
             current_ledger = [entry("current", "b" * 64, actual="ㄅ")]
+            seal_resume_fixture(output_dir,current_ledger)
             with (
                 patch.object(sp, "materialize_ledger", return_value=current_ledger),
                 patch.object(
@@ -313,6 +337,7 @@ class ManualActualGuiStagingServiceTests(unittest.TestCase):
                 entry("same-a", "c" * 64, pdf_name="a.pdf", x0=10),
                 entry("same-b", "c" * 64, pdf_name="b.pdf", x0=30),
             ]
+            seal_resume_fixture(output_dir,ledger)
             with patch.object(sp, "materialize_ledger", return_value=ledger):
                 sp.stage_manual_actual_correction(
                     output_dir, "review-same-a", "ㄓㄨㄢˇ", ["same-a"],
@@ -332,6 +357,7 @@ class ManualActualGuiStagingServiceTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output_dir = make_project(Path(directory))
             ledger = [entry("restart", "d" * 64)]
+            seal_resume_fixture(output_dir,ledger)
             with patch.object(sp, "materialize_ledger", return_value=ledger):
                 staged = sp.stage_manual_actual_correction(
                     output_dir, "review-restart", "ㄖㄣˊ", ["restart"],
