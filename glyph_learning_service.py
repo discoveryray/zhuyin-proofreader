@@ -94,18 +94,61 @@ def _reconfirmation_ids(evidence_root, records):
         return set()
     ids = set()
     for receipt in (Path(evidence_root) / DIRECTORY).glob("*.receipt.json"):
-        value = _read(receipt)
-        if value.get("global_status") != "STALE_APPROVAL_REQUIRES_NEW_ACTION":
-            continue
-        decision = _read(receipt.with_name(receipt.name.removesuffix(".receipt.json") + ".json"))
-        plan = _validate_plan(decision["plan"])
-        if decision.get("explicit_action") is not True:
-            raise ValueError("LEARNING_CONTRACT: no explicit action for reconfirmation")
-        request = _approval_request(plan["approval"])
-        record = records.get(request.glyph_id) if request else None
-        if record and not record.global_reuse_allowed and record.stored_state != library.QUARANTINED_CONFLICT:
-            ids.update(plan["checked_occurrence_ids"])
+        try:
+            value = _read(receipt)
+            if value.get("global_status") != "STALE_APPROVAL_REQUIRES_NEW_ACTION":
+                continue
+            decision = _read(receipt.with_name(receipt.name.removesuffix(".receipt.json") + ".json"))
+            plan = _validate_plan(decision["plan"])
+            if decision.get("explicit_action") is not True:
+                raise ValueError("LEARNING_CONTRACT: no explicit action for reconfirmation")
+            request = _approval_request(plan["approval"])
+            record = records.get(request.glyph_id) if request else None
+            if record and not record.global_reuse_allowed and record.stored_state != library.QUARANTINED_CONFLICT:
+                ids.update(plan["checked_occurrence_ids"])
+        except (OSError, ValueError, KeyError, TypeError):
+            continue  # list_learning_confirmations exposes this record failure.
     return ids
+
+
+def _confirmed_surface_positions(entries, source_context, evidence_root):
+    """Only applied, still-reproducible same-position surface receipts suppress prompts."""
+    if evidence_root is None:
+        return set(), []
+    import manual_surface_actual as surface
+    import standalone_proofread as sp
+    root = Path(evidence_root)
+    if not (root / surface.FILE).exists():
+        return set(), []
+    confirmed, diagnostics = set(), []
+    try:
+        output = root.parent.parent
+        manifest = sp.json_load_strict(output / "校對工作階段.json")
+        sp.validate_manifest_integrity(manifest)
+        if sp._global_direct_source_context(output, manifest) != source_context:
+            raise ValueError("SURFACE_CONTRACT: learning source differs from selected project")
+        document = surface.load_snapshot(root, manifest).document
+        by_id = {row["occurrence_id"]: row for row in entries}
+        for record in document["records"] if document else ():
+            oid = record["proof"]["source"]["occurrence_id"]
+            try:
+                # Source failures are per receipt: an unrelated bad historical
+                # source must not prevent viewing the remaining candidates.
+                surface.verify_sources({**document, "records": [record], "pending": [], "history": []},
+                                       manifest, output)
+                member = by_id.get(oid, {})
+                claim = {"occurrence_id": oid, "review_id": record["proof"]["source"]["review_id"],
+                         "reading": record["reading"], "proof_sha256": record["proof"]["proof_sha256"],
+                         "receipt_sha256": record["receipt_sha256"]}
+                if (member.get("manual_surface_actual") == claim
+                        and actual._canon(member.get("actual")) == record["reading"]):
+                    confirmed.add(oid)
+            except (OSError, ValueError, KeyError, TypeError) as exc:
+                diagnostics.append({"occurrence_id": oid, "status": "SURFACE_CONFIRMATION_UNVERIFIED",
+                                    "reason": str(exc)})
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        diagnostics.append({"status": "SURFACE_CONFIRMATION_UNVERIFIED", "reason": str(exc)})
+    return confirmed, diagnostics
 
 
 def collect_learning_candidates(entries, source_context, *, repository=None, evidence_root=None):
@@ -121,7 +164,8 @@ def collect_learning_candidates(entries, source_context, *, repository=None, evi
     static, project_ttf, project_cff, quarantine = _known_prompt_sources(evidence_root)
     reconfirm = _reconfirmation_ids(evidence_root, records)
     index = actual.index_actual_group_members(entries)
-    groups, suppressed, diagnostics = [], [], []
+    surface_confirmed, diagnostics = _confirmed_surface_positions(entries, source_context, evidence_root)
+    groups, suppressed = [], []
     seen = set()
     with promotion._DirectVisualPDFSnapshot(source_context) as snapshot:
         for entry in entries:
@@ -153,10 +197,12 @@ def collect_learning_candidates(entries, source_context, *, repository=None, evi
                         lower_priority_sources=(("STATIC_VERIFIED_EXACT", fixed["bopomofo"]),) if fixed.get("bopomofo") else (),
                         exact_identity_quarantined=key in quarantine["ttf" if is_ttf else "cff"],
                         quarantine_readings=fixed.get("conflict_readings", ()))
-                if oid in reconfirm:
+                if oid in surface_confirmed:
+                    reason = "SURFACE_POSITION_ALREADY_CONFIRMED"
+                elif oid in reconfirm:
                     candidates.append(member)
                     continue
-                if (evidence_root is not None and reading
+                elif (evidence_root is not None and reading
                         and actual.has_direct_occurrence_actual(Path(evidence_root), member, reading)):
                     reason = "DIRECT_POSITION_ALREADY_CONFIRMED"
                 elif reuse is not None and not reuse.conflict and reading and reuse.reading == reading:
@@ -193,7 +239,7 @@ def _assert_hashes(hashes):
             raise ValueError("LEARNING_STALE: displayed project data changed: " + name)
 
 
-def _check_images(plan):
+def _check_images(plan, prepared_images=None):
     from glyph_learning_images import LearningImageStore
     store = LearningImageStore(Path(plan["image_store_root"]))
     images = plan["image_evidence"]
@@ -201,7 +247,7 @@ def _check_images(plan):
     if sorted(ids) != plan["checked_occurrence_ids"] or len(ids) != len(set(ids)):
         raise ValueError("LEARNING_IMAGES: every checked position requires exactly its viewed image")
     for image in images:
-        store.read_evidence(image)
+        (prepared_images or store).read_evidence(image)
 
 
 def _approval_value(request):
@@ -217,7 +263,7 @@ def _approval_request(value):
 
 
 def prepare_learning_confirmation(output_dir, snapshot, group_id, reading, checked_occurrence_ids,
-        *, repository=None, image_evidence=(), image_store_root=None):
+        *, repository=None, image_evidence=(), image_store_root=None, prepared_images=None):
     """Freeze the proposal before the user presses the final save/enable button."""
     from standalone_proofread import _global_direct_source_context
     from glyph_learning_images import LearningImageStore
@@ -260,7 +306,7 @@ def prepare_learning_confirmation(output_dir, snapshot, group_id, reading, check
         "image_store_root": str(store.root), "image_evidence": copy.deepcopy(list(image_evidence)),
         "input_hashes": copy.deepcopy(snapshot.hashes), "action": ACTION}
     plan = json.loads(json.dumps(plan, ensure_ascii=False, allow_nan=False))
-    _check_images(plan)
+    _check_images(plan, prepared_images)
     _assert_hashes(snapshot.hashes)
     plan["operation_id"] = _digest(plan)
     return plan
@@ -318,6 +364,67 @@ def _result(plan, *, status, local="SAVED", global_status="PENDING", reusable=Fa
         "reading": plan["reading"], "checked_occurrence_ids": plan["checked_occurrence_ids"], "error": error}
 
 
+def _bind_selected_project(plan, output_dir):
+    """Rebind locators in memory, keeping the original signed decision intact.
+
+    A directory name is not project identity. The selected sealed project must
+    prove the session, complete PDF roster, workbooks and original native slots.
+    This runtime view is never persisted or used to manufacture a new approval.
+    """
+    import standalone_proofread as sp
+    from sealed_workbook_paths import trusted_root, bind_workbooks
+    selected = trusted_root(output_dir)
+    manifest = sp.json_load_strict(selected / "校對工作階段.json")
+    sp.validate_manifest_integrity(manifest)
+    bind_workbooks(selected, manifest)
+    journal_path = sp.project_actual_evidence_root(selected) / promotion.PROJECT_TRANSACTION_FILE
+    if journal_path.exists():
+        journal = promotion._validated_project_journal(journal_path.read_bytes())
+        if (journal["schema_version"] in {"2.0", "3.0"}
+                and journal["owner"]["project"] != str(selected)):
+            # These existing transaction contracts bind absolute owner and
+            # dependency paths. Learning cannot silently migrate that contract.
+            raise ValueError("LEARNING_PROJECT: moved owned transaction requires an explicit relocation contract")
+    context = sp._global_direct_source_context(selected, manifest)
+    origin = plan["source_context"]
+    roster = lambda value: {name: info["pdf_sha256"] for name, info in value["pdfs"].items()}
+    if context["session_id"] != origin["session_id"] or roster(context) != roster(origin):
+        raise ValueError("LEARNING_PROJECT: selected session/sealed PDF roster differs")
+    current = {row["occurrence_id"]: row for row in manifest["records"]}
+    if len(current) != len(manifest["records"]):
+        raise ValueError("LEARNING_PROJECT: duplicate occurrence roster")
+    bound = copy.deepcopy(plan)
+    bound["output_dir"], bound["source_context"] = str(selected), context
+    fields = ("occurrence_id", "review_id", "pdf_name", "pdf_sha256", "physical_page",
+              "char", "font_xref", "glyph_id", "zhuyin_component_id", "x0", "y0", "x1", "y1")
+    for member in bound["group"]["members"]:
+        row = current.get(member["occurrence_id"])
+        if (row is None or any(row.get(key) != member.get(key) for key in fields)
+                or actual.actual_group_identity(row) != actual.actual_group_identity(member)):
+            raise ValueError("LEARNING_PROJECT: selected native occurrence differs")
+        pdf = context["pdfs"][member["pdf_name"]]["pdf"]
+        member["pdf"] = pdf
+        if "pdf" in member.get("source_record", {}):
+            member["source_record"]["pdf"] = pdf
+    # All original snapshot checks remain, with only proven location changes.
+    # The pre-save checks run only if the original local transaction is absent.
+    old_root = Path(plan["output_dir"])
+    pdf_paths = {str(Path(info["pdf"])): context["pdfs"][name]["pdf"]
+                 for name, info in origin["pdfs"].items()}
+    hashes = {}
+    for name, digest in plan["input_hashes"].items():
+        path = Path(name)
+        mapped = (str(selected / path.relative_to(old_root)) if path.is_relative_to(old_root)
+                  else pdf_paths.get(str(path), name))
+        if mapped in hashes and hashes[mapped] != digest:
+            raise ValueError("LEARNING_PROJECT: ambiguous snapshot binding")
+        hashes[mapped] = digest
+    bound["input_hashes"] = hashes
+    _check_images(bound)
+    _reprove(bound)
+    return bound
+
+
 def list_learning_confirmations(output_dir):
     from standalone_proofread import project_actual_evidence_root
     root = project_actual_evidence_root(Path(output_dir)) / DIRECTORY
@@ -327,42 +434,48 @@ def list_learning_confirmations(output_dir):
     for path in sorted(root.glob("*.json")):
         if path.name.endswith(".receipt.json"):
             continue
-        decision = _read(path)
-        if set(decision) != {"plan", "confirmed_at", "explicit_action"} or decision["explicit_action"] is not True:
-            raise ValueError("LEARNING_CONTRACT: invalid durable user decision")
-        plan = _validate_plan(decision["plan"])
-        if str(Path(output_dir).resolve()) != plan["output_dir"] or path.stem != plan["operation_id"]:
-            raise ValueError("LEARNING_CONTRACT: decision belongs to another project")
-        receipt = path.with_name(path.stem + ".receipt.json")
-        if receipt.exists():
-            value = _read(receipt)
-            if value.get("operation_id") != plan["operation_id"]:
-                raise ValueError("LEARNING_CONTRACT: foreign delivery receipt")
-        else:
-            observed = _local_observed(plan, project_actual_evidence_root(Path(output_dir)))
-            value = _result(plan, status="REFRESH_PENDING" if observed else "LOCAL_PENDING",
-                local="SAVED" if observed else "UNKNOWN", refresh="PENDING")
-        repository_path = plan["repository_path"]
-        if repository_path not in current_records:
-            current_records[repository_path] = {row.glyph_id: row for row in
-                library.GlobalExactGlyphRepository(Path(repository_path)).load_inspection_snapshot().records}
-        observed = [current_records[repository_path].get(gid) for gid in value.get("glyph_ids", [])]
-        currently_reusable = bool(observed) and all(row is not None and row.global_reuse_allowed
-            and row.stored_active_reading == plan["reading"] for row in observed)
-        value = {**value, "current_reusable": currently_reusable}
-        if any(row is not None and row.stored_state == library.QUARANTINED_CONFLICT for row in observed):
-            value.update(reusable=False, status="CONFLICT_SAVED", global_status="QUARANTINED_CONFLICT")
-        elif currently_reusable and value.get("global_status") == "STALE_APPROVAL_REQUIRES_NEW_ACTION":
-            # Preserve the stale request's history; a newer valid action can
-            # make current truth reusable without retroactively approving it.
-            value.update(status="SUPERSEDED_BY_CURRENT_TRUTH", reusable=False)
-        elif not currently_reusable:
-            value["reusable"] = False
-        results.append(value)
+        try:
+            decision = _read(path)
+            if set(decision) != {"plan", "confirmed_at", "explicit_action"} or decision["explicit_action"] is not True:
+                raise ValueError("LEARNING_CONTRACT: invalid durable user decision")
+            plan = _validate_plan(decision["plan"])
+            if path.stem != plan["operation_id"]:
+                raise ValueError("LEARNING_CONTRACT: decision belongs to another project")
+            plan = _bind_selected_project(plan, output_dir)
+            receipt = path.with_name(path.stem + ".receipt.json")
+            if receipt.exists():
+                value = _read(receipt)
+                if value.get("operation_id") != plan["operation_id"]:
+                    raise ValueError("LEARNING_CONTRACT: foreign delivery receipt")
+            else:
+                observed = _local_observed(plan, project_actual_evidence_root(Path(output_dir)))
+                value = _result(plan, status="REFRESH_PENDING" if observed else "LOCAL_PENDING",
+                    local="SAVED" if observed else "UNKNOWN", refresh="PENDING")
+            repository_path = plan["repository_path"]
+            if repository_path not in current_records:
+                current_records[repository_path] = {row.glyph_id: row for row in
+                    library.GlobalExactGlyphRepository(Path(repository_path)).load_inspection_snapshot().records}
+            observed = [current_records[repository_path].get(gid) for gid in value.get("glyph_ids", [])]
+            currently_reusable = bool(observed) and all(row is not None and row.global_reuse_allowed
+                and row.stored_active_reading == plan["reading"] for row in observed)
+            value = {**value, "current_reusable": currently_reusable}
+            if any(row is not None and row.stored_state == library.QUARANTINED_CONFLICT for row in observed):
+                value.update(reusable=False, status="CONFLICT_SAVED", global_status="QUARANTINED_CONFLICT")
+            elif currently_reusable and value.get("global_status") == "STALE_APPROVAL_REQUIRES_NEW_ACTION":
+                # Preserve the stale request's history; a newer valid action can
+                # make current truth reusable without retroactively approving it.
+                value.update(status="SUPERSEDED_BY_CURRENT_TRUTH", reusable=False)
+            elif not currently_reusable:
+                value["reusable"] = False
+            results.append(value)
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            results.append({"operation_id": path.stem, "status": "UNRECOVERABLE",
+                "local_status": "UNKNOWN", "global_status": "UNVERIFIED",
+                "reusable": False, "current_reusable": False, "error": str(exc)})
     return results
 
 
-def confirm_learning(plan, *, repository=None, explicit_action=False):
+def confirm_learning(plan, *, repository=None, explicit_action=False, prepared_images=None):
     """Persist this user's fixed combined action, then attempt ordinary delivery."""
     if explicit_action is not True:
         raise ValueError("LEARNING_ACTION: an actual final user click is required")
@@ -371,7 +484,7 @@ def confirm_learning(plan, *, repository=None, explicit_action=False):
     if str(repository.path) != plan["repository_path"]:
         raise ValueError("LEARNING_CONTRACT: repository changed")
     admission = _save_admission(plan, repository)
-    _check_images(plan)
+    _check_images(plan, prepared_images)
     from standalone_proofread import project_actual_evidence_root
     output = Path(plan["output_dir"])
     path, receipt = _paths(output, plan["operation_id"])
@@ -384,9 +497,17 @@ def confirm_learning(plan, *, repository=None, explicit_action=False):
         else:
             _assert_hashes(plan["input_hashes"])
             _reprove(plan)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            _write(path, {"plan": plan, "confirmed_at": datetime.now(timezone.utc).isoformat(),
-                "explicit_action": True})
+            decision = {"plan": plan, "confirmed_at": datetime.now(timezone.utc).isoformat(),
+                        "explicit_action": True}
+            def publish():
+                _check_images(plan)
+                _write(path, decision)
+            if prepared_images is not None:
+                from glyph_learning_images import LearningImageStore
+                prepared_images.persist_decision(LearningImageStore(Path(plan["image_store_root"])),
+                    plan["image_evidence"], publish, lambda: path.exists())
+            else:
+                publish()
         return _resume(plan, repository, receipt)
 
 
@@ -396,14 +517,17 @@ def retry_learning_confirmation(output_dir, operation_id, *, repository=None):
     if set(decision) != {"plan", "confirmed_at", "explicit_action"} or decision["explicit_action"] is not True:
         raise ValueError("LEARNING_CONTRACT: no durable explicit action to retry")
     plan = _validate_plan(decision["plan"])
-    if plan["output_dir"] != str(Path(output_dir).resolve()):
-        raise ValueError("LEARNING_CONTRACT: different project")
+    plan = _bind_selected_project(plan, output_dir)
     repository = _repository(repository)
     if str(repository.path) != plan["repository_path"]:
         raise ValueError("LEARNING_CONTRACT: repository changed")
     admission = _save_admission(plan, repository)
     from standalone_proofread import project_actual_evidence_root
     with promotion.project_delivery_lock(project_actual_evidence_root(Path(output_dir))):
+        admission.recheck()
+        # Rebind against the admitted selected project under its write lock;
+        # a locator check before admission cannot authorize later replacement.
+        plan = _bind_selected_project(decision["plan"], output_dir)
         admission.recheck()
         _check_images(plan)
         return _resume(plan, repository, receipt)

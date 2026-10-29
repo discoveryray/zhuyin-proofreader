@@ -206,3 +206,78 @@ class LearningImageStore:
     def trim_cache(self):
         with _storage_lock(self.root):
             self._evict_cache()
+
+
+class PreparedLearningImages:
+    """One worker's bounded, disposable pictures; never durable evidence.
+
+    References reserve the eventual content-addressed evidence name. Losing
+    this buffer invalidates the prepared action; confirmation cannot recreate
+    the pixels or silently substitute a newly rendered image.
+    """
+    def __init__(self, limit_bytes=DEFAULT_CACHE_LIMIT_BYTES):
+        if type(limit_bytes) is not int or limit_bytes < 0:
+            raise ValueError("prepared image limit must be nonnegative")
+        self.limit_bytes = limit_bytes
+        self._pixels = {}
+
+    @property
+    def size_bytes(self):
+        return sum(map(len, self._pixels.values()))
+
+    def add(self, store, occurrence_id, raw):
+        reference = store._reference(occurrence_id, raw, "evidence")
+        digest = reference["sha256"]
+        if digest not in self._pixels:
+            if self.size_bytes + len(raw) > self.limit_bytes:
+                raise ValueError("準備圖片超過容量限制；請減少本次樣本")
+            self._pixels[digest] = raw
+        return reference
+
+    def read_evidence(self, reference):
+        digest = reference.get("sha256")
+        raw = self._pixels.get(digest)
+        if raw is None or hashlib.sha256(raw).hexdigest() != digest:
+            raise ValueError("準備圖片已失效；請重新看圖")
+        if reference != {"occurrence_id": reference.get("occurrence_id"), "sha256": digest,
+                         "relative_path": f"evidence/{digest}.png"}:
+            raise ValueError("準備圖片 reference 不符")
+        return _png_bytes(raw)
+
+    def persist_decision(self, store, references, publish, is_published):
+        """Publish the decision while its new images remain storage-locked.
+
+        Failure only rolls back files created here, and only when the caller
+        proves that no durable decision references them. Existing shared
+        evidence is never reclaimed by this operation.
+        """
+        pictures = [(reference, self.read_evidence(reference)) for reference in references]
+        created = []
+        with _storage_lock(store.root):
+            try:
+                for reference, raw in pictures:
+                    if store._reference(reference["occurrence_id"], raw, "evidence") != reference:
+                        raise ValueError("保存圖片與原準備內容不符")
+                    target = store._target(reference, "evidence")
+                    if target.exists():
+                        if target.read_bytes() != raw:
+                            raise ValueError("確認圖片 evidence 內容已損毀；未覆寫")
+                    else:
+                        # Track before atomic write: an exception may be raised
+                        # after replacement has actually succeeded.
+                        created.append((target, raw))
+                        _atomic_write(target, raw)
+                return publish()
+            except Exception:
+                try:
+                    unpublished = is_published() is False
+                except Exception:
+                    unpublished = False
+                if unpublished:
+                    for target, raw in created:
+                        if target.exists() and target.read_bytes() == raw:
+                            target.unlink()
+                raise
+
+    def clear(self):
+        self._pixels.clear()

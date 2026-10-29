@@ -46,6 +46,7 @@ _PAYLOAD_FIELDS = {
     "prepare_learning": ({"group_id", "reading", "checked_occurrence_ids", "images", "expected_manifest", "expected_db"},
                          {"group_id", "reading", "checked_occurrence_ids", "images", "expected_manifest", "expected_db"}),
     "confirm_learning": ({"plan_token"}, {"plan_token"}),
+    "discard_learning": (set(), set()),
     "retry_learning": ({"operation_id"}, {"operation_id"}),
     "save_learning_surface": ({"review_id", "reading", "proof", "actor", "whole_unit_readable", "target_character_matches",
                                "reading_from_original", "enable_format", "expected_manifest", "expected_db"},
@@ -122,6 +123,8 @@ class ReviewOperationState:
         self.service = service or ReviewSaveService(self.output_dir)
         self.snapshots = {}
         self.learning_plans = {}
+        from glyph_learning_images import PreparedLearningImages
+        self.prepared_learning_images = PreparedLearningImages()
 
     def remember(self, snapshot):
         self.snapshots[_snapshot_key(snapshot)] = snapshot
@@ -158,9 +161,23 @@ class ReviewOperationState:
             self.service = self.service.with_invalidated_cache()
             self.snapshots.clear()
             self.learning_plans.clear()
+            self.prepared_learning_images.clear()
             return None
+        if operation == "discard_learning":
+            self.learning_plans.clear()
+            self.prepared_learning_images.clear()
+            return None
+        if operation == "prepare_learning":
+            self.learning_plans.clear()
+            self.prepared_learning_images.clear()
         if operation in {"load_learning", "list_learning_recovery", "prepare_learning_target", "prepare_learning", "confirm_learning", "retry_learning"}:
-            return self._learning(operation, payload, progress)
+            try:
+                return self._learning(operation, payload, progress)
+            except Exception:
+                if operation == "prepare_learning":
+                    self.learning_plans.clear()
+                    self.prepared_learning_images.clear()
+                raise
         if operation == "save_learning_surface":
             return self._surface_learning(payload, progress)
         if operation in {"reload", "actual_summary", "prepare_actual", "stage_actual", "stage_surface", "report", "apply_actual"}:
@@ -276,7 +293,10 @@ class ReviewOperationState:
                 if plan is None:
                     raise ReviewOperationError("確認計畫已失效；請重新看圖並準備保存。", commit_state="NOT_WRITTEN")
                 progress("保存已固定的目視確認與核准")
-                result = learning.confirm_learning(plan, explicit_action=True)
+                result = learning.confirm_learning(plan, explicit_action=True,
+                    prepared_images=self.prepared_learning_images)
+                self.learning_plans.clear()
+                self.prepared_learning_images.clear()
             else:
                 progress("接續原本固定的確認，不增加確認次數")
                 result = learning.retry_learning_confirmation(self.output_dir, payload["operation_id"])
@@ -334,10 +354,11 @@ class ReviewOperationState:
                         or verified["occurrence_id"] != row["occurrence_id"]
                         or verified["review_id"] != row["review_id"]):
                     raise ValueError("確認圖片像素不屬於已核實的原頁位置；請重新載入並看圖")
-                evidence.append(store.save_evidence(image["occurrence_id"], raw))
+                evidence.append(self.prepared_learning_images.add(store, image["occurrence_id"], raw))
             plan = learning.prepare_learning_confirmation(self.output_dir, snapshot,
                 payload["group_id"], payload["reading"], payload["checked_occurrence_ids"],
-                image_evidence=evidence, image_store_root=str(store.root))
+                image_evidence=evidence, image_store_root=str(store.root),
+                prepared_images=self.prepared_learning_images)
             token = uuid.uuid4().hex
             self.learning_plans.clear()
             self.learning_plans[token] = plan

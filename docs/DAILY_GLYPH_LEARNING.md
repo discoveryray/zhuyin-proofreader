@@ -24,6 +24,12 @@
 
 若本地已保存但重新整理失敗，可用「接續已保存字形確認」讀取原固定操作；此入口在一般校對畫面無法載入時仍可使用。恢復成功後重新載入教材，不能利用恢復操作核准後來改變的資料。
 
+專案搬移或改名後，學習紀錄以目前選定位置的 sealed session、完整 PDF SHA roster、workbook 封印及原生位置重新驗證；舊目錄只保留為歷史 locator，決策 bytes、operation ID、證據 hash 與原核准請求不改寫。單筆無法驗證的紀錄列為 `UNRECOVERABLE`，不使其餘可讀候選整批失敗。
+
+目前仍有限制：已啟用 `manual-surface-actual/1` 的專案若留下未完成的 owned transaction journal `/2` 或 `/3`，其既有 owner/dependency 契約綁定原絕對位置，搬移後須拒絕恢復。本次未變更此核心契約，不能宣稱全部搬移情境已修復；保留原件，不建立舊目錄或重製核准。須先另行確認具體 relocation 契約設計。
+
+已套用的 surface 確認每次收集候選仍依原嚴格來源／render proof 驗證；只有相同 occurrence、review、讀音及 receipt 的有效位置不再詢問，未確認的同字形位置仍保留。失效證據不算完成，正常「修改 actual」入口仍可重新確認本位置，surface 永遠不增加 Global donor 或獨立來源票數。
+
 等待第二來源屬於學習進度，不加入教材完成條件。教材是否完成仍由原本的 actual、expected、差異確認與完整性門檻判定。
 
 ## 衝突與已知影響
@@ -40,6 +46,8 @@
 
 原 PDF 只保留來源引用，不複製整冊。新學習確認圖按內容 SHA 去重，必要證據與可重建快取分開；快取預設上限 256 MiB，清除快取不刪必要證據。既有 `manual-surface-actual/1` 的內嵌圖片、證據原件與 hash 契約維持原義，不遷移或重寫。
 
+真實 worker 準備階段使用每個 worker 預設上限 256 MiB、依圖片 SHA 去重的記憶體暫存。取消、重新準備、部分準備失敗或重開會釋放未確認圖片，超限則拒絕整次準備。最後按「並記住」並重新通過來源檢查後，才把原準備圖片的相同 bytes 保存為必要證據；提交不重新渲染替換圖片。圖片與決策發布共用圖片鎖；發布前失敗只回收本操作新建且未引用的圖，共用既有圖與已發布、待恢復操作的圖保留。既有正式資料不批次清理。
+
 新學習圖片預設放在 `%LOCALAPPDATA%\DiscoveryRay\ZhuyinProofreader\GlyphLearning\images\evidence\<sha256>.png`；可重建圖片另放同層 `cache`。已知專案使用索引位於 `GlyphLearning\usage.json`。這些是使用者資料，不放入 repository 的 `tmp`；測試另用隔離路徑。
 
 本功能不修改既有 SQLite schema、occurrence/review identity、actual/expected fingerprint schema、semantics epoch、runtime assets 或通用審查政策。舊資料不批次追認為新的 direct evidence。
@@ -55,5 +63,7 @@
 5. 以小型疊蓋範例確認位置限定成果不變成全域字形讀音；只改 expected 不應新增 actual 確認。
 6. 對已啟用字形作有效人工相反讀音確認，核對隔離、撤銷核准及已登記教材影響清單。重開其中一份，核對 actual 依賴更新且人工 expected 保留；未開啟專案檔案不應被重寫。
 7. 選「稍後處理」，核對原教材待辦仍在；僅等待第二來源時不應新增教材結案障礙。核對圖片去重與快取清除不刪有效確認證據、原 PDF 沒有被額外複製。
+8. 在隔離資料複本搬移／改名已完成及一般待恢復專案，核對原操作可列出、可重試、不增加票數、不建立舊目錄。另以 owned journal `/2`、`/3` 的搬移案例核對明確拒絕，不能當作已支援情境。
+9. 多次調整圖片尺寸並準備／取消，確認未確認圖不累積永久檔案；保存後重開，核對原圖仍可供恢復。疊蓋字形保存後重開，不應再次詢問已確認位置，但其他位置仍須確認。
 
 以上是待執行人工驗收步驟；非視窗 handler 或服務測試不能代替原生介面的圖片、排版與點擊驗收。

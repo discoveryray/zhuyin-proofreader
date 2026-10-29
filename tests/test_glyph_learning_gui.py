@@ -215,6 +215,8 @@ def test_real_worker_changed_project_cannot_commit_prepared_plan(tmp_path, monke
         state.dispatch("confirm_learning", prepared_token(prepared), lambda text: None, lambda: False)
     assert not library.GlobalExactGlyphRepository.resolved().path.exists()
     assert sp.json_load_strict(output / "人工判定資料庫.json") == changed
+    from glyph_learning_images import LearningImageStore
+    assert not (LearningImageStore().root / "evidence").exists()
 
 
 def test_surface_learning_applies_only_current_position_and_never_global(tmp_path, monkeypatch):
@@ -472,3 +474,174 @@ def test_surface_learning_committed_failure_keeps_existing_fixed_recovery(tmp_pa
     assert value["snapshot"].ledger[1]["actual"] == "ㄅ"
     assert value["snapshot"].db == before.db
     assert not library.GlobalExactGlyphRepository.resolved().path.exists()
+
+
+def worker_image_request(output, displayed, group, row, width=400):
+    from review_operation_worker import preview_png
+    pixels = preview_png(row, padding=(95, 60), output_dir=output, display_width=width)
+    return dict(displayed, group_id=group["group_id"], reading="ㄅ",
+        checked_occurrence_ids=[row["occurrence_id"]], images=[dict(
+            occurrence_id=row["occurrence_id"], review_id=row["review_id"], source_sha256=row["pdf_sha256"],
+            png_base64=base64.b64encode(pixels["png"]).decode("ascii"), padding=[95, 60], display_width=width)])
+
+
+def test_worker_prepared_images_are_bounded_and_disposable(tmp_path, monkeypatch):
+    from glyph_learning_images import LearningImageStore
+    import glyph_learning_service as learning
+    output, snapshot, state, displayed, group, row = learning_worker_fixture(tmp_path, monkeypatch)
+    store = LearningImageStore()
+    for width in (400, 500, 600):
+        request = worker_image_request(output, displayed, group, row, width)
+        state.dispatch("prepare_learning", request, lambda _: None, lambda: False)
+        assert state.prepared_learning_images.size_bytes == len(base64.b64decode(request["images"][0]["png_base64"]))
+        assert not (store.root / "evidence").exists()
+    state.dispatch("discard_learning", {}, lambda _: None, lambda: False)
+    assert not state.learning_plans and state.prepared_learning_images.size_bytes == 0
+    assert learning.list_learning_confirmations(output) == []
+    state.dispatch("prepare_learning", request, lambda _: None, lambda: False)
+    state.dispatch("invalidate", {}, lambda _: None, lambda: False)
+    assert state.prepared_learning_images.size_bytes == 0
+    reopened = ReviewOperationState(output)
+    assert reopened.prepared_learning_images.size_bytes == 0 and not reopened.learning_plans
+    state.prepared_learning_images.limit_bytes = 0
+    with pytest.raises(ValueError, match="容量"):
+        state.dispatch("prepare_learning", request, lambda _: None, lambda: False)
+    assert state.prepared_learning_images.size_bytes == 0 and not state.learning_plans
+    assert not (store.root / "evidence").exists()
+
+
+def test_worker_partial_or_failed_prepare_releases_all_pixels(tmp_path, monkeypatch):
+    import copy
+    from glyph_learning_images import LearningImageStore
+    import glyph_learning_service as learning
+    output, snapshot, state, displayed, group, row = learning_worker_fixture(tmp_path, monkeypatch)
+    request = worker_image_request(output, displayed, group, row)
+    other = next(item for item in group["candidate_members"] if item["occurrence_id"] != row["occurrence_id"])
+    invalid = worker_image_request(output, displayed, group, other)["images"][0]
+    invalid["png_base64"] = base64.b64encode(b"invalid pixels").decode("ascii")
+    partial = copy.deepcopy(request)
+    partial["checked_occurrence_ids"].append(other["occurrence_id"])
+    partial["images"].append(invalid)
+    with pytest.raises(ValueError, match="圖片像素"):
+        state.dispatch("prepare_learning", partial, lambda _: None, lambda: False)
+    assert state.prepared_learning_images.size_bytes == 0 and not state.learning_plans
+    with monkeypatch.context() as fault:
+        fault.setattr(learning, "prepare_learning_confirmation", Mock(side_effect=ValueError("late prepare failure")))
+        with pytest.raises(ValueError, match="late prepare"):
+            state.dispatch("prepare_learning", request, lambda _: None, lambda: False)
+    assert state.prepared_learning_images.size_bytes == 0 and not state.learning_plans
+    assert not (LearningImageStore().root / "evidence").exists()
+
+
+def test_worker_confirm_persists_original_pixels_and_recovery_retains_shared_evidence(tmp_path, monkeypatch):
+    import standalone_proofread as sp
+    import review_operation_worker as worker
+    from glyph_learning_images import LearningImageStore
+    import glyph_learning_service as learning
+    output, snapshot, state, displayed, group, row = learning_worker_fixture(tmp_path, monkeypatch)
+    request = worker_image_request(output, displayed, group, row)
+    prepared = state.dispatch("prepare_learning", request, lambda _: None, lambda: False)
+    shared = ReviewOperationState(output)
+    shared.dispatch("prepare_learning", request, lambda _: None, lambda: False)
+    plan = state.learning_plans[prepared["plan_token"]]
+    reference = plan["image_evidence"][0]
+    original = base64.b64decode(request["images"][0]["png_base64"])
+    with monkeypatch.context() as fault:
+        fault.setattr(worker, "preview_png", Mock(side_effect=AssertionError("confirmation cannot rerender")))
+        fault.setattr(sp, "_finish_direct_actual_commit", Mock(side_effect=OSError("isolated postcommit interruption")))
+        saved = state.dispatch("confirm_learning", prepared_token(prepared), lambda _: None, lambda: False)
+    assert saved["result"]["local_status"] == "SAVED" and saved["result"]["status"] == "REFRESH_PENDING"
+    store = LearningImageStore()
+    assert store.read_evidence(reference) == original
+    shared.dispatch("discard_learning", {}, lambda _: None, lambda: False)
+    store.cache_limit_bytes = 0
+    store.trim_cache()
+    assert store.read_evidence(reference) == original
+    assert len(list((store.root / "evidence").glob("*.png"))) == 1
+    reopened = ReviewOperationState(output)
+    recovered = reopened.dispatch("retry_learning", {"operation_id": saved["result"]["operation_id"]}, lambda _: None, lambda: False)
+    assert recovered["result"]["status"] == "LOCAL_SAVED_WAITING_SOURCE"
+    assert recovered["snapshot"].db == snapshot.db
+    assert store.read_evidence(reference) == original
+
+
+def test_worker_image_persistence_failure_discards_only_new_unreferenced_pixels(tmp_path, monkeypatch):
+    import glyph_learning_images as images
+    import glyph_learning_service as learning
+    output, snapshot, state, displayed, group, row = learning_worker_fixture(tmp_path, monkeypatch)
+    request = worker_image_request(output, displayed, group, row)
+    request["images"] = [worker_image_request(output, displayed, group, item, 400 + index * 100)["images"][0]
+        for index, item in enumerate(group["candidate_members"])]
+    request["checked_occurrence_ids"] = [item["occurrence_id"] for item in request["images"]]
+    prepared = state.dispatch("prepare_learning", request, lambda _: None, lambda: False)
+    references = state.learning_plans[prepared["plan_token"]]["image_evidence"]
+    assert len({item["sha256"] for item in references}) == 3
+    raw = base64.b64decode(request["images"][0]["png_base64"])
+    store = images.LearningImageStore()
+    shared = store.save_evidence(references[0]["occurrence_id"], raw)
+    real_write = images._atomic_write
+    writes = []
+    def fail_second_new_image(path, pixels):
+        writes.append(path)
+        if len(writes) == 2:
+            raise OSError("isolated second image persistence failure")
+        return real_write(path, pixels)
+    with monkeypatch.context() as fault:
+        fault.setattr(images, "_atomic_write", fail_second_new_image)
+        with pytest.raises(OSError, match="second image"):
+            state.dispatch("confirm_learning", prepared_token(prepared), lambda _: None, lambda: False)
+    assert len(writes) == 2
+    assert learning.list_learning_confirmations(output) == []
+    assert store.read_evidence(shared) == raw
+    assert list((store.root / "evidence").glob("*.png")) == [store.root / shared["relative_path"]]
+    state.dispatch("discard_learning", {}, lambda _: None, lambda: False)
+    assert store.read_evidence(shared) == raw
+
+
+def test_worker_failed_decision_publish_removes_unreferenced_images(tmp_path, monkeypatch):
+    import glyph_learning_service as learning
+    import review_operation_worker as worker
+    from glyph_learning_images import LearningImageStore
+    output, snapshot, state, prepared = prepared_worker(tmp_path, monkeypatch)
+    plan = state.learning_plans[prepared["plan_token"]]
+    reference = plan["image_evidence"][0]
+    raw = state.prepared_learning_images.read_evidence(reference)
+    with monkeypatch.context() as fault:
+        fault.setattr(learning, "_write", Mock(side_effect=OSError("isolated decision publish failure")))
+        with pytest.raises(OSError, match="decision publish"):
+            state.dispatch("confirm_learning", prepared_token(prepared), lambda _: None, lambda: False)
+    store = LearningImageStore()
+    assert not list((store.root / "evidence").glob("*.png"))
+    assert learning.list_learning_confirmations(output) == []
+    with monkeypatch.context() as fault:
+        fault.setattr(worker, "preview_png", Mock(side_effect=AssertionError("retry cannot substitute pixels")))
+        saved = state.dispatch("confirm_learning", prepared_token(prepared), lambda _: None, lambda: False)
+    assert saved["result"]["local_status"] == "SAVED"
+    assert store.read_evidence(reference) == raw
+
+
+def test_worker_decision_published_before_error_preserves_recoverable_images(tmp_path, monkeypatch):
+    import glyph_learning_service as learning
+    from glyph_learning_images import LearningImageStore
+    output, snapshot, state, prepared = prepared_worker(tmp_path, monkeypatch)
+    plan = state.learning_plans[prepared["plan_token"]]
+    reference = plan["image_evidence"][0]
+    raw = state.prepared_learning_images.read_evidence(reference)
+    decision, _receipt = learning._paths(output, plan["operation_id"])
+    original_write = learning._write
+    def write_then_interrupt(path, value):
+        original_write(path, value)
+        if path == decision:
+            raise OSError("isolated error after decision publication")
+    with monkeypatch.context() as fault:
+        fault.setattr(learning, "_write", write_then_interrupt)
+        with pytest.raises(OSError, match="after decision"):
+            state.dispatch("confirm_learning", prepared_token(prepared), lambda _: None, lambda: False)
+    assert learning._read(decision)["plan"] == plan
+    assert LearningImageStore().read_evidence(reference) == raw
+    state.dispatch("discard_learning", {}, lambda _: None, lambda: False)
+    reopened = ReviewOperationState(output)
+    recovered = reopened.dispatch("retry_learning", {"operation_id": plan["operation_id"]}, lambda _: None, lambda: False)
+    assert recovered["result"]["status"] == "LOCAL_SAVED_WAITING_SOURCE"
+    assert recovered["snapshot"].db == snapshot.db
+    assert LearningImageStore().read_evidence(reference) == raw

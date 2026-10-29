@@ -462,3 +462,181 @@ def test_visual_conflict_removes_unseen_propagated_override_and_keeps_expected(t
     assert not any(float(row["y0"]) == pytest.approx(unseen["y0"], abs=.01) for row in overrides)
     assert sp.json_load_strict(output / "人工判定資料庫.json")["events"][first["review_id"]] == original_expected
     assert lib.GlobalExactGlyphRepository.resolved().load_inspection_snapshot().records[0].stored_state == lib.QUARANTINED_CONFLICT
+
+
+def test_moved_completed_and_pending_decisions_keep_original_evidence_and_count(tmp_path, monkeypatch):
+    root = _isolated(tmp_path, monkeypatch)
+    for stage in ("completed", "before_local", "after_local"):
+        # Each scenario owns its Global store, original PDF and selected project.
+        area = root / stage
+        area.mkdir()
+        monkeypatch.setenv("LOCALAPPDATA", str(area / "u"))
+        output = _project(area, monkeypatch)
+        plan = _plan(output)
+        with monkeypatch.context() as failure:
+            if stage == "before_local":
+                failure.setattr(ar, "apply_direct_visual_actual_batch",
+                    lambda *a, **k: (_ for _ in ()).throw(OSError("before local")))
+                with pytest.raises(OSError, match="before local"):
+                    learning.confirm_learning(plan, explicit_action=True)
+            else:
+                if stage == "after_local":
+                    failure.setattr(promotion, "deliver_pending_promotion_outbox",
+                        lambda *a, **k: (_ for _ in ()).throw(OSError("after local")))
+                learning.confirm_learning(plan, explicit_action=True)
+        decision, _ = learning._paths(output, plan["operation_id"])
+        raw = decision.read_bytes()
+        moved_area = root / (stage + "-moved")
+        area.rename(moved_area)
+        # User data is outside the relocated project in production. Keep the
+        # isolated Global/image location unchanged while moving the PDF+project.
+        area.mkdir()
+        (moved_area / "u").rename(area / "u")
+        selected = moved_area / "renamed-project"
+        (moved_area / output.name).rename(selected)
+        view = learning.list_learning_confirmations(selected)
+        assert len(view) == 1 and view[0]["status"] != "UNRECOVERABLE", view
+        result = learning.retry_learning_confirmation(selected, plan["operation_id"])
+        assert result["local_status"] == "SAVED" and result["status"] == "LOCAL_SAVED_WAITING_SOURCE"
+        learning.retry_learning_confirmation(selected, plan["operation_id"])
+        assert lib.GlobalExactGlyphRepository.resolved().load_inspection_snapshot().records[0].direct_source_count == 1
+        assert learning._paths(selected, plan["operation_id"])[0].read_bytes() == raw
+        assert not output.exists() and not (area / "one.pdf").exists()
+
+
+def test_foreign_or_broken_learning_history_does_not_hide_legal_candidates(tmp_path, monkeypatch):
+    root = _isolated(tmp_path, monkeypatch)
+    first = _project(root, monkeypatch)
+    plan = _plan(first)
+    with monkeypatch.context() as interrupted:
+        interrupted.setattr(ar, "apply_direct_visual_actual_batch",
+            lambda *a, **k: (_ for _ in ()).throw(OSError("before local")))
+        with pytest.raises(OSError, match="before local"):
+            learning.confirm_learning(plan, explicit_action=True)
+    original = learning._paths(first, plan["operation_id"])[0].read_bytes()
+    other = _project(root, monkeypatch, name="other")
+    copied, _ = learning._paths(other, plan["operation_id"])
+    copied.parent.mkdir(parents=True)
+    copied.write_bytes(original)
+    with pytest.raises(ValueError, match="selected session"):
+        learning.retry_learning_confirmation(other, plan["operation_id"])
+    assert learning.list_learning_confirmations(other)[0]["status"] == "UNRECOVERABLE"
+    # A malformed independent history entry cannot block all candidate viewing.
+    broken = copied.with_name("f" * 64 + ".json")
+    broken.write_text('{"broken": true}', encoding="utf-8")
+    from review_operation_worker import ReviewOperationState
+    snapshot = ReviewSaveService(other).load_resume_snapshot()
+    result = ReviewOperationState(other).dispatch("load_learning", dict(
+        expected_manifest=snapshot.manifest, expected_db=snapshot.db), lambda _: None, lambda: False)
+    assert len(result["pending"]) == 2 and all(row["status"] == "UNRECOVERABLE" for row in result["pending"])
+    # The readable source can still be explicitly opened, independent of history.
+    assert result["snapshot"].ledger and result["candidates"]["groups"]
+    image = Path(plan["image_store_root"]) / plan["image_evidence"][0]["relative_path"]
+    image.unlink()
+    assert learning.list_learning_confirmations(first)[0]["status"] == "UNRECOVERABLE"
+    with pytest.raises(OSError):
+        learning.retry_learning_confirmation(first, plan["operation_id"])
+    assert copied.read_bytes() == original
+
+
+def test_moved_decision_rejects_changed_workbook_and_source_without_old_writes(tmp_path, monkeypatch):
+    root = _isolated(tmp_path, monkeypatch)
+    output = _project(root, monkeypatch)
+    plan = _plan(output)
+    learning.confirm_learning(plan, explicit_action=True)
+    selected = root / "renamed"
+    output.rename(selected)
+    from sealed_workbook_paths import descriptor
+    manifest = sp.json_load_strict(selected / "校對工作階段.json")
+    workbook = selected / descriptor(manifest["pdfs"][0], "actual")
+    pdf = root / "one.pdf"
+    for path in (workbook, pdf):
+        original = path.read_bytes()
+        path.write_bytes(original + b"changed")
+        assert learning.list_learning_confirmations(selected)[0]["status"] == "UNRECOVERABLE"
+        with pytest.raises(ValueError):
+            learning.retry_learning_confirmation(selected, plan["operation_id"])
+        assert not output.exists()
+        path.write_bytes(original)
+    assert learning.retry_learning_confirmation(selected, plan["operation_id"])["local_status"] == "SAVED"
+    assert lib.GlobalExactGlyphRepository.resolved().load_inspection_snapshot().records[0].direct_source_count == 1
+
+
+def test_moved_owned_journal_remains_blocked_without_contract_migration(tmp_path, monkeypatch):
+    from tests.test_glyph_learning_gui import surface_request
+    from review_operation_worker import ReviewOperationState
+    root = _isolated(tmp_path, monkeypatch)
+    output = _project(root, monkeypatch)
+    _snapshot, request = surface_request(output)
+    ReviewOperationState(output).dispatch("save_learning_surface", request, lambda _: None, lambda: False)
+    plan = _plan(output, checked_offset=1)
+    with monkeypatch.context() as interrupted:
+        interrupted.setattr(promotion, "deliver_pending_promotion_outbox",
+            lambda *a, **k: (_ for _ in ()).throw(OSError("after owned local commit")))
+        saved = learning.confirm_learning(plan, explicit_action=True)
+    assert saved["local_status"] == "SAVED"
+    journal_path = sp.project_actual_evidence_root(output) / promotion.PROJECT_TRANSACTION_FILE
+    journal_raw = journal_path.read_bytes()
+    assert promotion._validated_project_journal(journal_raw)["schema_version"] == "3.0"
+    selected = root / "owned-moved"
+    output.rename(selected)
+    assert learning.list_learning_confirmations(selected)[0]["status"] == "UNRECOVERABLE"
+    with pytest.raises(ValueError, match="explicit relocation contract"):
+        learning.retry_learning_confirmation(selected, plan["operation_id"])
+    assert not output.exists()
+    assert (sp.project_actual_evidence_root(selected) / promotion.PROJECT_TRANSACTION_FILE).read_bytes() == journal_raw
+
+
+def test_valid_surface_confirmation_suppresses_only_applied_position(tmp_path, monkeypatch):
+    import manual_surface_actual as surface
+    from tests.test_actual_source_visual_safety import make_visual_source
+    from review_operation_worker import ReviewOperationState
+    root = _isolated(tmp_path, monkeypatch)
+    monkeypatch.setattr(sp, "decode", _decode)
+    rows = make_visual_source(root / "src", count=2)
+    pdf = root / "src" / "painted.pdf"
+    with fitz.open(rows[0]["pdf"]) as document:
+        document[0].draw_rect(fitz.Rect(41, 45, 44, 48), fill=(1, 1, 1), color=None)
+        document.save(pdf)
+    output = root / "project"
+    sp.run_pipeline_pdfs([pdf], output, defer_excel_reports=True)
+    snapshot = ReviewSaveService(output).load_resume_snapshot()
+    target = next(row for row in snapshot.ledger if row["char"] == "A" and row["y0"] < 60)
+    group = ar.build_actual_group_for_entry(snapshot.ledger, target)
+    state = ReviewOperationState(output)
+    selected = state.dispatch("prepare_learning_target", dict(group_id=group["group_id"],
+        review_id=target["review_id"], expected_manifest=snapshot.manifest, expected_db=snapshot.db),
+        lambda _: None, lambda: False)
+    assert selected["surface"] is not None
+    state.dispatch("save_learning_surface", dict(expected_manifest=snapshot.manifest, expected_db=snapshot.db,
+        review_id=target["review_id"], reading="ㄆ", proof=selected["surface"]["proof"], actor="isolated fixture",
+        whole_unit_readable=True, target_character_matches=True, reading_from_original=True, enable_format=True),
+        lambda _: None, lambda: False)
+    reopened = ReviewSaveService(output).load_resume_snapshot()
+    context = sp._global_direct_source_context(output, reopened.manifest)
+    evidence = sp.project_actual_evidence_root(output)
+    result = learning.collect_learning_candidates(reopened.ledger, context, evidence_root=evidence)
+    candidates = {row["occurrence_id"] for group in result["groups"] for row in group["candidate_members"]}
+    assert target["occurrence_id"] not in candidates
+    assert candidates == {row["occurrence_id"] for row in reopened.ledger} - {target["occurrence_id"]}
+    assert any(row["reason"] == "SURFACE_POSITION_ALREADY_CONFIRMED" for row in result["suppressed"])
+    assert reopened.db == snapshot.db and not lib.GlobalExactGlyphRepository.resolved().path.exists()
+    # The ordinary actual correction route remains available for this position.
+    edit = state.dispatch("prepare_actual", dict(review_id=target["review_id"],
+        expected_manifest=reopened.manifest, expected_db=reopened.db), lambda _: None, lambda: False)
+    assert edit["surface"] is not None
+    with monkeypatch.context() as damaged:
+        damaged.setattr(surface, "verify_sources", lambda *a, **k: (_ for _ in ()).throw(ValueError("source lost")))
+        unverified = learning.collect_learning_candidates(reopened.ledger, context, evidence_root=evidence)
+    assert target["occurrence_id"] in {row["occurrence_id"] for group in unverified["groups"] for row in group["candidate_members"]}
+    assert any(row["status"] == "SURFACE_CONFIRMATION_UNVERIFIED" for row in unverified["diagnostics"])
+    changed = copy.deepcopy(reopened.ledger)
+    next(row for row in changed if row["occurrence_id"] == target["occurrence_id"])["manual_surface_actual"]["receipt_sha256"] = "0" * 64
+    invalid = learning.collect_learning_candidates(changed, context, evidence_root=evidence)
+    assert target["occurrence_id"] in {row["occurrence_id"] for group in invalid["groups"] for row in group["candidate_members"]}
+    original_pdf = pdf.read_bytes()
+    pdf.write_bytes(original_pdf + b"changed sealed source")
+    invalid_source = learning.collect_learning_candidates(reopened.ledger, context, evidence_root=evidence)
+    assert target["occurrence_id"] in {row["occurrence_id"] for group in invalid_source["groups"] for row in group["candidate_members"]}
+    assert any(row["status"] == "SURFACE_CONFIRMATION_UNVERIFIED" for row in invalid_source["diagnostics"])
+    pdf.write_bytes(original_pdf)

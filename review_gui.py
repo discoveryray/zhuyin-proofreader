@@ -1201,8 +1201,10 @@ class LearningReadingDialog(ActualReadingDialog):
 
     def defer_learning(self):
         if not self._learning_busy:
-            self.result = {"deferred": True}
-            self.destroy()
+            def discarded(_value):
+                self.result = {"deferred": True}
+                self.destroy()
+            self._learning_job("discard_learning", {}, discarded)
 
     def destroy(self):
         if getattr(self, "_learning_busy", False):
