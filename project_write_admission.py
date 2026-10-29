@@ -270,6 +270,7 @@ class SurfaceWritePhase:
             return  # A fresh, same-entry transaction had no relocated authority.
         import global_glyph_promotion as promotion
         import standalone_proofread as sp
+        from owned_project_relocation import recovery_plan_digest
         root=sp.project_actual_evidence_root(self.project)
         journal_path=root/promotion.PROJECT_TRANSACTION_FILE
         key=self._key(journal_path)
@@ -277,7 +278,7 @@ class SurfaceWritePhase:
         if (not promotion._ACTIVE_LOCKS.get(str(root)) or self.pending is not None
                 or journal['schema_version'] not in {'2.0','3.0'} or journal['state']!='PREPARED'
                 or journal['transaction_id']!=self.relocation.transaction_id
-                or sp._hash_review_payload(journal['recovery_plan'])!=self.relocation.plan_sha
+                or recovery_plan_digest(journal)!=self.relocation.plan_sha
                 or self._completed_write!=({key:original_journal_raw},{key:None})
                 or self.expected_bytes(journal_path) is not None
                 or self.expected_bytes(self.project/sp.ACTUAL_REFRESH_PUBLICATION) is not None):

@@ -56,13 +56,32 @@ def _pdf_roster(manifest):
     return result
 
 
+def recovery_plan_digest(journal):
+    """Bind the finite owned-journal no-plan state without inventing a plan.
+
+    Callers validate the complete journal first. None remains a distinct legal
+    PREPARED authority; publication and COMMITTED authority always need a plan.
+    """
+    import global_glyph_promotion as promotion
+    import standalone_proofread as sp
+    if journal['schema_version'] not in {'2.0', '3.0'}:
+        _fail('unsupported recovery plan authority')
+    plan = journal['recovery_plan']
+    if plan is None:
+        if journal['state'] != 'PREPARED':
+            _fail('committed authority requires a recovery plan')
+        return None
+    promotion.validate_post_commit_recovery_plan(plan)
+    return sp._hash_review_payload(plan)
+
+
 @dataclass(frozen=True)
 class OwnedProjectBinding:
     project: Path
     origin: Path
     owner: tuple
     transaction_id: str
-    plan_sha: str
+    plan_sha: str | None
     origin_manifest: bytes
     dependencies: tuple
     paths: tuple
@@ -93,7 +112,8 @@ class OwnedProjectBinding:
 
     def check_publication(self, publication, old_manifest):
         owner = dict(self.owner)
-        if (publication['project'] not in {str(self.origin), str(self.project), self.publication_owner}
+        if (self.plan_sha is None
+                or publication['project'] not in {str(self.origin), str(self.project), self.publication_owner}
                 or publication['session_id'] != owner['session_id']
                 or publication['token'] != self.transaction_id
                 or publication['plan_sha'] != self.plan_sha
@@ -173,7 +193,7 @@ def capture_owned_binding(project, journal, manifest, *, origin_manifest=None,
             mappings[name] = mapped
     stat = project.stat()
     binding = OwnedProjectBinding(project, origin, tuple(sorted(owner.items())), journal['transaction_id'],
-        sp._hash_review_payload(journal['recovery_plan']),
+        recovery_plan_digest(journal),
         json.dumps(original, sort_keys=True, ensure_ascii=False).encode('utf-8'),
         tuple(sorted(mappings.items())), tuple(dependency_names or ()), (stat.st_dev, stat.st_ino),
         str(_historical_path(publication['project'])) if publication is not None else None)

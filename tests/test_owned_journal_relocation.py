@@ -21,6 +21,7 @@ from project_write_admission import capture_project_write_admission
 from review_save_service import ReviewSaveService
 from tests.test_glyph_learning_service import _isolated, _project
 from tests.test_manual_surface_actual_v580 import interrupted_surface_transaction
+from tests.test_manual_surface_actual_v580 import interrupted_initial_ordinary_journal
 
 
 def _files(root):
@@ -108,6 +109,98 @@ def _authority(output):
         return path.read_bytes()
     publication = sp.json_load_strict(output / sp.ACTUAL_REFRESH_PUBLICATION)
     return (output.parent / publication['stage'] / 'ack-committed.json').read_bytes()
+
+
+@pytest.mark.parametrize('variant,relocated', [
+    ('journal2-preimages', True), ('journal2-partial', True),
+    ('c15-preimage', True), ('c15-afterimage', True),
+    ('journal3-initial', True), ('journal3-initial', False),
+], ids=['journal2-preimages-moved', 'journal2-partial-moved', 'c15-preimage-moved',
+        'c15-afterimage-moved', 'journal3-initial-moved', 'journal3-initial-local'])
+def test_none_plan_authority_preserves_finite_recovery_and_new_transaction(tmp_path, monkeypatch, variant, relocated):
+    from project_write_admission import SurfaceWritePhase
+    from owned_project_relocation import recovery_plan_digest
+    root, area, output, before = _profile(tmp_path, monkeypatch)
+    original_manifest = sp.json_load_strict(output / '校對工作階段.json')
+    actual = sp.project_actual_evidence_root(output)
+    if variant.startswith('c15'):
+        _stage_surface(output, before)
+        journal = interrupted_surface_transaction(output)
+        journal['recovery_plan'] = None  # Named finite historical producer state.
+        if variant == 'c15-preimage':
+            (actual / surface.FILE).write_bytes(promotion._unpacked(journal['files'][surface.FILE]))
+    else:
+        row = before.ledger[1]
+        sp.stage_manual_actual_correction(output, row['review_id'], 'ㄆ',
+            checked_occurrence_ids=[row['occurrence_id']], note='isolated None-plan source')
+        journal = interrupted_initial_ordinary_journal(output)  # Real initial journal/3 write.
+        if variant.startswith('journal2'):
+            journal.pop('write_plan')
+            journal['schema_version'] = '2.0'
+        if variant == 'journal2-partial':
+            original = original_manifest['records'][1]
+            ar._write_actual_evidence_csv(actual / ar.OCCURRENCE_OVERRIDE_FILE, ar.OVERRIDE_HEADERS, [{
+                'pdf_contains': original['pdf_name'], 'pdf_excludes': '',
+                'page': str(original['physical_page']), 'target_char': original['char'],
+                'stable_key': original['source_record']['穩定注音鍵'],
+                'x0': str(original['x0']), 'y0': str(original['y0']), 'actual_reading': 'ㄆ',
+                'source': 'finite legacy partial fixture', 'note': '',
+            }])
+    promotion._write_json(actual / promotion.PROJECT_TRANSACTION_FILE, journal)
+    raw = (actual / promotion.PROJECT_TRANSACTION_FILE).read_bytes()
+    assert promotion._validated_project_journal(raw)['recovery_plan'] is None
+    selected, old = _relocate(root, area, output) if relocated else (output, None)
+    actual = sp.project_actual_evidence_root(selected)
+    receipt = capture_project_write_admission(selected, recovery=True)
+    binding = receipt.relocation
+    assert binding.plan_sha is None and _authority(selected) == raw
+    # An absent plan is never a publication capability or a COMMITTED plan.
+    with pytest.raises(ValueError, match='publication'):
+        binding.check_publication({'project': str(selected), 'session_id': original_manifest['session_id'],
+            'token': journal['transaction_id'], 'plan_sha': None}, original_manifest)
+    committed = copy.deepcopy(journal)
+    committed['state'] = 'COMMITTED'
+    with pytest.raises(ValueError, match='requires a recovery plan'):
+        recovery_plan_digest(committed)
+    with pytest.raises(library.GlobalLibraryValidationError):
+        promotion._validated_project_journal((library._canonical_json(committed) + '\n').encode('utf-8'))
+    if variant == 'journal2-partial':
+        unchanged = _files(selected)
+        with pytest.raises(ValueError, match='lacks exact afterimages'):
+            promotion.recover_pending_project_actual_write(actual)
+        assert _files(selected) == unchanged and _authority(selected) == raw
+    else:
+        retired = []
+        finish = SurfaceWritePhase.complete_owned_rollback
+        def observe(phase, original_raw):
+            assert phase.relocation.plan_sha is None
+            finish(phase, original_raw)
+            assert phase.relocation is None and phase.retired_relocations[-1].plan_sha is None
+            retired.append(original_raw)
+        apply = (sp.apply_staged_surface_actual_corrections if variant.startswith('c15')
+                 else sp.apply_staged_manual_actual_corrections)
+        with patch.object(SurfaceWritePhase, 'complete_owned_rollback', new=observe):
+            assert apply(selected)['project_refresh'] == 'SUCCESS'
+        assert retired == [raw]  # One public entry: rollback then a real new transaction.
+        after = ReviewSaveService(selected).load_resume_snapshot()
+        index = 0 if variant.startswith('c15') else 1
+        assert after.ledger[index]['actual'] == 'ㄆ' and after.db == before.db
+        assert [r['actual'] for i, r in enumerate(after.ledger) if i != index] == [
+            r['actual'] for i, r in enumerate(before.ledger) if i != index]
+        if variant.startswith('c15'):
+            assert not library.GlobalExactGlyphRepository.resolved().path.exists()
+            assert apply(selected)['surface_applied_count'] == 0
+        else:
+            repository = library.GlobalExactGlyphRepository.resolved()
+            delivered = repository.load_inspection_snapshot()
+            assert len(delivered.records) == 1 and delivered.records[0].direct_source_count == 1
+            assert not delivered.records[0].global_reuse_allowed
+            apply(selected)
+            assert replace(repository.load_inspection_snapshot(), loaded_at=delivered.loaded_at) == delivered
+        assert not (actual / promotion.PROJECT_TRANSACTION_FILE).exists()
+        assert not (selected / sp.ACTUAL_REFRESH_PUBLICATION).exists()
+    if relocated:
+        assert _files(area) == old
 
 
 @pytest.mark.parametrize('phase', ['PREPARED', 'COMMITTED', 'PUBLISHED', 'ACKNOWLEDGING'])
