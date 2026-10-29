@@ -4889,6 +4889,8 @@ def _refresh_owned_path(base, relative):
             raise ValueError("actual refresh publication path link/junction 不允許")
     if target.resolve() != base.resolve() / relative:
         raise ValueError("actual refresh publication path 不屬於 owner")
+    if target.exists() and target.is_file() and target.stat().st_nlink != 1:
+        raise ValueError("actual refresh publication hardlink 不允許")
     return target
 
 
@@ -5036,7 +5038,7 @@ def _surface_phase_cleanup_stage(stage,phase,*,unpublished=False):
             raise ValueError('SURFACE_PHASE: published stage is still recovery evidence')
         receipt=ProjectWriteAdmission(phase.project,
             tuple((name,raw) for name,raw in phase.files.items() if Path(name).is_relative_to(stage))+
-            ((str(publication.resolve()),None),),phase.profile)
+            ((str(publication.resolve()),None),),phase.profile,relocation=phase.relocation)
         phase=SurfaceWritePhase(receipt)
     phase.recheck()
     known={Path(name) for name in phase.files if Path(name).is_relative_to(stage)}
@@ -5054,11 +5056,14 @@ def _surface_phase_cleanup_stage(stage,phase,*,unpublished=False):
     stage.rmdir()
 
 
-def _read_actual_refresh_publication(output_dir, *, acknowledged=None, _phase=None):
+def _read_actual_refresh_publication(output_dir, *, acknowledged=None, _phase=None, _relocation=None):
     """Verify every byte and owner before any interrupted publication write."""
     path = output_dir / ACTUAL_REFRESH_PUBLICATION
     if _phase is not None:
         _phase.recheck()
+        if _relocation is not None and _relocation is not _phase.relocation:
+            raise ValueError('actual refresh publication relocation differs from admitted phase')
+        _relocation = _phase.relocation
     raw=_phase.expected_bytes(path) if _phase is not None else None
     if (raw is None if _phase is not None else not path.exists()):
         return None
@@ -5074,7 +5079,7 @@ def _read_actual_refresh_publication(output_dir, *, acknowledged=None, _phase=No
     if (not isinstance(journal, dict) or set(journal) != keys
             or journal["schema"] not in {"actual-deferred-refresh/1", 'actual-deferred-refresh/2'}
             or journal["phase"] not in {"PREPARED", "PUBLISHED", "ACKNOWLEDGING"}
-            or journal["project"] != str(output_dir.resolve())
+            or not isinstance(journal["project"], str)
             or not isinstance(journal["stage"], str)
             or re.fullmatch(r"\.ar-[a-zA-Z0-9_]{8}", journal["stage"]) is None
             or type(journal["cleared_count"]) is not int or journal["cleared_count"] < 0):
@@ -5154,6 +5159,16 @@ def _read_actual_refresh_publication(output_dir, *, acknowledged=None, _phase=No
         raise ValueError("actual refresh publication COMMITTED plan 不符")
     if token is None and journal["phase"] == "PREPARED" and journal["plan_sha"] is not None:
         raise ValueError("actual refresh publication unexpected recovery plan")
+    if _relocation is None and journal['project'] != str(output_dir.resolve()):
+        # Cold admission/acknowledgement may have no local journal. Its finite
+        # binding must prove the original owned journal (including retained
+        # ack bytes), not trust an old directory or a matching stage basename.
+        from owned_project_relocation import binding_for_publication
+        _relocation = binding_for_publication(output_dir, journal, old_manifest)
+        if _relocation is None:
+            raise ValueError('actual refresh publication has no proven relocation binding')
+    if _relocation is not None:
+        _relocation.check_publication(journal, old_manifest)
     return journal, digest, stage, originals
 
 
@@ -5971,7 +5986,8 @@ def _surface_admission_after_owned_change(output_dir, admission, replacements, *
                 if removed_stage is None or not Path(name).is_relative_to(removed_stage)}
     expected.update((str(Path(name).resolve()),raw) for name,raw in replacements.items())
     transitioned = ProjectWriteAdmission(Path(output_dir).resolve(),tuple(sorted(expected.items())),admission.profile,
-        workbook_roster=admission.workbook_roster,integrity_paths=admission.integrity_paths)
+        workbook_roster=admission.workbook_roster,integrity_paths=admission.integrity_paths,
+        relocation=admission.relocation)
     transitioned.recheck()
     current = capture_project_write_admission(output_dir,recovery=True)
     # A temporary valid change during recapture must not become a new baseline.

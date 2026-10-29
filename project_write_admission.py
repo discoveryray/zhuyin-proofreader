@@ -165,6 +165,7 @@ class ProjectWriteAdmission:
     write_block: str | None = None
     workbook_roster: tuple | None = None
     integrity_paths: tuple = ()
+    relocation: object = None
 
     def expected_bytes(self, path):
         name = str(Path(path).resolve())
@@ -174,6 +175,8 @@ class ProjectWriteAdmission:
         raise ValueError('PROJECT_WRITE_ADMISSION: file not in original receipt: ' + name)
 
     def recheck(self):
+        if self.relocation is not None:
+            self.relocation.recheck()
         if self.workbook_roster is not None:
             from sealed_workbook_paths import workbook_role_paths
             if tuple(str(path) for path in workbook_role_paths(self.project))!=self.workbook_roster:
@@ -203,6 +206,7 @@ class SurfaceWritePhase:
         self.profile=receipt.profile
         self.workbook_roster=receipt.workbook_roster
         self.integrity_paths=receipt.integrity_paths
+        self.relocation=receipt.relocation
         self.files=dict(receipt.files)
         self.pending=None
         self.attempted_paths=set()
@@ -218,7 +222,7 @@ class SurfaceWritePhase:
 
     def receipt(self):
         return ProjectWriteAdmission(self.project,tuple(sorted(self.files.items())),self.profile,
-            workbook_roster=self.workbook_roster,integrity_paths=self.integrity_paths)
+            workbook_roster=self.workbook_roster,integrity_paths=self.integrity_paths,relocation=self.relocation)
 
     def recheck(self):
         self.receipt().recheck()
@@ -314,7 +318,8 @@ def capture_project_write_admission(output_dir, *, allow_new=False, recovery=Fal
     import standalone_proofread as sp
     import actual_review as ar
     import global_glyph_promotion as promotion
-    project = Path(output_dir).resolve()
+    from sealed_workbook_paths import trusted_root
+    project = trusted_root(output_dir)
     if project in _CREATING.get():
         return None
     if project in _ACTIVE.get():
@@ -365,7 +370,7 @@ def capture_project_write_admission(output_dir, *, allow_new=False, recovery=Fal
                 raise ValueError('PROJECT_WRITE_ADMISSION: new surface format requires an owned journal/2')
             if journal['schema_version'] in {'2.0','3.0'}:
                 owner = journal['owner']
-                if (owner['project'] != str(project) or owner['session_id'] != manifest['session_id']
+                if (owner['session_id'] != manifest['session_id']
                         or (journal['state']=='PREPARED' and owner['origin_manifest_sha256'] != manifest['manifest_integrity_sha256'])):
                     raise ValueError('PROJECT_WRITE_ADMISSION: foreign surface transaction owner')
                 if owner['operation']=='surface-only':
@@ -520,9 +525,24 @@ def capture_project_write_admission(output_dir, *, allow_new=False, recovery=Fal
                        and captured[staging_path]==promotion._unpacked(journal['staging']))
             if journal['state']!='PREPARED' or not unchanged:
                 write_block='legacy new-profile journal/2 direct pending lacks exact afterimages; read-only, no automatic upgrade/recovery'
+        authority=journal
+        if authority is None and publication is not None and publication[0]['phase']=='ACKNOWLEDGING':
+            raw=captured.get(publication[2]/'ack-committed.json')
+            if raw is not None:authority=promotion._validated_project_journal(raw)
+        relocation=None
+        if authority is not None and authority['schema_version'] in {'2.0','3.0'}:
+            from owned_project_relocation import capture_owned_binding
+            original=(sp.json_parse_strict(publication[3]['校對工作階段.json'],publication_path)
+                      if publication is not None else manifest)
+            relocation=capture_owned_binding(project,authority,manifest,origin_manifest=original,
+                sources=binder._source_specs,runtime=runtime,
+                dependency_names=tuple(str(path) for path in captured),
+                publication=publication[0] if publication is not None else None)
+            if publication is not None:relocation.check_publication(publication[0],original)
         receipt = ProjectWriteAdmission(project, tuple(sorted((str(path), raw) for path, raw in captured.items())),
                                         profile=surface.enabled(manifest),write_block=write_block,
                                         workbook_roster=workbook_roster,
+                                        relocation=relocation,
                                         integrity_paths=tuple(str(Path(path)) for path in
                                             [*binder._source_specs,*binder._artifact_specs,*(path for path,_ in runtime)]))
         if surface_entry:
@@ -532,10 +552,6 @@ def capture_project_write_admission(output_dir, *, allow_new=False, recovery=Fal
                 actual_excel_conflict_state(project,manifest,checked_db,_read_bytes=receipt.expected_bytes)
             if captured[project/CONFLICT_FILE] is not None:
                 validate_conflict_state(project,manifest,checked_db,_read_bytes=receipt.expected_bytes)
-        authority=journal
-        if authority is None and publication is not None and publication[0]['phase']=='ACKNOWLEDGING':
-            raw=captured.get(publication[2]/'ack-committed.json')
-            if raw is not None:authority=promotion._validated_project_journal(raw)
         if authority is not None and authority['schema_version']=='3.0':
             promotion._check_direct_receipt(root,authority,receipt,publication)
         receipt.recheck()

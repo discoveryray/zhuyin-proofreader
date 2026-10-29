@@ -432,7 +432,11 @@ def _validate_direct_write_plan(journal):
     if plan['contract']!=DIRECT_WRITE_CONTRACT or not isinstance(plan['dependencies'],dict):
         raise library.GlobalLibraryValidationError('unsupported direct write plan')
     for path,digest in plan['dependencies'].items():
-        if not isinstance(path,str) or not Path(path).is_absolute() or str(Path(path).resolve())!=path:
+        # A retained absolute locator is syntax, not a filesystem capability.
+        # Do not resolve symlinks or consult a former project directory here;
+        # admission checks the selected mapped dependency's ancestry and bytes.
+        if (not isinstance(path,str) or not Path(path).is_absolute()
+                or '..' in Path(path).parts or str(Path(path))!=path):
             raise library.GlobalLibraryValidationError('invalid direct dependency path')
         if digest is not None:library._sha256_text(digest,'direct dependency')
     after=plan['afterimages']
@@ -518,11 +522,15 @@ def _check_direct_receipt(root,journal,receipt,publication=None):
     import standalone_proofread as sp
     import manual_surface_actual as surface
     manifest=sp.json_parse_strict(receipt.expected_bytes(project/'校對工作階段.json'),project/'校對工作階段.json')
-    if journal['owner']['project']!=str(project) or journal['owner']['session_id']!=manifest['session_id']:
+    if receipt.relocation is not None:
+        receipt.relocation.check_owner(journal['owner'],manifest)
+    elif journal['owner']['project']!=str(project) or journal['owner']['session_id']!=manifest['session_id']:
         raise library.GlobalLibraryValidationError('direct write plan owner differs from its project')
     if not surface.enabled(manifest):raise library.GlobalLibraryValidationError('journal/3 requires its surface profile')
     before=_direct_image_map(root,journal);after=_direct_image_map(root,journal,after=True)
     dependencies=journal['write_plan']['dependencies'];current=dict(receipt.files)
+    if receipt.relocation is not None:
+        dependencies=receipt.relocation.dependency_map(dependencies)
     stage=publication[2] if publication is not None else None
     ignored={str((root/PROJECT_TRANSACTION_FILE).resolve()),str((project/sp.ACTUAL_REFRESH_PUBLICATION).resolve()),*before}
     expected={name for name in current if name not in ignored and
@@ -642,7 +650,9 @@ def recover_project_actual_transaction(root: Path, *, _phase=None):
             raise library.GlobalLibraryValidationError('surface transaction has no admitted owner snapshot')
         manifest = sp.json_parse_strict(admission.expected_bytes(project/'校對工作階段.json'),
                                         project/'校對工作階段.json')
-        if (journal['owner']['project'] != str(project.resolve())
+        if admission.relocation is not None:
+            admission.relocation.check_owner(journal['owner'],manifest)
+        elif (journal['owner']['project'] != str(project.resolve())
                 or journal['owner']['session_id'] != manifest['session_id']
                 or (journal['state']=='PREPARED' and journal['owner']['origin_manifest_sha256'] != manifest['manifest_integrity_sha256'])):
             raise library.GlobalLibraryValidationError('surface transaction owner changed; no recovery writes')
@@ -702,7 +712,8 @@ def recover_project_actual_transaction(root: Path, *, _phase=None):
             restored[str((root/surface.FILE).resolve())]=before
             if _phase is None:
                 ProjectWriteAdmission(admission.project,tuple(sorted(restored.items())),admission.profile,
-                    workbook_roster=admission.workbook_roster,integrity_paths=admission.integrity_paths).recheck()
+                    workbook_roster=admission.workbook_roster,integrity_paths=admission.integrity_paths,
+                    relocation=admission.relocation).recheck()
             else:
                 _phase.recheck()
         if _phase is not None:

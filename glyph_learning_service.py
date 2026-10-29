@@ -376,15 +376,36 @@ def _bind_selected_project(plan, output_dir):
     selected = trusted_root(output_dir)
     manifest = sp.json_load_strict(selected / "校對工作階段.json")
     sp.validate_manifest_integrity(manifest)
-    bind_workbooks(selected, manifest)
-    journal_path = sp.project_actual_evidence_root(selected) / promotion.PROJECT_TRANSACTION_FILE
-    if journal_path.exists():
-        journal = promotion._validated_project_journal(journal_path.read_bytes())
-        if (journal["schema_version"] in {"2.0", "3.0"}
-                and journal["owner"]["project"] != str(selected)):
-            # These existing transaction contracts bind absolute owner and
-            # dependency paths. Learning cannot silently migrate that contract.
-            raise ValueError("LEARNING_PROJECT: moved owned transaction requires an explicit relocation contract")
+    # Owned recovery uses the same sealed relocation receipt as every writer;
+    # no learning-only bypass or changed durable decision is created here.
+    from project_write_admission import capture_project_write_admission
+    admission = capture_project_write_admission(selected, recovery=True)
+    publication = sp._read_actual_refresh_publication(selected, _relocation=admission.relocation)
+    # Keep the complete workbook role/path/SHA gate. An interrupted publisher
+    # may already have replaced one workbook while the old sealed manifest is
+    # still current; only its verified original backup may supply those bytes.
+    from sealed_workbook_paths import descriptor
+    workbook_sha = {selected / descriptor(info, kind): info[kind + '_workbook_sha256']
+                    for info in manifest['pdfs'] for kind in ('actual', 'candidate')}
+    def workbook_bytes(path):
+        raw = admission.expected_bytes(path)
+        if path not in workbook_sha:
+            return raw  # The role namespace scan still detects duplicate SHA bindings.
+        if raw is not None and hashlib.sha256(raw).hexdigest() == workbook_sha[path]:
+            return raw
+        if publication is not None:
+            relative = str(Path(path).relative_to(selected))
+            entry = next((item for item in publication[0]['entries'] if item['path'] == relative), None)
+            original = publication[3].get(relative)
+            if (entry is not None and entry['old_sha'] == workbook_sha[path]
+                    and original is not None and hashlib.sha256(original).hexdigest() == workbook_sha[path]):
+                return original
+        raise ValueError('LEARNING_PROJECT: sealed workbook bytes unavailable')
+    if publication is None:
+        bind_workbooks(selected, manifest)
+    else:
+        bind_workbooks(selected, manifest, _read_bytes=workbook_bytes)
+    admission.recheck()
     context = sp._global_direct_source_context(selected, manifest)
     origin = plan["source_context"]
     roster = lambda value: {name: info["pdf_sha256"] for name, info in value["pdfs"].items()}

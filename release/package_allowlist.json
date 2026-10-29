@@ -80,6 +80,10 @@
       "role": "runtime_module"
     },
     {
+      "path": "owned_project_relocation.py",
+      "role": "runtime_module"
+    },
+    {
       "path": "global_library_approval.py",
       "role": "runtime_module"
     },

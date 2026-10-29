@@ -562,7 +562,7 @@ def test_moved_decision_rejects_changed_workbook_and_source_without_old_writes(t
     assert lib.GlobalExactGlyphRepository.resolved().load_inspection_snapshot().records[0].direct_source_count == 1
 
 
-def test_moved_owned_journal_remains_blocked_without_contract_migration(tmp_path, monkeypatch):
+def test_moved_owned_journal_uses_authorized_binding_without_new_vote(tmp_path, monkeypatch):
     from tests.test_glyph_learning_gui import surface_request
     from review_operation_worker import ReviewOperationState
     root = _isolated(tmp_path, monkeypatch)
@@ -580,11 +580,60 @@ def test_moved_owned_journal_remains_blocked_without_contract_migration(tmp_path
     assert promotion._validated_project_journal(journal_raw)["schema_version"] == "3.0"
     selected = root / "owned-moved"
     output.rename(selected)
-    assert learning.list_learning_confirmations(selected)[0]["status"] == "UNRECOVERABLE"
-    with pytest.raises(ValueError, match="explicit relocation contract"):
-        learning.retry_learning_confirmation(selected, plan["operation_id"])
+    decision_raw = learning._paths(selected, plan['operation_id'])[0].read_bytes()
+    assert learning.list_learning_confirmations(selected)[0]["status"] != "UNRECOVERABLE"
+    result = learning.retry_learning_confirmation(selected, plan["operation_id"])
+    assert result['local_status'] == 'SAVED' and result['refresh_status'] == 'SUCCESS'
+    learning.retry_learning_confirmation(selected, plan["operation_id"])
     assert not output.exists()
-    assert (sp.project_actual_evidence_root(selected) / promotion.PROJECT_TRANSACTION_FILE).read_bytes() == journal_raw
+    assert not (sp.project_actual_evidence_root(selected) / promotion.PROJECT_TRANSACTION_FILE).exists()
+    assert learning._paths(selected, plan['operation_id'])[0].read_bytes() == decision_raw
+    assert lib.GlobalExactGlyphRepository.resolved().load_inspection_snapshot().records[0].direct_source_count == 1
+
+
+def test_moved_learning_partial_publication_retains_workbook_gate(tmp_path, monkeypatch):
+    from tests.test_glyph_learning_gui import surface_request
+    from review_operation_worker import ReviewOperationState
+    root = _isolated(tmp_path, monkeypatch)
+    output = _project(root, monkeypatch)
+    _snapshot, request = surface_request(output)
+    ReviewOperationState(output).dispatch('save_learning_surface', request, lambda _: None, lambda: False)
+    plan = _plan(output, checked_offset=1)
+    move, resume = sp._surface_phase_move, sp._resume_actual_refresh_publication
+    moved = []
+    def stop_after_move(source, target, phase):
+        move(source, target, phase)
+        if not moved:
+            moved.append(True)
+            raise OSError('isolated learning publication prefix interruption')
+    def no_hot_resume(*args, **kwargs):
+        if moved:
+            raise OSError('isolated stopped process')
+        return resume(*args, **kwargs)
+    with monkeypatch.context() as fault:
+        fault.setattr(sp, '_surface_phase_move', stop_after_move)
+        fault.setattr(sp, '_resume_actual_refresh_publication', no_hot_resume)
+        result = learning.confirm_learning(plan, explicit_action=True)
+    assert result['refresh_status'] == 'PENDING' and moved
+    assert sp.json_load_strict(output / sp.ACTUAL_REFRESH_PUBLICATION)['phase'] == 'PREPARED'
+    decision_raw = learning._paths(output, plan['operation_id'])[0].read_bytes()
+    selected = root / 'partial-moved'
+    output.rename(selected)
+    assert learning.list_learning_confirmations(selected)[0]['status'] != 'UNRECOVERABLE'
+    manifest = sp.json_load_strict(selected / '校對工作階段.json')
+    workbook = selected / sp.descriptor(manifest['pdfs'][0], 'actual')
+    original = workbook.read_bytes()
+    workbook.write_bytes(original + b'foreign workbook bytes')
+    assert learning.list_learning_confirmations(selected)[0]['status'] == 'UNRECOVERABLE'
+    with pytest.raises(ValueError):
+        learning.retry_learning_confirmation(selected, plan['operation_id'])
+    workbook.write_bytes(original)
+    result = learning.retry_learning_confirmation(selected, plan['operation_id'])
+    assert result['local_status'] == 'SAVED' and result['refresh_status'] == 'SUCCESS'
+    learning.retry_learning_confirmation(selected, plan['operation_id'])
+    assert learning._paths(selected, plan['operation_id'])[0].read_bytes() == decision_raw
+    assert not output.exists()
+    assert lib.GlobalExactGlyphRepository.resolved().load_inspection_snapshot().records[0].direct_source_count == 1
 
 
 def test_valid_surface_confirmation_suppresses_only_applied_position(tmp_path, monkeypatch):
