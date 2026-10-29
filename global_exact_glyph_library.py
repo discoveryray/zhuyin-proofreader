@@ -2440,6 +2440,49 @@ class GlobalExactGlyphRepository:
                 reason = "符合既有核准條件；仍須檢視這份固定資料並明確確認。"
         return GlobalApprovalPreview(str(self.path), glyph_id, record, request, reason)
 
+    def project_direct_evidence_approval(self, intents, glyph_id: str) -> GlobalApprovalPreview:
+        """Read-only proposal for one combined visual-confirm-and-approve action.
+
+        A disposable SQLite snapshot runs the existing strict delivery and
+        preview services. It never publishes source evidence or changes the
+        original DB, and the returned request remains bound to the original
+        repository. Only a later explicit action may persist that fixed request.
+        WAL validation remains unchanged; an in-memory DB cannot satisfy it.
+        """
+        from dataclasses import replace
+        from tempfile import TemporaryDirectory
+        batch = canonical_direct_evidence_batch(intents)
+        glyph_id = _sha256_text(glyph_id, "glyph_id")
+        if any(item["payload"]["evidence"]["glyph_id"] != glyph_id for item in batch):
+            raise GlobalLibraryValidationError("projection contains a different glyph")
+        with TemporaryDirectory(prefix="zhuyin-learning-projection-") as directory:
+            target = Path(directory) / GLOBAL_LIBRARY_FILENAME
+            projected = GlobalExactGlyphRepository(target, busy_timeout_ms=self.busy_timeout_ms,
+                                                   write_retry_limit=self.write_retry_limit)
+            if _path_is_absent(self.path):
+                projected.initialize()
+            else:
+                original = copied = None
+                try:
+                    original = _connect_existing(self.path, read_only=True, busy_timeout_ms=self.busy_timeout_ms)
+                    original.execute("BEGIN")
+                    _validate_connection(original, self.path)
+                    copied = sqlite3.connect(target, isolation_level=None)
+                    original.backup(copied)
+                    copied.execute("PRAGMA journal_mode = WAL")
+                    original.execute("COMMIT")
+                finally:
+                    if copied is not None:
+                        copied.close()
+                    if original is not None:
+                        original.close()
+            deliver_global_direct_evidence(projected, batch)
+            preview = projected.load_approval_preview(glyph_id)
+            request = replace(preview.request, database_path=str(self.path)) if preview.request else None
+            # The private proposal record must never escape as authoritative
+            # source evidence or be mistaken for an observation of the live DB.
+            return GlobalApprovalPreview(str(self.path), glyph_id, None, request, preview.reason)
+
     def lookup_approval_outcome(self, request: GlobalApprovalRequest) -> GlobalApprovalOutcome:
         """Read the exact approval identity or existing conflict receipt, without retry.
 

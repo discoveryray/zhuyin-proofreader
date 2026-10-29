@@ -1019,15 +1019,15 @@ class _DirectVisualPDFSnapshot:
         return self.inspectors[font_key]
 
 
-def direct_visual_intents(group, reading, checked_occurrence_ids, source_context, *, _snapshot=None):
-    """Only frozen checked decisions admitted from current, sealed PDF bytes.
+def visual_source_descriptors(group, checked_occurrence_ids, source_context, *, _snapshot=None):
+    """Prove source identity only; never create a reading or human evidence.
 
-    Insufficient Global proof is explicitly reported without rejecting the local
-    occurrence correction. No expected/decoder reading is consulted here.
+    Candidate selection uses these descriptors without fabricating direct
+    visual evidence. The same proof is repeated by the actual writer.
     """
     if _snapshot is None:
         with _DirectVisualPDFSnapshot(source_context) as snapshot:
-            return direct_visual_intents(group, reading, checked_occurrence_ids, source_context, _snapshot=snapshot)
+            return visual_source_descriptors(group, checked_occurrence_ids, source_context, _snapshot=snapshot)
     if not isinstance(_snapshot, _DirectVisualPDFSnapshot):
         raise ValueError("invalid direct visual PDF snapshot")
     ids = list(checked_occurrence_ids)
@@ -1036,7 +1036,7 @@ def direct_visual_intents(group, reading, checked_occurrence_ids, source_context
     members = {member["occurrence_id"]: member for member in group["members"]}
     if not set(ids).issubset(members):
         raise ValueError("direct visual checked IDs are not group members")
-    intents, admissions = [], []
+    descriptors, admissions = [], []
     for oid in ids:
         try:
             if source_context is None:
@@ -1111,21 +1111,41 @@ def direct_visual_intents(group, reading, checked_occurrence_ids, source_context
                 "kind": group["kind"], "style_group": style, "glyph_sha256": current_sha,
                 "identity_eligibility": identity["eligibility"],
             }
-            frozen = {
-                "session_id": project_id, "pdf_sha256": pdf_sha,
-                "font_program_sha256": hashlib.sha256(font_bytes).hexdigest(),
-                "occurrence_id": oid, "review_id": member["review_id"], "identity": exact,
-                "reading": reading, "confirmation_channel": library.PDF_PAGE_VISUAL,
-            }
-            intent = library.make_direct_evidence_intent(
-                exact, reading=reading, source_project_id=project_id, source_pdf_sha256=pdf_sha,
-                source_font_program_sha256=frozen["font_program_sha256"],
-                source_occurrence_id=oid, source_review_id=member["review_id"],
-                decision_snapshot_sha256=library._canonical_sha256(frozen),
-            )
-            intents.append(intent)
-            admissions.append({"occurrence_id": oid, "status": "ELIGIBLE", "intent_id": intent["intent_id"]})
+            descriptors.append({
+                "source_project_id": project_id, "source_pdf_sha256": pdf_sha,
+                "source_font_program_sha256": hashlib.sha256(font_bytes).hexdigest(),
+                "source_occurrence_id": oid, "source_review_id": member["review_id"],
+                "identity": exact,
+            })
+            admissions.append({"occurrence_id": oid, "status": "ELIGIBLE"})
         except Exception as exc:
             admissions.append({"occurrence_id": oid, "status": "NON_GLOBAL_ELIGIBLE",
                                "reason": str(exc), "error_type": type(exc).__name__})
+    return descriptors, admissions
+
+
+def direct_visual_intents(group, reading, checked_occurrence_ids, source_context, *, _snapshot=None):
+    """Create direct intents only for the caller's explicit checked decision."""
+    descriptors, admissions = visual_source_descriptors(
+        group, checked_occurrence_ids, source_context, _snapshot=_snapshot)
+    intents = []
+    for source in descriptors:
+        admission = next(row for row in admissions if row["occurrence_id"] == source["source_occurrence_id"])
+        try:
+            frozen = {
+                "session_id": source["source_project_id"], "pdf_sha256": source["source_pdf_sha256"],
+                "font_program_sha256": source["source_font_program_sha256"],
+                "occurrence_id": source["source_occurrence_id"], "review_id": source["source_review_id"],
+                "identity": source["identity"], "reading": reading,
+                "confirmation_channel": library.PDF_PAGE_VISUAL,
+            }
+            intent = library.make_direct_evidence_intent(source["identity"], reading=reading,
+                **{key: value for key, value in source.items() if key != "identity"},
+                decision_snapshot_sha256=library._canonical_sha256(frozen))
+            intents.append(intent)
+            admission.update(intent_id=intent["intent_id"])
+        except Exception as exc:
+            # Preserve the existing per-position admission contract: an invalid
+            # Global proposal cannot masquerade as eligible or abort other rows.
+            admission.update(status="NON_GLOBAL_ELIGIBLE", reason=str(exc), error_type=type(exc).__name__)
     return intents, admissions

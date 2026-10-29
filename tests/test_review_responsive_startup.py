@@ -1,5 +1,8 @@
 """Synthetic project and fake UI regressions. Never initialize Tcl/Tk."""
 import contextlib
+import copy
+import hashlib
+import json
 import os
 import queue
 import sys
@@ -19,14 +22,81 @@ from tests.review_save_test_support import QueuedRoot, wait_for_save
 from tests.test_staged_review_navigation_v580 import create_staged_navigation_fixture, headless_app
 
 
+def current_dependency_fixture(output):
+    """Retain navigation classifications with genuine, sealed Global inputs.
+
+    The original helper intentionally has only three workbook columns. Startup
+    now checks current PDF dependencies, so this fixture supplies real embedded
+    fonts and the existing dependency metadata instead of bypassing that gate.
+    It remains an occurrence-only navigation fixture, not learned glyph truth.
+    """
+    from openpyxl import load_workbook
+    import actual_review as ar
+    import occurrence_ledger as ol
+    import global_exact_glyph_library as library
+    from tests.actual_source_test_support import register_fixture_glyph, write_fixture_pdf, bind_source_from_pdf
+
+    manifest = create_staged_navigation_fixture(output)
+    pdf = Path(manifest["records"][0]["pdf"])
+    originals = copy.deepcopy(manifest["records"])
+    specs = [{"glyph_sha256": register_fixture_glyph(f"startup-position-{index}"),
+              "char": row["char"], "x0": row["x0"], "y0": row["y0"]}
+             for index, row in enumerate(originals)]
+    pdf.unlink()
+    write_fixture_pdf(pdf, specs)
+    rebuilt, actual_rows = [], []
+    for original in originals:
+        located = bind_source_from_pdf(copy.deepcopy(original), pdf)
+        native = located["source_record"]
+        actual_rows.append(["TrueType複合元件", located["font_xref"], located["zhuyin_component_id"],
+                            native["TTF字形SHA256"], "", ""])
+        source = {**native, "pdf": str(pdf), "pdf_name": pdf.name, "pdf_sha256": located["pdf_sha256"],
+                  "font": "", **{key: located[key] for key in ("x0", "y0", "x1", "y1")}}
+        source.pop("TTF字形SHA256")
+        ol.prepare_occurrence_rows(located["pdf_sha256"], [source])
+        classification = {**original, "source_record": source}
+        rebuilt.extend(ol.build_occurrence_ledger([source], {source["occurrence_id"]: classification}))
+    manifest["records"] = rebuilt
+    manifest["actual_source_ids"] = [row["occurrence_id"] for row in rebuilt]
+    info = manifest["pdfs"][0]
+    info["pdf_sha256"] = hashlib.sha256(pdf.read_bytes()).hexdigest()
+    for kind in ("actual", "candidate"):
+        path = Path(info[f"{kind}_workbook"])
+        workbook = load_workbook(path)
+        sheet = workbook["隔離測試輸入"]
+        for index, row in enumerate(rebuilt, 2):
+            sheet.cell(index, 1, row["occurrence_id"])
+        if kind == "actual":
+            actual = workbook.create_sheet("實際注音")
+            actual.append(["字形架構", "font_xref", "注音元件ID", "TTF字形SHA256", "CFF樣式群組", "CFF整字字形SHA256"])
+            for row in actual_rows:
+                actual.append(row)
+            workbook.save(path)
+            dependencies = ar.actual_workbook_global_exact_dependencies(path, pdf)
+            assert dependencies is not None and len(dependencies) == len(rebuilt)
+            metadata = workbook.create_sheet("v5.2中繼資料")
+            metadata.append(["項目", "內容"])
+            metadata.append(["pdf_sha256", info["pdf_sha256"]])
+            metadata.append(["actual_asset_fingerprint_components", json.dumps({
+                "global_exact_glyph_evidence_hashes": library.global_exact_glyph_evidence_hashes(
+                    library.GlobalExactGlyphRepository.resolved().load_snapshot(), dependencies)})])
+        workbook.save(path)
+        workbook.close()
+        info[f"{kind}_workbook_sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+    manifest = sp.seal_manifest(manifest)
+    sp.json_save(output / "校對工作階段.json", manifest)
+    return manifest
+
+
 class ResponsiveReviewTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.output = Path(self.temp.name)
-        self.manifest = create_staged_navigation_fixture(self.output)
         self.stack = contextlib.ExitStack()
         self.addCleanup(self.stack.close)
+        self.stack.enter_context(patch.dict(os.environ, {"LOCALAPPDATA": str(self.output / "isolated-user")}))
+        self.manifest = current_dependency_fixture(self.output)
         from tests.no_window_review_support import InlineReviewService
         loader = gui.load_review_project
         self.stack.enter_context(patch.object(gui, "load_review_project",

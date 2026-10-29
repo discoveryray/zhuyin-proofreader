@@ -86,6 +86,9 @@ def test_writer_close_waits_for_result_and_never_terminates(tmp_path):
 
 def test_real_spawn_actual_staging_preserves_expected_and_rejects_drift(tmp_path):
     manifest, row = fixture(tmp_path)
+    # The new actual-only candidate read validates the complete project-owned
+    # evidence set. This isolated project begins with valid empty evidence.
+    sp.ensure_user_evidence_files(sp.project_actual_evidence_root(tmp_path))
     service = ReviewProcessService(tmp_path)
     try:
         snapshot = service.load_resume_snapshot()

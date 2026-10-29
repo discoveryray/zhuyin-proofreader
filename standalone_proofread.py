@@ -5396,7 +5396,7 @@ def _publish_actual_refresh(output_dir, stage, manifest, *, source, token, befor
 @project_write_entry(recovery=True, locked=True, profile_only=True)
 def refresh_actual_project(output_dir: Path, *, defer_excel_reports: bool = True,
                            _prewrite_guard=None, _refresh_plan=None, _refresh_status=None,
-                           _refresh_acknowledge=True) -> Path:
+                           _refresh_acknowledge=True, _force_decoder_refresh=False) -> Path:
     """Incrementally re-decode current project after dynamic actual evidence changes."""
     output_dir = Path(output_dir).resolve()
     import manual_surface_actual as surface
@@ -5404,7 +5404,7 @@ def refresh_actual_project(output_dir: Path, *, defer_excel_reports: bool = True
     entry=entry_write_admission(output_dir)
     current = (json_parse_strict(entry.expected_bytes(output_dir/'校對工作階段.json'),output_dir/'校對工作階段.json')
                if entry is not None else json_load_strict(output_dir/'校對工作階段.json'))
-    if (defer_excel_reports and surface.enabled(current) and current.get('manual_surface_projection_refresh',{}).get('raw_actual_inputs')
+    if (not _force_decoder_refresh and defer_excel_reports and surface.enabled(current) and current.get('manual_surface_projection_refresh',{}).get('raw_actual_inputs')
             == surface.raw_dependencies(project_actual_evidence_root(output_dir),
                 **({'_read_bytes':entry.expected_bytes} if entry is not None else {}))):
         if _prewrite_guard is not None:
