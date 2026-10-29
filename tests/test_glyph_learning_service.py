@@ -591,6 +591,43 @@ def test_moved_owned_journal_uses_authorized_binding_without_new_vote(tmp_path, 
     assert lib.GlobalExactGlyphRepository.resolved().load_inspection_snapshot().records[0].direct_source_count == 1
 
 
+def test_learning_retry_one_entry_rolls_back_prepared_then_preserves_fixed_decision(tmp_path, monkeypatch):
+    from tests.test_owned_journal_relocation import _profile, _files, _relocate
+    root, area, output, before = _profile(tmp_path, monkeypatch)
+    plan = _plan(output, checked_offset=1)
+    actual = sp.project_actual_evidence_root(output)
+    atomic = promotion._atomic_bytes
+    crashed = []
+    def stop_after_actual_write(path, raw, **kwargs):
+        atomic(path, raw, **kwargs)
+        if Path(path).name == ar.OCCURRENCE_OVERRIDE_FILE and not crashed:
+            journal = promotion._validated_project_journal((actual / promotion.PROJECT_TRANSACTION_FILE).read_bytes())
+            assert journal['schema_version'] == '3.0' and journal['state'] == 'PREPARED'
+            crashed.append(_files(output))
+            raise OSError('isolated learning PREPARED process loss')
+    with monkeypatch.context() as fault:
+        fault.setattr(promotion, '_atomic_bytes', stop_after_actual_write)
+        with pytest.raises(OSError, match='PREPARED process loss'):
+            learning.confirm_learning(plan, explicit_action=True)
+    assert crashed and not (actual / promotion.PROJECT_TRANSACTION_FILE).exists()
+    for name, raw in crashed[0].items():
+        path = output / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(raw)
+    decision_raw = learning._paths(output, plan['operation_id'])[0].read_bytes()
+    selected, old = _relocate(root, area, output)
+    result = learning.retry_learning_confirmation(selected, plan['operation_id'])
+    assert result['operation_id'] == plan['operation_id'] and result['refresh_status'] == 'SUCCESS'
+    assert result['local_status'] == 'SAVED'
+    learning.retry_learning_confirmation(selected, plan['operation_id'])
+    assert learning._paths(selected, plan['operation_id'])[0].read_bytes() == decision_raw
+    assert lib.GlobalExactGlyphRepository.resolved().load_inspection_snapshot().records[0].direct_source_count == 1
+    assert not lib.GlobalExactGlyphRepository.resolved().load_inspection_snapshot().records[0].global_reuse_allowed
+    assert ReviewSaveService(selected).load_resume_snapshot().db == before.db
+    assert _files(area) == old
+    assert not (sp.project_actual_evidence_root(selected) / promotion.PROJECT_TRANSACTION_FILE).exists()
+
+
 def test_moved_learning_partial_publication_retains_workbook_gate(tmp_path, monkeypatch):
     from tests.test_glyph_learning_gui import surface_request
     from review_operation_worker import ReviewOperationState

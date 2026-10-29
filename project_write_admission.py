@@ -166,6 +166,7 @@ class ProjectWriteAdmission:
     workbook_roster: tuple | None = None
     integrity_paths: tuple = ()
     relocation: object = None
+    retired_relocations: tuple = ()
 
     def expected_bytes(self, path):
         name = str(Path(path).resolve())
@@ -177,6 +178,8 @@ class ProjectWriteAdmission:
     def recheck(self):
         if self.relocation is not None:
             self.relocation.recheck()
+        for binding in self.retired_relocations:
+            binding.recheck()
         if self.workbook_roster is not None:
             from sealed_workbook_paths import workbook_role_paths
             if tuple(str(path) for path in workbook_role_paths(self.project))!=self.workbook_roster:
@@ -207,9 +210,11 @@ class SurfaceWritePhase:
         self.workbook_roster=receipt.workbook_roster
         self.integrity_paths=receipt.integrity_paths
         self.relocation=receipt.relocation
+        self.retired_relocations=receipt.retired_relocations
         self.files=dict(receipt.files)
         self.pending=None
         self.attempted_paths=set()
+        self._completed_write=None
 
     def _key(self,path):
         return str(Path(path).resolve())
@@ -222,7 +227,8 @@ class SurfaceWritePhase:
 
     def receipt(self):
         return ProjectWriteAdmission(self.project,tuple(sorted(self.files.items())),self.profile,
-            workbook_roster=self.workbook_roster,integrity_paths=self.integrity_paths,relocation=self.relocation)
+            workbook_roster=self.workbook_roster,integrity_paths=self.integrity_paths,relocation=self.relocation,
+            retired_relocations=self.retired_relocations)
 
     def recheck(self):
         self.receipt().recheck()
@@ -248,8 +254,49 @@ class SurfaceWritePhase:
     def written(self):
         if self.pending is None:
             raise ValueError('SURFACE_PHASE: no planned output')
+        self._completed_write=self.pending
         self.files.update(self.pending[1])
         self.pending=None
+        self.recheck()
+
+    def complete_owned_rollback(self, original_journal_raw):
+        """Retire one proven PREPARED authority, retaining every source guard.
+
+        Only the recovery writer's exact journal unlink can cross this boundary.
+        This never recaptures current files as a new baseline. The next ordinary
+        transaction uses the same admitted bytes and selected project lock.
+        """
+        if self.relocation is None:
+            return  # A fresh, same-entry transaction had no relocated authority.
+        import global_glyph_promotion as promotion
+        import standalone_proofread as sp
+        root=sp.project_actual_evidence_root(self.project)
+        journal_path=root/promotion.PROJECT_TRANSACTION_FILE
+        key=self._key(journal_path)
+        journal=promotion._validated_project_journal(original_journal_raw)
+        if (not promotion._ACTIVE_LOCKS.get(str(root)) or self.pending is not None
+                or journal['schema_version'] not in {'2.0','3.0'} or journal['state']!='PREPARED'
+                or journal['transaction_id']!=self.relocation.transaction_id
+                or sp._hash_review_payload(journal['recovery_plan'])!=self.relocation.plan_sha
+                or self._completed_write!=({key:original_journal_raw},{key:None})
+                or self.expected_bytes(journal_path) is not None
+                or self.expected_bytes(self.project/sp.ACTUAL_REFRESH_PUBLICATION) is not None):
+            raise ValueError('SURFACE_PHASE: owned rollback authority is not completely consumed')
+        manifest=sp.json_parse_strict(self.expected_bytes(self.project/'校對工作階段.json'),
+                                      self.project/'校對工作階段.json')
+        self.relocation.check_owner(journal['owner'],manifest)
+        if journal['owner']['origin_manifest_sha256']!=manifest['manifest_integrity_sha256']:
+            raise ValueError('SURFACE_PHASE: rollback origin manifest changed')
+        if (any(self.expected_bytes(root/name)!=promotion._unpacked(raw)
+                for name,raw in journal['files'].items())
+                or self.expected_bytes(root/promotion.STAGING_FILE)!=promotion._unpacked(journal['staging'])):
+            raise ValueError('SURFACE_PHASE: rollback beforeimages are not fully restored')
+        self.recheck()  # Includes any foreign write between unlink and handoff.
+        # The old token/owner no longer authorizes a transaction, but its
+        # selected-directory identity and no-link guards remain in force.
+        self.retired_relocations=(*self.retired_relocations,self.relocation)
+        self.relocation=None
+        self._completed_write=None
         self.recheck()
 
     def attempting(self):

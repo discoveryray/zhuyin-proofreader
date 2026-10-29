@@ -5038,7 +5038,8 @@ def _surface_phase_cleanup_stage(stage,phase,*,unpublished=False):
             raise ValueError('SURFACE_PHASE: published stage is still recovery evidence')
         receipt=ProjectWriteAdmission(phase.project,
             tuple((name,raw) for name,raw in phase.files.items() if Path(name).is_relative_to(stage))+
-            ((str(publication.resolve()),None),),phase.profile,relocation=phase.relocation)
+            ((str(publication.resolve()),None),),phase.profile,relocation=phase.relocation,
+            retired_relocations=phase.retired_relocations)
         phase=SurfaceWritePhase(receipt)
     phase.recheck()
     known={Path(name) for name in phase.files if Path(name).is_relative_to(stage)}
@@ -5987,7 +5988,7 @@ def _surface_admission_after_owned_change(output_dir, admission, replacements, *
     expected.update((str(Path(name).resolve()),raw) for name,raw in replacements.items())
     transitioned = ProjectWriteAdmission(Path(output_dir).resolve(),tuple(sorted(expected.items())),admission.profile,
         workbook_roster=admission.workbook_roster,integrity_paths=admission.integrity_paths,
-        relocation=admission.relocation)
+        relocation=admission.relocation,retired_relocations=admission.retired_relocations)
     transitioned.recheck()
     current = capture_project_write_admission(output_dir,recovery=True)
     # A temporary valid change during recapture must not become a new baseline.

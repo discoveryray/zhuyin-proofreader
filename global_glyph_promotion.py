@@ -671,6 +671,7 @@ def recover_project_actual_transaction(root: Path, *, _phase=None):
                 else:_atomic_bytes(target,raw,_phase=_phase)
             _phase.recheck()
             _phase.plan({path:None});_phase.attempting();path.unlink();_phase.written()
+            _phase.complete_owned_rollback(journal_raw)
             return state
         if (journal['schema_version']=='2.0' and journal['owner']['operation']=='direct-visual'
                 and admission is not None and admission.profile):
@@ -683,6 +684,7 @@ def recover_project_actual_transaction(root: Path, *, _phase=None):
                 from project_write_admission import SurfaceWritePhase
                 _phase=SurfaceWritePhase(admission)
             _phase.plan({path:None});_phase.attempting();path.unlink();_phase.written()
+            _phase.complete_owned_rollback(journal_raw)
             return state
         surface_only=journal['schema_version']=='2.0' and journal['owner']['operation']=='surface-only'
         if surface_only:
@@ -713,11 +715,12 @@ def recover_project_actual_transaction(root: Path, *, _phase=None):
             if _phase is None:
                 ProjectWriteAdmission(admission.project,tuple(sorted(restored.items())),admission.profile,
                     workbook_roster=admission.workbook_roster,integrity_paths=admission.integrity_paths,
-                    relocation=admission.relocation).recheck()
+                    relocation=admission.relocation,retired_relocations=admission.retired_relocations).recheck()
             else:
                 _phase.recheck()
         if _phase is not None:
             _phase.plan({path:None});_phase.attempting();path.unlink();_phase.written()
+            _phase.complete_owned_rollback(journal_raw)
         else:
             path.unlink()
     return state

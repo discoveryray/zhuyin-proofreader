@@ -334,3 +334,95 @@ def test_owned_recovery_interrupted_again_then_moved_back_keeps_original_vote(tm
     after = ReviewSaveService(output).load_resume_snapshot()
     assert after.ledger[1]['actual'] == 'ㄆ' and after.db == before.db
     assert not renamed.exists() and not (output / sp.ACTUAL_REFRESH_PUBLICATION).exists()
+
+
+@pytest.mark.parametrize('kind', ['direct', 'surface'])
+def test_one_apply_entry_retires_prepared_authority_before_new_commit(tmp_path, monkeypatch, kind):
+    from project_write_admission import SurfaceWritePhase
+    root, area, output, before = _profile(tmp_path, monkeypatch)
+    if kind == 'direct':
+        _retain_direct(output, before, 'PREPARED')
+    else:
+        _stage_surface(output, before)
+        interrupted_surface_transaction(output)
+    original = promotion._validated_project_journal(_authority(output))
+    selected, old = _relocate(root, area, output)
+    retired, written = [], []
+    finish, write = SurfaceWritePhase.complete_owned_rollback, promotion._write_json
+    def observe_handoff(phase, raw):
+        binding = phase.relocation
+        assert binding.transaction_id == original['transaction_id']
+        finish(phase, raw)
+        assert phase.relocation is None and phase.retired_relocations[-1] is binding
+        phase.recheck()
+        retired.append(binding)
+    def observe_journal(path, value, **kwargs):
+        write(path, value, **kwargs)
+        if Path(path).name == promotion.PROJECT_TRANSACTION_FILE:
+            written.append(copy.deepcopy(value))
+    apply = sp.apply_staged_manual_actual_corrections if kind == 'direct' else sp.apply_staged_surface_actual_corrections
+    with patch.object(SurfaceWritePhase, 'complete_owned_rollback', new=observe_handoff), \
+            patch.object(promotion, '_write_json', new=observe_journal):
+        result = apply(selected)  # No separate rollback call before this public entry.
+    assert result['project_refresh'] == 'SUCCESS' and len(retired) == 1
+    assert written and all(item['transaction_id'] != original['transaction_id'] for item in written)
+    assert all(item['owner']['project'] == str(selected) for item in written)
+    after = ReviewSaveService(selected).load_resume_snapshot()
+    changed = 1 if kind == 'direct' else 0
+    assert after.ledger[changed]['actual'] == 'ㄆ' and after.db == before.db
+    assert [row['actual'] for i, row in enumerate(after.ledger) if i != changed] == [
+        row['actual'] for i, row in enumerate(before.ledger) if i != changed]
+    if kind == 'direct':
+        repository = library.GlobalExactGlyphRepository.resolved()
+        first = repository.load_inspection_snapshot()
+        assert len(first.records) == 1 and first.records[0].direct_source_count == 1
+        assert not first.records[0].global_reuse_allowed
+        apply(selected)
+        assert replace(repository.load_inspection_snapshot(), loaded_at=first.loaded_at) == first
+    else:
+        assert not library.GlobalExactGlyphRepository.resolved().path.exists()
+        assert apply(selected)['surface_applied_count'] == 0
+    assert _files(area) == old
+    assert not (sp.project_actual_evidence_root(selected) / promotion.PROJECT_TRANSACTION_FILE).exists()
+    assert not (selected / sp.ACTUAL_REFRESH_PUBLICATION).exists()
+
+
+@pytest.mark.parametrize('kind', ['direct', 'surface'])
+def test_rollback_handoff_rejects_foreign_bytes_before_retiring_authority(tmp_path, monkeypatch, kind):
+    from project_write_admission import SurfaceWritePhase
+    root, area, output, before = _profile(tmp_path, monkeypatch)
+    if kind == 'direct':
+        _retain_direct(output, before, 'PREPARED')
+    else:
+        _stage_surface(output, before)
+        interrupted_surface_transaction(output)
+    selected, old = _relocate(root, area, output)
+    original = promotion._validated_project_journal(_authority(selected))
+    db_raw = (selected / '人工判定資料庫.json').read_bytes()
+    manifest = sp.json_load_strict(selected / '校對工作階段.json')
+    target = (selected / sp.descriptor(manifest['pdfs'][0], 'actual') if kind == 'direct'
+              else selected / sp.ACTUAL_REFRESH_PUBLICATION)
+    foreign = b'foreign boundary bytes must not become a new baseline'
+    entered = []
+    finish = SurfaceWritePhase.complete_owned_rollback
+    def inject_at_handoff(phase, raw):
+        binding = phase.relocation
+        assert binding.transaction_id == original['transaction_id']
+        target.write_bytes(foreign)
+        entered.append(phase)
+        with pytest.raises(ValueError, match='source changed before write'):
+            finish(phase, raw)
+        assert phase.relocation is binding and not phase.retired_relocations
+        raise ValueError('isolated handoff rejected foreign bytes')
+    apply = sp.apply_staged_manual_actual_corrections if kind == 'direct' else sp.apply_staged_surface_actual_corrections
+    with patch.object(SurfaceWritePhase, 'complete_owned_rollback', new=inject_at_handoff):
+        with pytest.raises(ValueError, match='handoff rejected foreign bytes'):
+            apply(selected)
+    assert entered and target.read_bytes() == foreign and _files(area) == old
+    actual = sp.project_actual_evidence_root(selected)
+    assert not (actual / promotion.PROJECT_TRANSACTION_FILE).exists()
+    for name, packed in original['files'].items():
+        path = actual / name
+        assert (path.read_bytes() if path.exists() else None) == promotion._unpacked(packed)
+    assert (selected / '人工判定資料庫.json').read_bytes() == db_raw
+    assert not library.GlobalExactGlyphRepository.resolved().path.exists()

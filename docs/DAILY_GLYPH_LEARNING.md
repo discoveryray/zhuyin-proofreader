@@ -30,6 +30,8 @@
 
 搬移最小集合包含完整專案，以及既有來源機制能核實的 PDF。若已有 `actual_refresh_publication.json`，還必須保留它明確登記、位於專案同層的 `.ar-XXXXXXXX` 暫存目錄；其中 `previous` 與 `ack-committed.json` 是尚未結束交易的必要恢復證據。跨資料夾搬移時需連同該目錄保留在新專案同層；同層改名不需搬它。只搬專案而遺失此目錄、同名目錄含不同 bytes 或證據有連結時會拒絕恢復，不回舊位置搜尋，也不重建缺失原件。這項操作要求不是全機掃描或正式資料遷移。
 
+搬移後可直接使用原本的「套用 actual」或學習重試入口，不需先另行呼叫低階 rollback。若原交易停在 PREPARED，同一次操作先完整還原原 beforeimages/staging，確認原 journal 已由該 phase 正常移除、沒有 publication 殘留及外來 bytes，再結束該交易的 owner/token authority。選定目錄與來源防護仍保留，新交易依原流程進行；固定學習決策、operation ID 與核准不因此重製。任何 handoff 邊界資料變動仍拒絕繼續。
+
 已套用的 surface 確認每次收集候選仍依原嚴格來源／render proof 驗證；只有相同 occurrence、review、讀音及 receipt 的有效位置不再詢問，未確認的同字形位置仍保留。失效證據不算完成，正常「修改 actual」入口仍可重新確認本位置，surface 永遠不增加 Global donor 或獨立來源票數。
 
 等待第二來源屬於學習進度，不加入教材完成條件。教材是否完成仍由原本的 actual、expected、差異確認與完整性門檻判定。
