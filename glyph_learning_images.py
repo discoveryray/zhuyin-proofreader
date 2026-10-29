@@ -44,11 +44,9 @@ def _storage_lock(root: Path, *, timeout: float = 2.0):
     lock = _plain_path(root / ".learning-storage.lock")
     # OS locks are released on process exit. The retained lock file is never
     # mistaken for ownership or deleted while another process can hold it.
+    # msvcrt.locking permits ranges beyond EOF, so byte 0 needs no sentinel.
+    # Writing before acquisition races another handle holding that byte range.
     with lock.open("a+b") as handle:
-        handle.seek(0, 2)
-        if handle.tell() == 0:
-            handle.write(b"0")
-            handle.flush()
         started = time.monotonic()
         while True:
             handle.seek(0)

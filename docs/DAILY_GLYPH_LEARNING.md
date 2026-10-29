@@ -54,6 +54,8 @@
 
 真實 worker 準備階段使用每個 worker 預設上限 256 MiB、依圖片 SHA 去重的記憶體暫存。取消、重新準備、部分準備失敗或重開會釋放未確認圖片，超限則拒絕整次準備。最後按「並記住」並重新通過來源檢查後，才把原準備圖片的相同 bytes 保存為必要證據；提交不重新渲染替換圖片。圖片與決策發布共用圖片鎖；發布前失敗只回收本操作新建且未引用的圖，共用既有圖與已發布、待恢復操作的圖保留。既有正式資料不批次清理。
 
+圖片儲存沿用固定的 `.learning-storage.lock`，直接鎖定 byte 0，不在取得鎖前初始化或寫入 sentinel；既有含 sentinel 的鎖檔也保留原 bytes。這依 [Python `msvcrt.locking`](https://docs.python.org/3.13/library/msvcrt.html) 與 [Microsoft `_locking`](https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/locking?view=msvc-170) 允許鎖定 EOF 之外範圍的契約，空檔同樣可互斥。跨執行緒／程序保存仍受原有限等待保護，離開操作時解鎖，程序退出後由 OS 釋鎖；不刪使用中的鎖檔，鎖定失敗不視為保存成功。
+
 新學習圖片預設放在 `%LOCALAPPDATA%\DiscoveryRay\ZhuyinProofreader\GlyphLearning\images\evidence\<sha256>.png`；可重建圖片另放同層 `cache`。已知專案使用索引位於 `GlyphLearning\usage.json`。這些是使用者資料，不放入 repository 的 `tmp`；測試另用隔離路徑。
 
 本功能不修改既有 SQLite schema、occurrence/review identity、actual/expected fingerprint schema、semantics epoch、runtime assets 或通用審查政策。舊資料不批次追認為新的 direct evidence。
