@@ -432,7 +432,11 @@ def _validate_direct_write_plan(journal):
     if plan['contract']!=DIRECT_WRITE_CONTRACT or not isinstance(plan['dependencies'],dict):
         raise library.GlobalLibraryValidationError('unsupported direct write plan')
     for path,digest in plan['dependencies'].items():
-        if not isinstance(path,str) or not Path(path).is_absolute() or str(Path(path).resolve())!=path:
+        # A retained absolute locator is syntax, not a filesystem capability.
+        # Do not resolve symlinks or consult a former project directory here;
+        # admission checks the selected mapped dependency's ancestry and bytes.
+        if (not isinstance(path,str) or not Path(path).is_absolute()
+                or '..' in Path(path).parts or str(Path(path))!=path):
             raise library.GlobalLibraryValidationError('invalid direct dependency path')
         if digest is not None:library._sha256_text(digest,'direct dependency')
     after=plan['afterimages']
@@ -518,11 +522,15 @@ def _check_direct_receipt(root,journal,receipt,publication=None):
     import standalone_proofread as sp
     import manual_surface_actual as surface
     manifest=sp.json_parse_strict(receipt.expected_bytes(project/'校對工作階段.json'),project/'校對工作階段.json')
-    if journal['owner']['project']!=str(project) or journal['owner']['session_id']!=manifest['session_id']:
+    if receipt.relocation is not None:
+        receipt.relocation.check_owner(journal['owner'],manifest)
+    elif journal['owner']['project']!=str(project) or journal['owner']['session_id']!=manifest['session_id']:
         raise library.GlobalLibraryValidationError('direct write plan owner differs from its project')
     if not surface.enabled(manifest):raise library.GlobalLibraryValidationError('journal/3 requires its surface profile')
     before=_direct_image_map(root,journal);after=_direct_image_map(root,journal,after=True)
     dependencies=journal['write_plan']['dependencies'];current=dict(receipt.files)
+    if receipt.relocation is not None:
+        dependencies=receipt.relocation.dependency_map(dependencies)
     stage=publication[2] if publication is not None else None
     ignored={str((root/PROJECT_TRANSACTION_FILE).resolve()),str((project/sp.ACTUAL_REFRESH_PUBLICATION).resolve()),*before}
     expected={name for name in current if name not in ignored and
@@ -642,7 +650,9 @@ def recover_project_actual_transaction(root: Path, *, _phase=None):
             raise library.GlobalLibraryValidationError('surface transaction has no admitted owner snapshot')
         manifest = sp.json_parse_strict(admission.expected_bytes(project/'校對工作階段.json'),
                                         project/'校對工作階段.json')
-        if (journal['owner']['project'] != str(project.resolve())
+        if admission.relocation is not None:
+            admission.relocation.check_owner(journal['owner'],manifest)
+        elif (journal['owner']['project'] != str(project.resolve())
                 or journal['owner']['session_id'] != manifest['session_id']
                 or (journal['state']=='PREPARED' and journal['owner']['origin_manifest_sha256'] != manifest['manifest_integrity_sha256'])):
             raise library.GlobalLibraryValidationError('surface transaction owner changed; no recovery writes')
@@ -661,6 +671,7 @@ def recover_project_actual_transaction(root: Path, *, _phase=None):
                 else:_atomic_bytes(target,raw,_phase=_phase)
             _phase.recheck()
             _phase.plan({path:None});_phase.attempting();path.unlink();_phase.written()
+            _phase.complete_owned_rollback(journal_raw)
             return state
         if (journal['schema_version']=='2.0' and journal['owner']['operation']=='direct-visual'
                 and admission is not None and admission.profile):
@@ -673,6 +684,7 @@ def recover_project_actual_transaction(root: Path, *, _phase=None):
                 from project_write_admission import SurfaceWritePhase
                 _phase=SurfaceWritePhase(admission)
             _phase.plan({path:None});_phase.attempting();path.unlink();_phase.written()
+            _phase.complete_owned_rollback(journal_raw)
             return state
         surface_only=journal['schema_version']=='2.0' and journal['owner']['operation']=='surface-only'
         if surface_only:
@@ -702,11 +714,13 @@ def recover_project_actual_transaction(root: Path, *, _phase=None):
             restored[str((root/surface.FILE).resolve())]=before
             if _phase is None:
                 ProjectWriteAdmission(admission.project,tuple(sorted(restored.items())),admission.profile,
-                    workbook_roster=admission.workbook_roster,integrity_paths=admission.integrity_paths).recheck()
+                    workbook_roster=admission.workbook_roster,integrity_paths=admission.integrity_paths,
+                    relocation=admission.relocation,retired_relocations=admission.retired_relocations).recheck()
             else:
                 _phase.recheck()
         if _phase is not None:
             _phase.plan({path:None});_phase.attempting();path.unlink();_phase.written()
+            _phase.complete_owned_rollback(journal_raw)
         else:
             path.unlink()
     return state
@@ -1019,15 +1033,15 @@ class _DirectVisualPDFSnapshot:
         return self.inspectors[font_key]
 
 
-def direct_visual_intents(group, reading, checked_occurrence_ids, source_context, *, _snapshot=None):
-    """Only frozen checked decisions admitted from current, sealed PDF bytes.
+def visual_source_descriptors(group, checked_occurrence_ids, source_context, *, _snapshot=None):
+    """Prove source identity only; never create a reading or human evidence.
 
-    Insufficient Global proof is explicitly reported without rejecting the local
-    occurrence correction. No expected/decoder reading is consulted here.
+    Candidate selection uses these descriptors without fabricating direct
+    visual evidence. The same proof is repeated by the actual writer.
     """
     if _snapshot is None:
         with _DirectVisualPDFSnapshot(source_context) as snapshot:
-            return direct_visual_intents(group, reading, checked_occurrence_ids, source_context, _snapshot=snapshot)
+            return visual_source_descriptors(group, checked_occurrence_ids, source_context, _snapshot=snapshot)
     if not isinstance(_snapshot, _DirectVisualPDFSnapshot):
         raise ValueError("invalid direct visual PDF snapshot")
     ids = list(checked_occurrence_ids)
@@ -1036,7 +1050,7 @@ def direct_visual_intents(group, reading, checked_occurrence_ids, source_context
     members = {member["occurrence_id"]: member for member in group["members"]}
     if not set(ids).issubset(members):
         raise ValueError("direct visual checked IDs are not group members")
-    intents, admissions = [], []
+    descriptors, admissions = [], []
     for oid in ids:
         try:
             if source_context is None:
@@ -1111,21 +1125,41 @@ def direct_visual_intents(group, reading, checked_occurrence_ids, source_context
                 "kind": group["kind"], "style_group": style, "glyph_sha256": current_sha,
                 "identity_eligibility": identity["eligibility"],
             }
-            frozen = {
-                "session_id": project_id, "pdf_sha256": pdf_sha,
-                "font_program_sha256": hashlib.sha256(font_bytes).hexdigest(),
-                "occurrence_id": oid, "review_id": member["review_id"], "identity": exact,
-                "reading": reading, "confirmation_channel": library.PDF_PAGE_VISUAL,
-            }
-            intent = library.make_direct_evidence_intent(
-                exact, reading=reading, source_project_id=project_id, source_pdf_sha256=pdf_sha,
-                source_font_program_sha256=frozen["font_program_sha256"],
-                source_occurrence_id=oid, source_review_id=member["review_id"],
-                decision_snapshot_sha256=library._canonical_sha256(frozen),
-            )
-            intents.append(intent)
-            admissions.append({"occurrence_id": oid, "status": "ELIGIBLE", "intent_id": intent["intent_id"]})
+            descriptors.append({
+                "source_project_id": project_id, "source_pdf_sha256": pdf_sha,
+                "source_font_program_sha256": hashlib.sha256(font_bytes).hexdigest(),
+                "source_occurrence_id": oid, "source_review_id": member["review_id"],
+                "identity": exact,
+            })
+            admissions.append({"occurrence_id": oid, "status": "ELIGIBLE"})
         except Exception as exc:
             admissions.append({"occurrence_id": oid, "status": "NON_GLOBAL_ELIGIBLE",
                                "reason": str(exc), "error_type": type(exc).__name__})
+    return descriptors, admissions
+
+
+def direct_visual_intents(group, reading, checked_occurrence_ids, source_context, *, _snapshot=None):
+    """Create direct intents only for the caller's explicit checked decision."""
+    descriptors, admissions = visual_source_descriptors(
+        group, checked_occurrence_ids, source_context, _snapshot=_snapshot)
+    intents = []
+    for source in descriptors:
+        admission = next(row for row in admissions if row["occurrence_id"] == source["source_occurrence_id"])
+        try:
+            frozen = {
+                "session_id": source["source_project_id"], "pdf_sha256": source["source_pdf_sha256"],
+                "font_program_sha256": source["source_font_program_sha256"],
+                "occurrence_id": source["source_occurrence_id"], "review_id": source["source_review_id"],
+                "identity": source["identity"], "reading": reading,
+                "confirmation_channel": library.PDF_PAGE_VISUAL,
+            }
+            intent = library.make_direct_evidence_intent(source["identity"], reading=reading,
+                **{key: value for key, value in source.items() if key != "identity"},
+                decision_snapshot_sha256=library._canonical_sha256(frozen))
+            intents.append(intent)
+            admission.update(intent_id=intent["intent_id"])
+        except Exception as exc:
+            # Preserve the existing per-position admission contract: an invalid
+            # Global proposal cannot masquerade as eligible or abort other rows.
+            admission.update(status="NON_GLOBAL_ELIGIBLE", reason=str(exc), error_type=type(exc).__name__)
     return intents, admissions

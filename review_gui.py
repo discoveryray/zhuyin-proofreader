@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import base64
 import copy
+import hashlib
+import json
 import queue
 import re
 import sys
@@ -559,7 +562,7 @@ class SurfaceActualDialog(_ReviewDialog):
     _variable_attributes = ('reading','actor','confirmations')
     _widget_attributes = ('body_canvas','photos')
 
-    def __init__(self, parent, entry, prepared):
+    def __init__(self, parent, entry, prepared, *, learning_mode=False):
         super().__init__(parent)
         self.result = None
         self.prepared = prepared
@@ -569,8 +572,8 @@ class SurfaceActualDialog(_ReviewDialog):
         self.grab_set()
         footer = ActionRows(self)
         footer.pack(side='bottom',fill='x')
-        footer.set_items([tk.Button(footer,text='暫存本位置 actual',command=self.submit),
-                          tk.Button(footer,text='取消',command=self.destroy)])
+        footer.set_items([tk.Button(footer,text='修改圖片上的注音並記住（僅本位置）' if learning_mode else '暫存本位置 actual',command=self.submit),
+                          tk.Button(footer,text='稍後處理' if learning_mode else '取消',command=self.destroy)])
         body,self.body_canvas = create_scrollable_body(self)
         WrappedLabel(body,text=prepared['warning'],fg='#9a4100').pack(fill='x',padx=14,pady=8)
         WrappedLabel(body,text=f"僅此位置：{entry.get('char','')}；自動解碼原值：{prepared['proof']['automatic_actual'] or '未解碼'}。疊蓋警示保留，不學習或傳播。"
@@ -617,12 +620,14 @@ class ActualReadingDialog(_ReviewDialog):
     _variable_attributes = ("checked_vars", "reading", "note")
     _widget_attributes = ("body_canvas", "previews", "preview_slots", "preview_buttons",
                           "check_buttons", "preview_guidance", "_body_scrollbar", "_sample_frames",
-                          "sample_container", "page_navigation", "page_label", "previous_page_button", "next_page_button")
+                          "sample_container", "page_navigation", "page_label", "previous_page_button", "next_page_button",
+                          "action_footer")
     _PREVIEW_READY_RETRIES = 40
 
     def __init__(self, parent, entry, group, output_dir: Path, *, wait: bool = True,
-                 verified_checked_occurrence_ids=()):
+                 verified_checked_occurrence_ids=(), learning_mode=False):
         super().__init__(parent)
+        self.learning_mode = learning_mode
         self.result = None
         self.entry = entry
         self.group = group
@@ -643,6 +648,7 @@ class ActualReadingDialog(_ReviewDialog):
         self.verified_checked_occurrence_ids = set(verified_checked_occurrence_ids)
 
         footer = ActionRows(self, bd=1, relief="groove")
+        self.action_footer = footer
         footer.pack(side="bottom", fill="x")
         cancel = tk.Button(footer, text="取消", command=self.destroy)
         save = tk.Button(footer, text="暫存這筆 actual", command=self.submit)
@@ -658,8 +664,9 @@ class ActualReadingDialog(_ReviewDialog):
         WrappedLabel(form, text=f"程式目前 actual：{entry.get('actual') or '尚未辨識'}").grid(row=0,column=0,columnspan=2,sticky="ew",padx=8,pady=(8,4))
         WrappedLabel(form, text="原頁真正 actual：", width_fraction=0.25).grid(row=1,column=0,sticky="ew",padx=8,pady=4)
         scrollable_entry(form, self.reading).grid(row=1,column=1,sticky="ew",padx=8,pady=4)
-        WrappedLabel(form, text="備註（可空白）：", width_fraction=0.25).grid(row=2,column=0,sticky="ew",padx=8,pady=4)
-        scrollable_entry(form, self.note).grid(row=2,column=1,sticky="ew",padx=8,pady=(4,8))
+        if not learning_mode:
+            WrappedLabel(form, text="備註（可空白）：", width_fraction=0.25).grid(row=2,column=0,sticky="ew",padx=8,pady=4)
+            scrollable_entry(form, self.note).grid(row=2,column=1,sticky="ew",padx=8,pady=(4,8))
         form.columnconfigure(0, weight=1, uniform="actual-form")
         form.columnconfigure(1, weight=3, uniform="actual-form")
 
@@ -674,6 +681,10 @@ class ActualReadingDialog(_ReviewDialog):
         WrappedLabel(
             body,
             text=(
+                "請只依上方原頁判斷 actual。準備保存後，按「並記住」會保存這次看圖確認，"
+                "並依畫面準備時固定的來源與讀音，在符合獨立來源條件時供其他教材使用。"
+                "只有實際看過並勾選的樣本會成為直接證據；等待第二來源不影響教材結案。"
+                if learning_mode else
                 "這個視窗不提供 expected／字典答案，請只依原頁可見字形輸入 actual。"
                 "這次只會保存人工核對結果，不會立即重跑 PDF；你可以繼續確認下一筆，"
                 "最後由主畫面的「套用 actual 修正」一次處理。"
@@ -748,6 +759,8 @@ class ActualReadingDialog(_ReviewDialog):
                     "暫存後批次套用時，才會依已核對位置及既有證據判斷能否重用 exact 字形。")
         else:
             hint = "目前沒有第二個可交叉核對的 exact glyph；本次會先暫存 occurrence-specific actual 修正。"
+        if learning_mode:
+            hint = "同組其他位置只用來定位候選；未親自看圖勾選不會增加人工確認次數。"
         WrappedLabel(body, text=hint, fg="#555555").pack(fill="x", anchor="w", padx=18, pady=(0,10))
         self.protocol("WM_DELETE_WINDOW", self.destroy)
         if wait:
@@ -799,7 +812,8 @@ class ActualReadingDialog(_ReviewDialog):
                 var = tk.BooleanVar(master=self, value=self.checked_vars[index].get())
                 self.checked_vars[index].bind(var)
                 check = wrap_checkbutton(tk.Checkbutton(frame, text="我已直接核對這張 PDF 原頁", variable=var,
-                    state="normal" if self.sample_available[index] and self._viewed_target[index] else "disabled"))
+                    state="normal" if self.sample_available[index] and self._viewed_target[index] else "disabled",
+                    command=getattr(self, "_learning_changed", lambda: None)))
                 check.pack(fill="x", padx=8, pady=(2, 7))
                 self.check_buttons[index] = check
         pages = max(1, (len(self.samples) + ACTUAL_SAMPLE_PAGE_SIZE - 1) // ACTUAL_SAMPLE_PAGE_SIZE)
@@ -983,6 +997,297 @@ class ActualReadingDialog(_ReviewDialog):
         self.destroy()
 
 
+def learning_confirmation_inputs(dialog):
+    """Only current, actually viewed samples can enter a learning request."""
+    reading = canonical_bopomofo(dialog.reading.get())
+    if not reading:
+        raise ValueError("請輸入單一合法注音。")
+    images, checked = [], []
+    for index, sample in enumerate(dialog.samples):
+        if not dialog.checked_vars[index].get():
+            continue
+        if (not dialog.sample_available[index] or not dialog._viewed_target[index]
+                or dialog.previously_checked[index]):
+            raise ValueError("勾選的樣本尚未完成原頁目視核對；請重新顯示並核對。")
+        image = dialog._learning_images.get(index)
+        if image is None:
+            raise ValueError("確認圖片已失效；請重新載入原頁。")
+        oid = str(sample.get("occurrence_id") or "")
+        checked.append(oid)
+        images.append(dict(occurrence_id=oid, review_id=sample.get("review_id"),
+                           source_sha256=sample.get("pdf_sha256"),
+                           png_base64=base64.b64encode(image["png"]).decode("ascii"),
+                           padding=list(image["padding"]), display_width=image["display_width"]))
+    if str(dialog.entry.get("occurrence_id") or "") not in checked:
+        raise ValueError("目前位置必須看過原頁並親自勾選。")
+    return dict(reading=reading, checked_occurrence_ids=checked, images=images)
+
+
+def learning_inputs_key(inputs):
+    return hashlib.sha256(json.dumps(inputs, sort_keys=True, ensure_ascii=False).encode("utf-8")).hexdigest()
+
+
+class LearningReadingDialog(ActualReadingDialog):
+    """One viewed sample operation, with a fixed plan before the final click."""
+    _widget_attributes = ActualReadingDialog._widget_attributes + (
+        "learning_status", "prepare_button", "remember_button", "correct_button", "defer_button")
+
+    def __init__(self, parent, entry, group, output_dir, *, service, expected_manifest,
+                 expected_db, wait=True):
+        self._learning_images = {}
+        self._learning_prepared = None
+        self._learning_busy = False
+        self._learning_poll = None
+        self._learning_service = service
+        self._learning_context = dict(expected_manifest=copy.deepcopy(expected_manifest),
+                                      expected_db=copy.deepcopy(expected_db), group_id=group["group_id"])
+        visible_group = dict(group, members=group.get("candidate_members") or group["members"])
+        super().__init__(parent, entry, visible_group, output_dir, wait=False, learning_mode=True)
+        self.title("新字形待確認")
+        self.reading.set(canonical_bopomofo(entry.get("actual")) or "")
+        self.learning_status = WrappedLabel(self, text="看圖並勾選樣本，再準備保存。", fg="#555555")
+        self.learning_status.pack(side="bottom", fill="x", padx=16, pady=4)
+        self.prepare_button = tk.Button(self.action_footer, text="準備保存", command=self.prepare_learning)
+        self.remember_button = tk.Button(self.action_footer, text="辨識正確並記住",
+                                        command=lambda: self.submit_learning(correct=True), state="disabled")
+        self.correct_button = tk.Button(self.action_footer, text="修改圖片上的注音並記住",
+                                       command=lambda: self.submit_learning(correct=False), state="disabled")
+        self.defer_button = tk.Button(self.action_footer, text="稍後處理", command=self.defer_learning)
+        self.action_footer.set_items([self.prepare_button, self.remember_button, self.correct_button, self.defer_button])
+        self.reading.trace_add("write", lambda *_: self._learning_changed())
+        self.protocol("WM_DELETE_WINDOW", self.defer_learning)
+        if wait:
+            self.wait_window(self)
+
+    def _learning_changed(self):
+        self._learning_prepared = None
+        if hasattr(self, "remember_button"):
+            self.remember_button.configure(state="disabled")
+            self.correct_button.configure(state="disabled")
+            self.learning_status.configure(text="讀音、勾選或圖片有變動；請重新準備保存。")
+
+    def show_sample_preview(self, index):
+        self._learning_images.pop(index, None)
+        self._learning_changed()
+        super().show_sample_preview(index)
+        preview = self.previews[index]
+        if preview is None:
+            return
+        ready, failure, invalidated = preview.on_ready, preview.on_failure, preview.on_invalidated
+        def clear_image(callback):
+            self._learning_images.pop(index, None)
+            self._learning_changed()
+            if callback is not None:
+                callback()
+        def remember_image(current):
+            if (self.previews[index] is current and current.target is not None
+                    and current.pixmap is not None and current.photo is not None):
+                self._learning_images[index] = dict(png=bytes(current.pixmap.png),
+                    padding=tuple(current._padding), display_width=current._render_width)
+            if ready is not None:
+                ready(current)
+        preview.on_ready = remember_image
+        preview.on_failure = lambda: clear_image(failure)
+        preview.on_invalidated = lambda: clear_image(invalidated)
+
+    def _learning_controls(self, busy):
+        self._learning_busy = busy
+        self.prepare_button.configure(state="disabled" if busy else "normal")
+        self.defer_button.configure(state="disabled" if busy else "normal")
+        self.remember_button.configure(state="disabled")
+        self.correct_button.configure(state="disabled")
+
+    def _learning_job(self, operation, payload, publish):
+        if self._learning_busy:
+            return
+        self._learning_controls(True)
+        completed = queue.Queue(maxsize=1)
+        service = self._learning_service
+        frozen = copy.deepcopy(payload)
+        entered, abandoned = threading.Event(), threading.Event()
+        admission_error = [None]
+        def run():
+            entered.set()
+            if abandoned.is_set():
+                completed.put((None, admission_error[0]))
+                return
+            try:
+                completed.put((service.invoke(operation, frozen), None))
+            except Exception as exc:
+                completed.put((None, exc))
+        worker = threading.Thread(target=run, daemon=False)
+        def started():
+            return entered.is_set() or worker.ident is not None or (
+                getattr(worker, "_started", None) is not None and worker._started.is_set())
+        try:
+            worker.start()
+        except Exception as exc:
+            admission_error[0] = exc
+            if not started():
+                abandoned.set()
+                if not started():
+                    self._learning_controls(False)
+                    self.learning_status.configure(text="操作尚未啟動，仍停留本筆。")
+                    messagebox.showerror("操作尚未啟動", str(exc), parent=self)
+                    return
+            self.learning_status.configure(text="操作已開始，正在等待原保存結果；請勿重複操作。")
+        def poll():
+            self._learning_poll = None
+            try:
+                result, error = completed.get_nowait()
+            except queue.Empty:
+                self._learning_poll = self.after(30, poll)
+                return
+            self._learning_controls(False)
+            if error is not None:
+                self.learning_status.configure(text="保存尚未完成；仍保留目前位置，可重新核對或重試。")
+                messagebox.showerror("字形學習未完成", str(error), parent=self)
+                return
+            try:
+                publish(result)
+            except Exception as exc:
+                self.learning_status.configure(text="保存結果的畫面更新未完成；請保留本筆並重新載入。")
+                messagebox.showerror("保存結果待核對", str(exc), parent=self)
+        self._learning_poll = self.after(30, poll)
+
+    def prepare_learning(self):
+        if self._learning_busy:
+            return
+        try:
+            inputs = learning_confirmation_inputs(self)
+        except ValueError as exc:
+            messagebox.showerror("尚未完成原頁確認", str(exc), parent=self)
+            return
+        key = learning_inputs_key(inputs)
+        self._learning_prepared = None
+        self.learning_status.configure(text="正在固定讀音、來源、確認圖片與可啟用的證據集合…")
+        def prepared(result):
+            try:
+                unchanged = key == learning_inputs_key(learning_confirmation_inputs(self))
+            except ValueError:
+                unchanged = False
+            if not unchanged:
+                self._learning_changed()
+                return
+            self._learning_prepared = (key, result["plan_token"])
+            self.remember_button.configure(state="normal" if inputs["reading"] == canonical_bopomofo(self.entry.get("actual")) else "disabled")
+            self.correct_button.configure(state="normal" if inputs["reading"] != canonical_bopomofo(self.entry.get("actual")) else "disabled")
+            self.learning_status.configure(text=result["message"])
+        self._learning_job("prepare_learning", dict(self._learning_context, **inputs), prepared)
+
+    def submit_learning(self, *, correct):
+        if self._learning_busy or self._learning_prepared is None:
+            return
+        try:
+            inputs = learning_confirmation_inputs(self)
+            key, token = self._learning_prepared
+            if key != learning_inputs_key(inputs):
+                raise ValueError("資料已變動；請重新準備保存。")
+            if correct != (inputs["reading"] == canonical_bopomofo(self.entry.get("actual"))):
+                raise ValueError("按鈕與目前選定讀音不符；請重新準備保存。")
+        except ValueError as exc:
+            self._learning_changed()
+            messagebox.showerror("確認資料已失效", str(exc), parent=self)
+            return
+        self.learning_status.configure(text="正在保存確認；符合條件的固定核准會在同次操作完成。")
+        def saved(value):
+            result = value["result"]
+            if result.get("local_status") != "SAVED":
+                self.learning_status.configure(text=result.get("error") or "尚未保存，仍停留本筆。")
+                return
+            self.result = value
+            self.destroy()
+        self._learning_job("confirm_learning", {"plan_token": token}, saved)
+
+    def defer_learning(self):
+        if not self._learning_busy:
+            def discarded(_value):
+                self.result = {"deferred": True}
+                self.destroy()
+            self._learning_job("discard_learning", {}, discarded)
+
+    def destroy(self):
+        if getattr(self, "_learning_busy", False):
+            return
+        if self._learning_poll is not None:
+            self.after_cancel(self._learning_poll)
+            self._learning_poll = None
+        self._learning_images.clear()
+        self._learning_service = None
+        super().destroy()
+
+
+class LearningItemsDialog(_ReviewDialog):
+    """Learning navigation never writes a textbook review decision."""
+    _widget_attributes = ("items",)
+
+    def __init__(self, parent, groups, pending, deferred, *, history=(), wait=True):
+        super().__init__(parent)
+        self.result = None
+        self.groups = {group["group_id"]: group for group in groups}
+        self.deferred = deferred
+        self.title("新字形待確認")
+        apply_screen_safe_geometry(self, 920, 600, min_width=700, min_height=420)
+        self.transient(parent)
+        self.grab_set()
+        WrappedLabel(self, text="學習進度與教材校對分開。稍後處理仍未確認，也不會清除教材待辦。"
+                     "相同 exact 字形合併列出；只計實際看過的樣本。").pack(fill="x", padx=12, pady=8)
+        counts = Counter(row.get("status") for row in history)
+        WrappedLabel(self, text=f"本地已保存 {sum(row.get('local_status') == 'SAVED' for row in history)} 筆確認｜"
+                     f"等待獨立來源 {counts['LOCAL_SAVED_WAITING_SOURCE']}｜已可重用 {counts['REUSABLE']}｜"
+                     f"隔離衝突 {counts['CONFLICT_SAVED']}｜待接續 {len(pending)}").pack(fill="x", padx=12, pady=4)
+        self.items = ttk.Treeview(self, columns=("pdf", "page", "actual", "state"), show="headings")
+        for key, label in (("pdf", "來源 PDF"), ("page", "實體頁"), ("actual", "程式辨識注音"), ("state", "學習狀態")):
+            self.items.heading(key, text=label)
+            self.items.column(key, width=100 if key != "pdf" else 300)
+        self.items.pack(fill="both", expand=True, padx=12)
+        self.targets = {}
+        for group in groups:
+            if group["group_id"] in deferred:
+                continue
+            members = group.get("candidate_members") or group["members"]
+            entry = members[0]
+            iid = "group:" + group["group_id"]
+            self.targets[iid] = dict(group=group, entry=entry)
+            self.items.insert("", "end", iid=iid, values=(entry.get("pdf_name"), entry.get("physical_page"),
+                entry.get("actual") or "尚未辨識", "證據已變動，需重新看圖" if group.get("requires_fresh_approval_action") else "待看圖確認"))
+        for operation in pending:
+            if (operation.get("global_status") == "STALE_APPROVAL_REQUIRES_NEW_ACTION"
+                    and operation.get("group_id") in self.groups):
+                # The fresh candidate above is the only confirmation entry.
+                # Retrying the old fixed approval cannot approve a new roster.
+                continue
+            iid = "operation:" + operation["operation_id"]
+            self.targets[iid] = dict(operation_id=operation["operation_id"])
+            self.items.insert("", "end", iid=iid, values=(operation.get("pdf_name", "已保存確認"), "", "",
+                operation.get("status", "全域待完成")))
+        footer = ActionRows(self)
+        footer.pack(fill="x", padx=12, pady=10)
+        footer.set_items([tk.Button(footer, text="查看原頁／接續保存", command=self.choose),
+                          tk.Button(footer, text="稍後處理", command=self.later),
+                          tk.Button(footer, text="重新列出稍後項目", command=self.revisit),
+                          tk.Button(footer, text="返回教材校對", command=self.destroy)])
+        if wait:
+            self.wait_window(self)
+
+    def choose(self):
+        selected = self.items.selection()
+        if selected:
+            self.result = self.targets[selected[0]]
+            self.destroy()
+
+    def later(self):
+        selected = self.items.selection()
+        if selected and "group" in self.targets[selected[0]]:
+            self.deferred.add(self.targets[selected[0]]["group"]["group_id"])
+            self.items.delete(selected[0])
+
+    def revisit(self):
+        self.deferred.clear()
+        self.result = {"reload": True}
+        self.destroy()
+
+
 class ConfirmedItemsDialog(_ReviewDialog):
     """Find a durable local expected decision without using the pending queue."""
 
@@ -1064,6 +1369,22 @@ def load_review_project(output_dir, progress, *, service=None):
     progress("讀取校對工作階段")
     progress("驗證工作階段、來源與輸出資產完整性")
     snapshot = service.load_resume_snapshot()
+    progress("重新核對本教材實際使用的 Global 字形依賴")
+    from glyph_learning_impact import recheck_project_dependencies, refresh_stale_project_dependencies, register_usage
+    dependency_check = recheck_project_dependencies(output_dir, manifest=snapshot.manifest)
+    if dependency_check["status"] == "UNPROVABLE":
+        raise ValueError("actual 字形依賴無法核實；請先更新本教材 actual，未將舊結果視為仍可結案。")
+    if dependency_check["status"] == "STALE":
+        progress("受影響字形已變更，正在更新目前開啟教材的 actual；人工 expected 保留")
+        refresh_stale_project_dependencies(output_dir)
+        service = ReviewSaveService(output_dir, evidence_anchor=service.evidence_anchor)
+        snapshot = service.load_resume_snapshot()
+    registration_error = None
+    try:
+        register_usage(output_dir)
+    except Exception as exc:
+        # Registration is observability, never a substitute for actual proof.
+        registration_error = str(exc)
     manifest, db = copy.deepcopy(snapshot.manifest), copy.deepcopy(snapshot.db)
     progress("核對跨專案判定衝突")
     from pdf_portability import validate_conflict_state, actual_excel_conflict_state, expected_conflict_review_view
@@ -1078,6 +1399,7 @@ def load_review_project(output_dir, progress, *, service=None):
     return dict(manifest=manifest, db=db, summary=summary, prepared=prepared,
                 conflicts=conflicts, actual_conflicts=actual_conflicts,
                 service=service, snapshot=snapshot,
+                learning_registration_error=registration_error,
                 source_actual_pending=(output_dir / "來源actual待重新核對.json").exists())
 
 
@@ -1135,6 +1457,7 @@ class ReviewApp:
         self.staged_member_occurrence_ids = set()
         self.staged_checked_occurrence_ids = set()
         self.deferred_items = set()
+        self.deferred_learning = set()
         self._save_in_progress = False
         self._project_generation = 0
         self._save_service = ReviewProcessService(output_dir)
@@ -1154,14 +1477,17 @@ class ReviewApp:
         self.status = WrappedLabel(top, text="", font=("Microsoft JhengHei UI", 11, "bold"))
         self.status.pack(fill="x")
         self.retry_startup_button = tk.Button(top, text="重新載入校對專案", command=self._start_review_loading)
+        self.learning_recovery_button = tk.Button(top, text="接續已保存字形確認", command=self.open_learning_recovery)
+        self.learning_recovery_button.pack(anchor="w")
         navigation = ActionRows(top)
         navigation.pack(fill="x")
         self.revisit_button = tk.Button(navigation, text="重新查看稍後處理（0）", command=self.revisit_deferred, state="disabled")
         self.confirmed_button = tk.Button(navigation, text="查看已確認項目", command=self.open_confirmed_items)
+        self.learning_button = tk.Button(navigation, text="新字形待確認", command=self.open_learning)
         self.undo_expected_button = tk.Button(navigation, text="撤銷上一次判定", command=self.undo_last_expected, state="disabled")
         navigation.set_items([tk.Button(navigation, text="上一筆", command=self.prev),
                               tk.Button(navigation, text="下一筆", command=self.next), self.revisit_button,
-                              self.confirmed_button, self.undo_expected_button])
+                              self.confirmed_button, self.learning_button, self.undo_expected_button])
         self.navigation = navigation
 
         self.summary = tk.LabelFrame(body, text="這一筆要確認什麼")
@@ -1224,10 +1550,12 @@ class ReviewApp:
 
     def _start_review_loading(self):
         if (getattr(self, "_startup_in_progress", False) or getattr(self, "_async_disposed", False)
-                or getattr(self, "_apply_in_progress", False) or getattr(self, "_save_in_progress", False)):
+                or getattr(self, "_apply_in_progress", False) or getattr(self, "_save_in_progress", False)
+                or getattr(self, "_operation_in_progress", False) or getattr(self, "_review_action_in_progress", False)):
             return
         self._startup_in_progress = True
         self._startup_failed = False
+        self._disable_save_controls()
         self.retry_startup_button.pack_forget()
         request = {"started": time.perf_counter(), "phase": "準備載入校對專案"}
         self._startup_request = request
@@ -1252,6 +1580,7 @@ class ReviewApp:
         self._show_staging_status()
         self.status.config(text=f"校對專案載入失敗：{error}。可重新載入或關閉。")
         self.retry_startup_button.pack(anchor="w")
+        ReviewApp._update_learning_recovery_control(self)
         messagebox.showerror("無法載入人工校對", error, parent=self.root)
 
     def _poll_review_loading(self, request, messages):
@@ -1282,6 +1611,7 @@ class ReviewApp:
         self.unresolved_portability_conflicts = result["conflicts"]
         self.actual_excel_conflict_review_ids = result["actual_conflicts"]
         self._startup_in_progress = self._startup_failed = False
+        self._save_recovery_required = False
         self._startup_request = None
         self.exit_code = 0
         self._restore_save_controls()
@@ -1293,6 +1623,9 @@ class ReviewApp:
         self._start_staging_validation(result["snapshot"])
         self.show()
         _review_log("[人工校對] 已載入，可以開始校對")
+        if result.get("learning_registration_error"):
+            messagebox.showwarning("使用專案登記未完成", "教材來源已核對，但無法加入已知影響回查："
+                + result["learning_registration_error"], parent=self.root)
         from manual_surface_actual import enabled, UNSUPPORTED_WARNING
         if enabled(self.manifest):
             messagebox.showwarning('專案格式相容性',UNSUPPORTED_WARNING,parent=self.root)
@@ -1620,6 +1953,17 @@ class ReviewApp:
                 or getattr(self, "_save_recovery_required", False)
                 or getattr(self, "_async_disposed", False))
 
+    def _learning_recovery_busy(self):
+        return (any(getattr(self, name, False) for name in
+                    ("_save_in_progress", "_operation_in_progress", "_startup_in_progress", "_apply_in_progress",
+                     "_async_disposed", "_review_action_in_progress"))
+                or getattr(getattr(self, "_learning_dialog", None), "_learning_busy", False))
+
+    def _update_learning_recovery_control(self):
+        button = getattr(self, "learning_recovery_button", None)
+        if button is not None:
+            button.config(state="disabled" if ReviewApp._learning_recovery_busy(self) else "normal")
+
     def _ensure_async_lifecycle(self):
         if hasattr(self, "_async_after_ids"):
             return
@@ -1675,7 +2019,8 @@ class ReviewApp:
 
     def close(self):
         if (getattr(self, "_save_in_progress", False) or getattr(self, "_apply_in_progress", False)
-                or getattr(self, "_operation_in_progress", False)):
+                or getattr(self, "_operation_in_progress", False)
+                or getattr(getattr(self, "_learning_dialog", None), "_learning_busy", False)):
             self.status.config(text="人工判定儲存中，完成後即可關閉。")
             return
         self._cancel_staging_validation()
@@ -1824,6 +2169,12 @@ class ReviewApp:
             if committed:
                 self._save_recovery_required = True
                 self._disable_save_controls()
+                if state == "COMMITTED_REFRESH_PENDING":
+                    self._publish_actual_recovery_failure(error, self._source_error_staging_summary(error))
+                # A staged-only surface result has no committed journal; a
+                # fresh verified reload restores the existing apply queue.
+                if hasattr(self, "retry_startup_button"):
+                    self.retry_startup_button.pack(anchor="w")
             label = {"STAGED_REFRESH_PENDING": "actual 已暫存，但清單更新未完成",
                      "REPORT_SAVED_REFRESH_PENDING": "報告已保存，但清單更新未完成"}.get(state,
                      "已保存，但後續更新未完成" if committed else
@@ -1842,7 +2193,7 @@ class ReviewApp:
     def _disable_save_controls(self):
         widgets = [getattr(self, name, None) for name in
                    ("primary", "secondary", "later", "more_button", "apply_actual_button", "revisit_button",
-                    "confirmed_button", "undo_expected_button")]
+                    "confirmed_button", "learning_button", "undo_expected_button")]
         navigation = getattr(self, "navigation", None)
         if navigation is not None:
             widgets.extend(navigation.winfo_children())
@@ -1860,6 +2211,7 @@ class ReviewApp:
             if first_snapshot:
                 self._saved_status_text = self.status.cget("text")
             self.status.config(text="正在儲存人工判定與更新待辦，請稍候…")
+        ReviewApp._update_learning_recovery_control(self)
 
     def _restore_save_controls(self):
         for widget, state in getattr(self, "_saved_control_states", []):
@@ -1873,6 +2225,7 @@ class ReviewApp:
             getattr(self, "_confirm_current_expected_button", self.primary).config(state="disabled")
         if hasattr(self, "status") and hasattr(self, "_saved_status_text"):
             self.status.config(text=self._saved_status_text)
+        ReviewApp._update_learning_recovery_control(self)
 
     def save_event(self, entry, event, *, explain_expected=False, focus_after_save=False):
         """Start one durable save; publish only from the Tk polling callback."""
@@ -2248,6 +2601,145 @@ class ReviewApp:
             "updated_at": datetime.now().isoformat(timespec="seconds"),
         })
 
+    def open_learning_recovery(self):
+        """Resume only durable decisions, independently of an accepted view."""
+        if ReviewApp._learning_recovery_busy(self):
+            return
+        service = self._save_service
+        def loaded(history):
+            pending = [row for row in history
+                       if row["status"] in {"LOCAL_PENDING", "GLOBAL_PENDING", "REFRESH_PENDING"}]
+            if not pending:
+                messagebox.showinfo("接續已保存字形確認", "沒有尚待接續的固定確認。可重新載入專案核對目前狀態。", parent=self.root)
+                return
+            self._review_action_in_progress = True
+            try:
+                dialog = LearningItemsDialog(self.root, [], pending, set(), history=history)
+            finally:
+                self._review_action_in_progress = False
+            selected = dialog.result
+            if selected and selected.get("operation_id"):
+                self._retry_learning(selected["operation_id"])
+        self._start_owned_operation("讀取已保存字形確認",
+            lambda progress: service.invoke("list_learning_recovery", {}, progress=progress), loaded)
+
+    @guarded_review_action
+    def open_learning(self):
+        """The learning list also exists when the textbook has no pending row."""
+        service = self._save_service
+        payload = dict(expected_manifest=self.manifest, expected_db=self.db)
+        def loaded(value):
+            self.deferred_learning = getattr(self, "deferred_learning", set())
+            candidates = value["candidates"]
+            pending = [row for row in value["pending"]
+                       if row["status"] in {"LOCAL_PENDING", "GLOBAL_PENDING", "REFRESH_PENDING"}]
+            self._review_action_in_progress = True
+            try:
+                dialog = LearningItemsDialog(self.root, candidates["groups"], pending, self.deferred_learning,
+                                             history=value["pending"])
+            finally:
+                self._review_action_in_progress = False
+            selected = dialog.result
+            if not selected:
+                return
+            if selected.get("reload"):
+                self.open_learning()
+            elif selected.get("operation_id"):
+                self._retry_learning(selected["operation_id"])
+            else:
+                self._open_learning_target(selected["group"]["group_id"], selected["entry"]["review_id"])
+        self._start_owned_operation("整理新字形待確認", lambda progress: service.invoke("load_learning", payload, progress=progress), loaded)
+
+    def _open_learning_target(self, group_id, review_id=None):
+        payload = dict(expected_manifest=self.manifest, expected_db=self.db, group_id=group_id)
+        if review_id is not None:
+            payload["review_id"] = review_id
+        service = self._save_service
+        self._start_owned_operation("準備字形原頁", lambda progress: service.invoke("prepare_learning_target", payload, progress=progress),
+                                    self._show_learning_target)
+
+    def _show_learning_target(self, value):
+        entry, group = value["entry"], value["group"]
+        if value.get("surface") is not None:
+            self._save_learning_surface(entry, value["surface"])
+            return
+        self._review_action_in_progress = True
+        try:
+            dialog = LearningReadingDialog(self.root, entry, group, self.output_dir,
+                service=self._save_service, expected_manifest=self.manifest, expected_db=self.db, wait=False)
+            self._learning_dialog = dialog
+            dialog.wait_window(dialog)
+        finally:
+            self._learning_dialog = None
+            self._review_action_in_progress = False
+        if not dialog.result:
+            return
+        if dialog.result.get("deferred"):
+            self.deferred_learning = getattr(self, "deferred_learning", set())
+            self.deferred_learning.add(group["group_id"])
+            return
+        self._publish_learning_save(dialog.result)
+
+    def _retry_learning(self, operation_id):
+        service = self._save_service
+        self._start_owned_operation("接續字形確認保存",
+            lambda progress: service.invoke("retry_learning", {"operation_id": operation_id}, progress=progress),
+            self._publish_learning_save)
+
+    def _save_learning_surface(self, entry, prepared):
+        self._review_action_in_progress = True
+        try:
+            dialog = SurfaceActualDialog(self.root, entry, prepared, learning_mode=True)
+        finally:
+            self._review_action_in_progress = False
+        if not dialog.result:
+            return
+        payload = dict(expected_manifest=self.manifest, expected_db=self.db,
+                       review_id=entry["review_id"], **dialog.result)
+        service = self._save_service
+        self._start_owned_operation("保存本位置原頁確認",
+            lambda progress: service.invoke("save_learning_surface", payload, progress=progress), self._publish_learning_save)
+
+    def _publish_learning_save(self, value):
+        result = value["result"]
+        if result.get("local_status") != "SAVED":
+            messagebox.showerror("字形確認尚未保存", result.get("error") or "請重新核對目前位置。", parent=self.root)
+            return
+        rebuild = bool(getattr(self, "_startup_failed", False) or getattr(self, "_save_recovery_required", False))
+        if value.get("snapshot") is not None and not rebuild:
+            self.manifest, self.db = value["snapshot"].manifest, value["snapshot"].db
+            self._publish_staging_summary(value["summary"])
+            self._set_actionable_records_from_ledger(value["review_view"])
+            self.show()
+        elif value.get("reload_error"):
+            self._save_recovery_required = True
+            self._disable_save_controls()
+        labels = {
+            "REUSABLE": "本地已保存，已可供其他教材重用。",
+            "LOCAL_SAVED_WAITING_SOURCE": "本地已保存，等待符合全部獨立性條件的第二來源；不阻擋教材結案。",
+            "CONFLICT_SAVED": "本位置修正已保存，全域讀音因衝突停止重用；歷史證據保留。",
+            "GLOBAL_PENDING": "本地已保存，全域啟用尚未完成；可從新字形清單接續原操作。",
+            "REFRESH_PENDING": "本地已保存，教材重新整理尚未完成；請接續原操作。",
+        }
+        message = labels.get(result.get("status"), "本地已保存；" + str(result.get("global_status", "全域狀態待核對")))
+        if result.get("global_status") == "LOCAL_ONLY":
+            message = "本地位置確認已保存；此來源不符合全域字形重用條件。"
+        if result.get("error"):
+            message += "\n" + result["error"]
+        if value.get("reload_error"):
+            message += "\n畫面重新載入未完成：" + value["reload_error"]
+        impact = value.get("impacts")
+        if impact is not None:
+            message += "\n" + impact["notice"]
+            for project in impact["projects"]:
+                message += "\n" + project["output_dir"] + "：" + project["status"]
+        self.status.config(text=message)
+        messagebox.showinfo("字形確認保存結果", message, parent=self.root)
+        if value.get("snapshot") is not None and rebuild:
+            # Rebuild conflicts, queue, dependencies and all view state through
+            # startup; retry itself does not authorize the failed old view.
+            self._start_review_loading()
+
     @guarded_review_action
     def correct_actual(self):
         if getattr(self, "staging_summary", {}).get("staging_validation_pending"):
@@ -2267,6 +2759,9 @@ class ReviewApp:
             self._set_actionable_records_from_ledger(value["ledger"])
             self.show()
             if not self.current() or self.current().get("review_id") != entry.get("review_id"):
+                return
+            if value.get("learning_group") is not None:
+                self._show_learning_target(dict(entry=entry, group=value["learning_group"], surface=value.get("surface")))
                 return
             self._review_action_in_progress = True
             try:

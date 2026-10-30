@@ -69,6 +69,35 @@ def create_staged_navigation_fixture(output, *, same_exact_peers=False, exact_pe
     return manifest
 
 
+def unexpected_navigation_error(title, message, **_options):
+    raise AssertionError(f"unexpected isolated navigation error: {title}: {message}")
+
+
+def isolate_existing_staging_route(test):
+    """Select only the no-new-learning-candidate view boundary.
+
+    The real collector still validates source/dynamic evidence. Only its prompt
+    selection is substituted: no evidence is marked confirmed, and the real
+    dispatcher, stage/save, apply and recovery services remain in use. Learning
+    prompts have separate real worker/service coverage.
+    """
+    import glyph_learning_service as learning
+    # Only these navigation fixtures need the new readonly collector. Keep the
+    # shared fixture producer's historical output/absence semantics unchanged.
+    ar.ensure_user_evidence_files(sp.project_actual_evidence_root(test.output))
+    user = tempfile.TemporaryDirectory(prefix="navigation-user-")
+    test.addCleanup(user.cleanup)
+    test.enterContext(patch.dict("os.environ", {"LOCALAPPDATA": user.name}))
+    collect = learning.collect_learning_candidates
+    def no_new_learning_candidate(*args, **kwargs):
+        result = collect(*args, **kwargs)
+        return {**result, "groups": []}
+    test.enterContext(patch.object(learning, "collect_learning_candidates",
+                                  side_effect=no_new_learning_candidate))
+    test.enterContext(patch.object(gui.messagebox, "showerror",
+                                  side_effect=unexpected_navigation_error))
+
+
 def headless_app(output):
     from tests.no_window_review_support import ReviewApp, InlineReviewService, Surface
     app = ReviewApp.__new__(ReviewApp)
@@ -199,6 +228,7 @@ class StagedNavigationTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.output = Path(self.temp.name)
         create_staged_navigation_fixture(self.output)
+        isolate_existing_staging_route(self)
         self.app = headless_app(self.output)
 
     def row(self, number):
@@ -232,6 +262,20 @@ class StagedNavigationTests(unittest.TestCase):
         self.assertIn(row["occurrence_id"], self.app.waiting_actual_occurrence_ids)
         self.assertEqual(self.app.manifest, before)
         self.assertIn("1 筆等待套用後重新比較", self.app.staging_status.options["text"])
+
+    def test_existing_staging_route_rejects_missing_collector_source_without_swallowing_error(self):
+        before = copy.deepcopy(self.app.manifest), copy.deepcopy(self.app.db)
+        root = sp.project_actual_evidence_root(self.output)
+        missing = root / ar.USER_GLYF_FILE
+        missing.unlink()
+        with patch.object(gui, "ActualReadingDialog") as dialog:
+            # The real service anchor rejects drift before readonly collection.
+            with self.assertRaisesRegex(AssertionError, "actual 證據或應標規則已變更"):
+                self.app.correct_actual()
+            dialog.assert_not_called()
+        self.assertFalse(ar.manual_actual_staging_path(root).exists())
+        self.assertFalse(missing.exists())  # Readonly collection cannot repair it.
+        self.assertEqual((self.app.manifest, self.app.db), before)
 
     def test_staged_expected_unresolved_remains_then_save_does_not_reselect_old_difference(self):
         row = self.row(1)
@@ -344,9 +388,11 @@ class StagedNavigationTests(unittest.TestCase):
     def test_expected_save_failure_does_not_advance_and_actual_duplicate_does_not_stage_next(self):
         row = self.app.current()
         before = copy.deepcopy(self.app.db)
-        with patch.object(sp, "json_save", side_effect=OSError("isolated write failure")), patch.object(gui.messagebox, "showerror"):
+        with patch.object(sp, "json_save", side_effect=OSError("isolated write failure")), patch.object(gui.messagebox, "showerror") as error:
             self.app.save_event(row, sp.build_manual_expected_event(row, operation="ENTER_EXPECTED", expected_set="ㄎㄢ"))
             wait_for_save(self.app)
+        error.assert_called_once()
+        self.assertIn("isolated write failure", error.call_args.args[1])
         self.assertEqual(self.app.current(), row)
         self.assertEqual(self.app.db, before)
         row = self.row(5)
@@ -367,6 +413,7 @@ class StagedNavigationTests(unittest.TestCase):
                 patch.object(gui.messagebox, "showerror") as error, patch.object(gui.messagebox, "showinfo") as success:
             self.app.correct_actual()
         error.assert_called_once()
+        self.assertIn("isolated failure", error.call_args.args[1])
         success.assert_not_called()
         self.assertEqual(self.app.current(), row)
 
@@ -447,6 +494,7 @@ class StagedNavigationTests(unittest.TestCase):
             self.app.apply_staged_actuals()
             self.app.root.update()
         error.assert_called_once()
+        self.assertIn("isolated transactional failure", error.call_args.args[1])
         info.assert_not_called()
         self.assertEqual(stage_path.read_bytes(), before)
         self.assertEqual(self.app.db["events"][row["review_id"]], expected_event)
@@ -467,6 +515,7 @@ class StagedNavigationTests(unittest.TestCase):
             self.app.apply_staged_actuals()
             self.app.root.update()
         error.assert_called_once()
+        self.assertIn("unreadable", error.call_args.args[1])
         launch.assert_not_called()
 
     def test_saved_expected_survives_render_failure_without_extra_success_prompt(self):
@@ -510,6 +559,7 @@ class SameExactStagedNavigationTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.output = Path(self.temp.name)
         manifest = create_staged_navigation_fixture(self.output, same_exact_peers=True)
+        isolate_existing_staging_route(self)
         self.peers = manifest["records"][:3]
         self.ids = [row["occurrence_id"] for row in self.peers]
         self.app = headless_app(self.output)
@@ -520,15 +570,18 @@ class SameExactStagedNavigationTests(unittest.TestCase):
         self.expected_before = copy.deepcopy(self.app.db["events"])
         self.stage_path = ar.manual_actual_staging_path(sp.project_actual_evidence_root(self.output))
 
-    def stage_gui(self, index, reading="ㄎㄢ"):
+    def stage_gui(self, index, reading="ㄎㄢ", *, expected_error=None):
         row = self.peers[index]
         self.app.index = next(n for n, item in enumerate(self.app.records) if item["review_id"] == row["review_id"])
         self.app._review_action_cooldown_until = 0
+        def check_error(title, message, **options):
+            if expected_error is None or expected_error not in str(message):
+                unexpected_navigation_error(title, message, **options)
         with patch.object(gui, "ActualReadingDialog", return_value=SimpleNamespace(result={
                 "reading": reading, "checked_occurrence_ids": [row["occurrence_id"]]})), \
                 patch.object(gui.messagebox, "showinfo") as success, \
                 patch.object(gui.messagebox, "showwarning") as warning, \
-                patch.object(gui.messagebox, "showerror") as error:
+                patch.object(gui.messagebox, "showerror", side_effect=check_error) as error:
             self.app.correct_actual()
         return success, warning, error
 
@@ -566,7 +619,7 @@ class SameExactStagedNavigationTests(unittest.TestCase):
     def test_different_reading_or_rejudgment_preserves_prior_and_does_not_advance(self):
         self.stage_gui(0)
         before = self.stage_path.read_bytes()
-        success, warning, error = self.stage_gui(1, "ㄎㄢˊ")
+        success, warning, error = self.stage_gui(1, "ㄎㄢˊ", expected_error="不同讀音")
         error.assert_called_once()
         self.assertIn("不同讀音", error.call_args.args[1])
         warning.assert_not_called()
@@ -607,7 +660,7 @@ class SameExactStagedNavigationTests(unittest.TestCase):
                 sp.stage_manual_actual_correction(self.output, self.peers[1]["review_id"], "ㄎㄢ", checked)
             self.assertEqual(self.stage_path.read_bytes(), before)
         with patch.object(ar.os, "replace", side_effect=OSError("isolated staging replacement failure")):
-            success, warning, error = self.stage_gui(1)
+            success, warning, error = self.stage_gui(1, expected_error="isolated staging replacement failure")
         error.assert_called_once()
         success.assert_not_called()
         self.assertEqual(self.stage_path.read_bytes(), before)

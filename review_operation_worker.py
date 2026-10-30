@@ -7,6 +7,7 @@ validation. Only read-only validation can be cancelled; a writer is never killed
 from __future__ import annotations
 
 import copy
+import base64
 import atexit
 import hashlib
 import json
@@ -16,6 +17,7 @@ import os
 import struct
 import threading
 import zlib
+import uuid
 from pathlib import Path, WindowsPath, PosixPath
 
 
@@ -37,6 +39,19 @@ _PAYLOAD_FIELDS = {
     "save": ({"review_id", "event"}, {"review_id", "event", "expected_manifest", "expected_db",
              "defer_staging_validation", "confirm_current_actual_snapshot"}),
     "prepare_actual": ({"review_id", "expected_manifest", "expected_db"}, {"review_id", "expected_manifest", "expected_db"}),
+    "load_learning": ({"expected_manifest", "expected_db"}, {"expected_manifest", "expected_db"}),
+    "list_learning_recovery": (set(), set()),
+    "prepare_learning_target": ({"group_id", "expected_manifest", "expected_db"},
+                                {"group_id", "review_id", "expected_manifest", "expected_db"}),
+    "prepare_learning": ({"group_id", "reading", "checked_occurrence_ids", "images", "expected_manifest", "expected_db"},
+                         {"group_id", "reading", "checked_occurrence_ids", "images", "expected_manifest", "expected_db"}),
+    "confirm_learning": ({"plan_token"}, {"plan_token"}),
+    "discard_learning": (set(), set()),
+    "retry_learning": ({"operation_id"}, {"operation_id"}),
+    "save_learning_surface": ({"review_id", "reading", "proof", "actor", "whole_unit_readable", "target_character_matches",
+                               "reading_from_original", "enable_format", "expected_manifest", "expected_db"},
+                              {"review_id", "reading", "proof", "actor", "whole_unit_readable", "target_character_matches",
+                               "reading_from_original", "enable_format", "expected_manifest", "expected_db"}),
     "stage_actual": ({"review_id", "reading", "checked_occurrence_ids", "expected_manifest", "expected_db"},
                      {"review_id", "reading", "checked_occurrence_ids", "note", "expected_manifest", "expected_db"}),
     "stage_surface": ({"review_id", "reading", "proof", "actor", "whole_unit_readable", "target_character_matches",
@@ -70,7 +85,7 @@ def validate_payload(operation, payload):
             return
         raise ValueError("review payload must contain only plain data")
     pure(payload)
-    for key in ("review_id", "reading", "note", "snapshot_key"):
+    for key in ("review_id", "reading", "note", "snapshot_key", "group_id", "plan_token", "operation_id"):
         if key in payload and type(payload[key]) is not str:
             raise ValueError("review payload string field invalid")
     for key in ("expected_manifest", "expected_db"):
@@ -107,6 +122,9 @@ class ReviewOperationState:
         self.output_dir = Path(output_dir).resolve()
         self.service = service or ReviewSaveService(self.output_dir)
         self.snapshots = {}
+        self.learning_plans = {}
+        from glyph_learning_images import PreparedLearningImages
+        self.prepared_learning_images = PreparedLearningImages()
 
     def remember(self, snapshot):
         self.snapshots[_snapshot_key(snapshot)] = snapshot
@@ -124,7 +142,7 @@ class ReviewOperationState:
         if operation == "startup":
             from review_gui import load_review_project
             value = load_review_project(self.output_dir, progress, service=self.service)
-            value.pop("service")
+            self.service = value.pop("service")
             self.remember(value["snapshot"])
             return value
         if operation == "resume":
@@ -142,7 +160,26 @@ class ReviewOperationState:
         if operation == "invalidate":
             self.service = self.service.with_invalidated_cache()
             self.snapshots.clear()
+            self.learning_plans.clear()
+            self.prepared_learning_images.clear()
             return None
+        if operation == "discard_learning":
+            self.learning_plans.clear()
+            self.prepared_learning_images.clear()
+            return None
+        if operation == "prepare_learning":
+            self.learning_plans.clear()
+            self.prepared_learning_images.clear()
+        if operation in {"load_learning", "list_learning_recovery", "prepare_learning_target", "prepare_learning", "confirm_learning", "retry_learning"}:
+            try:
+                return self._learning(operation, payload, progress)
+            except Exception:
+                if operation == "prepare_learning":
+                    self.learning_plans.clear()
+                    self.prepared_learning_images.clear()
+                raise
+        if operation == "save_learning_surface":
+            return self._surface_learning(payload, progress)
         if operation in {"reload", "actual_summary", "prepare_actual", "stage_actual", "stage_surface", "report", "apply_actual"}:
             expected = {key: payload[key] for key in ("expected_manifest", "expected_db")
                         if key in payload}
@@ -192,7 +229,15 @@ class ReviewOperationState:
                     # Exact native eligibility is re-proven; an unsafe/unknown
                     # slot is not made eligible by the presence of pixels.
                     surface = sp.prepare_surface_actual_correction(self.output_dir, payload['review_id'])
-                return dict(group=group, summary=summary, ledger=view, surface=surface)
+                from glyph_learning_service import collect_learning_candidates
+                learning = collect_learning_candidates(snapshot.ledger,
+                    sp._global_direct_source_context(self.output_dir, snapshot.manifest),
+                    evidence_root=sp.project_actual_evidence_root(self.output_dir))
+                learning_group = next((candidate for candidate in learning["groups"]
+                    if any(member.get("occurrence_id") == entry.get("occurrence_id")
+                           for member in candidate.get("candidate_members", candidate["members"]))), None)
+                return dict(group=group, summary=summary, ledger=view, surface=surface,
+                            learning_group=learning_group)
             if operation == "stage_actual":
                 progress("正在保存 actual 暫存")
                 sp.stage_manual_actual_correction(self.output_dir, payload["review_id"],
@@ -232,6 +277,159 @@ class ReviewOperationState:
                         snapshot=snapshot, summary=summary,
                         review_view=view)
         raise ValueError("unknown review operation")
+
+    def _learning(self, operation, payload, progress):
+        """Keep plans in this serial worker; the GUI can only commit its token."""
+        import glyph_learning_service as learning
+        import standalone_proofread as sp
+        from review_save_service import ReviewSaveService
+        if operation == "list_learning_recovery":
+            # Durable fixed decisions must remain reachable even when a
+            # committed journal correctly prevents accepting a resume view.
+            return learning.list_learning_confirmations(self.output_dir)
+        if operation in {"confirm_learning", "retry_learning"}:
+            if operation == "confirm_learning":
+                plan = self.learning_plans.get(payload["plan_token"])
+                if plan is None:
+                    raise ReviewOperationError("確認計畫已失效；請重新看圖並準備保存。", commit_state="NOT_WRITTEN")
+                progress("保存已固定的目視確認與核准")
+                result = learning.confirm_learning(plan, explicit_action=True,
+                    prepared_images=self.prepared_learning_images)
+                self.learning_plans.clear()
+                self.prepared_learning_images.clear()
+            else:
+                progress("接續原本固定的確認，不增加確認次數")
+                result = learning.retry_learning_confirmation(self.output_dir, payload["operation_id"])
+            value = dict(result=result)
+            if result.get("global_status") == "QUARANTINED_CONFLICT":
+                from glyph_learning_impact import known_impacts
+                try:
+                    value["impacts"] = known_impacts(result.get("glyph_ids", []))
+                except Exception as exc:
+                    value["impacts"] = dict(projects=[], notice="已知影響回查未完成：" + str(exc))
+            if result.get("local_status") == "SAVED":
+                try:
+                    self.service = ReviewSaveService(self.output_dir, evidence_anchor=self.service.evidence_anchor)
+                    self.snapshots.clear()
+                    snapshot = self.remember(self.service.load_resume_snapshot())
+                    value.update(snapshot=snapshot, summary=self.service.validate_resume_staging(snapshot),
+                                 review_view=self.service._conflicts.review_view(snapshot.db, snapshot.ledger))
+                except Exception as exc:
+                    value["reload_error"] = str(exc)
+            return value
+        snapshot = self.service.load_resume_snapshot(**{key: payload[key] for key in ("expected_manifest", "expected_db")})
+        if operation == "prepare_learning":
+            # A replacement preparation retires the prior UI decision even if
+            # its new image/input validation fails below.
+            self.learning_plans.clear()
+            from glyph_learning_images import LearningImageStore
+            store = LearningImageStore()
+            rows = {row["occurrence_id"]: row for row in snapshot.ledger}
+            images = payload["images"]
+            if (type(images) is not list or len(images) != len(payload["checked_occurrence_ids"])
+                    or {image.get("occurrence_id") for image in images if type(image) is dict}
+                    != set(payload["checked_occurrence_ids"])):
+                raise ValueError("確認圖片與實際勾選樣本不符")
+            evidence = []
+            for image in images:
+                if type(image) is not dict or set(image) != {"occurrence_id", "review_id", "source_sha256", "png_base64",
+                                                           "padding", "display_width"}:
+                    raise ValueError("確認圖片欄位不完整")
+                row = rows[image["occurrence_id"]]
+                if image["review_id"] != row["review_id"] or image["source_sha256"] != row["pdf_sha256"]:
+                    raise ValueError("確認圖片不屬於目前來源與位置")
+                if (type(image["padding"]) not in (list, tuple) or list(image["padding"]) != [95, 60]
+                        or any(type(item) is not int for item in image["padding"])):
+                    raise ValueError("確認圖片裁切參數不符合學習原頁規格")
+                width = image["display_width"]
+                if width is not None and (type(width) is not int or width <= 0):
+                    raise ValueError("確認圖片寬度不合法")
+                raw = base64.b64decode(image["png_base64"], validate=True)
+                # Re-render the sealed, worker-owned occurrence at the exact
+                # displayed geometry. Labels supplied next to arbitrary PNG
+                # bytes cannot authorize direct visual evidence.
+                verified = preview_png(row, padding=(95, 60), output_dir=self.output_dir, display_width=width)
+                if (verified["target"] is None or verified.get("warning_target") is not None
+                        or verified["png"] != raw or verified["source_sha256"] != row["pdf_sha256"]
+                        or verified["occurrence_id"] != row["occurrence_id"]
+                        or verified["review_id"] != row["review_id"]):
+                    raise ValueError("確認圖片像素不屬於已核實的原頁位置；請重新載入並看圖")
+                evidence.append(self.prepared_learning_images.add(store, image["occurrence_id"], raw))
+            plan = learning.prepare_learning_confirmation(self.output_dir, snapshot,
+                payload["group_id"], payload["reading"], payload["checked_occurrence_ids"],
+                image_evidence=evidence, image_store_root=str(store.root),
+                prepared_images=self.prepared_learning_images)
+            token = uuid.uuid4().hex
+            self.learning_plans.clear()
+            self.learning_plans[token] = plan
+            return dict(plan_token=token, message="讀音、來源與證據集合已固定。請按「並記住」保存本次確認；"
+                        "符合全部獨立性條件時，同次啟用跨教材重用。")
+        collected = learning.collect_learning_candidates(snapshot.ledger,
+            sp._global_direct_source_context(self.output_dir, snapshot.manifest),
+            evidence_root=sp.project_actual_evidence_root(self.output_dir))
+        if operation == "load_learning":
+            pending = learning.list_learning_confirmations(self.output_dir)
+            return dict(snapshot=self.remember(snapshot), candidates=collected, pending=pending)
+        group = next((item for item in collected["groups"] if item["group_id"] == payload["group_id"]), None)
+        if group is None:
+            raise ValueError("學習候選已變動；請重新載入清單")
+        members = group.get("candidate_members") or group["members"]
+        entry = next((row for row in members if row["review_id"] == payload.get("review_id")), members[0])
+        from actual_review import actual_visual_source_safety
+        safety = actual_visual_source_safety(entry, self.output_dir)
+        surface = None
+        if not safety["location_readable"] or entry.get("manual_surface_actual") is not None:
+            surface = sp.prepare_surface_actual_correction(self.output_dir, entry["review_id"])
+        return dict(group=group, entry=entry, surface=surface)
+
+    def _surface_learning(self, payload, progress):
+        """Apply only the viewed surface occurrence, through the existing path."""
+        import standalone_proofread as sp
+        import manual_surface_actual as surface
+        from global_glyph_promotion import project_delivery_lock
+        from project_write_admission import capture_project_write_admission
+        from glyph_learning_images import LearningImageStore
+        from review_save_service import ReviewSaveService
+        expected = {key: payload[key] for key in ("expected_manifest", "expected_db")}
+        prepared = sp.prepare_surface_actual_correction(self.output_dir, payload["review_id"])
+        if prepared["proof"] != payload["proof"]:
+            raise ReviewOperationError("原頁已變更；未保存", commit_state="NOT_WRITTEN")
+        surface.record_for(payload["proof"], payload["reading"], actor=payload["actor"],
+            **{key: payload[key] for key in ("whole_unit_readable", "target_character_matches", "reading_from_original")})
+        if prepared["requires_format_conversion"] and not payload["enable_format"]:
+            raise ReviewOperationError("未確認既有專案格式轉換", commit_state="NOT_WRITTEN")
+        snapshot = self.service.load_resume_snapshot(**expected)
+        root = sp.project_actual_evidence_root(self.output_dir)
+        admission = capture_project_write_admission(self.output_dir)
+        oid = payload["proof"]["source"]["occurrence_id"]
+        with project_delivery_lock(root, _admission=admission):
+            admission.recheck()
+            document = surface.load_snapshot(root, snapshot.manifest).document
+            if document is not None and any(row["proof"]["source"]["occurrence_id"] != oid for row in document["pending"]):
+                raise ReviewOperationError("另有其他位置的原頁確認尚未套用；請先處理，未套用其他位置。", commit_state="NOT_WRITTEN")
+            store = LearningImageStore()
+            store.save_evidence(oid, base64.b64decode(payload["proof"]["render"]["target_png"], validate=True))
+            progress("保存本位置原頁確認；不寫入全域字形讀音")
+            staged = sp.stage_surface_actual_correction(self.output_dir,
+                **{key: value for key, value in payload.items() if key not in ("expected_manifest", "expected_db")})
+            if not staged.get("already_applied"):
+                try:
+                    sp.apply_staged_surface_actual_corrections(self.output_dir)
+                except Exception as exc:
+                    state = ("COMMITTED_REFRESH_PENDING" if isinstance(exc, sp.ManualActualPostApplyError)
+                             or getattr(exc, "commit_state", "") == "COMMITTED_REFRESH_PENDING"
+                             else "STAGED_REFRESH_PENDING")
+                    raise ReviewOperationError(str(exc), commit_state=state) from exc
+        self.service = ReviewSaveService(self.output_dir, evidence_anchor=self.service.evidence_anchor)
+        self.snapshots.clear()
+        try:
+            snapshot = self.remember(self.service.load_resume_snapshot())
+            return dict(result=dict(status="LOCAL_SAVED_WAITING_SOURCE", local_status="SAVED", global_status="LOCAL_ONLY"),
+                        snapshot=snapshot, summary=self.service.validate_resume_staging(snapshot),
+                        review_view=self.service._conflicts.review_view(snapshot.db, snapshot.ledger))
+        except Exception as exc:
+            return dict(result=dict(status="REFRESH_PENDING", local_status="SAVED", global_status="LOCAL_ONLY"),
+                        reload_error=str(exc))
 
 
 def _review_child(connection, output_dir, cancel_signal):

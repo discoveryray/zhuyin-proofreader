@@ -952,6 +952,9 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
         })
         app._save_service = service
         with (
+            # No new learning candidate: retain coverage of the legacy staging
+            # route independently of the new collector's source contract.
+            patch("glyph_learning_service.collect_learning_candidates", return_value={"groups": []}),
             patch.object(review_gui, "ActualReadingDialog", return_value=SimpleNamespace(result=None)) as dialog,
         ):
             app.correct_actual()
@@ -983,6 +986,7 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
         })
         app._save_service = service
         with (
+            patch("glyph_learning_service.collect_learning_candidates", return_value={"groups": []}),
             patch.object(review_gui, "ActualReadingDialog", return_value=SimpleNamespace(result=None)) as dialog,
             patch.object(sp, "stage_manual_actual_correction") as stage,
         ):
@@ -1169,6 +1173,9 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
             {"staged_group_count": 0, "staged_checked_occurrence_ids": []}, saved_summary,
         ]
         with (
+            # Exercise the still-supported staging route when the learning
+            # service has no new candidate; all original queue assertions stay.
+            patch("glyph_learning_service.collect_learning_candidates", return_value={"groups": []}),
             patch.object(review_gui, "ActualReadingDialog", return_value=dialog),
             # Original backend outcome fixture: this case tests GUI controller,
             # dispatch, queue and prompt behavior, not domain write acceptance.

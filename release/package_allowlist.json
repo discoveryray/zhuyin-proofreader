@@ -68,6 +68,22 @@
       "role": "runtime_module"
     },
     {
+      "path": "glyph_learning_images.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "glyph_learning_impact.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "glyph_learning_service.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "owned_project_relocation.py",
+      "role": "runtime_module"
+    },
+    {
       "path": "global_library_approval.py",
       "role": "runtime_module"
     },
@@ -298,6 +314,10 @@
     },
     {
       "path": "docs/USER_GUIDE.md",
+      "role": "document"
+    },
+    {
+      "path": "docs/DAILY_GLYPH_LEARNING.md",
       "role": "document"
     },
     {
