@@ -291,6 +291,9 @@ Gate v4 可另行明確採用 optional `review_history_links: {ref, sha256}`，�
 `{report_ref, report_sha256, record: {ref, sha256}}`。Gate 實際讀取 anchor、
 兩份 record 與報告 bytes 並重算 SHA；records 必須等於完整歷史中的原 record。
 報告 ref 可帶原 fragment，讀檔只去除 fragment，不改歷史身分。
+本擴充的 JSON value/prefix 比對區分 bool、int、float，object 鍵序無關而 array
+順序必須相同；link.round 僅接受整數1/2。Anchor root 必須是 state object，
+合法 JSON 的 list/null/scalar 亦以 EvidenceError/STOP 拒絕，不拋出未分類 traceback。
 CODE 必須更早，兩份均 full_diff、獨立、合法 reviewer、精確 scope 相同、
 原 supersedes/finalizes/resolution 均 null。第二輪 reviewer 不得參與同 scope 第一輪。
 拒絕未知 target、跨 task/repository/scope/HEAD、身分或 hash 不符、重複/分叉/循環。

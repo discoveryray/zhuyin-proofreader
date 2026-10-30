@@ -2,6 +2,11 @@
 from copy import deepcopy
 import hashlib
 import json
+from pathlib import Path
+import subprocess
+import sys
+
+import pytest
 
 from scripts import pr_review_gate as gate
 from test_current_validation_evidence import bundle
@@ -217,3 +222,83 @@ def test_original_bytes_and_duplicate_json_keys_are_not_self_attested(tmp_path):
     invalid.write_text('{"schema":1,"schema":2}', encoding="utf-8")
     state["review_history_links"] = {"ref": str(invalid), "sha256": hashlib.sha256(invalid.read_bytes()).hexdigest()}
     assert gate.next_action(state)["action"] == "STOP"
+
+
+def test_link_round_rejects_literal_boolean_and_float(tmp_path):
+    state, document = fixture(tmp_path)
+    for literal in ("true", "1.0"):
+        changed, doc = deepcopy(state), deepcopy(document)
+        doc["links"][0]["round"] = json.loads(literal)
+        repin(tmp_path, changed, doc)
+        assert gate.next_action(changed)["action"] == "STOP"
+
+
+def test_original_record_type_changes_cannot_reach_merge_after_supplement(tmp_path):
+    state, document = fixture(tmp_path)
+    for field, literal in (("round", "1.0"), ("round", "true"),
+                           ("independent", "1"), ("full_diff_reviewed", "1")):
+        changed, doc = deepcopy(state), deepcopy(document)
+        fake_record = deepcopy(changed["reviews"][0])
+        fake_record[field] = json.loads(literal)
+        doc["links"][0]["code"]["record"] = write(tmp_path / "wrong-type-record.json", fake_record)
+        repin(tmp_path, changed, doc)
+        assert gate.next_action(changed)["action"] == "STOP"
+        supplement(changed, 1); supplement(changed, 2)
+        assert gate.next_action(changed)["action"] == "STOP"
+
+
+def test_anchor_and_previous_prefixes_are_type_sensitive(tmp_path):
+    state, document = fixture(tmp_path)
+    for field, literal in (("round", "1.0"), ("independent", "1"), ("full_diff_reviewed", "1")):
+        changed, doc = deepcopy(state), deepcopy(document)
+        anchor = json.loads(Path(doc["anchor"]["ref"]).read_text(encoding="utf-8"))
+        anchor["reviews"][0][field] = json.loads(literal)
+        doc["anchor"] = write(tmp_path / "wrong-type-anchor.json", anchor)
+        repin(tmp_path, changed, doc)
+        assert gate.next_action(changed)["action"] == "STOP"
+    for literal in ("true", "1.0"):
+        changed, doc = deepcopy(state), deepcopy(document)
+        previous = deepcopy(document)
+        previous["links"] = previous["links"][:1]
+        previous["links"][0]["round"] = json.loads(literal)
+        doc["previous"] = write(tmp_path / "wrong-type-previous.json", previous)
+        repin(tmp_path, changed, doc)
+        assert gate.next_action(changed)["action"] == "STOP"
+    correction = {"number": 1, "from_head": state["task"]["baseline"],
+                  "to_head": state["current"]["head"], "evidence_ref": "fixture://correction"}
+    state["corrections"] = [correction]
+    anchor = {k: deepcopy(v) for k, v in state.items() if k != "review_history_links"}
+    anchor["corrections"][0]["number"] = json.loads("1.0")
+    document["anchor"] = write(tmp_path / "wrong-type-correction-prefix.json", anchor)
+    repin(tmp_path, state, document)
+    assert gate.next_action(state)["action"] == "STOP"
+
+
+def test_object_key_order_is_irrelevant_but_json_types_remain_exact(tmp_path):
+    state, document = fixture(tmp_path)
+    record = dict(reversed(list(state["reviews"][0].items())))
+    document["links"][0]["code"]["record"] = write(tmp_path / "reordered-record.json", record)
+    anchor = json.loads(Path(document["anchor"]["ref"]).read_text(encoding="utf-8"))
+    anchor["reviews"][0] = dict(reversed(list(anchor["reviews"][0].items())))
+    document["anchor"] = write(tmp_path / "reordered-anchor.json", dict(reversed(list(anchor.items()))))
+    repin(tmp_path, state, document)
+    assert gate.next_action(state)["action"] == "REFRESH_EVIDENCE"
+
+
+def test_nonobject_anchor_returns_structured_stop_in_api_and_cli(tmp_path):
+    state, document = fixture(tmp_path)
+    for literal in ("[]", "null", "1", '"scalar"', "true"):
+        changed, doc = deepcopy(state), deepcopy(document)
+        doc["anchor"] = write(tmp_path / "nonobject-anchor.json", json.loads(literal))
+        repin(tmp_path, changed, doc)
+        with pytest.raises(gate.EvidenceError, match="anchor must be a state object"):
+            gate.validate_state(changed)
+        assert gate.next_action(changed)["action"] == "STOP"
+        state_path = tmp_path / "nonobject-state.json"
+        write(state_path, changed)
+        for verb in ("validate", "next-action"):
+            result = subprocess.run([sys.executable, "-B", str(Path(gate.__file__)), verb, str(state_path)],
+                                    capture_output=True, text=True, encoding="utf-8")
+            assert result.returncode == 2
+            assert json.loads(result.stdout)["action"] == "STOP"
+            assert result.stderr == ""

@@ -1328,6 +1328,19 @@ def _linked_json(pointer):
         raise EvidenceError("history original is not valid JSON: " + str(exc)) from exc
 
 
+def _same_json_value(left, right):
+    """Exact JSON value identity, including number/bool types and array order."""
+    if type(left) is not type(right):
+        return False
+    if type(left) is dict:
+        return left.keys() == right.keys() and all(
+            _same_json_value(value, right[key]) for key, value in left.items())
+    if type(left) is list:
+        return len(left) == len(right) and all(
+            _same_json_value(a, b) for a, b in zip(left, right))
+    return left == right
+
+
 def _blocker_link_document(pointer, visited=None):
     visited = set() if visited is None else visited
     key = str(Path(pointer["ref"]).resolve())
@@ -1340,10 +1353,11 @@ def _blocker_link_document(pointer, visited=None):
              "blocker links must be a finite nonempty list")
     if document["previous"] is not None:
         old = _blocker_link_document(document["previous"], visited)
-        _require((document["task"], document["anchor"]) == (old["task"], old["anchor"]),
+        _require(_same_json_value(document["task"], old["task"]) and
+                 _same_json_value(document["anchor"], old["anchor"]),
                  "blocker link history changed its anchor")
         _require(len(document["links"]) > len(old["links"]) and
-                 document["links"][:len(old["links"])] == old["links"],
+                 _same_json_value(document["links"][:len(old["links"])], old["links"]),
                  "blocker link history must retain the complete prior prefix")
     return document
 
@@ -1354,25 +1368,27 @@ def _historical_code_refs(state):
         return set()
     _require(state["schema"] == STAGED_SCHEMA, "blocker links require gate v4")
     document = _blocker_link_document(state["review_history_links"])
-    _require(document["task"] == state["task"], "blocker links belong to another task/repository")
+    _require(_same_json_value(document["task"], state["task"]), "blocker links belong to another task/repository")
     anchor = _linked_json(document["anchor"])
-    _require(anchor.get("schema") == STAGED_SCHEMA and anchor.get("task") == state["task"],
+    _require(type(anchor) is dict, "blocker link anchor must be a state object")
+    _require(anchor.get("schema") == STAGED_SCHEMA and _same_json_value(anchor.get("task"), state["task"]),
              "blocker link anchor task/schema differs")
     _require("review_history_links" not in anchor, "initial anchor must be the retained pre-adoption state")
     original = anchor.get("reviews")
     _require(type(original) is list and bool(original) and
-             state["reviews"][:len(original)] == original,
+             _same_json_value(state["reviews"][:len(original)], original),
              "complete anchored review prefix was deleted, reordered or changed")
     _require(type(anchor.get("implementers")) is list and
              set(anchor["implementers"]) <= set(state["implementers"]),
              "anchored implementation actors cannot be removed")
     _require(type(anchor.get("corrections")) is list and
-             state["corrections"][:len(anchor["corrections"])] == anchor["corrections"],
+             _same_json_value(state["corrections"][:len(anchor["corrections"])], anchor["corrections"]),
              "anchored correction history changed")
     reports = {r["report_ref"]: (i, r) for i, r in enumerate(state["reviews"])}
     retired, targets = set(), set()
     for link in document["links"]:
         _fields(link, "round baseline base head scope code_reviewer blocked_reviewer code blocked", "blocker link")
+        _require(type(link["round"]) is int and link["round"] in (1, 2), "invalid blocker link round")
         pair = []
         for label in ("code", "blocked"):
             artifact = link[label]
@@ -1380,7 +1396,7 @@ def _historical_code_refs(state):
             ref = artifact["report_ref"]
             _require(ref in reports, "blocker link references an unknown report")
             index, review = reports[ref]
-            _require(_linked_json(artifact["record"]) == review, "original review record differs")
+            _require(_same_json_value(_linked_json(artifact["record"]), review), "original review record differs")
             _linked_original({"ref": ref, "sha256": artifact["report_sha256"]})
             pair.append((index, review))
         (code_index, code), (blocked_index, blocked) = pair
@@ -1390,7 +1406,8 @@ def _historical_code_refs(state):
         _require(code["report_ref"] not in retired and blocked["report_ref"] not in targets,
                  "duplicate or forked blocker link")
         scope = tuple(link[f] for f in ("round", "baseline", "base", "head", "scope"))
-        _require(scope == _review_scope(code) == _review_scope(blocked), "blocker link crosses review scope")
+        _require(_same_json_value(list(scope), list(_review_scope(code))) and
+                 _same_json_value(list(scope), list(_review_scope(blocked))), "blocker link crosses review scope")
         _require(link["code_reviewer"] == code["reviewer"] and
                  link["blocked_reviewer"] == blocked["reviewer"], "blocker link reviewer identity differs")
         for review in (code, blocked):
