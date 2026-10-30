@@ -1,6 +1,8 @@
 """Finite native CMYK/closed-boundary proof, real isolated PDF/font sources."""
 import copy
 import hashlib
+import sys
+import weakref
 from pathlib import Path
 
 import fitz
@@ -137,7 +139,8 @@ def test_cubic_clip_hole_and_corner_do_not_pass_from_outer_bbox(tmp_path):
 
 def test_native_boundaries_keep_winding_touch_open_and_capture_limit_closed():
     native = safety._native_pdf.mupdf
-    ctm = native.FzMatrix().internal()
+    matrix_owner = native.FzMatrix()
+    ctm = matrix_owner.internal()
     path = native.FzPath()
     for points in (((0, 0), (100, 0), (100, 100), (0, 100)),
                    ((20, 20), (80, 20), (80, 80), (20, 80))):
@@ -167,6 +170,96 @@ def test_native_boundaries_keep_winding_touch_open_and_capture_limit_closed():
     native.fz_walk_path(excessive, walker, walker.m_internal)
     assert walker.failure == "SOURCE_NATIVE_BOUNDARY_CAPTURE_LIMIT"
     assert len(walker.commands) == 2048 and walker.current is None
+
+
+def _observe_borrow_owners(monkeypatch, wrapper_class):
+    """Observe real internal() borrows without retaining their owning wrappers."""
+    owners = {}
+    original = wrapper_class.internal
+
+    def observed(owner, *args):
+        borrowed = original(owner, *args)
+        owners[int(borrowed.this)] = weakref.ref(owner)
+        return borrowed
+
+    monkeypatch.setattr(wrapper_class, "internal", observed)
+    return owners
+
+
+def test_native_boundary_fixture_retains_matrix_owner_for_all_calls(monkeypatch):
+    native = safety._native_pdf.mupdf
+    owners = _observe_borrow_owners(monkeypatch, native.FzMatrix)
+    original = safety._native_boundaries
+    observations = []
+
+    def observed(path, ctm, stroke=None):
+        # Do not retain the owner or read borrowed storage if it is already dead.
+        assert owners[int(ctm.this)]() is not None
+        assert (ctm.a, ctm.b, ctm.c, ctm.d, ctm.e, ctm.f) == (1, 0, 0, 1, 0, 0)
+        observations.append(True)
+        return original(path, ctm, stroke)
+
+    monkeypatch.setattr(safety, "_native_boundaries", observed)
+    test_native_boundaries_keep_winding_touch_open_and_capture_limit_closed()
+    assert observations == [True, True, True, True]
+
+
+def test_native_stroke_bounds_retain_rectangle_owner_through_raw_call(monkeypatch):
+    native = safety._native_pdf.mupdf
+    owners = _observe_borrow_owners(monkeypatch, native.FzRect)
+    original = native.ll_fz_adjust_rect_for_stroke
+    borrowed_boxes = []
+
+    def observed(rectangle, stroke, ctm):
+        assert owners[int(rectangle.this)]() is not None
+        borrowed_boxes.append((rectangle.x0, rectangle.y0, rectangle.x1, rectangle.y1))
+        return original(rectangle, stroke, ctm)
+
+    monkeypatch.setattr(native, "ll_fz_adjust_rect_for_stroke", observed)
+    matrix_owner = native.FzMatrix()
+    stroke_owner = native.FzStrokeState()
+    stroke_owner.m_internal.linewidth = 2
+    stroke_owner.m_internal.linejoin = native.FZ_LINEJOIN_ROUND
+    path = native.FzPath()
+    path.fz_moveto(10, 20)
+    for point in ((30, 20), (30, 40), (10, 40)):
+        path.fz_lineto(*point)
+    path.fz_closepath()
+    boundaries = safety._native_boundaries(path.m_internal, matrix_owner.internal(),
+                                           stroke_owner.m_internal)
+    # Independent fixed segment boxes; a round 2-unit stroke adds one per side.
+    assert borrowed_boxes == [(10, 20, 30, 20), (30, 20, 30, 40),
+                              (10, 40, 30, 40), (10, 20, 10, 40)]
+    assert [part["bounds"] for part in boundaries] == [
+        (9, 19, 31, 21), (29, 19, 31, 41), (9, 39, 31, 41), (9, 19, 11, 41)]
+    assert safety._boundary_contains(boundaries, 0, fitz.Rect(12, 22, 28, 38))
+    assert not safety._boundary_contains(boundaries, 0, fitz.Rect(11, 22, 12, 23))
+
+
+def test_native_image_bounds_retain_transformed_owner_through_read(monkeypatch):
+    native = safety._native_pdf.mupdf
+    owners = _observe_borrow_owners(monkeypatch, native.FzRect)
+    original = safety._native_rect
+    borrowed_boxes = []
+
+    def observed(rectangle, *, allow_empty=False):
+        if sys._getframe(1).f_code.co_name == "_image_paint":
+            assert owners[int(rectangle.this)]() is not None
+            borrowed_boxes.append((rectangle.x0, rectangle.y0, rectangle.x1, rectangle.y1))
+        return original(rectangle, allow_empty=allow_empty)
+
+    monkeypatch.setattr(safety, "_native_rect", observed)
+    with fitz.open() as document:
+        page = document.new_page(width=100, height=100)
+        pixels = fitz.Pixmap(fitz.csRGB, fitz.IRect(0, 0, 2, 2), False)
+        pixels.clear_with(0)
+        page.insert_image(fitz.Rect(12, 20, 42, 60), pixmap=pixels, keep_proportion=False)
+        analysis = safety._capture_native_page(page, [])
+    # Fixed PDF placement, independent of the producer's transformed bounds.
+    assert borrowed_boxes == [(12, 20, 42, 60)]
+    assert analysis["paint_calls"] == ((0, "fill_image"),)
+    assert analysis["footprints"] == [
+        {"seqno": 0, "bounds": (12, 20, 42, 60), "empty": False, "inner": None}]
 
 
 def test_infinite_shade_before_source_keeps_sequence_and_later_unknown_refuses(tmp_path):
