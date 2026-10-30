@@ -18,6 +18,7 @@ SCHEMA = "zhuyin-pr-review-gate/3"
 STAGED_SCHEMA = "zhuyin-pr-review-gate/4"
 NO_WINDOW_POLICY = "validation-flow/no-real-tk/1"
 CURRENT_POLICY = "validation-flow/current-evidence/1"
+BLOCKER_LINKS_SCHEMA = "zhuyin-review-history-blocker-links/1"
 REPOSITORY = "discoveryray/zhuyin-proofreader"
 WORKFLOW = ".github/workflows/ci.yml"
 PYTHONS = ("3.13",)
@@ -868,7 +869,10 @@ def validate_state(state):
             + (" validation_policy" if type(state) is dict and "validation_policy" in state else "")
             + (" pr43_review_history_adapter" if type(state) is dict and "pr43_review_history_adapter" in state else "")
             + (" cff_review_history_adapter" if type(state) is dict and "cff_review_history_adapter" in state else "")
-            + (" pr46_review_history_adapter" if type(state) is dict and "pr46_review_history_adapter" in state else ""), "state")
+            + (" pr46_review_history_adapter" if type(state) is dict and "pr46_review_history_adapter" in state else "")
+            + (" review_history_links" if type(state) is dict and "review_history_links" in state else ""), "state")
+    if "review_history_links" in state:
+        _require(staged, "blocker links require explicit gate v4 adoption")
     if "validation_policy" in state:
         _require(state["validation_policy"] == NO_WINDOW_POLICY or
                  (staged and state["validation_policy"] == CURRENT_POLICY), "unknown validation policy")
@@ -1303,13 +1307,116 @@ def _pr46_history_pairs(state):
     return {frozenset((code["report_ref"], blocked["report_ref"]))}
 
 
+def _linked_original(pointer):
+    """Read a pinned local original; a digest is integrity, not authorship."""
+    _fields(pointer, "ref sha256", "history original")
+    _text(pointer["ref"], "history original ref")
+    digest = pointer["sha256"]
+    _require(type(digest) is str and re.fullmatch(r"[0-9a-f]{64}", digest), "invalid history SHA256")
+    try:
+        raw = Path(pointer["ref"].split("#", 1)[0]).read_bytes()
+    except OSError as exc:
+        raise EvidenceError("history original is unreadable: " + str(exc)) from exc
+    _require(hashlib.sha256(raw).hexdigest() == digest, "history original SHA256 mismatch")
+    return raw
+
+
+def _linked_json(pointer):
+    try:
+        return json.loads(_linked_original(pointer).decode("utf-8-sig"), object_pairs_hook=_unique_object)
+    except (UnicodeError, ValueError) as exc:
+        raise EvidenceError("history original is not valid JSON: " + str(exc)) from exc
+
+
+def _blocker_link_document(pointer, visited=None):
+    visited = set() if visited is None else visited
+    key = str(Path(pointer["ref"]).resolve())
+    _require(key not in visited and len(visited) < 32, "cyclic or excessive blocker link history")
+    visited.add(key)
+    document = _linked_json(pointer)
+    _fields(document, "schema task anchor previous links", "blocker links")
+    _require(document["schema"] == BLOCKER_LINKS_SCHEMA, "unsupported blocker links contract")
+    _require(type(document["links"]) is list and 0 < len(document["links"]) <= 1000,
+             "blocker links must be a finite nonempty list")
+    if document["previous"] is not None:
+        old = _blocker_link_document(document["previous"], visited)
+        _require((document["task"], document["anchor"]) == (old["task"], old["anchor"]),
+                 "blocker link history changed its anchor")
+        _require(len(document["links"]) > len(old["links"]) and
+                 document["links"][:len(old["links"])] == old["links"],
+                 "blocker link history must retain the complete prior prefix")
+    return document
+
+
+def _historical_code_refs(state):
+    """One opt-in relation: retire CODE only, never resolve a BLOCKED finding."""
+    if "review_history_links" not in state:
+        return set()
+    _require(state["schema"] == STAGED_SCHEMA, "blocker links require gate v4")
+    document = _blocker_link_document(state["review_history_links"])
+    _require(document["task"] == state["task"], "blocker links belong to another task/repository")
+    anchor = _linked_json(document["anchor"])
+    _require(anchor.get("schema") == STAGED_SCHEMA and anchor.get("task") == state["task"],
+             "blocker link anchor task/schema differs")
+    _require("review_history_links" not in anchor, "initial anchor must be the retained pre-adoption state")
+    original = anchor.get("reviews")
+    _require(type(original) is list and bool(original) and
+             state["reviews"][:len(original)] == original,
+             "complete anchored review prefix was deleted, reordered or changed")
+    _require(type(anchor.get("implementers")) is list and
+             set(anchor["implementers"]) <= set(state["implementers"]),
+             "anchored implementation actors cannot be removed")
+    _require(type(anchor.get("corrections")) is list and
+             state["corrections"][:len(anchor["corrections"])] == anchor["corrections"],
+             "anchored correction history changed")
+    reports = {r["report_ref"]: (i, r) for i, r in enumerate(state["reviews"])}
+    retired, targets = set(), set()
+    for link in document["links"]:
+        _fields(link, "round baseline base head scope code_reviewer blocked_reviewer code blocked", "blocker link")
+        pair = []
+        for label in ("code", "blocked"):
+            artifact = link[label]
+            _fields(artifact, "report_ref report_sha256 record", "blocker link artifact")
+            ref = artifact["report_ref"]
+            _require(ref in reports, "blocker link references an unknown report")
+            index, review = reports[ref]
+            _require(_linked_json(artifact["record"]) == review, "original review record differs")
+            _linked_original({"ref": ref, "sha256": artifact["report_sha256"]})
+            pair.append((index, review))
+        (code_index, code), (blocked_index, blocked) = pair
+        _require(code_index < blocked_index, "CODE must precede its BLOCKED report")
+        _require(code["verdict"] == "CODE_REVIEWED" and blocked["verdict"] == "BLOCKED",
+                 "blocker link only permits CODE_REVIEWED to BLOCKED")
+        _require(code["report_ref"] not in retired and blocked["report_ref"] not in targets,
+                 "duplicate or forked blocker link")
+        scope = tuple(link[f] for f in ("round", "baseline", "base", "head", "scope"))
+        _require(scope == _review_scope(code) == _review_scope(blocked), "blocker link crosses review scope")
+        _require(link["code_reviewer"] == code["reviewer"] and
+                 link["blocked_reviewer"] == blocked["reviewer"], "blocker link reviewer identity differs")
+        for review in (code, blocked):
+            _require(review["baseline"] == state["task"]["baseline"] and
+                     review["full_diff_reviewed"] and review["review_mode"] == "full_diff",
+                     "blocker link needs the retained complete reviews")
+            _require(all(review.get(f) is None for f in
+                         ("supersedes_report_ref", "finalizes_report_ref", "resolution_evidence_ref")),
+                     "blocker link must preserve original null relations")
+            _require(_review_problem(state, review, review["round"]) is None,
+                     "blocker link reviewer is not independent or scope is incomplete")
+        retired.add(code["report_ref"])
+        targets.add(blocked["report_ref"])
+    return retired
+
+
 def _validate_review_history(state):
     """Resolve only explicit, append-only supplements backed by retained evidence."""
     allowed_pairs = _cff_history_pairs(state) | _pr43_history_pairs(state) | _pr46_history_pairs(state)
-    reports, superseded = {}, set()
+    historical = _historical_code_refs(state)
+    reports, superseded = {}, set(historical)
     for review in state["reviews"]:
         ref, prior = review["report_ref"], review["supersedes_report_ref"]
         finalizes = review.get("finalizes_report_ref")
+        _require(not finalizes or finalizes not in historical,
+                 "historical CODE cannot create a parallel finalization chain")
         _require(not (prior and finalizes), "finalization and supersession are distinct relations")
         prior = prior or finalizes
         _require(ref not in reports, "report_ref must uniquely identify an original report")
@@ -1336,8 +1443,13 @@ def _validate_review_history(state):
             superseded.add(prior)
         reports[ref] = review
     seen = {}
+    active_passes = set()
     for ref, review in reports.items():
         if ref not in superseded:
+            if "review_history_links" in state and review["verdict"] == "PASS":
+                scope = _review_scope(review)
+                _require(scope not in active_passes, "duplicate active PASS for the same scope")
+                active_passes.add(scope)
             key = (*_review_scope(review), json.dumps(review["ci"], sort_keys=True))
             if state["schema"] == STAGED_SCHEMA:
                 key += (review["coverage_sha256"],)
@@ -1350,6 +1462,7 @@ def _validate_review_history(state):
 
 def _review(state, number, base, head):
     superseded = {r["supersedes_report_ref"] or r.get("finalizes_report_ref") for r in state["reviews"]}
+    superseded.update(_historical_code_refs(state))
     matches = [r for r in state["reviews"] if r["report_ref"] not in superseded and r["round"] == number and
                (r["baseline"], r["base"], r["head"]) == (state["task"]["baseline"], base, head)]
     # Unresolved blockers survive CI reruns and unrelated PASS records.
