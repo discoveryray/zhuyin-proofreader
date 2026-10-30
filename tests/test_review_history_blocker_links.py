@@ -302,3 +302,89 @@ def test_nonobject_anchor_returns_structured_stop_in_api_and_cli(tmp_path):
             assert result.returncode == 2
             assert json.loads(result.stdout)["action"] == "STOP"
             assert result.stderr == ""
+
+
+def _assert_anchor_rejected_in_api_and_cli(root, state, document, anchor):
+    document["anchor"] = write(root / "invalid-full-anchor.json", anchor)
+    repin(root, state, document)
+    with pytest.raises(gate.EvidenceError):
+        gate.validate_state(state)
+    assert gate.next_action(state)["action"] == "STOP"
+    path = root / "invalid-anchor-state.json"
+    write(path, state)
+    for verb in ("validate", "next-action"):
+        result = subprocess.run([sys.executable, "-B", str(Path(gate.__file__)), verb, str(path)],
+                                capture_output=True, text=True, encoding="utf-8")
+        assert result.returncode == 2
+        assert json.loads(result.stdout)["action"] == "STOP"
+        assert result.stderr == ""
+
+
+def test_incomplete_anchor_state_is_rejected_by_full_shared_structure(tmp_path):
+    state, document = fixture(tmp_path)
+    original = json.loads(Path(document["anchor"]["ref"]).read_text(encoding="utf-8"))
+    missing_authorization = deepcopy(original)
+    del missing_authorization["authorization"]
+    five_fields = {k: original[k] for k in ("schema", "task", "reviews", "corrections", "implementers")}
+    for anchor in (missing_authorization, five_fields):
+        _assert_anchor_rejected_in_api_and_cli(tmp_path, deepcopy(state), deepcopy(document), anchor)
+
+
+def test_anchor_required_nested_types_and_unknown_fields_are_rejected(tmp_path):
+    state, document = fixture(tmp_path)
+    original = json.loads(Path(document["anchor"]["ref"]).read_text(encoding="utf-8"))
+    for mutate in (
+        lambda a: a.update(authorization=[]),
+        lambda a: a["authorization"].update(active=1),
+        lambda a: a["current"].update(working_tree_clean="true"),
+        lambda a: a.update(handoffs={}),
+        lambda a: a.update(pr_ci=[]),
+        lambda a: a.update(unknown_field=None),
+        lambda a: a["execution"].update(unknown_field=None),
+    ):
+        anchor = deepcopy(original); mutate(anchor)
+        _assert_anchor_rejected_in_api_and_cli(tmp_path, deepcopy(state), deepcopy(document), anchor)
+
+
+def test_complete_anchor_may_fail_original_history_while_links_remain_blocked(tmp_path):
+    state, document = fixture(tmp_path)
+    anchor = json.loads(Path(document["anchor"]["ref"]).read_text(encoding="utf-8"))
+    with pytest.raises(gate.EvidenceError, match="ambiguous unlinked review"):
+        gate.validate_state(anchor)
+    assert gate.next_action(anchor)["action"] == "STOP"
+    gate.validate_state(state)
+    assert gate.next_action(state)["action"] == "REFRESH_EVIDENCE"
+    assert all(gate._review(state, n, state["current"]["base"], state["current"]["head"])["verdict"] == "BLOCKED"
+               for n in (1, 2))
+
+
+def test_anchor_optional_extension_and_adapter_shapes_use_shared_rules(tmp_path):
+    state, document = fixture(tmp_path)
+    original = json.loads(Path(document["anchor"]["ref"]).read_text(encoding="utf-8"))
+    for field, invalid in (
+        ("pr43_review_history_adapter", []),
+        ("cff_review_history_adapter", None),
+        ("pr46_review_history_adapter", {"contract": "pr46-review-history/1", "sources": []}),
+        ("correction_exception", []),
+        ("correction_exception", {**gate.CORRECTION4_EXCEPTION, "authorization_ref": 1}),
+        ("review_history_links", {"ref": "fixture://not-adopted", "sha256": True}),
+    ):
+        anchor = deepcopy(original); anchor[field] = invalid
+        _assert_anchor_rejected_in_api_and_cli(tmp_path, deepcopy(state), deepcopy(document), anchor)
+
+
+def test_structure_has_no_saved_history_or_authorization_file_dependency(tmp_path, monkeypatch):
+    state, document = fixture(tmp_path)
+    anchor = json.loads(Path(document["anchor"]["ref"]).read_text(encoding="utf-8"))
+    anchor["correction_exception"] = {**gate.CORRECTION4_EXCEPTION,
+                                      "authorization_ref": "fixture://absent-authorization"}
+    anchor["pr46_review_history_adapter"] = {"contract": "pr46-review-history/1",
+        "sources": {name: "fixture://absent-history/" + name for name in gate.PR46_HISTORY_DIGESTS}}
+    def no_attachment_read(path):
+        raise AssertionError("pure structure must not read authorization/history attachments")
+    with monkeypatch.context() as context:
+        context.setattr(Path, "read_bytes", no_attachment_read)
+        gate._validate_state_structure(anchor)
+    document["anchor"] = write(tmp_path / "complete-unresolved-history-anchor.json", anchor)
+    repin(tmp_path, state, document)
+    assert gate.next_action(state)["action"] == "REFRESH_EVIDENCE"

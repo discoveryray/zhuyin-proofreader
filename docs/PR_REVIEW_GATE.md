@@ -285,6 +285,9 @@ Gate v4 可另行明確採用 optional `review_history_links: {ref, sha256}`，�
 新 state 必須保留 anchor 的全部 review prefix（逐 record 及順序等值），不得移除
 原 implementers，corrections 亦須保持原 prefix。Anchor 與新 state 的 task/repository
 必須完全相同。原 state 可因尚未有此關係而拒絕；不追認其原判定為成功。
+Anchor 重用完整 state 的同一 closed fields／型別結構規則，缺必要欄位、
+未知欄位及錯型別均拒絕；只分離原 review-history 決策，不能要求歷史錨點已 PASS。
+此分層為內部共用驗證，不提供公開略過結構驗證的開關。
 
 每筆 link closed fields：`round/baseline/base/head/scope`、
 `code_reviewer/blocked_reviewer`、`code/blocked`。兩份 artifact 各為
