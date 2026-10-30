@@ -489,7 +489,11 @@ def load_verified_glyf_fingerprints(path: Path):
     conflicts = set()
     if not path.exists():
         return out
-    with path.open("r", encoding="utf-8-sig", newline="") as f:
+    asset_bytes = path.read_bytes()
+    asset_sha256 = hashlib.sha256(asset_bytes).hexdigest()
+    # Parse and identify the same captured bytes; per-row claims must not
+    # reopen a changing file or rehash the entire asset for every record.
+    with io.TextIOWrapper(io.BytesIO(asset_bytes), encoding="utf-8-sig", newline="") as f:
         for row in csv.DictReader(f):
             sha = (row.get("glyph_sha256") or "").strip().lower()
             bop = (row.get("bopomofo") or "").strip()
@@ -516,7 +520,7 @@ def load_verified_glyf_fingerprints(path: Path):
                 "source_gid": gid,
                 "verification": (row.get("verification") or "").strip(),
                 "notes": (row.get("notes") or "").strip(),
-                "evidence_roots": (_row_claim_ref(path, row),),
+                "evidence_roots": (_row_claim_ref(path, row, asset_sha256=asset_sha256),),
             }
     return out
 
