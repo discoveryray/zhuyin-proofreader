@@ -317,6 +317,9 @@ class ReviewOperationState:
                 except Exception as exc:
                     value["reload_error"] = str(exc)
             return value
+        if operation == "prepare_learning_target" and (type(payload.get("group_id")) is not str
+                                                       or not payload["group_id"].strip()):
+            raise ValueError("學習組 ID 不合法；請重新載入清單")
         snapshot = self.service.load_resume_snapshot(**{key: payload[key] for key in ("expected_manifest", "expected_db")})
         if operation == "prepare_learning":
             # A replacement preparation retires the prior UI decision even if
@@ -366,7 +369,8 @@ class ReviewOperationState:
                         "符合全部獨立性條件時，同次啟用跨教材重用。")
         collected = learning.collect_learning_candidates(snapshot.ledger,
             sp._global_direct_source_context(self.output_dir, snapshot.manifest),
-            evidence_root=sp.project_actual_evidence_root(self.output_dir))
+            evidence_root=sp.project_actual_evidence_root(self.output_dir),
+            **({"target_group_id": payload["group_id"]} if operation == "prepare_learning_target" else {}))
         if operation == "load_learning":
             pending = learning.list_learning_confirmations(self.output_dir)
             return dict(snapshot=self.remember(snapshot), candidates=collected, pending=pending)
