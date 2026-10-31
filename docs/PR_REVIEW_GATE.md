@@ -265,6 +265,55 @@ Develop 後續前進時，可在已證明保留此 merge 的條件下完成該 m
 
 ## Gate v4：分階段驗證（明確採用的新任務）
 
+### 明確採用的外部 blocker links `/1`
+
+Gate v4 可另行明確採用 optional `review_history_links: {ref, sha256}`，指向
+`zhuyin-review-history-blocker-links/1` 外部 JSON 原件。沒有此欄位的 v3/v4、
+既有歷史 adapter 與原判定不變；v3 不接受此擴充。不得自動套用既有任務，
+也不得用新 gate 認證自身或創造寫入、正式驗證及 merge 授權。
+
+此契約只有一種關係：同一精確 code scope 的完整 `CODE_REVIEWED` 後出現完整
+`BLOCKED`。它將前者退為歷史中間紀錄，後者完整生效；不解除任何 finding，
+不產生 PASS。原 records、報告 bytes、null relation 欄位與順序全部保持。
+退為歷史的 CODE 不再參與 `_review`，亦不能再作 `finalizes_report_ref` 的 target。
+後續 non-code BLOCKED 補審只沿用既有 `supersedes_report_ref` 及
+`resolution_evidence_ref`；code BLOCKED 仍不可同 HEAD 解除。沒有第二種解除事件。
+
+外部檔 closed fields：`schema`、完整 `task`、`anchor: {ref, sha256}`、
+`previous: null | {ref, sha256}`、`links`。Anchor 是事前由協調者獨立核對並保存的
+完整 pre-adoption v4 state 原件，不可是本輪重新封裝的自證 manifest。
+新 state 必須保留 anchor 的全部 review prefix（逐 record 及順序等值），不得移除
+原 implementers，corrections 亦須保持原 prefix。Anchor 與新 state 的 task/repository
+必須完全相同。原 state 可因尚未有此關係而拒絕；不追認其原判定為成功。
+Anchor 重用完整 state 的同一 closed fields／型別結構規則，缺必要欄位、
+未知欄位及錯型別均拒絕；只分離原 review-history 決策，不能要求歷史錨點已 PASS。
+此分層為內部共用驗證，不提供公開略過結構驗證的開關。
+
+每筆 link closed fields：`round/baseline/base/head/scope`、
+`code_reviewer/blocked_reviewer`、`code/blocked`。兩份 artifact 各為
+`{report_ref, report_sha256, record: {ref, sha256}}`。Gate 實際讀取 anchor、
+兩份 record 與報告 bytes 並重算 SHA；records 必須等於完整歷史中的原 record。
+報告 ref 可帶原 fragment，讀檔只去除 fragment，不改歷史身分。
+本擴充的 JSON value/prefix 比對區分 bool、int、float，object 鍵序無關而 array
+順序必須相同；link.round 僅接受整數1/2。Anchor root 必須是 state object，
+合法 JSON 的 list/null/scalar 亦以 EvidenceError/STOP 拒絕，不拋出未分類 traceback。
+CODE 必須更早，兩份均 full_diff、獨立、合法 reviewer、精確 scope 相同、
+原 supersedes/finalizes/resolution 均 null。第二輪 reviewer 不得參與同 scope 第一輪。
+拒絕未知 target、跨 task/repository/scope/HEAD、身分或 hash 不符、重複/分叉/循環。
+
+追加外部檔時 `previous` 指向保留的上一份原 bytes；task、anchor 不變，links
+必須嚴格增加且保留整個舊 prefix。每份檔最多1000 links，previous chain最多32份，
+超限 fail closed；不新增無限歷史重播框架。歷史 CODE 一旦退場，不得建立平行放行鏈。
+此擴充下同 scope 亦不得有兩份 active PASS，即使 report_ref、CI 或 coverage 不同。
+新 HEAD 可保留舊歷史，但舊 link/PASS 不適用新 scope；新候選仍須完整獨立審查。
+
+SHA及record欄位只證明與所指定原件的一致性，不認證真人身分或報告真實性。
+協調者仍須從原平台/代理原文核對 reviewer 身分、獨立性及事前 anchor 的來源；
+不能自行重算一份新 manifest 就宣稱刪改後的歷史完整。缺原件、假 record、
+錯 SHA、unknown JSON fields/duplicate keys 均拒絕。合成測試不得作正式審查證據。
+後續 PASS 仍需既有合法 non-code 補審、resolution、完整 coverage、最新適用 CI、
+兩輪及保護規則；任何尚未解除 BLOCKED 都繼續阻擋。
+
 `zhuyin-pr-review-gate/4` 明確區分開發、驗證及實際 merge 的短檢查。
 本節只適用明確採用 [VALIDATION_POLICY.md](VALIDATION_POLICY.md) 新流程的任務，
 及使用者事前指定的 `validation-flow-reduction` transition。原 v3 snapshot、

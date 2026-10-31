@@ -18,6 +18,7 @@ SCHEMA = "zhuyin-pr-review-gate/3"
 STAGED_SCHEMA = "zhuyin-pr-review-gate/4"
 NO_WINDOW_POLICY = "validation-flow/no-real-tk/1"
 CURRENT_POLICY = "validation-flow/current-evidence/1"
+BLOCKER_LINKS_SCHEMA = "zhuyin-review-history-blocker-links/1"
 REPOSITORY = "discoveryray/zhuyin-proofreader"
 WORKFLOW = ".github/workflows/ci.yml"
 PYTHONS = ("3.13",)
@@ -170,7 +171,7 @@ def _ci_schema(ci, where):
 
 def _correction5_limit(state):
     exception = state["correction_exception"]
-    _fields(exception, " ".join((*CORRECTION5_EXCEPTION, "authorization_ref", "previous_authorization_ref")), "correction_exception")
+    _correction_exception_structure(exception)
     for name, expected in CORRECTION5_EXCEPTION.items():
         _require(type(exception[name]) is type(expected) and exception[name] == expected,
                  "invalid fifth-round task-bound exception: " + name)
@@ -211,9 +212,7 @@ def _correction5_limit(state):
 
 def _correction6_limit(state):
     exception = state["correction_exception"]
-    _fields(exception, " ".join((*CORRECTION6_EXCEPTION, "authorization_ref",
-                                "previous_authorization_ref", "fourth_authorization_ref")),
-            "correction_exception")
+    _correction_exception_structure(exception)
     for name, expected in CORRECTION6_EXCEPTION.items():
         _require(type(exception[name]) is type(expected) and exception[name] == expected,
                  "invalid sixth-round task-bound exception: " + name)
@@ -253,9 +252,7 @@ def _correction6_limit(state):
 
 def _correction7_limit(state):
     exception = state["correction_exception"]
-    _fields(exception, " ".join((*CORRECTION7_EXCEPTION, "authorization_ref",
-                                "previous_authorization_ref", "fifth_authorization_ref", "fourth_authorization_ref")),
-            "correction_exception")
+    _correction_exception_structure(exception)
     for name, expected in CORRECTION7_EXCEPTION.items():
         _require(type(exception[name]) is type(expected) and exception[name] == expected,
                  "invalid seventh-round task-bound exception: " + name)
@@ -294,9 +291,7 @@ def _correction7_limit(state):
 
 def _correction8_limit(state):
     exception = state["correction_exception"]
-    _fields(exception, " ".join((*CORRECTION8_EXCEPTION, "authorization_ref", "previous_authorization_ref",
-                                "sixth_authorization_ref", "fifth_authorization_ref", "fourth_authorization_ref")),
-            "correction_exception")
+    _correction_exception_structure(exception)
     for name, expected in CORRECTION8_EXCEPTION.items():
         _require(type(exception[name]) is type(expected) and exception[name] == expected,
                  "invalid eighth-round task-bound exception: " + name)
@@ -370,7 +365,7 @@ def _pr43_saved_bytes(ref):
 def _pr43_correction_limit(state):
     """Closed historical projection; never edits the canonical ledger or reviews."""
     ex = state["correction_exception"]
-    _fields(ex, "schema limit sources integration_commits corrective_head", "PR43 correction exception")
+    _correction_exception_structure(ex)
     _require(type(ex["limit"]) is int and ex["limit"] in (4, 5), "PR43 permits no sixth round")
     task, pr, corrections = state["task"], state["pr"], state["corrections"]
     _require(task == {"id": PR43_TASK, "repository": REPOSITORY, "baseline": PR43_BASELINE,
@@ -381,7 +376,6 @@ def _pr43_correction_limit(state):
     pins = dict(PR43_SOURCES)
     if ex["limit"] == 5:
         pins["fifth_authorization"] = PR43_FIFTH_AUTHORIZATION
-    _fields(ex["sources"], " ".join(pins), "PR43 pinned sources")
     saved = {}
     for key, digest in pins.items():
         raw = _pr43_saved_bytes(ex["sources"][key])
@@ -424,8 +418,7 @@ def _pr43_correction_limit(state):
     previous, integration_base = PR43_PREFIX[-1][1], None
     correction_seen = False
     for record in records:
-        _fields(record, "sha object_ref", "PR43 integration commit")
-        _sha(record["sha"], "PR43 integration SHA")
+        _pr43_commit_structure(record)
         raw = _pr43_saved_bytes(record["object_ref"])
         digest = hashlib.sha1(b"commit " + str(len(raw)).encode("ascii") + b"\0" + raw).hexdigest()
         _require(digest == record["sha"], "PR43 commit object hash differs")
@@ -501,8 +494,7 @@ def _pr43_json(raw):
 
 
 def _pr43_commit(record):
-    _fields(record, "sha object_ref", "PR43 raw commit")
-    _sha(record["sha"], "PR43 raw commit SHA")
+    _pr43_commit_structure(record)
     raw = _pr43_saved_bytes(record["object_ref"])
     actual = hashlib.sha1(b"commit " + str(len(raw)).encode("ascii") + b"\0" + raw).hexdigest()
     _require(actual == record["sha"], "PR43 commit object hash differs")
@@ -525,8 +517,7 @@ def _pr43_commit(record):
 def _pr43_history(state, *, _current_only=None):
     current_only = state.get("validation_policy") == CURRENT_POLICY if _current_only is None else _current_only
     adapter = state.get("pr43_review_history_adapter")
-    _fields(adapter, "contract sources", "PR43 history adapter")
-    _require(adapter["contract"] == PR43_HISTORY_CONTRACT, "unknown PR43 history contract")
+    _history_adapter_structure("pr43_review_history_adapter", adapter)
     _require(state["schema"] == STAGED_SCHEMA and state["task"] == {
         "id": PR43_TASK, "repository": REPOSITORY, "baseline": PR43_BASELINE,
         "base_branch": "develop", "head_branch": PR43_BRANCH}, "PR43 history identity differs")
@@ -534,7 +525,6 @@ def _pr43_history(state, *, _current_only=None):
     _require(type(pr) is dict and type(pr.get("number")) is int and pr["number"] == 43
              and pr.get("head_branch") == PR43_BRANCH and pr.get("base_branch") == "develop",
              "PR43 history belongs to original PR43")
-    _fields(adapter["sources"], " ".join(PR43_SIXTH_SOURCES), "PR43 sixth original sources")
     saved = {}
     for name, digest in PR43_SIXTH_SOURCES.items():
         if current_only and name in {"ci_manifest", "ci_raw", "ci_junit", "ci_events"}:
@@ -603,7 +593,7 @@ def _pr43_history_pairs(state):
 
 def _pr43_sixth_limit(state, *, _current_only=None):
     ex = state["correction_exception"]
-    _fields(ex, "schema limit sixth_corrective_head integration_commits candidate_tree", "PR43 sixth exception")
+    _correction_exception_structure(ex)
     _require(type(ex["limit"]) is int and ex["limit"] == 6, "PR43 sixth limit must be exactly six")
     original, _ = _pr43_history(state, _current_only=_current_only)
     corrections = state["corrections"]
@@ -618,7 +608,7 @@ def _pr43_sixth_limit(state, *, _current_only=None):
     _require(type(records) is list and bool(records), "PR43 sixth raw commit chain required")
     previous, base, seen = PR43_FIFTH_HEAD, PR43_FIFTH_BASE, False
     for record in records:
-        _fields(record, "sha object_ref develop_observation_ref", "PR43 sixth chain record")
+        _pr43_commit_structure(record, observation=True)
         tree, parents = _pr43_commit({key: record[key] for key in ("sha", "object_ref")})
         _require(parents[0] == previous, "PR43 sixth ordered first parent differs")
         if record["sha"] == ex["sixth_corrective_head"]:
@@ -673,10 +663,9 @@ PR43_POSTMERGE_SOURCES = {
 def _pr43_postmerge_original(state):
     """Read the immutable old task, never clear its merged code blocker."""
     ex = state["correction_exception"]
-    _fields(ex, "schema limit sources candidate pr_observation_ref", "PR43 postmerge exception")
+    _correction_exception_structure(ex)
     _require(ex["schema"] == PR43_POSTMERGE_SCHEMA and type(ex["limit"]) is int
              and ex["limit"] == 7, "PR43 postmerge permits exactly seven rounds")
-    _fields(ex["sources"], " ".join(PR43_POSTMERGE_SOURCES), "PR43 postmerge sources")
     saved = {}
     for name, digest in PR43_POSTMERGE_SOURCES.items():
         if state.get("validation_policy") == CURRENT_POLICY and name in {"short", "handoff"}:
@@ -819,7 +808,7 @@ def _correction_limit(state):
         return _correction6_limit(state)
     if type(exception) is dict and exception.get("schema") == CORRECTION5_EXCEPTION["schema"]:
         return _correction5_limit(state)
-    _fields(exception, " ".join((*CORRECTION4_EXCEPTION, "authorization_ref")), "correction_exception")
+    _correction_exception_structure(exception)
     for name, expected in CORRECTION4_EXCEPTION.items():
         _require(type(exception[name]) is type(expected) and exception[name] == expected,
                  "invalid task-bound correction exception: " + name)
@@ -859,8 +848,8 @@ def _correction_exhausted(state):
     return {3: "three", 4: "four", 5: "five", 6: "six", 7: "seven", 8: "eight"}[_correction_limit(state)] + " corrective rounds exhausted"
 
 
-def validate_state(state):
-    """Validate the closed input schema. This does not grant permission."""
+def _validate_state_header_structure(state):
+    """Closed header/review fields, shared with complete historical anchors."""
     staged = type(state) is dict and state.get("schema") == STAGED_SCHEMA
     fields = "schema task authorization current implementers corrections reviews unavailable_review_rounds pr pr_ci merge push_ci handoffs"
     _fields(state, fields + (" execution coverage short_validation" if staged else "")
@@ -868,7 +857,10 @@ def validate_state(state):
             + (" validation_policy" if type(state) is dict and "validation_policy" in state else "")
             + (" pr43_review_history_adapter" if type(state) is dict and "pr43_review_history_adapter" in state else "")
             + (" cff_review_history_adapter" if type(state) is dict and "cff_review_history_adapter" in state else "")
-            + (" pr46_review_history_adapter" if type(state) is dict and "pr46_review_history_adapter" in state else ""), "state")
+            + (" pr46_review_history_adapter" if type(state) is dict and "pr46_review_history_adapter" in state else "")
+            + (" review_history_links" if type(state) is dict and "review_history_links" in state else ""), "state")
+    if "review_history_links" in state:
+        _require(staged, "blocker links require explicit gate v4 adoption")
     if "validation_policy" in state:
         _require(state["validation_policy"] == NO_WINDOW_POLICY or
                  (staged and state["validation_policy"] == CURRENT_POLICY), "unknown validation policy")
@@ -911,8 +903,12 @@ def validate_state(state):
     _require(type(state["unavailable_review_rounds"]) is list and
              all(type(n) is int and n in (1, 2) for n in state["unavailable_review_rounds"]),
              "invalid unavailable review rounds")
-    _require(type(state["corrections"]) is list and len(state["corrections"]) <= _correction_limit(state),
-             "correction rounds exceed the applicable task limit")
+
+
+def _validate_state_reviews_structure(state):
+    """Shared correction records/reviews after the public correction-limit check."""
+    staged = state["schema"] == STAGED_SCHEMA
+    _require(type(state["corrections"]) is list, "corrections must be a list")
     previous = None
     for number, correction in enumerate(state["corrections"], 1):
         _fields(correction, "number from_head to_head evidence_ref", "correction")
@@ -969,7 +965,10 @@ def validate_state(state):
         else:
             _require((staged and review["verdict"] == "CODE_REVIEWED") or (review["verdict"] == "BLOCKED" and review["blocker_kind"] != "code"),
                      "round 2 without CI metadata must remain a non-code BLOCKED")
-    _validate_review_history(state)
+
+
+def _validate_state_tail_structure(state):
+    """Closed PR/CI/merge/handoff fields, without history decisions."""
     pr = state["pr"]
     if pr is not None:
         _fields(pr, "number url state base_branch head_branch base_sha head_sha mergeable "
@@ -1001,6 +1000,30 @@ def validate_state(state):
         for field in ("from", "to", "evidence_ref"):
             _text(handoff[field], f"handoff.{field}")
         _sha(handoff["head"], "handoff.head")
+
+
+def _validate_state_structure(state):
+    """Complete shared structure, without saved history or authorization reads."""
+    _validate_state_header_structure(state)
+    if "review_history_links" in state:
+        _history_original_structure(state["review_history_links"])
+    for name in ("pr43_review_history_adapter", "cff_review_history_adapter", "pr46_review_history_adapter"):
+        if name in state:
+            _history_adapter_structure(name, state[name])
+    if "correction_exception" in state:
+        _correction_exception_structure(state["correction_exception"])
+    _validate_state_reviews_structure(state)
+    _validate_state_tail_structure(state)
+
+
+def validate_state(state):
+    """Validate complete structure and review history; never grant permission."""
+    _validate_state_header_structure(state)
+    _require(type(state["corrections"]) is list and len(state["corrections"]) <= _correction_limit(state),
+             "correction rounds exceed the applicable task limit")
+    _validate_state_reviews_structure(state)
+    _validate_review_history(state)
+    _validate_state_tail_structure(state)
 
 
 def _decision(state, action, reason, **details):
@@ -1121,7 +1144,7 @@ def _cff_v2_history(state):
 
 def _cff_correction4_limit(state):
     exception = state["correction_exception"]
-    _fields(exception, " ".join((*CFF_CORRECTION4_EXCEPTION, "authorization_ref")), "CFF correction exception")
+    _correction_exception_structure(exception)
     for key, value in CFF_CORRECTION4_EXCEPTION.items():
         _require(type(exception[key]) is type(value) and exception[key] == value,
                  "invalid CFF fourth-round exception: " + key)
@@ -1161,14 +1184,10 @@ def _cff_history_pairs(state):
     _require(state["schema"] == STAGED_SCHEMA and state["task"] == CFF_HISTORY_TASK,
              "CFF history adapter belongs to its exact original task")
     _require(state["pr"] is None or state["pr"]["number"] == 42, "CFF history adapter belongs to PR42")
-    _fields(adapter, "contract sources", "cff_review_history_adapter")
-    _require(adapter["contract"] in ("cff-review-history/1", "cff-review-history/2"), "unknown CFF history contract")
+    _history_adapter_structure("cff_review_history_adapter", adapter)
     v2 = adapter["contract"] == "cff-review-history/2"
     additional_pair = _cff_v2_history(state)[1] if v2 else None
     sources = adapter["sources"]
-    expected_keys = (CFF_HISTORY_DIGESTS.keys() | CFF_HISTORY_V2_DIGESTS.keys()) if v2 else CFF_HISTORY_DIGESTS.keys()
-    _require(type(sources) is dict and sources.keys() == expected_keys,
-             "CFF history sources must be the exact retained originals")
     payloads = {}
     for name, expected in CFF_HISTORY_DIGESTS.items():
         _text(sources[name], "CFF original source path")
@@ -1240,11 +1259,8 @@ def _pr46_history_pairs(state):
              and pr.get("base_branch") == "develop"
              and pr.get("head_branch") == PR46_HISTORY_TASK["head_branch"],
              "PR46 history adapter requires original PR46/branches")
-    _fields(adapter, "contract sources", "pr46_review_history_adapter")
-    _require(adapter["contract"] == "pr46-review-history/1", "unknown PR46 history contract")
+    _history_adapter_structure("pr46_review_history_adapter", adapter)
     sources = adapter["sources"]
-    _require(type(sources) is dict and sources.keys() == PR46_HISTORY_DIGESTS.keys(),
-             "PR46 history sources must be the exact retained originals")
     payloads = {}
     for name, digest in PR46_HISTORY_DIGESTS.items():
         _text(sources[name], "PR46 original source")
@@ -1303,13 +1319,216 @@ def _pr46_history_pairs(state):
     return {frozenset((code["report_ref"], blocked["report_ref"]))}
 
 
+def _pr43_commit_structure(record, *, observation=False):
+    _fields(record, "sha object_ref" + (" develop_observation_ref" if observation else ""), "PR43 raw commit")
+    _sha(record["sha"], "PR43 raw commit SHA")
+    _text(record["object_ref"], "PR43 raw commit reference")
+    if observation and record["develop_observation_ref"] is not None:
+        _text(record["develop_observation_ref"], "PR43 develop observation reference")
+
+
+def _correction_exception_structure(exception):
+    """Shared pure shapes only; saved authorization/history checks stay in limits."""
+    _require(type(exception) is dict and type(exception.get("schema")) is str,
+             "correction exception must be a contract object")
+    fixed = {
+        template["schema"]: (template, refs) for template, refs in (
+            (CORRECTION4_EXCEPTION, ("authorization_ref",)),
+            (CORRECTION5_EXCEPTION, ("authorization_ref", "previous_authorization_ref")),
+            (CORRECTION6_EXCEPTION, ("authorization_ref", "previous_authorization_ref", "fourth_authorization_ref")),
+            (CORRECTION7_EXCEPTION, ("authorization_ref", "previous_authorization_ref", "fifth_authorization_ref", "fourth_authorization_ref")),
+            (CORRECTION8_EXCEPTION, ("authorization_ref", "previous_authorization_ref", "sixth_authorization_ref", "fifth_authorization_ref", "fourth_authorization_ref")),
+            (CFF_CORRECTION4_EXCEPTION, ("authorization_ref",)),
+        )}
+    schema = exception["schema"]
+    if schema in fixed:
+        template, refs = fixed[schema]
+        _fields(exception, " ".join((*template, *refs)), "correction_exception")
+        for name, expected in template.items():
+            _require(type(exception[name]) is type(expected), "invalid correction field type: " + name)
+        for ref in refs:
+            _text(exception[ref], "correction_exception." + ref)
+        return
+    fields = {
+        PR43_CORRECTION_SCHEMA: "schema limit sources integration_commits corrective_head",
+        PR43_SIXTH_SCHEMA: "schema limit sixth_corrective_head integration_commits candidate_tree",
+        PR43_POSTMERGE_SCHEMA: "schema limit sources candidate pr_observation_ref",
+    }
+    _require(schema in fields, "unknown correction exception contract")
+    _fields(exception, fields[schema], "PR43 correction exception")
+    _require(type(exception["limit"]) is int, "PR43 correction limit must be an integer")
+    if schema == PR43_CORRECTION_SCHEMA:
+        _require(exception["limit"] in (4, 5), "PR43 permits no sixth round")
+        sources = PR43_SOURCES.keys() | ({"fifth_authorization"} if exception["limit"] == 5 else set())
+        if exception["corrective_head"] is not None:
+            _sha(exception["corrective_head"], "PR43 corrective HEAD")
+    elif schema == PR43_SIXTH_SCHEMA:
+        _require(exception["limit"] == 6, "PR43 sixth limit must be exactly six")
+        _sha(exception["sixth_corrective_head"], "PR43 sixth corrective HEAD")
+        _sha(exception["candidate_tree"], "PR43 sixth candidate tree")
+    else:
+        _require(exception["limit"] == 7, "PR43 postmerge permits exactly seven rounds")
+        sources = PR43_POSTMERGE_SOURCES.keys()
+        _pr43_commit_structure(exception["candidate"])
+        if exception["pr_observation_ref"] is not None:
+            _text(exception["pr_observation_ref"], "PR43 PR observation reference")
+    if "sources" in exception:
+        _fields(exception["sources"], " ".join(sources), "PR43 original sources")
+        for ref in exception["sources"].values():
+            _text(ref, "PR43 original source reference")
+    if "integration_commits" in exception:
+        _require(type(exception["integration_commits"]) is list, "PR43 integration commits must be a list")
+        for record in exception["integration_commits"]:
+            _pr43_commit_structure(record, observation=schema == PR43_SIXTH_SCHEMA)
+
+
+def _history_adapter_structure(name, adapter):
+    """The same adapter fields for complete states and their historical anchors."""
+    contracts = {
+        "pr43_review_history_adapter": {PR43_HISTORY_CONTRACT: PR43_SIXTH_SOURCES.keys()},
+        "cff_review_history_adapter": {"cff-review-history/1": CFF_HISTORY_DIGESTS.keys(),
+                                       "cff-review-history/2": CFF_HISTORY_DIGESTS.keys() | CFF_HISTORY_V2_DIGESTS.keys()},
+        "pr46_review_history_adapter": {"pr46-review-history/1": PR46_HISTORY_DIGESTS.keys()},
+    }[name]
+    _fields(adapter, "contract sources", name)
+    _require(type(adapter["contract"]) is str and adapter["contract"] in contracts, "unknown history adapter contract")
+    _fields(adapter["sources"], " ".join(contracts[adapter["contract"]]), name + " sources")
+    for source in adapter["sources"].values():
+        _text(source, name + " original source")
+
+
+def _history_original_structure(pointer):
+    _fields(pointer, "ref sha256", "history original")
+    _text(pointer["ref"], "history original ref")
+    digest = pointer["sha256"]
+    _require(type(digest) is str and re.fullmatch(r"[0-9a-f]{64}", digest), "invalid history SHA256")
+
+
+def _linked_original(pointer):
+    """Read a pinned local original; a digest is integrity, not authorship."""
+    _history_original_structure(pointer)
+    try:
+        raw = Path(pointer["ref"].split("#", 1)[0]).read_bytes()
+    except OSError as exc:
+        raise EvidenceError("history original is unreadable: " + str(exc)) from exc
+    _require(hashlib.sha256(raw).hexdigest() == pointer["sha256"], "history original SHA256 mismatch")
+    return raw
+
+
+def _linked_json(pointer):
+    try:
+        return json.loads(_linked_original(pointer).decode("utf-8-sig"), object_pairs_hook=_unique_object)
+    except (UnicodeError, ValueError) as exc:
+        raise EvidenceError("history original is not valid JSON: " + str(exc)) from exc
+
+
+def _same_json_value(left, right):
+    """Exact JSON value identity, including number/bool types and array order."""
+    if type(left) is not type(right):
+        return False
+    if type(left) is dict:
+        return left.keys() == right.keys() and all(
+            _same_json_value(value, right[key]) for key, value in left.items())
+    if type(left) is list:
+        return len(left) == len(right) and all(
+            _same_json_value(a, b) for a, b in zip(left, right))
+    return left == right
+
+
+def _blocker_link_document(pointer, visited=None):
+    visited = set() if visited is None else visited
+    key = str(Path(pointer["ref"]).resolve())
+    _require(key not in visited and len(visited) < 32, "cyclic or excessive blocker link history")
+    visited.add(key)
+    document = _linked_json(pointer)
+    _fields(document, "schema task anchor previous links", "blocker links")
+    _require(document["schema"] == BLOCKER_LINKS_SCHEMA, "unsupported blocker links contract")
+    _require(type(document["links"]) is list and 0 < len(document["links"]) <= 1000,
+             "blocker links must be a finite nonempty list")
+    if document["previous"] is not None:
+        old = _blocker_link_document(document["previous"], visited)
+        _require(_same_json_value(document["task"], old["task"]) and
+                 _same_json_value(document["anchor"], old["anchor"]),
+                 "blocker link history changed its anchor")
+        _require(len(document["links"]) > len(old["links"]) and
+                 _same_json_value(document["links"][:len(old["links"])], old["links"]),
+                 "blocker link history must retain the complete prior prefix")
+    return document
+
+
+def _historical_code_refs(state):
+    """One opt-in relation: retire CODE only, never resolve a BLOCKED finding."""
+    if "review_history_links" not in state:
+        return set()
+    _require(state["schema"] == STAGED_SCHEMA, "blocker links require gate v4")
+    document = _blocker_link_document(state["review_history_links"])
+    _require(_same_json_value(document["task"], state["task"]), "blocker links belong to another task/repository")
+    anchor = _linked_json(document["anchor"])
+    _require(type(anchor) is dict, "blocker link anchor must be a state object")
+    _validate_state_structure(anchor)
+    _require(anchor.get("schema") == STAGED_SCHEMA and _same_json_value(anchor.get("task"), state["task"]),
+             "blocker link anchor task/schema differs")
+    _require("review_history_links" not in anchor, "initial anchor must be the retained pre-adoption state")
+    original = anchor.get("reviews")
+    _require(type(original) is list and bool(original) and
+             _same_json_value(state["reviews"][:len(original)], original),
+             "complete anchored review prefix was deleted, reordered or changed")
+    _require(type(anchor.get("implementers")) is list and
+             set(anchor["implementers"]) <= set(state["implementers"]),
+             "anchored implementation actors cannot be removed")
+    _require(type(anchor.get("corrections")) is list and
+             _same_json_value(state["corrections"][:len(anchor["corrections"])], anchor["corrections"]),
+             "anchored correction history changed")
+    reports = {r["report_ref"]: (i, r) for i, r in enumerate(state["reviews"])}
+    retired, targets = set(), set()
+    for link in document["links"]:
+        _fields(link, "round baseline base head scope code_reviewer blocked_reviewer code blocked", "blocker link")
+        _require(type(link["round"]) is int and link["round"] in (1, 2), "invalid blocker link round")
+        pair = []
+        for label in ("code", "blocked"):
+            artifact = link[label]
+            _fields(artifact, "report_ref report_sha256 record", "blocker link artifact")
+            ref = artifact["report_ref"]
+            _require(ref in reports, "blocker link references an unknown report")
+            index, review = reports[ref]
+            _require(_same_json_value(_linked_json(artifact["record"]), review), "original review record differs")
+            _linked_original({"ref": ref, "sha256": artifact["report_sha256"]})
+            pair.append((index, review))
+        (code_index, code), (blocked_index, blocked) = pair
+        _require(code_index < blocked_index, "CODE must precede its BLOCKED report")
+        _require(code["verdict"] == "CODE_REVIEWED" and blocked["verdict"] == "BLOCKED",
+                 "blocker link only permits CODE_REVIEWED to BLOCKED")
+        _require(code["report_ref"] not in retired and blocked["report_ref"] not in targets,
+                 "duplicate or forked blocker link")
+        scope = tuple(link[f] for f in ("round", "baseline", "base", "head", "scope"))
+        _require(_same_json_value(list(scope), list(_review_scope(code))) and
+                 _same_json_value(list(scope), list(_review_scope(blocked))), "blocker link crosses review scope")
+        _require(link["code_reviewer"] == code["reviewer"] and
+                 link["blocked_reviewer"] == blocked["reviewer"], "blocker link reviewer identity differs")
+        for review in (code, blocked):
+            _require(review["baseline"] == state["task"]["baseline"] and
+                     review["full_diff_reviewed"] and review["review_mode"] == "full_diff",
+                     "blocker link needs the retained complete reviews")
+            _require(all(review.get(f) is None for f in
+                         ("supersedes_report_ref", "finalizes_report_ref", "resolution_evidence_ref")),
+                     "blocker link must preserve original null relations")
+            _require(_review_problem(state, review, review["round"]) is None,
+                     "blocker link reviewer is not independent or scope is incomplete")
+        retired.add(code["report_ref"])
+        targets.add(blocked["report_ref"])
+    return retired
+
+
 def _validate_review_history(state):
     """Resolve only explicit, append-only supplements backed by retained evidence."""
     allowed_pairs = _cff_history_pairs(state) | _pr43_history_pairs(state) | _pr46_history_pairs(state)
-    reports, superseded = {}, set()
+    historical = _historical_code_refs(state)
+    reports, superseded = {}, set(historical)
     for review in state["reviews"]:
         ref, prior = review["report_ref"], review["supersedes_report_ref"]
         finalizes = review.get("finalizes_report_ref")
+        _require(not finalizes or finalizes not in historical,
+                 "historical CODE cannot create a parallel finalization chain")
         _require(not (prior and finalizes), "finalization and supersession are distinct relations")
         prior = prior or finalizes
         _require(ref not in reports, "report_ref must uniquely identify an original report")
@@ -1336,8 +1555,13 @@ def _validate_review_history(state):
             superseded.add(prior)
         reports[ref] = review
     seen = {}
+    active_passes = set()
     for ref, review in reports.items():
         if ref not in superseded:
+            if "review_history_links" in state and review["verdict"] == "PASS":
+                scope = _review_scope(review)
+                _require(scope not in active_passes, "duplicate active PASS for the same scope")
+                active_passes.add(scope)
             key = (*_review_scope(review), json.dumps(review["ci"], sort_keys=True))
             if state["schema"] == STAGED_SCHEMA:
                 key += (review["coverage_sha256"],)
@@ -1350,6 +1574,7 @@ def _validate_review_history(state):
 
 def _review(state, number, base, head):
     superseded = {r["supersedes_report_ref"] or r.get("finalizes_report_ref") for r in state["reviews"]}
+    superseded.update(_historical_code_refs(state))
     matches = [r for r in state["reviews"] if r["report_ref"] not in superseded and r["round"] == number and
                (r["baseline"], r["base"], r["head"]) == (state["task"]["baseline"], base, head)]
     # Unresolved blockers survive CI reruns and unrelated PASS records.
