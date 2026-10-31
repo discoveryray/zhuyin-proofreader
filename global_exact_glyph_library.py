@@ -275,6 +275,14 @@ class GlobalLibraryInspectionSnapshot:
 
 
 @dataclass(frozen=True)
+class GlobalLearningSnapshots:
+    """Operation-local audit and reuse views of the same validated transaction."""
+
+    inspection: GlobalLibraryInspectionSnapshot
+    reuse: GlobalExactGlyphSnapshot
+
+
+@dataclass(frozen=True)
 class GlobalApprovalRequest:
     """Fixed manual decision, including its repository; not fresh actual evidence."""
 
@@ -1126,7 +1134,11 @@ def _connect_existing(path: Path, *, read_only: bool, busy_timeout_ms: int) -> s
         timeout=busy_timeout_ms / 1000.0,
         isolation_level=None,
     )
-    _configure_connection(connection, busy_timeout_ms)
+    try:
+        _configure_connection(connection, busy_timeout_ms)
+    except BaseException:
+        connection.close()
+        raise
     return connection
 
 
@@ -1787,6 +1799,81 @@ def _absent_snapshot(path: Path) -> GlobalExactGlyphSnapshot:
     )
 
 
+def _build_inspection_records(connection, validated):
+    tables = {}
+    for table in ("source_evidence", "promotion_approval", "glyph_conflict",
+                  "migration_candidate", "provenance_event"):
+        grouped: dict[str, list[Mapping[str, Any]]] = {}
+        # Table and key names are a closed internal list, never GUI input.
+        key = _PRIMARY_KEYS[table][0]
+        for row in connection.execute(f"SELECT * FROM {table} ORDER BY {key}"):
+            grouped.setdefault(row["glyph_id"], []).append(MappingProxyType(dict(row)))
+        tables[table] = grouped
+    records = []
+    for glyph_id, row in sorted(validated["glyphs"].items()):
+        evidence, approvals, conflicts, legacy, provenance = (
+            tuple(tables[table].get(glyph_id, ())) for table in (
+                "source_evidence", "promotion_approval", "glyph_conflict",
+                "migration_candidate", "provenance_event"))
+        read_conflict = validated["read_side_conflicts"].get(glyph_id)
+        # Exactly the validated state/suppression gate used by load_snapshot;
+        # no quorum or approval inference from presentation counts.
+        allowed = row["state"] == VERIFIED_GLOBAL and read_conflict is None
+        reason = "" if allowed else (
+            "LEGACY_V0_READ_CONFLICT" if read_conflict else row["state"])
+        readings = {item["reading"] for item in (*evidence, *legacy)}
+        if row["active_reading"] is not None:
+            readings.add(row["active_reading"])
+        for conflict in conflicts:
+            readings.update(json.loads(conflict["conflicting_readings_json"]))
+        records.append(GlobalGlyphInspectionRecord(
+            glyph_id=glyph_id, identity=row["identity"], stored_state=row["state"],
+            stored_active_reading=row["active_reading"] or "", readings=tuple(sorted(readings)),
+            global_reuse_allowed=allowed, reuse_block_reason=reason,
+            direct_source_count=row["direct_source_count"],
+            independent_source_count=row["independent_source_count"],
+            truth=MappingProxyType({key: value for key, value in row.items() if key != "identity"}),
+            source_evidence=evidence, approvals=approvals, conflicts=conflicts,
+            legacy_candidates=legacy, provenance=provenance, read_side_conflict=read_conflict))
+    return tuple(records)
+
+
+def _build_reuse_records(validated):
+    open_conflicts = validated["open_conflicts"]
+    trusted: list[GlobalGlyphSnapshotRecord] = []
+    quarantined: list[GlobalGlyphSnapshotRecord] = []
+    for glyph_id, row in sorted(validated["glyphs"].items()):
+        identity = row["identity"]
+        if glyph_id in validated["read_side_conflicts"]:
+            continue  # Stored VERIFIED_GLOBAL is insufficient for effective reuse.
+        if row["state"] == VERIFIED_GLOBAL:
+            trusted.append(GlobalGlyphSnapshotRecord(
+                glyph_id=glyph_id,
+                identity=identity,
+                state=VERIFIED_GLOBAL,
+                active_reading=str(row["active_reading"]),
+                conflicting_readings=(),
+                direct_source_count=int(row["direct_source_count"]),
+                independent_source_count=int(row["independent_source_count"]),
+                revision=int(row["revision"]),
+                updated_at=str(row["updated_at"]),
+            ))
+        elif row["state"] == QUARANTINED_CONFLICT:
+            readings = tuple(open_conflicts[glyph_id][0])
+            quarantined.append(GlobalGlyphSnapshotRecord(
+                glyph_id=glyph_id,
+                identity=identity,
+                state=QUARANTINED_CONFLICT,
+                active_reading="",
+                conflicting_readings=readings,
+                direct_source_count=int(row["direct_source_count"]),
+                independent_source_count=int(row["independent_source_count"]),
+                revision=int(row["revision"]),
+                updated_at=str(row["updated_at"]),
+            ))
+    return tuple(trusted), tuple(quarantined)
+
+
 def _load_snapshot_from_path(path: Path, busy_timeout_ms: int) -> GlobalExactGlyphSnapshot:
     if _path_is_absent(path):
         return _absent_snapshot(path)
@@ -1796,38 +1883,7 @@ def _load_snapshot_from_path(path: Path, busy_timeout_ms: int) -> GlobalExactGly
         connection.execute("BEGIN")
         validated = _validate_connection(connection, path)
         meta = validated["meta"]
-        open_conflicts = validated["open_conflicts"]
-        trusted: list[GlobalGlyphSnapshotRecord] = []
-        quarantined: list[GlobalGlyphSnapshotRecord] = []
-        for glyph_id, row in sorted(validated["glyphs"].items()):
-            identity = row["identity"]
-            if glyph_id in validated["read_side_conflicts"]:
-                continue  # Stored VERIFIED_GLOBAL is insufficient for effective reuse.
-            if row["state"] == VERIFIED_GLOBAL:
-                trusted.append(GlobalGlyphSnapshotRecord(
-                    glyph_id=glyph_id,
-                    identity=identity,
-                    state=VERIFIED_GLOBAL,
-                    active_reading=str(row["active_reading"]),
-                    conflicting_readings=(),
-                    direct_source_count=int(row["direct_source_count"]),
-                    independent_source_count=int(row["independent_source_count"]),
-                    revision=int(row["revision"]),
-                    updated_at=str(row["updated_at"]),
-                ))
-            elif row["state"] == QUARANTINED_CONFLICT:
-                readings = tuple(open_conflicts[glyph_id][0])
-                quarantined.append(GlobalGlyphSnapshotRecord(
-                    glyph_id=glyph_id,
-                    identity=identity,
-                    state=QUARANTINED_CONFLICT,
-                    active_reading="",
-                    conflicting_readings=readings,
-                    direct_source_count=int(row["direct_source_count"]),
-                    independent_source_count=int(row["independent_source_count"]),
-                    revision=int(row["revision"]),
-                    updated_at=str(row["updated_at"]),
-                ))
+        trusted, quarantined = _build_reuse_records(validated)
         connection.execute("COMMIT")
         return GlobalExactGlyphSnapshot(
             store_status=VALID,
@@ -2357,44 +2413,54 @@ class GlobalExactGlyphRepository:
                 self.path, read_only=True, busy_timeout_ms=self.busy_timeout_ms)
             connection.execute("BEGIN")
             validated = _validate_connection(connection, self.path)
-            tables = {}
-            for table in ("source_evidence", "promotion_approval", "glyph_conflict",
-                          "migration_candidate", "provenance_event"):
-                grouped: dict[str, list[Mapping[str, Any]]] = {}
-                # Table and key names are a closed internal list, never GUI input.
-                key = _PRIMARY_KEYS[table][0]
-                for row in connection.execute(f"SELECT * FROM {table} ORDER BY {key}"):
-                    grouped.setdefault(row["glyph_id"], []).append(MappingProxyType(dict(row)))
-                tables[table] = grouped
-            records = []
-            for glyph_id, row in sorted(validated["glyphs"].items()):
-                evidence, approvals, conflicts, legacy, provenance = (
-                    tuple(tables[table].get(glyph_id, ())) for table in (
-                        "source_evidence", "promotion_approval", "glyph_conflict",
-                        "migration_candidate", "provenance_event"))
-                read_conflict = validated["read_side_conflicts"].get(glyph_id)
-                # Exactly the validated state/suppression gate used by load_snapshot;
-                # no quorum or approval inference from presentation counts.
-                allowed = row["state"] == VERIFIED_GLOBAL and read_conflict is None
-                reason = "" if allowed else (
-                    "LEGACY_V0_READ_CONFLICT" if read_conflict else row["state"])
-                readings = {item["reading"] for item in (*evidence, *legacy)}
-                if row["active_reading"] is not None:
-                    readings.add(row["active_reading"])
-                for conflict in conflicts:
-                    readings.update(json.loads(conflict["conflicting_readings_json"]))
-                records.append(GlobalGlyphInspectionRecord(
-                    glyph_id=glyph_id, identity=row["identity"], stored_state=row["state"],
-                    stored_active_reading=row["active_reading"] or "", readings=tuple(sorted(readings)),
-                    global_reuse_allowed=allowed, reuse_block_reason=reason,
-                    direct_source_count=row["direct_source_count"],
-                    independent_source_count=row["independent_source_count"],
-                    truth=MappingProxyType({key: value for key, value in row.items() if key != "identity"}),
-                    source_evidence=evidence, approvals=approvals, conflicts=conflicts,
-                    legacy_candidates=legacy, provenance=provenance, read_side_conflict=read_conflict))
+            records = _build_inspection_records(connection, validated)
             connection.execute("COMMIT")
             return GlobalLibraryInspectionSnapshot(
                 VALID, str(self.path), _utc_now(), MappingProxyType(dict(validated["meta"])), tuple(records))
+        except BaseException as exc:
+            if connection is not None and connection.in_transaction:
+                connection.execute("ROLLBACK")
+            raise _translated_error(exc, self.path) from exc
+        finally:
+            if connection is not None:
+                connection.close()
+
+    def load_learning_snapshots(self) -> GlobalLearningSnapshots:
+        """Fully validate once; publish both immutable views only after COMMIT.
+
+        This read is local to one collection operation, never a write or approval
+        authorization. The old individual loaders retain their smaller costs.
+        """
+        if _path_is_absent(self.path):
+            inspection = GlobalLibraryInspectionSnapshot(
+                ABSENT, str(self.path), _utc_now(), MappingProxyType({}), ())
+            return GlobalLearningSnapshots(inspection, _absent_snapshot(self.path))
+        connection: sqlite3.Connection | None = None
+        try:
+            connection = _connect_existing(
+                self.path, read_only=True, busy_timeout_ms=self.busy_timeout_ms)
+            connection.execute("BEGIN")
+            validated = _validate_connection(connection, self.path)
+            records = _build_inspection_records(connection, validated)
+            trusted, quarantined = _build_reuse_records(validated)
+            meta = validated["meta"]
+            connection.execute("COMMIT")
+            inspection = GlobalLibraryInspectionSnapshot(
+                VALID, str(self.path), _utc_now(), MappingProxyType(dict(meta)), records)
+            reuse = GlobalExactGlyphSnapshot(
+                store_status=VALID,
+                schema_version=str(meta["schema_version"]),
+                identity_contract_version=str(meta["identity_contract_version"]),
+                promotion_policy_version=str(meta["promotion_policy_version"]),
+                generation=int(meta["generation"]),
+                trusted_identities=trusted,
+                quarantined_identities=quarantined,
+                database_path=str(self.path),
+                loaded_at=_utc_now(),
+                provenance_event_count=int(validated["provenance_event_count"]),
+                read_side_conflicts=tuple(value for _, value in sorted(validated["read_side_conflicts"].items())),
+            )
+            return GlobalLearningSnapshots(inspection, reuse)
         except BaseException as exc:
             if connection is not None and connection.in_transaction:
                 connection.execute("ROLLBACK")
