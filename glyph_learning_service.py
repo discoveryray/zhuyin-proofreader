@@ -151,12 +151,16 @@ def _confirmed_surface_positions(entries, source_context, evidence_root):
     return confirmed, diagnostics
 
 
-def collect_learning_candidates(entries, source_context, *, repository=None, evidence_root=None):
+def collect_learning_candidates(entries, source_context, *, repository=None, evidence_root=None,
+                                target_group_id=None):
     """Collect from the complete actual roster, independently of expected/state.
 
     State is used only to identify overlap with the existing textbook queue.
     Source descriptors are not DIRECT_VISUAL_ACTUAL or migration evidence.
+    A target selects one complete group; common source/history checks still run.
     """
+    if target_group_id is not None and (type(target_group_id) is not str or not target_group_id.strip()):
+        raise ValueError("LEARNING_INPUT: target group ID must be a nonblank string")
     repository = _repository(repository)
     inspection = repository.load_inspection_snapshot()
     records = {record.glyph_id: record for record in inspection.records}
@@ -175,6 +179,8 @@ def collect_learning_candidates(entries, source_context, *, repository=None, evi
                 continue
             seen.add(key)
             group = actual.build_actual_group_for_entry(entries, entry, member_index=index)
+            if target_group_id is not None and group["group_id"] != target_group_id:
+                continue
             members = group["members"]
             descriptors, admissions = promotion.visual_source_descriptors(group,
                 [member["occurrence_id"] for member in members], source_context, _snapshot=snapshot)
