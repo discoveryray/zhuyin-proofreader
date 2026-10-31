@@ -259,18 +259,89 @@ def test_failure_boundaries_rollback_close_and_no_partial_pair(tmp_path):
     repo = populated_repo(tmp_path / "failures")
     before = {table: sql_rows(repo, table) for table in lib._REQUIRED_COLUMNS}
     for point in ("BEGIN", "validation", "audit", "inspection", "reuse", "COMMIT"):
+        phases, audit_faults, matching_sql_phases = [], [], []
+        audit_sql = "SELECT * FROM source_evidence ORDER BY evidence_id"
+        audit_failure = sqlite3.OperationalError("PA03_F1_INSPECTION_AUDIT_SQL")
+
+        def fail_audit(sql):
+            if sql == audit_sql:
+                matching_sql_phases.append({"sql": sql,
+                    "phase": "inspection" if "inspection_enter" in phases else "validation"})
+            if phases == ["validation_ok", "inspection_enter"] and sql == audit_sql:
+                audit_faults.append(sql)
+                phases.append("audit_fault")
+                raise audit_failure  # The execute point, after genuine validation.
+            if sql == "ROLLBACK":
+                phases.append("rollback")
+            return False
+
+        @contextmanager
+        def trace_audit():
+            # observe's validator wrapper still runs the complete real validator.
+            validate = lib._validate_connection
+            build = lib._build_inspection_records
+            close = ObservedConnection.close
+
+            def validated(connection, path):
+                result = validate(connection, path)
+                phases.append("validation_ok")
+                return result
+
+            def inspection(connection, validated_rows):
+                assert phases == ["validation_ok"]
+                phases.append("inspection_enter")
+                return build(connection, validated_rows)
+
+            def closed(connection):
+                close(connection)
+                phases.append("close")
+
+            with patch.object(lib, "_validate_connection", side_effect=validated), \
+                 patch.object(lib, "_build_inspection_records", side_effect=inspection), \
+                 patch.object(ObservedConnection, "close", closed):
+                yield
+
         fail = (lambda sql: sql == point) if point in ("BEGIN", "COMMIT") else (
-            (lambda sql: sql.startswith("SELECT * FROM source_evidence ORDER BY")) if point == "audit" else None)
+            fail_audit if point == "audit" else None)
         with observe(fail=fail) as (connections, validations):
             target = {"validation": "_validate_rows", "inspection": "_build_inspection_records",
                       "reuse": "_build_reuse_records"}.get(point)
-            with patch.object(lib, target, side_effect=ValueError(point)) if target else nullcontext():
-                with pytest.raises(lib.GlobalLibraryValidationError):
-                    repo.load_learning_snapshots()
+            with trace_audit() if point == "audit" else nullcontext(), \
+                 patch.object(lib, target, side_effect=ValueError(point)) if target else nullcontext():
+                not_returned = object()
+                result = not_returned
+                with pytest.raises(lib.GlobalLibraryValidationError) as rejected:
+                    result = repo.load_learning_snapshots()
+                assert result is not_returned
         assert len(connections) == 1 and connections[0].closed
         assert ("ROLLBACK" in connections[0].events) == (point != "BEGIN")
         with pytest.raises(sqlite3.ProgrammingError, match="closed"):
             connections[0].connection.execute("SELECT 1")
+        if point == "audit":
+            assert len(validations) == 1
+            assert phases == ["validation_ok", "inspection_enter", "audit_fault", "rollback", "close"]
+            assert audit_faults == [audit_sql]
+            assert matching_sql_phases == [{"sql": audit_sql, "phase": "validation"},
+                                           {"sql": audit_sql, "phase": "inspection"}]
+            assert rejected.value.__cause__ is audit_failure
+            assert str(rejected.value).endswith(str(audit_failure))
+            # The first identical SELECT completed inside the true validator;
+            # only the inspection's second execute faults before SQLite sees it.
+            assert connections[0].events.count(audit_sql) == 2
+            assert connections[0].sql.count(audit_sql) == 1
+            assert "COMMIT" not in connections[0].events
+            assert not any(re.match(r"\s*(INSERT|UPDATE|DELETE|REPLACE|CREATE|DROP|ALTER)\b", sql, re.I)
+                           for sql in connections[0].sql)
+            assert {table: sql_rows(repo, table) for table in lib._REQUIRED_COLUMNS} == before
+            evidence("F1-audit-phase", dict(phases=phases, audit_faults=audit_faults,
+                matching_sql_phases=matching_sql_phases,
+                error_type=type(rejected.value).__name__, error=str(rejected.value),
+                cause_type=type(audit_failure).__name__, cause=str(audit_failure),
+                cause_is_injected_object=rejected.value.__cause__ is audit_failure,
+                validations=validations, execute_events=connections[0].events,
+                sqlite_trace=connections[0].sql, validation_ranges=connections[0].validation_ranges,
+                result_is_original_sentinel=result is not_returned,
+                result_type=type(result).__name__, closed=connections[0].closed))
     # Acquired handle must close even before _connect_existing returns it.
     connect, handles = sqlite3.connect, []
     def opened(*args, **kwargs):
