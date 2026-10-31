@@ -334,7 +334,9 @@ def _native_boundaries(path, ctm, stroke=None):
         if not all(math.isfinite(value) for value in box):
             return None
         if stroke is not None:
-            bound = native.ll_fz_adjust_rect_for_stroke(native.FzRect(*box).internal(), stroke, ctm)
+            # internal() borrows the wrapper's storage; retain it through the call.
+            box_owner = native.FzRect(*box)
+            bound = native.ll_fz_adjust_rect_for_stroke(box_owner.internal(), stroke, ctm)
             box = _native_rect(bound)
         boundaries.append({"start": (transformed[0].x, transformed[0].y),
                            "end": (transformed[-1].x, transformed[-1].y), "bounds": box})
@@ -459,8 +461,10 @@ class _CurrentClipTrace(_native_pdf.JM_new_texttrace_device):
 
     def _image_paint(self, name, ctm, args):
         native = _native_pdf.mupdf
-        bounds = _native_rect(native.fz_transform_rect(
-            native.FzRect(0, 0, 1, 1), native.FzMatrix(ctm)).internal(), allow_empty=True)
+        # Keep the transformed rectangle alive while _native_rect reads its borrow.
+        bounds_owner = native.fz_transform_rect(
+            native.FzRect(0, 0, 1, 1), native.FzMatrix(ctm))
+        bounds = _native_rect(bounds_owner.internal(), allow_empty=True)
         self.footprints.append({"seqno": self.seqno, "bounds": bounds,
                                 "empty": bounds is None, "inner": None})
         self.paint_calls.append((self.seqno, name))
