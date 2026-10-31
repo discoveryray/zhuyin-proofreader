@@ -43,6 +43,12 @@ Reviewer 應使用全新 context（例如本環境 `fork_turns="none"`），提�
 
 ## BLOCKED 分類與同 HEAD 補審
 
+若任務明確採用 [外部 blocker links `/1`](PR_REVIEW_GATE.md#明確採用的外部-blocker-links-1)，
+協調者先核對事前固定的完整 state anchor、原 records/report bytes及 reviewer 身分，
+再於獨立外部原件追加唯一 CODE_REVIEWED→BLOCKED 關係。原 CODE 只退為歷史，
+BLOCKED 完整生效，後續只沿用本節原 supersedes/resolution 補審；禁止再 finalizes
+已退場 CODE。此擴充不提供新的解除事件、PASS或操作授權；舊 schema/未採用任務不變。
+
 兩輪使用該 task 凍結的 [gate 契約](PR_REVIEW_GATE.md)；新 v4 保留 v3 的 BLOCKED 分類與 append-only 限制，在安排 corrective write 或更新 count 前先查核分類與原始證據：
 
 - `code`：已證實違反明確採納契約的程式、測試、設定或指令缺陷；只有此類新增 corrective commit、使用同 task 最多三輪修正並對新 HEAD 重做兩輪完整適用審查。
