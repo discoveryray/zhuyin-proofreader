@@ -4,17 +4,20 @@ import csv
 import copy
 import io
 from contextvars import ContextVar
+from contextlib import contextmanager
 import hashlib
 import json
 import math
 import os
 import shutil
 import tempfile
+import threading
 import zipfile
 from datetime import datetime, timedelta
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
+from types import MappingProxyType
 
 import fitz
 from excel_text import append_text_row
@@ -2664,19 +2667,32 @@ def has_direct_occurrence_actual(root: Path, entry: Mapping[str, Any], reading: 
     independently checked. The occurrence ID binds the original PDF identity;
     source/shape/reading and the existing canonical event hash must also match.
     """
+    return _has_direct_occurrence_actual(entry, reading,
+        lambda key: _read_actual_evidence_csv(Path(root) / OCCURRENCE_OVERRIDE_FILE, OVERRIDE_HEADERS),
+        lambda oid: _read_actual_evidence_csv(Path(root) / GLYPH_PROVENANCE_FILE, GLYPH_PROVENANCE_HEADERS))
+
+
+_DIRECT_OVERRIDE_KEY_FIELDS = ("pdf_contains", "pdf_excludes", "page", "target_char", "stable_key", "x0", "y0")
+
+
+def _direct_override_matches(row, key, reading):
+    return (tuple(row.get(field, "") for field in _DIRECT_OVERRIDE_KEY_FIELDS) == key
+            and _canon(row.get("actual_reading")) == reading)
+
+
+def _has_direct_occurrence_actual(entry, reading, read_overrides, read_provenance):
+    # Both readers retain this exact lazy order. Buckets only narrow the rows;
+    # membership never substitutes any of the original direct-proof checks.
     reading = _canon(reading)
     if not reading:
         return False
     key = _override_key_from_entry(entry)
-    overrides = [row for row in _read_actual_evidence_csv(Path(root) / OCCURRENCE_OVERRIDE_FILE, OVERRIDE_HEADERS)
-                 if tuple(row.get(field, "") for field in
-                    ("pdf_contains", "pdf_excludes", "page", "target_char", "stable_key", "x0", "y0")) == key
-                 and _canon(row.get("actual_reading")) == reading]
+    overrides = [row for row in read_overrides(key) if _direct_override_matches(row, key, reading)]
     if len(overrides) != 1:
         return False
     identity = actual_group_identity(entry)
     oid = _text(entry.get("occurrence_id"))
-    for event in _read_actual_evidence_csv(Path(root) / GLYPH_PROVENANCE_FILE, GLYPH_PROVENANCE_HEADERS):
+    for event in read_provenance(oid):
         if (event.get("event_type") != "OCCURRENCE_OVERRIDE" or event.get("occurrence_ids") != oid
                 or _canon(event.get("bopomofo")) != reading or event.get("source") != overrides[0].get("source")
                 or event.get("kind") != identity["kind"] or event.get("style_group") != identity.get("style_group", "")
@@ -2687,6 +2703,133 @@ def has_direct_occurrence_actual(root: Path, entry: Mapping[str, Any], reading: 
         if event.get("event_id") == "gpe_" + _hash_payload(payload)[:24]:
             return True
     return False
+
+
+_direct_occurrence_query = ContextVar("direct_occurrence_query", default=None)
+_DIRECT_QUERY_TOKEN = object()
+
+
+class _DirectOccurrenceActualQuery:
+    """Readonly rows owned by one collector, never an admission or bool cache."""
+
+    def __init__(self, root, *, _token=None):
+        if _token is not _DIRECT_QUERY_TOKEN:
+            raise ValueError("direct occurrence query requires its collector scope")
+        self.path = Path(root)
+        self.root = self.path.resolve()
+        self.thread = threading.get_ident()
+        self.closed = False
+        self.failed = False
+        self.seeded = False
+        self.raw = {}
+        self.indexes = {}
+        self.used = set()
+
+    def _assert_owner(self, root):
+        if (self.closed or self.failed or _direct_occurrence_query.get() is not self
+                or threading.get_ident() != self.thread or Path(root).resolve() != self.root
+                or self.path.resolve() != self.root):
+            raise ValueError("direct occurrence query foreign／closed owner or root changed")
+        # A copied Context inherits ContextVar values but cannot reset this
+        # token. Do not let an inherited owner escape its creating context.
+        try:
+            _direct_occurrence_query.reset(self.context_token)
+        except (ValueError, RuntimeError) as exc:
+            raise ValueError("direct occurrence query foreign context") from exc
+        self.context_token = _direct_occurrence_query.set(self)
+
+    def _owned_path(self, name):
+        self._assert_owner(self.path)
+        path = self.path / name
+        if path.resolve() != self.root / name:
+            self.failed = True
+            raise ValueError("direct occurrence query source path changed: " + name)
+        return path
+
+    def _read_source(self, name):
+        path = self._owned_path(name)
+        raw = path.read_bytes() if path.exists() else None
+        self._owned_path(name)
+        return raw
+
+    def _check_source(self, name):
+        if self._read_source(name) != self.raw[name]:
+            self.failed = True
+            raise ValueError("direct occurrence query source changed: " + name)
+
+    def _seed(self, snapshot):
+        self._assert_owner(self.path)
+        if self.seeded or type(snapshot) is not ValidatedDynamicActualSnapshot or snapshot.root != self.root:
+            raise ValueError("direct occurrence query requires its validated dynamic capture")
+        self.seeded = True
+        # Prepared transactions keep their original live candidate reader,
+        # including dirty rows, scalar conversion and root/header guards.
+        if _prepared_actual_csv.get() is not None:
+            return
+        self._owned_path(OCCURRENCE_OVERRIDE_FILE)
+        self.raw[OCCURRENCE_OVERRIDE_FILE] = dict(snapshot.raw_files)[OCCURRENCE_OVERRIDE_FILE]
+        self.indexes[OCCURRENCE_OVERRIDE_FILE] = self._index(
+            dict(snapshot.parsed_rows)[OCCURRENCE_OVERRIDE_FILE], _DIRECT_OVERRIDE_KEY_FIELDS)
+
+    @staticmethod
+    def _index(rows, fields):
+        buckets = {}
+        for values in rows:
+            row = MappingProxyType(dict(values))
+            key = tuple(row.get(field, "") for field in fields)
+            buckets.setdefault(key, []).append(row)
+        return MappingProxyType({key: tuple(bucket) for key, bucket in buckets.items()})
+
+    def _overrides(self, key):
+        self.used.add(OCCURRENCE_OVERRIDE_FILE)
+        self._check_source(OCCURRENCE_OVERRIDE_FILE)
+        return self.indexes[OCCURRENCE_OVERRIDE_FILE].get(key, ())
+
+    def _provenance(self, oid):
+        name = GLYPH_PROVENANCE_FILE
+        if name not in self.raw:
+            raw = self._read_source(name)
+            self.raw[name] = raw
+            rows = _read_csv_bytes(raw, name, GLYPH_PROVENANCE_HEADERS) if raw is not None else []
+            self.indexes[name] = self._index(rows, ("event_type", "occurrence_ids"))
+        self.used.add(name)
+        # Also checks the first capture immediately after its original parser.
+        self._check_source(name)
+        return self.indexes[name].get(("OCCURRENCE_OVERRIDE", oid), ())
+
+    def has_direct(self, root, entry, reading):
+        self._assert_owner(root)
+        if not self.seeded:
+            raise ValueError("direct occurrence query has no validated capture")
+        if _prepared_actual_csv.get() is not None:
+            return has_direct_occurrence_actual(root, entry, reading)
+        return _has_direct_occurrence_actual(entry, reading, self._overrides, self._provenance)
+
+    def _finish(self):
+        self._assert_owner(self.path)
+        for name in sorted(self.used):
+            self._check_source(name)
+
+    def _close(self):
+        self.closed = True
+        self.raw.clear()
+        self.indexes.clear()
+        self.used.clear()
+
+
+@contextmanager
+def _direct_occurrence_actual_queries(root):
+    if root is None:
+        yield None
+        return
+    owner = _DirectOccurrenceActualQuery(root, _token=_DIRECT_QUERY_TOKEN)
+    owner.context_token = _direct_occurrence_query.set(owner)
+    try:
+        yield owner
+        owner._finish()
+    finally:
+        owner._close()
+        _direct_occurrence_query.reset(owner.context_token)
 
 
 def _update_learning_file(root: Path, group: Mapping[str, Any], reading: str, verified_entries: Sequence[Mapping[str, Any]], note: str) -> dict[str, Any]:

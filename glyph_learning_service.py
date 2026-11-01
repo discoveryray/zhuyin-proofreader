@@ -63,7 +63,7 @@ def _glyph_id(descriptor):
         identity["glyph_sha256"], identity_eligibility=identity["identity_eligibility"])
 
 
-def _known_prompt_sources(evidence_root):
+def _known_prompt_sources(evidence_root, *, _direct_query=None):
     """Read the existing verified sources, never upgrade historical rows."""
     from export_zhuyin_readings import load_verified_glyf_fingerprints
     program = Path(actual.__file__).resolve().parent
@@ -84,9 +84,14 @@ def _known_prompt_sources(evidence_root):
         return static, {}, {}, {"ttf": set(), "cff": set()}
     root = Path(evidence_root)
     snapshot = actual.load_dynamic_actual_snapshot(root, read_only=True)
-    return (static, actual.load_user_verified_glyf(root / actual.USER_GLYF_FILE, snapshot=snapshot),
+    result = (static, actual.load_user_verified_glyf(root / actual.USER_GLYF_FILE, snapshot=snapshot),
         actual.load_user_verified_cff(root / actual.USER_CFF_FILE, snapshot=snapshot),
         actual.load_glyph_truth_quarantine(root, snapshot=snapshot))
+    if _direct_query is not None:
+        if type(_direct_query) is not actual._DirectOccurrenceActualQuery:
+            raise ValueError("LEARNING_CONTRACT: foreign direct query owner")
+        _direct_query._seed(snapshot)
+    return result
 
 
 def _reconfirmation_ids(evidence_root, records):
@@ -161,80 +166,81 @@ def collect_learning_candidates(entries, source_context, *, repository=None, evi
     """
     if target_group_id is not None and (type(target_group_id) is not str or not target_group_id.strip()):
         raise ValueError("LEARNING_INPUT: target group ID must be a nonblank string")
-    repository = _repository(repository)
-    snapshots = repository.load_learning_snapshots()
-    records = {record.glyph_id: record for record in snapshots.inspection.records}
-    global_snapshot = snapshots.reuse
-    static, project_ttf, project_cff, quarantine = _known_prompt_sources(evidence_root)
-    reconfirm = _reconfirmation_ids(evidence_root, records)
-    index = actual.index_actual_group_members(entries)
-    surface_confirmed, diagnostics = _confirmed_surface_positions(entries, source_context, evidence_root)
-    groups, suppressed = [], []
-    seen = set()
-    with promotion._DirectVisualPDFSnapshot(source_context) as snapshot:
-        for entry in entries:
-            identity = actual.actual_group_identity(entry)
-            key = actual.actual_group_match_key(identity)
-            if key in seen:
-                continue
-            seen.add(key)
-            group = actual.build_actual_group_for_entry(entries, entry, member_index=index)
-            if target_group_id is not None and group["group_id"] != target_group_id:
-                continue
-            members = group["members"]
-            descriptors, admissions = promotion.visual_source_descriptors(group,
-                [member["occurrence_id"] for member in members], source_context, _snapshot=snapshot)
-            by_id = {item["source_occurrence_id"]: item for item in descriptors}
-            candidates = []
-            for member in members:
-                oid, reading = member["occurrence_id"], actual._canon(member.get("actual"))
-                descriptor = by_id.get(oid)
-                record = records.get(_glyph_id(descriptor)) if descriptor else None
-                reason = ""
-                reuse = None
-                if descriptor is not None:
-                    ident = descriptor["identity"]
-                    is_ttf = ident["kind"] == library.TTF_GLYF_SHA256
-                    key = ident["glyph_sha256"] if is_ttf else (ident["style_group"], ident["glyph_sha256"])
-                    local = (project_ttf if is_ttf else project_cff).get(key, {})
-                    fixed = static.get(key, {}) if is_ttf else {}
-                    reuse = library.resolve_exact_glyph_reuse(global_snapshot, ident,
-                        higher_priority_sources=(("PROJECT_VERIFIED_EXACT", local["bopomofo"]),) if local.get("bopomofo") else (),
-                        lower_priority_sources=(("STATIC_VERIFIED_EXACT", fixed["bopomofo"]),) if fixed.get("bopomofo") else (),
-                        exact_identity_quarantined=key in quarantine["ttf" if is_ttf else "cff"],
-                        quarantine_readings=fixed.get("conflict_readings", ()))
-                if oid in surface_confirmed:
-                    reason = "SURFACE_POSITION_ALREADY_CONFIRMED"
-                elif oid in reconfirm:
-                    candidates.append(member)
+    with actual._direct_occurrence_actual_queries(evidence_root) as direct_query:
+        repository = _repository(repository)
+        snapshots = repository.load_learning_snapshots()
+        records = {record.glyph_id: record for record in snapshots.inspection.records}
+        global_snapshot = snapshots.reuse
+        static, project_ttf, project_cff, quarantine = _known_prompt_sources(evidence_root, _direct_query=direct_query)
+        reconfirm = _reconfirmation_ids(evidence_root, records)
+        index = actual.index_actual_group_members(entries)
+        surface_confirmed, diagnostics = _confirmed_surface_positions(entries, source_context, evidence_root)
+        groups, suppressed = [], []
+        seen = set()
+        with promotion._DirectVisualPDFSnapshot(source_context) as snapshot:
+            for entry in entries:
+                identity = actual.actual_group_identity(entry)
+                key = actual.actual_group_match_key(identity)
+                if key in seen:
                     continue
-                elif (evidence_root is not None and reading
-                        and actual.has_direct_occurrence_actual(Path(evidence_root), member, reading)):
-                    reason = "DIRECT_POSITION_ALREADY_CONFIRMED"
-                elif reuse is not None and not reuse.conflict and reading and reuse.reading == reading:
-                    reason = "ALREADY_REUSABLE"
-                elif record is not None and descriptor is not None:
-                    matching = [row for row in record.source_evidence
-                        if row["evidence_class"] == library.DIRECT_VISUAL_ACTUAL
-                        and row["counts_toward_global_quorum"] == 1 and row["reading"] == reading]
-                    # A copy/rename/re-run cannot add an independent source.
-                    # This is only a prompt filter, never a quorum/approval gate.
-                    if matching and not any(all(row[axis] != descriptor[axis] for axis in _AXES)
-                                            for row in matching):
-                        reason = "CORRELATED_SOURCE_ALREADY_CONFIRMED"
-                if reason:
-                    suppressed.append({"occurrence_id": oid, "reason": reason})
-                else:
-                    candidates.append(member)
-            if candidates:
-                pending = sorted(member["occurrence_id"] for member in members
-                                 if member.get("state") in actual.ACTUAL_PENDING_STATES)
-                groups.append({**group, "candidate_members": candidates,
-                    "pending_occurrence_ids": pending, "learning_status": "AWAITING_VISUAL_CONFIRMATION",
-                    "requires_fresh_approval_action": any(member["occurrence_id"] in reconfirm for member in candidates),
-                    "source_admissions": admissions})
-            diagnostics.extend(row for row in admissions if row["status"] != "ELIGIBLE")
-    return {"groups": groups, "suppressed": suppressed, "diagnostics": diagnostics}
+                seen.add(key)
+                group = actual.build_actual_group_for_entry(entries, entry, member_index=index)
+                if target_group_id is not None and group["group_id"] != target_group_id:
+                    continue
+                members = group["members"]
+                descriptors, admissions = promotion.visual_source_descriptors(group,
+                    [member["occurrence_id"] for member in members], source_context, _snapshot=snapshot)
+                by_id = {item["source_occurrence_id"]: item for item in descriptors}
+                candidates = []
+                for member in members:
+                    oid, reading = member["occurrence_id"], actual._canon(member.get("actual"))
+                    descriptor = by_id.get(oid)
+                    record = records.get(_glyph_id(descriptor)) if descriptor else None
+                    reason = ""
+                    reuse = None
+                    if descriptor is not None:
+                        ident = descriptor["identity"]
+                        is_ttf = ident["kind"] == library.TTF_GLYF_SHA256
+                        key = ident["glyph_sha256"] if is_ttf else (ident["style_group"], ident["glyph_sha256"])
+                        local = (project_ttf if is_ttf else project_cff).get(key, {})
+                        fixed = static.get(key, {}) if is_ttf else {}
+                        reuse = library.resolve_exact_glyph_reuse(global_snapshot, ident,
+                            higher_priority_sources=(("PROJECT_VERIFIED_EXACT", local["bopomofo"]),) if local.get("bopomofo") else (),
+                            lower_priority_sources=(("STATIC_VERIFIED_EXACT", fixed["bopomofo"]),) if fixed.get("bopomofo") else (),
+                            exact_identity_quarantined=key in quarantine["ttf" if is_ttf else "cff"],
+                            quarantine_readings=fixed.get("conflict_readings", ()))
+                    if oid in surface_confirmed:
+                        reason = "SURFACE_POSITION_ALREADY_CONFIRMED"
+                    elif oid in reconfirm:
+                        candidates.append(member)
+                        continue
+                    elif (evidence_root is not None and reading
+                            and direct_query.has_direct(Path(evidence_root), member, reading)):
+                        reason = "DIRECT_POSITION_ALREADY_CONFIRMED"
+                    elif reuse is not None and not reuse.conflict and reading and reuse.reading == reading:
+                        reason = "ALREADY_REUSABLE"
+                    elif record is not None and descriptor is not None:
+                        matching = [row for row in record.source_evidence
+                            if row["evidence_class"] == library.DIRECT_VISUAL_ACTUAL
+                            and row["counts_toward_global_quorum"] == 1 and row["reading"] == reading]
+                        # A copy/rename/re-run cannot add an independent source.
+                        # This is only a prompt filter, never a quorum/approval gate.
+                        if matching and not any(all(row[axis] != descriptor[axis] for axis in _AXES)
+                                                for row in matching):
+                            reason = "CORRELATED_SOURCE_ALREADY_CONFIRMED"
+                    if reason:
+                        suppressed.append({"occurrence_id": oid, "reason": reason})
+                    else:
+                        candidates.append(member)
+                if candidates:
+                    pending = sorted(member["occurrence_id"] for member in members
+                                     if member.get("state") in actual.ACTUAL_PENDING_STATES)
+                    groups.append({**group, "candidate_members": candidates,
+                        "pending_occurrence_ids": pending, "learning_status": "AWAITING_VISUAL_CONFIRMATION",
+                        "requires_fresh_approval_action": any(member["occurrence_id"] in reconfirm for member in candidates),
+                        "source_admissions": admissions})
+                diagnostics.extend(row for row in admissions if row["status"] != "ELIGIBLE")
+        return {"groups": groups, "suppressed": suppressed, "diagnostics": diagnostics}
 
 
 def _assert_hashes(hashes):
