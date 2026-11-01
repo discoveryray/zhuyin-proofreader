@@ -5,7 +5,11 @@ fingerprint, a source of quorum, or permission to write an unopened project.
 """
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import asdict
+from threading import get_ident
+from types import MappingProxyType
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -16,6 +20,85 @@ from glyph_learning_images import learning_data_root, _plain_path, _storage_lock
 
 REGISTRY_CONTRACT = "glyph-learning-usage/1"
 _SHA = re.compile(r"[0-9a-f]{64}")
+
+
+_dependency_operation = ContextVar("dependency_parse_operation", default=None)
+_dependency_scope = ContextVar("dependency_parse_scope", default=None)
+
+
+class _DependencyParseOperation:
+    """Private, single-open pure evidence. Never stores a Global view or status."""
+    def __init__(self, root):
+        self.root = root
+        self.thread = get_ident()
+        self.scope = None
+        self.closed = False
+        self.round = 0
+        self.key = None
+        self.parsed = MappingProxyType({})
+
+    def close(self):
+        self.closed = True
+        self.key = None
+        self.parsed = MappingProxyType({})
+        if _dependency_operation.get() is self:
+            _dependency_operation.set(None)
+
+
+def _active_dependency_operation(root):
+    owner = _dependency_operation.get()
+    if owner is None:
+        return None
+    if (type(owner) is not _DependencyParseOperation or owner.closed
+            or owner.thread != get_ident() or owner.root != root
+            or owner.scope is None or owner.scope is not _dependency_scope.get()):
+        raise ValueError("依賴解析 operation owner 不相容或已結束")
+    return owner
+
+
+@contextmanager
+def _dependency_parse_operation(output_dir):
+    from sealed_workbook_paths import trusted_root
+    if _dependency_operation.get() is not None:
+        raise ValueError("依賴解析 operation 不可巢狀或跨操作重用")
+    owner = _DependencyParseOperation(trusted_root(output_dir))
+    owner.scope = object()
+    scope_token = _dependency_scope.set(owner.scope)
+    token = _dependency_operation.set(owner)
+    try:
+        yield owner
+    finally:
+        owner.close()
+        _dependency_operation.reset(token)
+        _dependency_scope.reset(scope_token)
+
+
+def _parse_dependency_sources(workbook, pdf, wanted_workbook, wanted_pdf):
+    """Font proof and digest consume identical PDF bytes; XLSX readers share a snapshot."""
+    import actual_review as ar
+    import standalone_proofread as sp
+    from cross_version_compat import parse_components
+    import global_exact_glyph_library as library
+    from pdf_portability import _workbook_snapshot
+    data = pdf.read_bytes()
+    if hashlib.sha256(data).hexdigest() != wanted_pdf:
+        raise ValueError("SOURCE_INVALID：所選 PDF 來源遺失或已變更")
+    try:
+        with _workbook_snapshot(workbook, expected_sha256=wanted_workbook) as (captured, _):
+            dependencies = ar._global_exact_dependency_reader(captured,
+                lambda: ar.fitz.open(stream=data, filetype="pdf"), source_label=workbook)
+            metadata_pdf_sha = None
+            try:
+                metadata = sp.workbook_metadata(captured)
+                components = parse_components(metadata.get("actual_asset_fingerprint_components"))
+                metadata_pdf_sha = metadata.get("pdf_sha256")
+            except (ValueError, TypeError, library.GlobalLibraryValidationError):
+                components = {}
+            # Canonical immutable JSON is detached from every public result.
+            metadata_raw = json.dumps(components, ensure_ascii=False, sort_keys=True)
+            return dependencies, metadata_pdf_sha, metadata_raw
+    finally:
+        del data
 
 
 def _json(raw):
@@ -63,6 +146,7 @@ def recheck_project_dependencies(output_dir, *, repository=None, manifest=None):
     from sealed_workbook_paths import bind_workbooks, owned_path, trusted_root
 
     output_dir = trusted_root(output_dir)
+    owner = _active_dependency_operation(output_dir)
     manifest_path = output_dir / "校對工作階段.json"
     manifest_raw = manifest_path.read_bytes()
     current = _json(manifest_raw)
@@ -73,6 +157,15 @@ def recheck_project_dependencies(output_dir, *, repository=None, manifest=None):
         raise ValueError("SOURCE_INVALID：沒有封印 PDF inventory")
     bindings = {(i, kind): (relative, wanted) for i, kind, relative, wanted
                 in bind_workbooks(output_dir, current, require_candidate=False)}
+    operation_key = (str(output_dir), manifest_raw, tuple(bindings.items()), "roster-metadata/1:read_only:data_only")
+    if owner is not None:
+        owner.round += 1
+        if owner.round > 2:
+            raise ValueError("依賴解析 operation 已完成兩次重核")
+        if owner.round == 2 and owner.key != operation_key:
+            owner.close()
+            owner = None
+    pending = {}
     repository = repository or library.GlobalExactGlyphRepository.resolved()
     snapshot = repository.load_snapshot()
     rows = []
@@ -80,13 +173,29 @@ def recheck_project_dependencies(output_dir, *, repository=None, manifest=None):
         relative, wanted_workbook = bindings[index, "actual"]
         workbook = owned_path(output_dir, relative)
         pdf = _source_path(output_dir, info)
-        dependencies = ar.actual_workbook_global_exact_dependencies(workbook, pdf)
+        parse_key = (index, str(pdf), info["pdf_sha256"], str(workbook.resolve()), relative, wanted_workbook)
+        parsed = owner.parsed.get(parse_key) if owner is not None and owner.round == 2 else None
+        if owner is not None and owner.round == 2 and parsed is None:
+            owner.close()
+            owner = None
+        if owner is not None:
+            if parsed is None:
+                parsed = _parse_dependency_sources(workbook, pdf, wanted_workbook, info["pdf_sha256"])
+            dependencies, metadata_pdf_sha, components_raw = parsed
+            components = json.loads(components_raw)
+            pending[parse_key] = parsed
+        else:
+            dependencies = ar.actual_workbook_global_exact_dependencies(workbook, pdf)
+            try:
+                metadata = sp.workbook_metadata(workbook)
+                components = parse_components(metadata.get("actual_asset_fingerprint_components"))
+                metadata_pdf_sha = metadata.get("pdf_sha256")
+            except (ValueError, TypeError, library.GlobalLibraryValidationError):
+                components, metadata_pdf_sha = {}, None
         try:
-            metadata = sp.workbook_metadata(workbook)
-            components = parse_components(metadata.get("actual_asset_fingerprint_components"))
             recorded = library.canonical_global_exact_glyph_evidence_hashes(
                 components.get("global_exact_glyph_evidence_hashes"))
-            if (metadata.get("pdf_sha256") != info["pdf_sha256"]
+            if (metadata_pdf_sha != info["pdf_sha256"]
                     or recorded["scope_mode"] != library.GLOBAL_EXACT_PER_PDF_SCOPE_MODE):
                 raise ValueError("來源/依賴 contract 不符")
         except (ValueError, TypeError, library.GlobalLibraryValidationError):
@@ -112,6 +221,9 @@ def recheck_project_dependencies(output_dir, *, repository=None, manifest=None):
             raise ValueError("SOURCE_INVALID：依賴重核期間來源或 workbook 變動")
     if manifest_path.read_bytes() != manifest_raw:
         raise ValueError("DATA_INTEGRITY_ERROR：依賴重核期間工作階段變動")
+    if owner is not None and owner.round == 1:
+        owner.key = operation_key
+        owner.parsed = MappingProxyType(pending)
     status = ("UNPROVABLE" if any(row["status"] == "UNPROVABLE" for row in rows) else
               "STALE" if any(row["status"] == "STALE" for row in rows) else "CURRENT")
     return {"status": status, "output_dir": str(output_dir), "session_id": current["session_id"],

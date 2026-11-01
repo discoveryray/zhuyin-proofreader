@@ -1179,6 +1179,12 @@ def actual_workbook_global_exact_dependencies(
     if not path.exists():
         return None
 
+    return _global_exact_dependency_reader(path, lambda: fitz.open(pdf_path), source_label=path)
+
+
+def _global_exact_dependency_reader(workbook_source, open_pdf, *, source_label):
+    """One complete roster parser for path and captured operation sources."""
+    path = Path(source_label)
     required_columns = {
         "字形架構",
         "font_xref",
@@ -1188,11 +1194,12 @@ def actual_workbook_global_exact_dependencies(
         "CFF整字字形SHA256",
     }
     try:
-        workbook = load_workbook(path, read_only=True, data_only=True)
+        workbook = load_workbook(workbook_source, read_only=True, data_only=True)
     except Exception as exc:
         raise ValueError(f"actual workbook 損壞，無法驗證 global exact dependency：{path}") from exc
 
     document = None
+    iterator = None
     try:
         if "實際注音" not in workbook.sheetnames:
             return None
@@ -1210,7 +1217,7 @@ def actual_workbook_global_exact_dependencies(
         index = {name: offset for offset, name in enumerate(headers)}
 
         try:
-            document = fitz.open(pdf_path)
+            document = open_pdf()
         except Exception:
             return None
         inspectors: dict[int, TrueTypeGlyphInspector | None] = {}
@@ -1331,6 +1338,8 @@ def actual_workbook_global_exact_dependencies(
 
         return tuple(dependencies[key] for key in sorted(dependencies))
     finally:
+        if iterator is not None:
+            iterator.close()
         if document is not None:
             document.close()
         workbook.close()
