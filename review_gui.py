@@ -1370,21 +1370,25 @@ def load_review_project(output_dir, progress, *, service=None):
     progress("驗證工作階段、來源與輸出資產完整性")
     snapshot = service.load_resume_snapshot()
     progress("重新核對本教材實際使用的 Global 字形依賴")
-    from glyph_learning_impact import recheck_project_dependencies, refresh_stale_project_dependencies, register_usage
-    dependency_check = recheck_project_dependencies(output_dir, manifest=snapshot.manifest)
-    if dependency_check["status"] == "UNPROVABLE":
-        raise ValueError("actual 字形依賴無法核實；請先更新本教材 actual，未將舊結果視為仍可結案。")
-    if dependency_check["status"] == "STALE":
-        progress("受影響字形已變更，正在更新目前開啟教材的 actual；人工 expected 保留")
-        refresh_stale_project_dependencies(output_dir)
-        service = ReviewSaveService(output_dir, evidence_anchor=service.evidence_anchor)
-        snapshot = service.load_resume_snapshot()
-    registration_error = None
-    try:
-        register_usage(output_dir)
-    except Exception as exc:
-        # Registration is observability, never a substitute for actual proof.
-        registration_error = str(exc)
+    from glyph_learning_impact import (recheck_project_dependencies, refresh_stale_project_dependencies,
+                                       register_usage, _dependency_parse_operation)
+    with _dependency_parse_operation(output_dir) as owner:
+        dependency_check = recheck_project_dependencies(output_dir, manifest=snapshot.manifest)
+        if dependency_check["status"] != "CURRENT":
+            owner.close()
+        if dependency_check["status"] == "UNPROVABLE":
+            raise ValueError("actual 字形依賴無法核實；請先更新本教材 actual，未將舊結果視為仍可結案。")
+        if dependency_check["status"] == "STALE":
+            progress("受影響字形已變更，正在更新目前開啟教材的 actual；人工 expected 保留")
+            refresh_stale_project_dependencies(output_dir)
+            service = ReviewSaveService(output_dir, evidence_anchor=service.evidence_anchor)
+            snapshot = service.load_resume_snapshot()
+        registration_error = None
+        try:
+            register_usage(output_dir)
+        except Exception as exc:
+            # Registration is observability, never a substitute for actual proof.
+            registration_error = str(exc)
     manifest, db = copy.deepcopy(snapshot.manifest), copy.deepcopy(snapshot.db)
     progress("核對跨專案判定衝突")
     from pdf_portability import validate_conflict_state, actual_excel_conflict_state, expected_conflict_review_view
