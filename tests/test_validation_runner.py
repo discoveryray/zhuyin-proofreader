@@ -844,6 +844,8 @@ class GroupedCollectionTests(unittest.TestCase):
             audit._bounded_callable_alias(caller, owner, "real")
         with patch.object(library, "_load_snapshot_from_path", tkinter.Tk):
             self.assertTrue(audit.callable_uses_tk(caller, owner))
+        with patch.object(library, "_build_reuse_records", tkinter.Tk):
+            self.assertTrue(audit.callable_uses_tk(caller, owner))
         with tempfile.TemporaryDirectory(dir=ROOT / "tmp") as temporary:
             root = Path(temporary)
             (root / "tests").mkdir()
