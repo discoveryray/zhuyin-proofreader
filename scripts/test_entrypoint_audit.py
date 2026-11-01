@@ -303,7 +303,7 @@ CALLABLE_ALIAS_SOURCE_HASHES = {'native_caller': 'ca39fdf2ceff04312cf16e1b048a42
  'instance_caller': '5f1cf2330aa35b416c377c0d0549b9caaa47083257c413290c9399952195c977',
  'instance_setup': 'bc87f5ee824dcc081f370fb845e58e041f1a7d8863e91997699ad0eea8ff0f24',
  'factory': '0270cc11b46bb0c7824bfa95bff87ec743717197ca4d19a9eae2fc12c33a606e',
- 'repository_class': 'adf18d13b77cea623ca04a2c027d655c7d1c5864a2e2f40421b551b244f59157',
+ 'repository_class': '0a97ccb04f0654e8d4c6abbb8e243109c48e2b367ed925b1b41cbde148d046c2',
  'target': '839947c76d4b989a5cd221e7fcc542bc854795cb393446b7a6b04a3382e063f2',
  'async_caller': 'c93e5659e2feb22afc8e0ac800efba13f3a2d3bb14ef1131393f983d27a3bffe',
  'async_setup': '64d70ea9db2ec6862854f53b21f0d2dc7c4aa0244368108c549aab09fde88e55',

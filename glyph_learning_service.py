@@ -162,9 +162,9 @@ def collect_learning_candidates(entries, source_context, *, repository=None, evi
     if target_group_id is not None and (type(target_group_id) is not str or not target_group_id.strip()):
         raise ValueError("LEARNING_INPUT: target group ID must be a nonblank string")
     repository = _repository(repository)
-    inspection = repository.load_inspection_snapshot()
-    records = {record.glyph_id: record for record in inspection.records}
-    global_snapshot = repository.load_snapshot()
+    snapshots = repository.load_learning_snapshots()
+    records = {record.glyph_id: record for record in snapshots.inspection.records}
+    global_snapshot = snapshots.reuse
     static, project_ttf, project_cff, quarantine = _known_prompt_sources(evidence_root)
     reconfirm = _reconfirmation_ids(evidence_root, records)
     index = actual.index_actual_group_members(entries)
