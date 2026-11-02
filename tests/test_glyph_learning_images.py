@@ -16,12 +16,67 @@ import pytest
 from glyph_learning_images import LearningImageStore, _storage_lock, learning_data_root
 
 
-def png(red=0):
+def png(red=0, *, width=1, height=1):
     def chunk(name, value):
         return (struct.pack(">I", len(value)) + name + value
                 + struct.pack(">I", zlib.crc32(name + value) & 0xffffffff))
-    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 2, 0, 0, 0))
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
             + chunk(b"IDAT", zlib.compress(bytes([0, red, 2, 3]))) + chunk(b"IEND", b""))
+
+
+def test_surface_check_missing_and_existing_evidence_preserves_original_save(tmp_path):
+    store = LearningImageStore(tmp_path / "pictures")
+    raw = png()
+    target = store.root / "evidence" / (hashlib.sha256(raw).hexdigest() + ".png")
+    assert store.check_evidence_without_save("occ-first", raw) is None
+    assert not target.exists()
+    assert (store.root / ".learning-storage.lock").is_file()
+    reference = store.save_evidence("occ-first", raw)
+    assert reference["relative_path"] == "evidence/" + target.name
+    assert target.read_bytes() == raw
+    assert store.check_evidence_without_save("occ-second", raw) is None
+    assert store.read_evidence(reference) == raw
+    target.write_bytes(png(19))
+    before = target.read_bytes()
+    with pytest.raises(ValueError, match="損毀"):
+        store.check_evidence_without_save("occ-third", raw)
+    assert target.read_bytes() == before
+
+
+def test_surface_check_retains_png_structure_crc_dimension_and_capacity_refusals(tmp_path):
+    store = LearningImageStore(tmp_path / "pictures")
+    wrong_crc = bytearray(png())
+    wrong_crc[-5] ^= 1
+    cases = (
+        bytes(wrong_crc),
+        png()[:-3],
+        png(width=20001),
+        png() + b"\x00" * (64 * 1024 * 1024),
+    )
+    for raw in cases:
+        with pytest.raises(ValueError, match="PNG"):
+            store.check_evidence_without_save("occ", raw)
+    assert not store.root.exists()
+
+
+def test_surface_check_preserves_untrusted_path_and_storage_lock_timeout(tmp_path):
+    raw = png()
+    store = LearningImageStore(tmp_path / "dangerous")
+    evidence = store.root / "evidence"
+    evidence.mkdir(parents=True)
+    source = store.root / "shared.png"
+    source.write_bytes(raw)
+    target = evidence / (hashlib.sha256(raw).hexdigest() + ".png")
+    os.link(source, target)
+    with pytest.raises(ValueError, match="獨立一般檔案"):
+        store.check_evidence_without_save("occ", raw)
+    assert source.read_bytes() == target.read_bytes() == raw
+    other = LearningImageStore(tmp_path / "locked")
+    with _storage_lock(other.root):
+        with pytest.raises(TimeoutError, match="請稍後重試"):
+            other.check_evidence_without_save("occ", raw)
+    assert other.check_evidence_without_save("occ", raw) is None
+    assert not (other.root / "evidence").exists()
 
 
 def test_image_content_deduplicates_without_copying_source_pdf(tmp_path):
