@@ -3,6 +3,7 @@ import base64
 import hashlib
 import threading
 import time
+from pathlib import Path
 from types import MethodType
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -247,6 +248,158 @@ def test_surface_learning_applies_only_current_position_and_never_global(tmp_pat
     assert not library.GlobalExactGlyphRepository.resolved().path.exists()
 
 
+def _pa10_surface_process_fixture(tmp_path, monkeypatch):
+    import actual_review as actual
+    import standalone_proofread as sp
+    import global_exact_glyph_library as library
+    from review_save_service import ReviewSaveService
+    from tests.test_staged_review_navigation_v580 import create_staged_navigation_fixture
+    root = short_root(tmp_path)
+    monkeypatch.setenv("LOCALAPPDATA", str(root / "user"))
+    output = root / "surface-project"
+    output.mkdir()
+    create_staged_navigation_fixture(output, same_exact_peers=True)
+    evidence_root = sp.project_actual_evidence_root(output)
+    actual.ensure_user_evidence_files(evidence_root)
+    actual._write_actual_evidence_csv(evidence_root / actual.OCCURRENCE_OVERRIDE_FILE,
+                                      actual.OVERRIDE_HEADERS, [])
+    sp.enable_surface_actual_project(output, confirmation=True)
+    assert library.GlobalExactGlyphRepository.resolved().path.is_relative_to(root)
+    from glyph_learning_images import LearningImageStore
+    assert LearningImageStore().root.is_relative_to(root)
+    return output, evidence_root
+
+
+def _pa10_surface_process_request(output, index):
+    import standalone_proofread as sp
+    from review_save_service import ReviewSaveService
+    snapshot = ReviewSaveService(output).load_resume_snapshot()
+    row = snapshot.ledger[index]
+    proof = sp.prepare_surface_actual_correction(output, row["review_id"])["proof"]
+    request = dict(review_id=row["review_id"], reading="ㄆ", proof=proof,
+        actor="isolated non-window worker test; no human interface acceptance",
+        whole_unit_readable=True, target_character_matches=True,
+        reading_from_original=True, enable_format=False,
+        expected_manifest=snapshot.manifest, expected_db=snapshot.db)
+    return snapshot, row, request
+
+
+def test_surface_process_saves_inline_proof_and_reopens_without_new_evidence_png(tmp_path, monkeypatch):
+    import manual_surface_actual as surface
+    from glyph_learning_images import LearningImageStore
+    from review_operation_worker import ReviewProcessService
+    output, evidence_root = _pa10_surface_process_fixture(tmp_path, monkeypatch)
+    before, row, request = _pa10_surface_process_request(output, 0)
+    raw = base64.b64decode(request["proof"]["render"]["target_png"], validate=True)
+    target = LearningImageStore().root / "evidence" / (hashlib.sha256(raw).hexdigest() + ".png")
+    assert not target.exists()
+    worker = ReviewProcessService(output)
+    try:
+        saved = worker.invoke("save_learning_surface", request)
+        assert worker.worker_pid is not None
+    finally:
+        worker.close()
+    assert saved["result"]["status"] == "LOCAL_SAVED_WAITING_SOURCE"
+    assert saved["result"]["local_status"] == "SAVED"
+    assert saved["result"]["global_status"] == "LOCAL_ONLY"
+    assert not target.exists()
+    document = surface.load(evidence_root, saved["snapshot"].manifest)
+    assert len(document["records"]) == 1 and not document["pending"]
+    proof = document["records"][0]["proof"]
+    assert proof["source"]["occurrence_id"] == row["occurrence_id"]
+    assert base64.b64decode(proof["render"]["target_png"], validate=True) == raw
+    assert proof["render"]["target_sha256"] == hashlib.sha256(raw).hexdigest()
+    page = base64.b64decode(proof["render"]["page_png"], validate=True)
+    assert proof["render"]["page_sha256"] == hashlib.sha256(page).hexdigest()
+    reopened = ReviewProcessService(output)
+    try:
+        snapshot = reopened.invoke("resume", {})
+    finally:
+        reopened.close()
+    assert snapshot.ledger[0]["actual"] == "ㄆ"
+    assert snapshot.db == before.db
+    assert snapshot.manifest["manual_surface_actual_projection"]["records"][0]["proof_sha256"] == proof["proof_sha256"]
+    assert surface.load(evidence_root, snapshot.manifest)["records"][0]["proof"] == proof
+    assert not target.exists()
+
+
+def test_surface_process_ordinary_staging_refusal_keeps_durable_state_without_png(tmp_path, monkeypatch):
+    import standalone_proofread as sp
+    import actual_review as actual
+    import global_glyph_promotion as promotion
+    from glyph_learning_images import LearningImageStore
+    from review_operation_worker import ReviewProcessService
+    output, evidence_root = _pa10_surface_process_fixture(tmp_path, monkeypatch)
+    _, ordinary, _ = _pa10_surface_process_request(output, 0)
+    sp.stage_manual_actual_correction(output, ordinary["review_id"], "ㄅㄛˊ",
+        checked_occurrence_ids=[ordinary["occurrence_id"]],
+        note="isolated legitimate ordinary staging")
+    staging_path = actual.manual_actual_staging_path(evidence_root)
+    staged_before = staging_path.read_bytes()
+    _, _, request = _pa10_surface_process_request(output, 3)
+    raw = base64.b64decode(request["proof"]["render"]["target_png"], validate=True)
+    target = LearningImageStore().root / "evidence" / (hashlib.sha256(raw).hexdigest() + ".png")
+    assert not target.exists()
+    protected = [output / "校對工作階段.json", output / "人工判定資料庫.json",
+                 evidence_root / "manual_surface_actual.json"]
+    before = {path: path.read_bytes() for path in protected}
+    worker = ReviewProcessService(output)
+    try:
+        with pytest.raises(ReviewOperationError, match="finish ordinary glyph staging") as error:
+            worker.invoke("save_learning_surface", request)
+        assert worker.worker_pid is not None
+    finally:
+        worker.close()
+    assert error.value.commit_state == "UNKNOWN"
+    assert not target.exists()
+    assert {path: path.read_bytes() for path in protected} == before
+    assert staging_path.read_bytes() == staged_before
+    assert not (evidence_root / promotion.PROJECT_TRANSACTION_FILE).exists()
+
+
+def test_surface_process_keeps_existing_same_sha_store_reference(tmp_path, monkeypatch):
+    from glyph_learning_images import LearningImageStore
+    from review_operation_worker import ReviewProcessService
+    output, _ = _pa10_surface_process_fixture(tmp_path, monkeypatch)
+    _, _, request = _pa10_surface_process_request(output, 0)
+    raw = base64.b64decode(request["proof"]["render"]["target_png"], validate=True)
+    store = LearningImageStore()
+    reference = store.save_evidence("other-occurrence", raw)
+    target = store.root / reference["relative_path"]
+    original = target.read_bytes()
+    worker = ReviewProcessService(output)
+    try:
+        result = worker.invoke("save_learning_surface", request)
+    finally:
+        worker.close()
+    assert result["result"]["local_status"] == "SAVED"
+    assert target.read_bytes() == original
+    assert store.read_evidence(reference) == raw
+
+
+def test_surface_process_rejects_changed_source_before_evidence_check(tmp_path, monkeypatch):
+    from glyph_learning_images import LearningImageStore
+    from review_operation_worker import ReviewProcessService
+    output, evidence_root = _pa10_surface_process_fixture(tmp_path, monkeypatch)
+    _, row, request = _pa10_surface_process_request(output, 0)
+    raw = base64.b64decode(request["proof"]["render"]["target_png"], validate=True)
+    target = LearningImageStore().root / "evidence" / (hashlib.sha256(raw).hexdigest() + ".png")
+    source = Path(row["pdf"])
+    document_path = evidence_root / "manual_surface_actual.json"
+    document_before = document_path.read_bytes() if document_path.exists() else None
+    source.write_bytes(source.read_bytes() + b"\n% isolated source drift\n")
+    assert not target.exists()
+    worker = ReviewProcessService(output)
+    try:
+        with pytest.raises(ReviewOperationError) as error:
+            worker.invoke("save_learning_surface", request)
+    finally:
+        worker.close()
+    assert error.value.commit_state == "UNKNOWN"
+    assert not target.exists()
+    assert (document_path.read_bytes() if document_path.exists() else None) == document_before
+
+
 def test_started_learning_worker_keeps_owner_after_thread_start_exception(monkeypatch):
     from tests.review_save_test_support import QueuedRoot
     root = QueuedRoot()
@@ -421,18 +574,23 @@ def surface_request(output):
 def test_surface_learning_staged_failure_reopens_existing_apply_queue(tmp_path, monkeypatch):
     import standalone_proofread as sp
     import global_exact_glyph_library as library
+    from glyph_learning_images import LearningImageStore
     from review_save_service import ReviewSaveService
     from tests.test_glyph_learning_service import _project
     root = short_root(tmp_path)
     monkeypatch.setenv("LOCALAPPDATA", str(root / "u"))
     output = _project(root, monkeypatch)
     before, request = surface_request(output)
+    raw = base64.b64decode(request["proof"]["render"]["target_png"], validate=True)
+    target = LearningImageStore().root / "evidence" / (hashlib.sha256(raw).hexdigest() + ".png")
+    assert not target.exists()
     state = ReviewOperationState(output)
     with monkeypatch.context() as failure:
         failure.setattr(sp, "apply_staged_surface_actual_corrections", Mock(side_effect=OSError("isolated pre-apply interruption")))
         with pytest.raises(ReviewOperationError) as error:
             state.dispatch("save_learning_surface", request, lambda text: None, lambda: False)
     assert error.value.commit_state == "STAGED_REFRESH_PENDING"
+    assert not target.exists()
     service = ReviewSaveService(output)
     snapshot = service.load_resume_snapshot()
     summary = service.validate_resume_staging(snapshot)
@@ -449,11 +607,15 @@ def test_surface_learning_staged_failure_reopens_existing_apply_queue(tmp_path, 
 def test_surface_learning_committed_failure_keeps_existing_fixed_recovery(tmp_path, monkeypatch):
     import standalone_proofread as sp
     import global_exact_glyph_library as library
+    from glyph_learning_images import LearningImageStore
     from tests.test_glyph_learning_service import _project
     root = short_root(tmp_path)
     monkeypatch.setenv("LOCALAPPDATA", str(root / "u"))
     output = _project(root, monkeypatch)
     before, request = surface_request(output)
+    raw = base64.b64decode(request["proof"]["render"]["target_png"], validate=True)
+    target = LearningImageStore().root / "evidence" / (hashlib.sha256(raw).hexdigest() + ".png")
+    assert not target.exists()
     state = ReviewOperationState(output)
     original_refresh = sp._surface_projection_refresh
     def interrupt_committed_refresh(*args, **kwargs):
@@ -465,6 +627,7 @@ def test_surface_learning_committed_failure_keeps_existing_fixed_recovery(tmp_pa
         with pytest.raises(ReviewOperationError) as error:
             state.dispatch("save_learning_surface", request, lambda text: None, lambda: False)
     assert error.value.commit_state == "COMMITTED_REFRESH_PENDING"
+    assert not target.exists()
     reopened = ReviewOperationState(output)
     summary = reopened.dispatch("actual_summary", {"recovery_only": True}, lambda text: None, lambda: False)
     assert summary["actual_recovery_pending"]

@@ -412,7 +412,8 @@ class ReviewOperationState:
             if document is not None and any(row["proof"]["source"]["occurrence_id"] != oid for row in document["pending"]):
                 raise ReviewOperationError("另有其他位置的原頁確認尚未套用；請先處理，未套用其他位置。", commit_state="NOT_WRITTEN")
             store = LearningImageStore()
-            store.save_evidence(oid, base64.b64decode(payload["proof"]["render"]["target_png"], validate=True))
+            store.check_evidence_without_save(oid, base64.b64decode(
+                payload["proof"]["render"]["target_png"], validate=True))
             progress("保存本位置原頁確認；不寫入全域字形讀音")
             staged = sp.stage_surface_actual_correction(self.output_dir,
                 **{key: value for key, value in payload.items() if key not in ("expected_manifest", "expected_db")})

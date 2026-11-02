@@ -143,14 +143,26 @@ class LearningImageStore:
             raise ValueError("確認圖片 reference 路徑或 SHA 不符")
         return _plain_path(self.root / directory / f"{digest}.png")
 
+    @staticmethod
+    def _matching_evidence_exists(target: Path, png_bytes: bytes) -> bool:
+        if not target.exists():
+            return False
+        if target.read_bytes() != png_bytes:
+            raise ValueError("確認圖片 evidence 內容已損毀；未覆寫")
+        return True
+
+    def check_evidence_without_save(self, occurrence_id: str, png_bytes: bytes) -> None:
+        """Validate surface pixels and any existing evidence, without publishing a file."""
+        reference = self._reference(occurrence_id, png_bytes, "evidence")
+        with _storage_lock(self.root):
+            target = self._target(reference, "evidence")
+            self._matching_evidence_exists(target, png_bytes)
+
     def save_evidence(self, occurrence_id: str, png_bytes: bytes) -> dict:
         reference = self._reference(occurrence_id, png_bytes, "evidence")
         with _storage_lock(self.root):
             target = self._target(reference, "evidence")
-            if target.exists():
-                if target.read_bytes() != png_bytes:
-                    raise ValueError("確認圖片 evidence 內容已損毀；未覆寫")
-            else:
+            if not self._matching_evidence_exists(target, png_bytes):
                 _atomic_write(target, png_bytes)
         return reference
 
