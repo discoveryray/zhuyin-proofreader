@@ -1257,15 +1257,60 @@ def _warning_bounds(entry):
     return None
 
 
+def _square_appearance_disjoint(annotation, ink):
+    """Prove a known unfilled Square paints no pixels near the glyph ink."""
+    if (annotation.type[0] != fitz.PDF_ANNOT_SQUARE
+            or annotation.colors.get('fill') not in (None, [])):
+        return False
+    bounds = fitz.Rect(annotation.rect)
+    if bounds.is_empty or (bounds.width * 4 + 4) * (bounds.height * 4 + 4) > 12_000_000:
+        return False
+    appearance = annotation.get_pixmap(matrix=fitz.Matrix(4, 4), alpha=True)
+    if (appearance.n != 4 or not appearance.alpha
+            or appearance.width * appearance.height > 12_000_000):
+        return False
+    # A one-device-pixel margin is conservative at the same 4x raster scale
+    # used by the native source proof. This inspects the annotation's own AP
+    # transparency, not just a possibly same-colored final-page comparison.
+    target = fitz.Rect(ink)
+    left = max(appearance.x, math.floor(target.x0 * 4) - 1)
+    top = max(appearance.y, math.floor(target.y0 * 4) - 1)
+    right = min(appearance.x + appearance.width, math.ceil(target.x1 * 4) + 1)
+    bottom = min(appearance.y + appearance.height, math.ceil(target.y1 * 4) + 1)
+    samples = appearance.samples
+    for y in range(top, bottom):
+        for x in range(left, right):
+            if samples[((y - appearance.y) * appearance.width + x - appearance.x) * 4 + 3]:
+                return False
+    return True
+
+
 def _annotation_intersects(page, ink):
-    # Native page replay and the independent preview both include annotations.
-    # Declared related annotation/widget bounds are only suspicion, not proof
-    # of actual coverage. Unavailable/invalid bounds never default unrelated.
+    # A Square may declare a full-page rectangle while drawing only its border.
+    # Unknown annotations/widgets and any AP ink near the glyph stay suspicious.
+    examined = False
     for iterator in (page.annots(), page.widgets()):
         for item in iterator or ():
             bounds = _native_rect(item.rect)
             if fitz.Rect(ink).intersects(fitz.Rect(bounds)):
-                return True
+                examined = True
+                if not isinstance(item, fitz.Annot) or not _square_appearance_disjoint(item, ink):
+                    return True
+    if not examined:
+        return False
+    # AP transparency alone is not the final rendered page. Both page renders
+    # must also agree over the glyph's actual native ink bounds.
+    target = (fitz.Rect(ink) + (-.25, -.25, .25, .25)) & page.rect
+    if target.is_empty:
+        return True
+    with_annotations = page.get_pixmap(matrix=fitz.Matrix(4, 4), clip=target,
+                                       alpha=False, annots=True)
+    without_annotations = page.get_pixmap(matrix=fitz.Matrix(4, 4), clip=target,
+                                          alpha=False, annots=False)
+    if (with_annotations.width != without_annotations.width
+            or with_annotations.height != without_annotations.height
+            or with_annotations.samples != without_annotations.samples):
+        return True
     return False
 
 
@@ -1386,6 +1431,12 @@ def _surface_plain(value):
     raise ValueError('SURFACE_UNKNOWN_NATIVE_SUMMARY_TYPE')
 
 
+SURFACE_MANUAL_REVIEW_REASONS = frozenset({
+    'SOURCE_OVERPAINT_CONFIRMED', 'SOURCE_PREFIX_BACKGROUND_UNPROVABLE',
+    'SOURCE_COMPLETE_CONTRAST_UNPROVABLE', 'SOURCE_LATER_INK_INTERSECTION_UNPROVABLE',
+})
+
+
 def surface_visual_proof(entry, *, pdf, session_id):
     """Bind a final unit for explicit human reading, without qualifying a donor.
 
@@ -1397,9 +1448,8 @@ def surface_visual_proof(entry, *, pdf, session_id):
         raise ValueError('SURFACE_SESSION_MISSING')
     with source_visual_operation() as operation:
         raw_safety = _source_visual_safety(operation, entry, pdf=pdf)
-        if raw_safety['reason'] not in {
-                'SOURCE_OVERPAINT_CONFIRMED', 'SOURCE_DRAW_UNCONTRADICTED',
-                'SOURCE_LOCATION_ONLY_NO_EXACT_PROOF'}:
+        if raw_safety['reason'] not in SURFACE_MANUAL_REVIEW_REASONS | {
+                'SOURCE_DRAW_UNCONTRADICTED', 'SOURCE_LOCATION_ONLY_NO_EXACT_PROOF'}:
             raise ValueError('SURFACE_SOURCE_REFUSED: ' + raw_safety['reason'])
         values, source = _tuple(entry)
         raw = operation.read_source(pdf, values['pdf_sha256'])

@@ -1,4 +1,5 @@
 """Finite candidate packaging and main evidence regressions; no Tk or real DB."""
+import ast
 import hashlib
 import json
 import os
@@ -95,9 +96,11 @@ class ReleasePackageTests(unittest.TestCase):
 
     def test_missing_runtime_dependency_is_rejected(self):
         self.spec["files"] = [item for item in self.spec["files"] if item["path"] != "helper.py"]
-        self.save()
-        with self.assertRaisesRegex(ValueError, "dependency missing"):
-            package.prepare(self.root, self.sha)
+        for source in (b"import helper\n", b"def later():\n    from helper import VALUE\n"):
+            self.data["entry.py"] = source
+            self.save()
+            with self.subTest(source=source), self.assertRaisesRegex(ValueError, "dependency missing"):
+                package.prepare(self.root, self.sha)
 
     def test_changed_seed_and_asset_are_rejected(self):
         self.data["seed.csv"] = b"personal rows\n"
@@ -141,6 +144,38 @@ class ReleasePackageTests(unittest.TestCase):
 
 
 class ReleaseEvidenceTests(unittest.TestCase):
+    def test_usage_feedback_runtime_modules_are_delivered(self):
+        """Check all three task edges and delivery targets without Git history."""
+        spec = json.loads((ROOT / package.ALLOWLIST).read_text(encoding="utf-8"))
+        roles = {entry["path"]: entry["role"] for entry in spec["files"]}
+
+        def local_dependencies(path):
+            dependencies = set()
+            for node in ast.walk(ast.parse((ROOT / path).read_text(encoding="utf-8-sig"))):
+                names = ([item.name for item in node.names] if isinstance(node, ast.Import)
+                         else [node.module] if isinstance(node, ast.ImportFrom) and node.module else [])
+                for name in names:
+                    candidate = name.split(".")[0] + ".py"
+                    if (ROOT / candidate).is_file():
+                        dependencies.add(candidate)
+                if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                        and node.value.endswith(".py") and (ROOT / node.value).is_file()):
+                    dependencies.add(node.value)
+            return dependencies
+
+        for owner, module, member in (
+            ("review_display.py", "review_context_display", "pdf_sentence_at_target"),
+            ("review_gui.py", "actual_source_visual_safety", "SURFACE_MANUAL_REVIEW_REASONS"),
+            ("review_operation_worker.py", "review_process_context", "review_spawn_context"),
+        ):
+            syntax = ast.parse((ROOT / owner).read_text(encoding="utf-8-sig"))
+            imports = [node for node in ast.walk(syntax) if isinstance(node, ast.ImportFrom)]
+            with self.subTest(owner=owner, dependency=module):
+                self.assertTrue(any(node.module == module and any(item.name == member for item in node.names)
+                                    for node in imports))
+                self.assertEqual(roles.get(module + ".py"), "runtime_module")
+                self.assertFalse(local_dependencies(module + ".py") - roles.keys())
+
     def test_delivered_document_local_links_resolve_inside_allowlist(self):
         spec = json.loads((ROOT / package.ALLOWLIST).read_text(encoding="utf-8"))
         included = {item["path"] for item in spec["files"]}

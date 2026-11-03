@@ -12,7 +12,7 @@ import tkinter as tk
 import unittest
 import weakref
 from pathlib import Path
-from types import MethodType
+from types import MethodType, SimpleNamespace
 from unittest.mock import Mock, patch
 
 import review_gui as gui
@@ -336,6 +336,8 @@ class AsyncReviewSaveTests(unittest.TestCase):
             save.assert_not_called()
         self.app._rendered_review_id = self.row["review_id"]
         self.app.primary = Mock()
+        self.app.image = SimpleNamespace(_entry=None, photo=None, target=None,
+                                         source_diagnostic=None, display_context=None)
         self.app._preview_failed()
         with patch.object(self.app, "save_event") as save:
             self.app.confirm_current_expected(self.row["review_id"])

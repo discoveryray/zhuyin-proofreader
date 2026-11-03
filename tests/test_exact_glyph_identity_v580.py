@@ -564,7 +564,7 @@ class ExactIdentitySchemaTests(unittest.TestCase):
                     [group],
                     expected_metadata=metadata,
                 )
-            self.assertEqual(ACTUAL_REVIEW_SCHEMA_VERSION, "1.2")
+            self.assertEqual(ACTUAL_REVIEW_SCHEMA_VERSION, "1.3")
             self.assertEqual(list(root.glob("*.csv")), [])
 
     def test_identity_module_is_actual_only_and_has_no_sqlite_or_expected_imports(self):

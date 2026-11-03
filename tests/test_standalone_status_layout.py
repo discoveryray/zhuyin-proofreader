@@ -166,15 +166,20 @@ def test_notebook_tracks_only_selected_natural_content_and_cancels_pending_layou
 
 def test_toggle_log_requests_scroll_content_relayout():
     app = launcher.App.__new__(launcher.App)
+    app.root = Surface()
+    app._fit_pending, app._fitting_window = None, False
     app.log_visible = False
     app.log_frame = Surface()
     app.log_frame.pack = Mock()
     app.log_frame.pack_forget = Mock()
     app.body_canvas = SimpleNamespace(request_layout=Mock())
     app.toggle_log()
+    pending_fit = app._fit_pending
+    assert pending_fit in app.root.callbacks
     assert app.log_visible
     app.log_frame.pack.assert_called_once()
     app.toggle_log()
+    assert app._fit_pending == pending_fit
     assert not app.log_visible
     app.log_frame.pack_forget.assert_called_once()
     assert app.body_canvas.request_layout.call_count == 2

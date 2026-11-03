@@ -47,7 +47,7 @@ from standalone_proofread import (
     validate_output_artifact_hashes,
 )
 from actual_review import build_actual_group_for_entry
-from review_display import ActionRows, OccurrencePreview, WrappedLabel, scroll_canvas, scrollable_entry, wrap_checkbutton
+from review_display import ActionRows, OccurrencePreview, SelectableText, WrappedLabel, scroll_canvas, scrollable_entry, wrap_checkbutton
 from review_save_service import ReviewSaveService
 from review_operation_worker import ReviewProcessService, ReviewOperationError
 
@@ -64,6 +64,23 @@ STATE_HELP = {
     "SOURCE_INVALID": "校對資料來源檢查失敗，需先修復資料。",
     "DATA_INTEGRITY_ERROR": "工作資料完整性異常，需先修復資料。",
 }
+
+
+def review_context_text(entry):
+    """Present both stored context fields in one place without changing evidence."""
+    display = entry.get("_display_context")
+    if isinstance(display, str) and display.strip() and str(entry.get("char") or "") in display:
+        return display.strip()
+    source = entry.get("source_record") or {}
+    phrase = str(source.get("局部詞境") or entry.get("context_evidence") or "").strip()
+    sentence = str(source.get("所在行") or "").strip()
+    if not sentence:
+        return phrase
+    if not phrase or phrase in sentence:
+        return sentence
+    if sentence in phrase:
+        return phrase
+    return f"{sentence}（局部：{phrase}）"
 
 
 def screen_safe_window_size(screen_width: int, screen_height: int, desired_width: int, desired_height: int) -> tuple[int, int]:
@@ -415,9 +432,7 @@ class ExpectedDialog(_ReviewDialog):
 
         body, self.body_canvas = create_scrollable_body(self)
 
-        source = entry.get("source_record") or {}
-        phrase = str(source.get("局部詞境") or entry.get("context_evidence") or "").strip()
-        sentence = str(source.get("所在行") or "").strip()
+        context = review_context_text(entry)
 
         intro = tk.Frame(body)
         intro.pack(fill="x", padx=16, pady=(14, 8))
@@ -432,11 +447,10 @@ class ExpectedDialog(_ReviewDialog):
         summary.pack(fill="x", padx=16, pady=6)
         text = (
             f"課本頁：{entry.get('printed_page', '')}　目標字：{entry.get('char', '')}\n"
-            f"詞語／局部詞境：{phrase}\n"
-            f"所在句：{sentence}\n"
+            f"語境：{context}\n"
             f"課本目前注音：{entry.get('actual', '')}"
         )
-        WrappedLabel(summary, text=text, justify="left", anchor="w", wraplength=660).pack(fill="x", padx=10, pady=8)
+        SelectableText(summary, text=text, height=5).pack(fill="x", padx=10, pady=8)
         if entry.get("expected_business_conflict_pending") is True:
             WrappedLabel(summary, text="兩份證據均已保存，原目標判定仍保留。請依本位置獨立裁決：\n"
                          + expected_conflict_summary(entry), justify="left", anchor="w",
@@ -446,7 +460,7 @@ class ExpectedDialog(_ReviewDialog):
         form.pack(fill="x", padx=16, pady=4)
         self.expected = tk.StringVar(master=self)
         self.evidence = tk.StringVar(master=self)
-        default_context = f"完整詞／局部詞境：{phrase}；所在句：{sentence}；目標字：{entry.get('char', '')}"
+        default_context = f"語境：{context}；目標字：{entry.get('char', '')}"
         self.context = tk.StringVar(master=self, value=default_context)
         self.reason = tk.StringVar(master=self)
         labels = [
@@ -557,23 +571,43 @@ def surface_input_result(prepared, *, reading, actor, confirmations):
                 enable_format=prepared['requires_format_conversion'], **confirmations)
 
 
+def surface_review_candidate(prepared, entry=None):
+    """An unconfirmed actual candidate, never an expected answer or fallback."""
+    from occurrence_ledger import canonical_bopomofo
+    if entry is not None and entry.get('manual_surface_actual') is not None:
+        return canonical_bopomofo(entry['manual_surface_actual']['reading'])
+    return canonical_bopomofo(prepared['proof']['automatic_actual'])
+
+
+def surface_review_result(prepared, *, reading, actor, user_expected_reading):
+    """Only the visible combined attestation buttons call this input adapter."""
+    from occurrence_ledger import canonical_bopomofo
+    expected = canonical_bopomofo(user_expected_reading)
+    if not expected:
+        raise ValueError('請輸入合法的應標注音；應標欄不會補入實際注音')
+    value = surface_input_result(prepared, reading=reading, actor=actor,
+        confirmations=dict(whole_unit_readable=True, target_character_matches=True, reading_from_original=True))
+    return dict(value, user_expected_reading=expected)
+
+
 class SurfaceActualDialog(_ReviewDialog):
     """One sealed original final surface, with explicit human attestations."""
-    _variable_attributes = ('reading','actor','confirmations')
+    _variable_attributes = ('reading','actor','confirmations','expected_reading')
     _widget_attributes = ('body_canvas','photos')
 
-    def __init__(self, parent, entry, prepared, *, learning_mode=False):
+    def __init__(self, parent, entry, prepared, *, learning_mode=False, review_mode=False):
         super().__init__(parent)
         self.result = None
         self.prepared = prepared
-        self.title('單一位置人工表面 actual')
+        self.title('目視確認本位置注音' if review_mode else '單一位置人工表面 actual')
         apply_screen_safe_geometry(self, 980, 780, min_width=720, min_height=520)
         self.transient(parent)
         self.grab_set()
         footer = ActionRows(self)
         footer.pack(side='bottom',fill='x')
-        footer.set_items([tk.Button(footer,text='修改圖片上的注音並記住（僅本位置）' if learning_mode else '暫存本位置 actual',command=self.submit),
-                          tk.Button(footer,text='稍後處理' if learning_mode else '取消',command=self.destroy)])
+        if not review_mode:
+            footer.set_items([tk.Button(footer,text='修改圖片上的注音並記住（僅本位置）' if learning_mode else '暫存本位置 actual',command=self.submit),
+                              tk.Button(footer,text='稍後處理' if learning_mode else '取消',command=self.destroy)])
         body,self.body_canvas = create_scrollable_body(self)
         WrappedLabel(body,text=prepared['warning'],fg='#9a4100').pack(fill='x',padx=14,pady=8)
         WrappedLabel(body,text=f"僅此位置：{entry.get('char','')}；自動解碼原值：{prepared['proof']['automatic_actual'] or '未解碼'}。疊蓋警示保留，不學習或傳播。"
@@ -586,13 +620,42 @@ class SurfaceActualDialog(_ReviewDialog):
                 photo=photo.subsample(subsample,subsample)
             self.photos.append(photo)
             tk.Label(body,image=photo).pack(padx=14,pady=5)
-        self.reading=tk.StringVar(master=self,value='')
-        self.actor=tk.StringVar(master=self,value='')
-        WrappedLabel(body,text='依原頁輸入實際注音（不提供應標答案）').pack(fill='x',padx=14)
+        self.reading=tk.StringVar(master=self,value=surface_review_candidate(prepared,entry) if review_mode else '')
+        actor = ''
+        if review_mode:
+            import getpass
+            try:
+                actor = getpass.getuser().strip()
+            except (OSError, KeyError):
+                pass
+        self.actor=tk.StringVar(master=self,value=actor)
+        WrappedLabel(body,text='原頁實際注音：候選尚未確認，請逐字目視核對；不符請直接修正。' if review_mode
+            else '依原頁輸入實際注音（不提供應標答案）').pack(fill='x',padx=14)
         scrollable_entry(body,self.reading).pack(fill='x',padx=14)
         WrappedLabel(body,text='人工核對者紀錄').pack(fill='x',padx=14)
         scrollable_entry(body,self.actor).pack(fill='x',padx=14)
         self.confirmations={}
+        if review_mode:
+            WrappedLabel(body,text='按下完成或保存，表示我已看過上方原頁最終畫面，整個字與注音清楚可讀，'
+                '目標字與本位置一致，並依原頁核對實際注音，未以應標答案回填。'
+                '實際與應標分別依按鈕列出的讀音保存；僅本位置，不作字型辨識或其他位置學習。',
+                fg='#9a4100').pack(fill='x',padx=14,pady=8)
+            self.expected_reading=tk.StringVar(master=self,value='')
+            WrappedLabel(body,text='目視發現有誤時，直接輸入應標注音（不會更動上方實際注音）').pack(fill='x',padx=14)
+            scrollable_entry(body,self.expected_reading).pack(fill='x',padx=14)
+            same=tk.Button(footer,command=lambda:self.submit_review(same=True))
+            different=tk.Button(footer,command=lambda:self.submit_review(same=False))
+            def labels(*_):
+                actual=self.reading.get().strip() or '尚未輸入'
+                expected=self.expected_reading.get().strip() or '尚未輸入'
+                same.config(text=f'我目視原頁實際與應標皆為「{actual}」：完成本位置')
+                different.config(text=f'我目視原頁實際「{actual}」、應標「{expected}」：保存本位置')
+            self.reading.trace_add('write',labels)
+            self.expected_reading.trace_add('write',labels)
+            labels()
+            footer.set_items([same,different,tk.Button(footer,text='稍後處理',command=self.destroy)])
+            self.wait_window(self)
+            return
         for key,text in [('whole_unit_readable','我看過上方最終畫面，整個字與注音清楚可讀'),
                          ('target_character_matches','我確認最終畫面的目標字與此位置一致'),
                          ('reading_from_original','讀音是我依原頁自行輸入，未使用應標答案')]:
@@ -605,6 +668,19 @@ class SurfaceActualDialog(_ReviewDialog):
         try:
             value=surface_input_result(self.prepared,reading=self.reading.get(),actor=self.actor.get().strip(),
                 confirmations={key:variable.get() for key,variable in self.confirmations.items()})
+            if value['enable_format'] and not messagebox.askyesno('明確轉換專案格式',
+                    self.prepared['warning']+'\n確認轉換此專案並保留版本化證據？',parent=self):
+                return
+        except ValueError as exc:
+            messagebox.showerror('尚未完成原頁確認',str(exc),parent=self)
+            return
+        self.result=value
+        self.destroy()
+
+    def submit_review(self, *, same):
+        try:
+            value=surface_review_result(self.prepared,reading=self.reading.get(),actor=self.actor.get().strip(),
+                user_expected_reading=self.reading.get() if same else self.expected_reading.get())
             if value['enable_format'] and not messagebox.askyesno('明確轉換專案格式',
                     self.prepared['warning']+'\n確認轉換此專案並保留版本化證據？',parent=self):
                 return
@@ -1496,7 +1572,7 @@ class ReviewApp:
 
         self.summary = tk.LabelFrame(body, text="這一筆要確認什麼")
         self.summary.pack(fill="x", padx=12, pady=5)
-        self.summary_text = WrappedLabel(self.summary, text="", justify="left", anchor="w", wraplength=1120, font=("Microsoft JhengHei", 11))
+        self.summary_text = SelectableText(self.summary, text="", height=7, font=("Microsoft JhengHei", 11))
         self.summary_text.pack(fill="x", padx=10, pady=8)
 
         self.image = OccurrencePreview(body, on_locate=self.body_canvas.reveal, on_failure=self._preview_failed,
@@ -1506,7 +1582,7 @@ class ReviewApp:
         self.image.pack(fill="both", expand=True, padx=12, pady=6)
 
         self.tech_frame = tk.LabelFrame(body, text="技術資訊")
-        self.tech_text = tk.Text(self.tech_frame, height=8, wrap="word", font=("Consolas", 9))
+        self.tech_text = SelectableText(self.tech_frame, text="", height=8, font=("Consolas", 9))
         self.tech_text.pack(fill="x", padx=8, pady=6)
 
         decision_actions = ActionRows(actions)
@@ -2168,7 +2244,8 @@ class ReviewApp:
             return
         if error is not None:
             state = getattr(error, "commit_state", "")
-            committed = committed or state in {"COMMITTED_REFRESH_PENDING", "STAGED_REFRESH_PENDING", "REPORT_SAVED_REFRESH_PENDING"}
+            committed = committed or state in {"COMMITTED_REFRESH_PENDING", "STAGED_REFRESH_PENDING", "REPORT_SAVED_REFRESH_PENDING",
+                                               "SURFACE_SAVED_EXPECTED_PENDING"}
             self._restore_save_controls()
             if committed:
                 self._save_recovery_required = True
@@ -2180,6 +2257,7 @@ class ReviewApp:
                 if hasattr(self, "retry_startup_button"):
                     self.retry_startup_button.pack(anchor="w")
             label = {"STAGED_REFRESH_PENDING": "actual 已暫存，但清單更新未完成",
+                     "SURFACE_SAVED_EXPECTED_PENDING": "本位置實際注音已保存，應標判定待核對",
                      "REPORT_SAVED_REFRESH_PENDING": "報告已保存，但清單更新未完成"}.get(state,
                      "已保存，但後續更新未完成" if committed else
                      "操作尚未寫入" if state == "NOT_WRITTEN" else request["title"] + "失敗")
@@ -2476,7 +2554,10 @@ class ReviewApp:
                 or (review_lane(entry) not in {"expected", "other"}
                     and not valid_manual_expected_decision(entry))):
             return
-        dialog = ExpectedDialog(self.root, entry, "輸入其他應標注音")
+        display_entry = dict(entry)
+        if getattr(self, "_display_context_review_id", None) == entry.get("review_id"):
+            display_entry["_display_context"] = self._display_context
+        dialog = ExpectedDialog(self.root, display_entry, "輸入其他應標注音")
         if not dialog.result:
             return
         try:
@@ -2764,6 +2845,9 @@ class ReviewApp:
             self.show()
             if not self.current() or self.current().get("review_id") != entry.get("review_id"):
                 return
+            if value.get('surface') is not None:
+                self._save_surface_review(entry, value['surface'])
+                return
             if value.get("learning_group") is not None:
                 self._show_learning_target(dict(entry=entry, group=value["learning_group"], surface=value.get("surface")))
                 return
@@ -2795,6 +2879,26 @@ class ReviewApp:
                     self.status.config(text=f"actual 已暫存，尚未正式套用；目前 {count} 組等待套用，可繼續下一筆。")
             self._start_owned_operation("actual 暫存", stage, staged)
         self._start_owned_operation("準備 actual 核對", work, prepared)
+
+    def _save_surface_review(self, entry, prepared):
+        self._review_action_in_progress = True
+        try:
+            dialog = SurfaceActualDialog(self.root, entry, prepared, review_mode=True)
+        finally:
+            self._review_action_in_progress = False
+        if not dialog.result:
+            return
+        payload = dict(expected_manifest=self.manifest, expected_db=self.db,
+                       review_id=entry['review_id'], **dialog.result)
+        service = self._save_service
+        def published(value):
+            self.manifest, self.db = value['snapshot'].manifest, value['snapshot'].db
+            self._publish_staging_summary(value['summary'])
+            self._set_actionable_records_from_ledger(value['review_view'], advance_from=entry['review_id'])
+            self.show()
+            self.status.config(text='本位置目視實際注音與人工應標判定已保存；疊圖警示保留，不作字型學習。')
+        self._start_owned_operation('保存本位置目視判定',
+            lambda progress: service.invoke('save_surface_review',payload,progress=progress),published)
 
     def apply_staged_actuals(self):
         if getattr(self, "staging_summary", {}).get("staging_validation_pending"):
@@ -3063,16 +3167,17 @@ class ReviewApp:
             self.summary_text.config(text=detail)
             self._rendered_review_id = None
             self.image.clear()
-            self.tech_text.delete("1.0", "end")
+            self.tech_text.configure(text="")
             self.primary.config(text=primary_text, state="disabled")
             if hasattr(self, "decision_actions"):
                 self.decision_actions.set_items([self.primary, self.later, self.more_button])
             return
 
-        source = entry.get("source_record") or {}
+        self._display_context_review_id = None
+        self._display_context = None
         state = str(entry.get("state") or "")
-        phrase = str(source.get("局部詞境") or entry.get("context_evidence") or "").strip()
-        sentence = str(source.get("所在行") or phrase).strip()
+        context = review_context_text(entry)
+        self._summary_context = context
         expected_text = " | ".join(entry.get("expected_set") or []) or "尚未確定"
         lane = review_lane(entry)
         if lane == "actual":
@@ -3097,8 +3202,7 @@ class ReviewApp:
         staged_line = "\nactual 狀態：已暫存人工核對結果，等待批次套用；上方目前注音是套用前的正式結果，應標仍須依語境獨立判定。" if is_staged else ""
         summary = (
             f"課本頁：{entry.get('printed_page', '')}　　目標字：{entry.get('char', '')}　　本組此字剩餘 {group_count} 筆（含本筆，不含稍後處理）\n"
-            f"詞語／局部詞境：{phrase}\n"
-            f"所在句：{sentence}\n"
+            f"語境：{context}\n"
             f"課本目前注音：{entry.get('actual', '') or '尚未辨識'}　　應標注音：{expected_text}\n"
             f"原因：{help_text}{staged_line}"
         )
@@ -3115,8 +3219,7 @@ class ReviewApp:
             f"context evidence: {entry.get('context_evidence', '')}",
             f"source view: {entry.get('source_view', '')}",
         ]
-        self.tech_text.delete("1.0", "end")
-        self.tech_text.insert("1.0", "\n".join(tech_lines))
+        self.tech_text.configure(text="\n".join(tech_lines))
         self.configure_actions(entry)
         self.render(entry)
 
@@ -3142,6 +3245,15 @@ class ReviewApp:
         entry = self.current()
         if (entry and preview is self.image and preview._entry == entry and preview.photo is not None
                 and preview.target is not None and not self._save_busy()):
+            display = getattr(preview, "display_context", None)
+            if (isinstance(display, str) and str(entry.get("char") or "") in display
+                    and display != getattr(self, "_summary_context", None)):
+                self._display_context_review_id = entry.get("review_id")
+                self._display_context = display
+                old = f"語境：{self._summary_context}\n"
+                new = f"語境：{display}\n"
+                self.summary_text.configure(text=self.summary_text.get("1.0", "end-1c").replace(old, new, 1))
+                self._summary_context = display
             self._rendered_review_id = entry.get("review_id")
             if entry.get("state") == "DIFFERENCE_PENDING_CONFIRMATION":
                 self.primary.config(state="normal")
@@ -3149,12 +3261,45 @@ class ReviewApp:
                 getattr(self, "_confirm_current_expected_button", self.primary).config(state="normal")
 
     def _preview_failed(self):
+        from actual_source_visual_safety import SURFACE_MANUAL_REVIEW_REASONS
         self._rendered_review_id = None
         entry = self.current()
         if entry and entry.get("state") == "DIFFERENCE_PENDING_CONFIRMATION":
             self.primary.config(state="disabled")
         if entry and can_confirm_current_expected(entry):
             getattr(self, "_confirm_current_expected_button", self.primary).config(state="disabled")
+        diagnostic = getattr(self.image, "source_diagnostic", None)
+        display = getattr(self.image, "display_context", None)
+        if (entry and getattr(self.image, "_entry", None) == entry
+                and getattr(self.image, "photo", None) is not None
+                and isinstance(display, str) and str(entry.get("char") or "") in display
+                and display != getattr(self, "_summary_context", None)):
+            self._display_context_review_id = entry.get("review_id")
+            self._display_context = display
+            old = f"語境：{self._summary_context}\n"
+            self.summary_text.configure(text=self.summary_text.get("1.0", "end-1c").replace(
+                old, f"語境：{display}\n", 1))
+            self._summary_context = display
+        if (entry and getattr(self.image, "_entry", None) == entry
+                and isinstance(diagnostic, dict)
+                and diagnostic.get("reason") in SURFACE_MANUAL_REVIEW_REASONS
+                and not self._save_busy()):
+            if (entry.get("manual_surface_actual") is not None
+                    and getattr(self.image, "photo", None) is not None
+                    and can_confirm_current_expected(entry)):
+                # A committed surface record is in the refreshed ledger. The
+                # same current PDF preview was verified, even though its text
+                # layer still cannot be used as an actual reading.
+                self._rendered_review_id = entry.get("review_id")
+                getattr(self, "_confirm_current_expected_button", self.primary).config(
+                    text="確認目前注音就是應標注音", state="normal",
+                    command=lambda rid=entry["review_id"]: self.confirm_current_expected(rid))
+                return
+            # The raw candidate remains unconfirmed. The dialog displays the
+            # sealed final surface and requires explicit independent intents.
+            button = (getattr(self, "_confirm_current_expected_button", self.primary)
+                      if can_confirm_current_expected(entry) else self.primary)
+            button.config(text="目視確認本位置注音", state="normal", command=self.correct_actual)
 
 
 def main():

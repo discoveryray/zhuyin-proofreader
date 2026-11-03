@@ -104,6 +104,8 @@ class ResponsiveReviewTests(unittest.TestCase):
         # Any accidental native entry in this test is an error, not a skip.
         self.stack.enter_context(patch.object(gui.tk, "Tk", side_effect=AssertionError("real Tk forbidden")))
         self.stack.enter_context(patch.object(gui.tk, "Toplevel", side_effect=AssertionError("real Tk forbidden")))
+        self.native_text_init = self.stack.enter_context(patch.object(
+            gui.tk.Text, "__init__", side_effect=AssertionError("real Tk Text forbidden")))
         for name in ("showinfo", "showerror", "showwarning"):
             self.stack.enter_context(patch.object(gui.messagebox, name))
 
@@ -125,9 +127,21 @@ class ResponsiveReviewTests(unittest.TestCase):
             self.stack.enter_context(patch.object(gui.tk, name, side_effect=widget))
         for name in ("WrappedLabel", "ActionRows", "OccurrencePreview"):
             self.stack.enter_context(patch.object(gui, name, side_effect=widget))
+        from tests.no_window_review_support import Text
+        self.stack.enter_context(patch.object(gui, "SelectableText", Text))
         self.stack.enter_context(patch.object(gui, "apply_screen_safe_geometry"))
         self.stack.enter_context(patch.object(gui, "create_scrollable_body", return_value=(widget(), widget())))
         return root
+
+    def test_selectable_consumer_is_finite_before_constructor_entry(self):
+        from tests.no_window_review_support import Text
+        self.fake_shell()
+        self.assertIs(gui.SelectableText, Text)
+        field = gui.SelectableText(Mock(), text="第一個原頁語境")
+        self.assertEqual(field.get("1.0", "end-1c"), "第一個原頁語境")
+        field.configure(text="更新後的原頁語境")
+        self.assertEqual(field.get("1.0", "end-1c"), "更新後的原頁語境")
+        self.native_text_init.assert_not_called()
 
     def pump_loading(self, app, *, finish_staging=True):
         deadline = time.monotonic() + 10

@@ -12,6 +12,10 @@
       "role": "runtime_module"
     },
     {
+      "path": "actual_source_visual_safety.py",
+      "role": "runtime_module"
+    },
+    {
       "path": "cff_unseen_family_bootstrap.py",
       "role": "runtime_module"
     },
@@ -120,6 +124,10 @@
       "role": "runtime_module"
     },
     {
+      "path": "review_context_display.py",
+      "role": "runtime_module"
+    },
+    {
       "path": "review_display.py",
       "role": "runtime_module"
     },
@@ -129,6 +137,10 @@
     },
     {
       "path": "review_operation_worker.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "review_process_context.py",
       "role": "runtime_module"
     },
     {
@@ -314,6 +326,10 @@
     },
     {
       "path": "docs/USER_GUIDE.md",
+      "role": "document"
+    },
+    {
+      "path": "docs/licenses/CPython-3.13.0-LICENSE.txt",
       "role": "document"
     },
     {

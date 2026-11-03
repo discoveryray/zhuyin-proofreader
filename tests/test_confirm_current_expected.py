@@ -1,5 +1,6 @@
 """Explicit human shortcut and real save boundaries, without Tcl/Tk objects."""
 import copy
+from types import SimpleNamespace
 
 import pytest
 
@@ -96,6 +97,8 @@ def test_difference_secondary_shortcut_render_failure_preserves_primary():
     app.configure_actions(row)
     assert app.primary.cget("text") == "確認教材錯誤"
     assert app.secondary.cget("text") == "確認目前注音就是應標注音"
+    app.image = SimpleNamespace(_entry=None, photo=None, target=None,
+                                source_diagnostic=None, display_context=None)
     app._preview_failed()
     assert app.secondary.cget("state") == "disabled"
     # Neither actual-dependent confirmation may use an unrendered source.

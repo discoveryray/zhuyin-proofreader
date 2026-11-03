@@ -98,6 +98,40 @@ def _json(raw: bytes | None, path: Path):
     return json.loads(raw.decode("utf-8-sig"), object_pairs_hook=unique)
 
 
+def _require_applied_surface_actual(entry, manifest, content, output_dir):
+    """Qualify only the applied, re-proven final-surface reading of this slot."""
+    import manual_surface_actual as surface
+
+    root = sp.project_actual_evidence_root(output_dir)
+    if not surface.enabled(manifest):
+        raise StaleReviewProjectError("本位置表面 actual 尚未套用；未保存")
+    document = surface.validate_document(surface.parse(content[root / surface.FILE]),
+                                         session_id=manifest["session_id"])
+    oid, rid = entry["occurrence_id"], entry["review_id"]
+    records = [item for item in document["records"]
+               if item["proof"]["source"]["occurrence_id"] == oid]
+    claims = [item for item in manifest["manual_surface_actual_projection"]["records"]
+              if item["occurrence_id"] == oid]
+    if len(records) != 1 or len(claims) != 1:
+        raise StaleReviewProjectError("本位置表面 actual 證據未完整套用；未保存")
+    record, claim = records[0], claims[0]
+    source = record["proof"]["source"]
+    if (source["review_id"] != rid or claim != entry.get("manual_surface_actual")
+            or claim != {"occurrence_id": oid, "review_id": rid,
+                         "reading": record["reading"],
+                         "proof_sha256": record["proof"]["proof_sha256"],
+                         "receipt_sha256": record["receipt_sha256"]}
+            or entry.get("actual") != record["reading"]
+            or entry.get("actual_status") != "RESOLVED"
+            or entry.get("actual_evidence") != "occurrence-local manual final-surface confirmation"
+            or entry.get("surface_donor_eligible") is not False):
+        raise StaleReviewProjectError("本位置人工 actual 與已驗證表面證據不同；未保存")
+    # The same final-page render (including PDF annotations) and native slot
+    # must still belong to the sealed source immediately before the DB write.
+    surface.verify_sources({"records": [record], "pending": [], "history": []},
+                           manifest, output_dir)
+
+
 class ReviewSaveService:
     """One worker at a time. Constructor and invalidation do no heavy work."""
 
@@ -449,7 +483,11 @@ class ReviewSaveService:
                             and isinstance(event.get("manual_expected_decision"), dict)
                             and event["manual_expected_decision"].get("operation") == "CONFIRM_CURRENT_AS_EXPECTED")
         if confirms_current or (isinstance(event, dict) and event.get("action") == "確認現版差異"):
-            sp.require_current_actual_visual_source(ledger[index[review_id]], self.output_dir)
+            actual_entry = ledger[index[review_id]]
+            if actual_entry.get("manual_surface_actual") is not None:
+                _require_applied_surface_actual(actual_entry, manifest, content, self.output_dir)
+            else:
+                sp.require_current_actual_visual_source(actual_entry, self.output_dir)
         if confirms_current:
             current = ledger[index[review_id]]
             current = self._conflicts.review_view(db, [current], pending=unresolved_conflicts)[0]
