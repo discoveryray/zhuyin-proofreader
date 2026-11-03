@@ -11,6 +11,19 @@ from standalone_gui import App, child_window_options, fitted_launcher_geometry, 
 
 
 class UsageInterfaceTests(unittest.TestCase):
+    def test_finite_text_reads_replaced_and_inserted_display_content(self):
+        from tests.no_window_review_support import Text
+        field = Text(text="語境：請\n目前注音：ㄑㄧㄥˇ")
+        self.assertEqual(field.get("1.0", "end-1c"), "語境：請\n目前注音：ㄑㄧㄥˇ")
+        field.configure(text="語境：請勾選已做到的愛家行動。")
+        self.assertEqual(field.get("1.0", "end-1c"), "語境：請勾選已做到的愛家行動。")
+        field.delete("1.0", "end")
+        field.insert("1.0", "獨立技術資訊")
+        self.assertEqual(field.get("1.0", "end-1c"), "獨立技術資訊")
+        field.config(text="第二次完整替換")
+        self.assertEqual(field.get("1.0", "end-1c"), "第二次完整替換")
+        self.assertEqual(field.cget("text"), "第二次完整替換")
+
     def test_context_keeps_full_sentence_once_and_preserves_distinct_local_context(self):
         entry = {"source_record": {"局部詞境": "請", "所在行": "請把答案寫下來。"}}
         self.assertEqual(review_context_text(entry), "請把答案寫下來。")

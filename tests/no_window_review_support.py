@@ -159,13 +159,25 @@ class Surface(QueuedRoot):
 class Text(Surface):
     def __init__(self, master=None, **options):
         super().__init__(master, **options)
-        self.content = ""
+        self.content = str(self.options.get("text", ""))
+
+    def configure(self, cnf=None, **options):
+        if cnf is not None:
+            options.update(cnf)
+        if "text" in options:
+            self.content = str(options["text"])
+            options["text"] = self.content
+        super().configure(**options)
+
+    config = configure
 
     def delete(self, *_args):
         self.content = ""
+        self.options["text"] = self.content
 
     def insert(self, _position, value):
-        self.content += value
+        self.content += str(value)
+        self.options["text"] = self.content
 
     def get(self, *_args):
         return self.content
@@ -372,11 +384,12 @@ class ReviewApp(ImmediateOperations, gui.ReviewApp):
         self.deferred_items = set()
         self.staged_checked_occurrence_ids = set()
         self.waiting_actual_occurrence_ids = set()
-        for name in ("status", "summary_text", "primary", "secondary", "later", "more_button",
+        for name in ("status", "primary", "secondary", "later", "more_button",
                      "apply_actual_button", "staging_status", "revisit_button", "confirmed_button",
                      "undo_expected_button", "navigation", "decision_actions", "body_canvas"):
             setattr(self, name, Surface(root))
         self.undo_expected_button.configure(command=self.undo_last_expected)
+        self.summary_text = Text(root)
         self.tech_text = Text(root)
         self.more_menu = Menu()
         self.more_menu.commands["返回待辦"] = self.return_to_pending
