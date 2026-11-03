@@ -81,9 +81,18 @@ def test_visible_square_cover_cannot_export_or_supply_exact_donor(tmp_path):
     row = _annotated_source(tmp_path, filled=True)
     safety = source_visual_safety(row)
     assert not safety["location_readable"] and not safety["donor_eligible"]
-    with pytest.raises(ValueError):
-        ar.export_actual_review_package(tmp_path / "delivery", [row], **META)
-    assert not (tmp_path / "delivery" / "actual待判定_GPT包.zip").exists()
+    output = tmp_path / "delivery"
+    ar.export_actual_review_package(output, [row], **META)
+    xlsx = output / "actual待判定_GPT包" / "actual待判定_給GPT.xlsx"
+    _, rows = ar._load_sheet_rows(xlsx, "actual待判定")
+    assert rows[0]["decision"] == "UNRESOLVED" and not rows[0]["sample_a_image"]
+    assert not list((xlsx.parent / "images").glob("*.png"))
+    _edit_decision(xlsx, decision="VERIFIED", actual_reading="ㄅㄨˋ", confidence="高", sample_a_checked="Y")
+    with patch.object(ar, "apply_direct_visual_actual_batch") as apply:
+        with pytest.raises(ValueError):
+            ar.import_actual_review_workbook(tmp_path / "actual", xlsx, ar.build_actual_review_groups([row]),
+                                             expected_metadata=META, source_output_dir=output)
+        apply.assert_not_called()
 
 
 def test_exported_frame_fails_closed_on_changed_or_missing_source_before_import(tmp_path):

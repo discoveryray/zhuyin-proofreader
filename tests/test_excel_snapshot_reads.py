@@ -19,7 +19,7 @@ def workbook(path, *, note='=literal', profile=False):
     wb = Workbook(); wb.remove(wb.active)
     meta = wb.create_sheet('匯入中繼資料')
     append_text_row(meta, ['session_id', 'source-session'])
-    append_text_row(meta, ['actual_review_schema_version', '1.2' if profile else '1.1'])
+    append_text_row(meta, ['actual_review_schema_version', ar.ACTUAL_REVIEW_SCHEMA_VERSION if profile else '1.1'])
     sheet = wb.create_sheet('actual待判定')
     headers = ['group_id', 'group_snapshot', 'decision', 'actual_reading', 'confidence',
                'sample_a_checked', 'sample_b_checked', 'note', 'sample_a_occurrence_id',

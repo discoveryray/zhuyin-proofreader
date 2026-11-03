@@ -3,10 +3,10 @@ import queue
 import subprocess
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from review_context_display import pdf_sentence_at_target
-from review_gui import ReviewApp, review_context_text
+from review_gui import ReviewApp, SurfaceActualDialog, review_context_text
 from standalone_gui import App, child_window_options, fitted_launcher_geometry, review_child_worker
 
 
@@ -114,9 +114,17 @@ class UsageInterfaceTests(unittest.TestCase):
         self.assertEqual(changes["state"], "normal")
         self.assertEqual(changes["text"], "確認目前注音就是應標注音")
         self.assertEqual(changes["command"](), "r1")
-        for reason in ("SOURCE_ANNOTATION_INTERSECTION_UNPROVABLE",
-                       "SOURCE_PREFIX_BACKGROUND_UNPROVABLE",
+        entry.pop('manual_surface_actual')
+        for reason in ("SOURCE_PREFIX_BACKGROUND_UNPROVABLE", "SOURCE_COMPLETE_CONTRAST_UNPROVABLE",
                        "SOURCE_LATER_INK_INTERSECTION_UNPROVABLE"):
+            app.image.source_diagnostic["reason"] = reason
+            changes.clear()
+            with patch("review_gui.can_confirm_current_expected", return_value=True):
+                ReviewApp._preview_failed(app)
+            self.assertIsNone(app._rendered_review_id)
+            self.assertEqual(changes['command'], app.correct_actual)
+            self.assertEqual(changes['text'], '目視確認本位置注音')
+        for reason in ("SOURCE_ANNOTATION_INTERSECTION_UNPROVABLE", "SOURCE_SLOT_CONTRADICTION"):
             app.image.source_diagnostic["reason"] = reason
             changes.clear()
             with patch("review_gui.can_confirm_current_expected", return_value=True):
@@ -134,6 +142,32 @@ class UsageInterfaceTests(unittest.TestCase):
         self.assertEqual(summary["text"], "語境：請勾選已做到的愛家行動。\n目前注音：待核對")
         self.assertIsNone(app._rendered_review_id)
         self.assertNotIn("_display_context", entry)
+
+    def test_surface_button_uses_current_reading_and_explicit_conversion_consent(self):
+        values = dict(actual='ㄆ', expected='ㄇ')
+        dialog = SimpleNamespace(prepared={'warning':'舊版不支援回寫'},
+            reading=SimpleNamespace(get=lambda:values['actual']),
+            expected_reading=SimpleNamespace(get=lambda:values['expected']),
+            actor=SimpleNamespace(get=lambda:'human'), result=None, destroy=Mock())
+        def result(prepared, **kwargs):
+            return dict(kwargs,enable_format=True)
+        with patch('review_gui.surface_review_result',side_effect=result), patch(
+                'review_gui.messagebox.askyesno',return_value=False) as consent:
+            SurfaceActualDialog.submit_review(dialog,same=True)
+        self.assertIsNone(dialog.result)
+        dialog.destroy.assert_not_called()
+        self.assertIn('舊版不支援回寫',consent.call_args.args[1])
+        values['actual']='ㄈ'
+        with patch('review_gui.surface_review_result',side_effect=result), patch(
+                'review_gui.messagebox.askyesno',return_value=True):
+            SurfaceActualDialog.submit_review(dialog,same=True)
+        self.assertEqual(dialog.result['reading'],'ㄈ')
+        self.assertEqual(dialog.result['user_expected_reading'],'ㄈ')
+        with patch('review_gui.surface_review_result',side_effect=result), patch(
+                'review_gui.messagebox.askyesno',return_value=True):
+            SurfaceActualDialog.submit_review(dialog,same=False)
+        self.assertEqual(dialog.result['reading'],'ㄈ')
+        self.assertEqual(dialog.result['user_expected_reading'],'ㄇ')
 
 
 if __name__ == "__main__":

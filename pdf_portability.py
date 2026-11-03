@@ -1272,7 +1272,7 @@ def validate_actual_profile_content_proof(workbook, *, source_manifest=None):
         raise ValueError("actual GPT source content proof 根節點無效")
     metadata = ar._actual_profile_metadata(workbook)
     profile_mismatch = (payload.get("actual_profile_metadata") != metadata
-                        if metadata["actual_review_schema_version"] == "1.2" else
+                        if metadata["actual_review_schema_version"] in ar.ACTUAL_SAMPLE_PROFILE_VERSIONS else
                         "actual_profile_metadata" in payload and payload["actual_profile_metadata"] != metadata)
     if (not isinstance(payload, dict) or _canonical(payload) != raw
             or hashlib.sha256(raw).hexdigest() != rows[1][1]
@@ -1315,7 +1315,7 @@ def load_excel_content_proof(xlsx: Path, target_dir: Path, target_manifest, *,
         raise ValueError("Excel 跨電腦內容證據完整性或種類不符")
     source_manifest, source_db, proof = (payload.get(key) for key in ("manifest", "db", "proof"))
     if kind == "actual":
-        if actual_profile_metadata["actual_review_schema_version"] == "1.2":
+        if actual_profile_metadata["actual_review_schema_version"] in ar.ACTUAL_SAMPLE_PROFILE_VERSIONS:
             if payload.get("actual_profile_metadata") != actual_profile_metadata:
                 raise ValueError("actual GPT 1.2 metadata／portable proof mismatch")
         elif "actual_profile_metadata" in payload and payload["actual_profile_metadata"] != actual_profile_metadata:

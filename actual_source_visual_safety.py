@@ -1431,6 +1431,12 @@ def _surface_plain(value):
     raise ValueError('SURFACE_UNKNOWN_NATIVE_SUMMARY_TYPE')
 
 
+SURFACE_MANUAL_REVIEW_REASONS = frozenset({
+    'SOURCE_OVERPAINT_CONFIRMED', 'SOURCE_PREFIX_BACKGROUND_UNPROVABLE',
+    'SOURCE_COMPLETE_CONTRAST_UNPROVABLE', 'SOURCE_LATER_INK_INTERSECTION_UNPROVABLE',
+})
+
+
 def surface_visual_proof(entry, *, pdf, session_id):
     """Bind a final unit for explicit human reading, without qualifying a donor.
 
@@ -1442,9 +1448,8 @@ def surface_visual_proof(entry, *, pdf, session_id):
         raise ValueError('SURFACE_SESSION_MISSING')
     with source_visual_operation() as operation:
         raw_safety = _source_visual_safety(operation, entry, pdf=pdf)
-        if raw_safety['reason'] not in {
-                'SOURCE_OVERPAINT_CONFIRMED', 'SOURCE_DRAW_UNCONTRADICTED',
-                'SOURCE_LOCATION_ONLY_NO_EXACT_PROOF'}:
+        if raw_safety['reason'] not in SURFACE_MANUAL_REVIEW_REASONS | {
+                'SOURCE_DRAW_UNCONTRADICTED', 'SOURCE_LOCATION_ONLY_NO_EXACT_PROOF'}:
             raise ValueError('SURFACE_SOURCE_REFUSED: ' + raw_safety['reason'])
         values, source = _tuple(entry)
         raw = operation.read_source(pdf, values['pdf_sha256'])

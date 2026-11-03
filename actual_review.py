@@ -23,7 +23,7 @@ import fitz
 from excel_text import append_text_row
 from openpyxl import Workbook, load_workbook
 from pdf_portability import _memoized_excel_read, _read_excel_workbook
-from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.styles import Alignment, Font, PatternFill, Protection
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.datavalidation import DataValidation
 
@@ -60,8 +60,15 @@ from global_glyph_promotion import (
     project_delivery_lock,
 )
 
-ACTUAL_REVIEW_SCHEMA_VERSION = "1.2"
-ACTUAL_SAMPLE_PROFILE_SCHEMA = "actual-gpt-sample-profile/1"
+ACTUAL_REVIEW_SCHEMA_VERSION = "1.3"
+ACTUAL_SAMPLE_PROFILE_SCHEMA = "actual-gpt-sample-profile/2"
+ACTUAL_SAMPLE_PROFILE_VERSIONS = {"1.2": "actual-gpt-sample-profile/1", "1.3": ACTUAL_SAMPLE_PROFILE_SCHEMA}
+# Finite location-bound visual uncertainties, never missing/stale/unknown sources.
+ACTUAL_UNREADABLE_REASONS = frozenset({
+    "SOURCE_PREFIX_BACKGROUND_UNPROVABLE", "SOURCE_COMPLETE_CONTRAST_UNPROVABLE",
+    "SOURCE_LATER_INK_INTERSECTION_UNPROVABLE", "SOURCE_OVERPAINT_CONFIRMED",
+    "SOURCE_ANNOTATION_INTERSECTION_UNPROVABLE", "SOURCE_FULLY_OCCLUDED",
+})
 ACTUAL_SAMPLE_PROFILE_SHEET = "actual圖證契約"
 ACTUAL_SAMPLE_PROFILE_META = ("actual_sample_profile_schema", "actual_sample_profile_sha256",
                               "actual_sample_profile_sheet")
@@ -1864,9 +1871,9 @@ def _actual_sample_location(entry: Mapping[str, Any], output_dir: Path | None = 
                                *, pdf_resolver=None) -> tuple:
     """Classify source drawings, never editable workbook declarations.
 
-    Only the two audited clipped bindings may be unavailable. Ordinary source
-    boxes must still be finite and have area; zero-width CFF draws use their
-    existing exact geometry proof. PDF relocation is always SHA verified.
+    The two audited clipped bindings and finite, location-bound visibility
+    failures remain listed without evidence images. Identity/source failures
+    still reject; zero-width CFF draws retain their exact geometry proof.
     """
     location = None
     from actual_render_geometry import source_clipped_candidate, source_drawing_clipped
@@ -1877,6 +1884,14 @@ def _actual_sample_location(entry: Mapping[str, Any], output_dir: Path | None = 
     bounds = tuple(float(entry[k]) for k in ("x0", "y0", "x1", "y1"))
     if not all(math.isfinite(v) for v in bounds) or min(bounds) < 0:
         raise ValueError("未知來源 drawing 定位不足；不能宣告 READABLE")
+    from actual_source_visual_safety import source_visual_safety
+    safety = (source_visual_safety(entry, pdf=pdf_resolver(entry)) if pdf_resolver
+              else actual_visual_source_safety(entry, output_dir))
+    if not safety["location_readable"]:
+        reason = safety["reason"]
+        if reason not in ACTUAL_UNREADABLE_REASONS:
+            raise ValueError("actual source visual target 無法證明：" + reason)
+        return reason, None
     if bounds[2] <= bounds[0] or bounds[3] <= bounds[1]:
         if pdf_resolver:
             from actual_render_geometry import exact_vertical_cff_location
@@ -1894,15 +1909,6 @@ def _actual_sample_location(entry: Mapping[str, Any], output_dir: Path | None = 
             location = _confirmed_render_location(relocated)
     else:
         location = _confirmed_render_location(entry, output_dir)
-    if location is not None:
-        require_actual_visual_target(entry, output_dir)
-    elif pdf_resolver:
-        from actual_source_visual_safety import source_visual_safety
-        safety = source_visual_safety(entry, pdf=pdf_resolver(entry))
-        if not safety["location_readable"]:
-            raise ValueError("actual mapped source visual target 無法證明：" + safety["reason"])
-    else:
-        require_actual_visual_target(entry, output_dir)
     return "READABLE", location
 
 
@@ -1923,10 +1929,27 @@ def _sample_source_profile(entry, availability):
     return {"source": {key: entry.get(key) for key in keys},
             "source_record": {key: source.get(key) for key in source_keys},
             "availability": availability,
-            "reason": "SOURCE_DRAWING_CLIPPED_v1" if availability == "SOURCE_DRAWING_CLIPPED" else ""}
+            "reason": _availability_reason(availability)}
 
 
-def _actual_profile(groups, output_dir=None, *, statuses=None, pdf_resolver=None):
+def _availability_reason(availability):
+    if availability == "READABLE":
+        return ""
+    if availability == "SOURCE_DRAWING_CLIPPED":
+        return "SOURCE_DRAWING_CLIPPED_v1"
+    if availability in ACTUAL_UNREADABLE_REASONS:
+        return availability
+    raise ValueError("actual GPT unknown availability")
+
+
+def _group_availability_reason(samples):
+    reasons = [f"{label.upper()}:{sample['reason']}" for label, sample in samples.items() if sample["reason"]]
+    if len(samples) == 1 and samples["a"]["availability"] == "SOURCE_DRAWING_CLIPPED":
+        return "SOURCE_DRAWING_CLIPPED_v1"
+    return " | ".join(reasons)
+
+
+def _actual_profile(groups, output_dir=None, *, statuses=None, pdf_resolver=None, schema=ACTUAL_SAMPLE_PROFILE_SCHEMA):
     rows = []
     for group in groups:
         samples = {}
@@ -1939,7 +1962,7 @@ def _actual_profile(groups, output_dir=None, *, statuses=None, pdf_resolver=None
                 raise ValueError("SOURCE_DRAWING_CLIPPED_v1 只支持已審計 singleton A")
         rows.append({"group_id": group["group_id"], "group_snapshot": group["group_snapshot"],
                      "samples": samples})
-    return {"schema": ACTUAL_SAMPLE_PROFILE_SCHEMA, "groups": rows}
+    return {"schema": schema, "groups": rows}
 
 
 def _profile_bytes(profile):
@@ -1953,14 +1976,14 @@ def _write_actual_sample_profile(workbook, profile):
     chunks = [text[i:i + 30000] for i in range(0, len(text), 30000)]
     digest = hashlib.sha256(raw).hexdigest()
     sheet = workbook.create_sheet(ACTUAL_SAMPLE_PROFILE_SHEET)
-    append_text_row(sheet, ["schema", ACTUAL_SAMPLE_PROFILE_SCHEMA])
+    append_text_row(sheet, ["schema", profile["schema"]])
     append_text_row(sheet, ["sha256", digest])
     append_text_row(sheet, ["chunk_count", len(chunks)])
     for index, chunk in enumerate(chunks, 1):
         append_text_row(sheet, [index, chunk])
     sheet.sheet_state = "veryHidden"
     for key, value in zip(ACTUAL_SAMPLE_PROFILE_META,
-                          (ACTUAL_SAMPLE_PROFILE_SCHEMA, digest, ACTUAL_SAMPLE_PROFILE_SHEET)):
+                          (profile["schema"], digest, ACTUAL_SAMPLE_PROFILE_SHEET)):
         append_text_row(workbook["匯入中繼資料"], [key, value])
 
 
@@ -1991,14 +2014,15 @@ def _load_actual_sample_profile(workbook):
         if not required <= set(headers):
             raise ValueError("historical_complete_samples_v1_1 欄位不足")
         return None
-    if version != ACTUAL_REVIEW_SCHEMA_VERSION:
+    if version not in ACTUAL_SAMPLE_PROFILE_VERSIONS:
         raise ValueError("actual GPT unknown actual_review_schema_version")
-    if (metadata["actual_sample_profile_schema"] != ACTUAL_SAMPLE_PROFILE_SCHEMA
+    schema = ACTUAL_SAMPLE_PROFILE_VERSIONS[version]
+    if (metadata["actual_sample_profile_schema"] != schema
             or metadata["actual_sample_profile_sheet"] != ACTUAL_SAMPLE_PROFILE_SHEET
             or ACTUAL_SAMPLE_PROFILE_SHEET not in workbook.sheetnames or not flags <= set(headers)):
         raise ValueError("actual GPT 1.2 profile／flags 缺失或未知")
     rows = list(workbook[ACTUAL_SAMPLE_PROFILE_SHEET].values)
-    if (len(rows) < 4 or rows[0][:2] != ("schema", ACTUAL_SAMPLE_PROFILE_SCHEMA)
+    if (len(rows) < 4 or rows[0][:2] != ("schema", schema)
             or rows[1][0] != "sha256" or rows[2][0] != "chunk_count"
             or type(rows[2][1]) is not int or rows[2][1] < 1
             or len(rows) != rows[2][1] + 3
@@ -2015,7 +2039,7 @@ def _load_actual_sample_profile(workbook):
         return result
     profile = json.loads(raw, object_pairs_hook=unique)
     if (not isinstance(profile, dict) or set(profile) != {"schema", "groups"}
-            or profile["schema"] != ACTUAL_SAMPLE_PROFILE_SCHEMA or not isinstance(profile["groups"], list)
+            or profile["schema"] != schema or not isinstance(profile["groups"], list)
             or _profile_bytes(profile) != raw
             or hashlib.sha256(raw).hexdigest() != rows[1][1]
             or rows[1][1] != metadata["actual_sample_profile_sha256"]):
@@ -2034,8 +2058,8 @@ def _load_actual_sample_profile(workbook):
             if (not isinstance(sample, dict) or set(sample) != {"source", "source_record", "availability", "reason"}
                     or not isinstance(sample["source"], dict) or set(sample["source"]) != source_keys
                     or not isinstance(sample["source_record"], dict) or set(sample["source_record"]) != record_keys
-                    or sample["availability"] not in {"READABLE", "SOURCE_DRAWING_CLIPPED"}
-                    or sample["reason"] != ("SOURCE_DRAWING_CLIPPED_v1" if sample["availability"] == "SOURCE_DRAWING_CLIPPED" else "")):
+                    or sample["availability"] not in ({"READABLE", "SOURCE_DRAWING_CLIPPED"} | (ACTUAL_UNREADABLE_REASONS if version == "1.3" else set()))
+                    or sample["reason"] != _availability_reason(sample["availability"])):
                 raise ValueError("actual GPT profile unknown／missing source field or availability")
     return profile
 
@@ -2044,7 +2068,7 @@ def _load_actual_sample_profile(workbook):
 def load_actual_sample_profile(xlsx: Path):
     """Read and structurally verify the carried profile; source guard is separate.
 
-    Returns a profile dict for 1.2, None for the explicitly named 1.1 adapter.
+    Returns a profile for explicit 1.2/1.3, None for the named 1.1 adapter.
     A self-sealed digest alone does not authenticate current source evidence.
     """
     with _read_excel_workbook(xlsx, data_only=True) as workbook:
@@ -2081,7 +2105,8 @@ def validate_actual_sample_profile(xlsx: Path, groups, output_dir=None, *, pdf_r
         if len(members) == 1 and _text(row.get("sample_b_occurrence_id")):
             raise ValueError("actual GPT source 多出 sample B")
         selected.append(group)
-    expected = _actual_profile(selected, output_dir, pdf_resolver=pdf_resolver)
+    expected = _actual_profile(selected, output_dir, pdf_resolver=pdf_resolver,
+                               schema=carried["schema"] if carried else ACTUAL_SAMPLE_PROFILE_SCHEMA)
     if carried is not None and seen != set(by_id):
         raise ValueError("actual GPT 1.2 selected plan 缺少來源 group／sample")
     if carried is not None and carried != expected:
@@ -2090,20 +2115,23 @@ def validate_actual_sample_profile(xlsx: Path, groups, output_dir=None, *, pdf_r
         if "b" not in group_profile["samples"] and any(_text(row.get(f"sample_b_{key}"))
                 for key in ("availability", "image")):
             raise ValueError("actual GPT singleton 多出 B flag／image")
-        for label, sample in group_profile["samples"].items():
+        samples = group_profile["samples"]
+        blocked = any(sample["availability"] != "READABLE" for sample in samples.values())
+        if carried is not None and _text(row.get("source_availability_reason")) != _group_availability_reason(samples):
+            raise ValueError("actual GPT source availability reason 不符")
+        if blocked and (row.get("decision") != "UNRESOLVED" or _text(row.get("actual_reading"))
+                        or _text(row.get("confidence"))
+                        or any(row.get(f"sample_{label}_checked") != "N" for label in samples)):
+            raise ValueError("不可判定組（含 SOURCE_DRAWING_CLIPPED）不允許 visual decision／reading／Y")
+        for label, sample in samples.items():
             status = sample["availability"]
             if carried is None:
                 if status != "READABLE" or not _text(row.get(f"sample_{label}_image")):
                     raise ValueError("historical_complete_samples_v1_1 不允許 clipped／缺圖樣本")
-            elif (row.get(f"sample_{label}_availability") != status
-                  or _text(row.get("source_availability_reason")) != sample["reason"]):
+            elif row.get(f"sample_{label}_availability") != status:
                 raise ValueError("actual GPT source availability flags 不符")
-            if status == "SOURCE_DRAWING_CLIPPED":
-                if (row.get("decision") != "UNRESOLVED" or _text(row.get("actual_reading"))
-                        or _text(row.get("confidence")) or row.get(f"sample_{label}_checked") != "N"
-                        or _text(row.get(f"sample_{label}_image"))
-                        or _text(row.get("sample_b_checked")).upper() == "Y"):
-                    raise ValueError("SOURCE_DRAWING_CLIPPED 不允許 visual decision／reading／Y／image")
+            if status != "READABLE" and _text(row.get(f"sample_{label}_image")):
+                raise ValueError("不可判定樣本（含 SOURCE_DRAWING_CLIPPED）不允許 evidence image")
     return expected
 
 
@@ -2127,7 +2155,7 @@ def export_actual_review_package(
         for label, entry in zip(("A", "B"), group["members"][:2]):
             try:
                 availability, location = _actual_sample_location(entry, output_dir)
-                selected.append((label.lower(), entry, location))
+                selected.append((label.lower(), entry, location, availability))
             except Exception as exc:
                 errors.append(json.dumps({
                     "group_id": group["group_id"], "sample": label,
@@ -2193,7 +2221,7 @@ def _validate_actual_review_package(package_dir: Path, archive: Path, groups: Se
         ):
             raise ValueError("actual GPT 暫存工作簿選取或識別不符")
         for label, member in zip(("a", "b"), members[:2]):
-            if statuses[(group["group_id"], label)] == "SOURCE_DRAWING_CLIPPED":
+            if statuses[(group["group_id"], label)] != "READABLE":
                 if (row.get(f"sample_{label}_image") or row.get("decision") != "UNRESOLVED"
                         or row.get("actual_reading") or row.get("confidence")
                         or row.get(f"sample_{label}_checked") != "N"):
@@ -2266,15 +2294,15 @@ def _write_actual_review_package(
     images_dir = package_dir / "images"
     images_dir.mkdir(parents=True, exist_ok=True)
 
-    statuses = {(group["group_id"], label): "READABLE" if location is not None else "SOURCE_DRAWING_CLIPPED"
-                for group, selected in zip(groups, plan) for label, entry, location in selected}
+    statuses = {(group["group_id"], label): availability
+                for group, selected in zip(groups, plan) for label, entry, location, availability in selected}
     profile = _actual_profile(groups, statuses=statuses)
     readable_count = sum(value == "READABLE" for value in statuses.values())
     blocked_count = len(statuses) - readable_count
     (package_dir / "README.txt").write_text(
-        f"actual GPT 1.2：{len(groups)} groups／{len(statuses)} selected samples。\n"
-        f"{readable_count} 可判定樣本／{blocked_count} SOURCE_DRAWING_CLIPPED 不可判定樣本。\n"
-        "不可判定列保留原 occurrence ID／bbox／group snapshot，無圖片，保持 UNRESOLVED、空 reading/confidence、N。\n"
+        f"actual GPT 1.3：{len(groups)} groups／{len(statuses)} selected samples。\n"
+        f"{readable_count} 可判定樣本／{blocked_count} 不可判定樣本。\n"
+        "不可判定樣本保留原 occurrence ID／bbox／group snapshot，無圖片；含不可判定樣本的整組鎖定 UNRESOLVED、空 reading/confidence、全部 N。\n"
         "不得用 expected、字典、其他同字或解除原頁 clip 代替原頁可見注音。\n", encoding="utf-8")
 
     wb = Workbook()
@@ -2282,6 +2310,7 @@ def _write_actual_review_package(
     guide.title = "使用說明"
     instructions = [
         ("用途", "只判定 PDF 原頁實際可見注音 actual；不得使用 expected、字典、中文字讀音常識反推。"),
+        ("不可判定組", "任何樣本不可判定時整組鎖定，不得核准、匯入有效判定或用作字型學習；請回原程式逐筆目視處理。"),
         ("判定方式", "先看 annotation-only 圖直接讀注音；同組有2筆以上時，VERIFIED 必須同時查看樣本B。兩張不一致就填 UNRESOLVED。whole-glyph 圖僅用於確認裁切位置，不得用中文字讀音反推。"),
         ("聲調", "輕聲點、二三四聲都必須直接從圖片確認。聲調前後位置可等價輸入，程式會 canonicalize。"),
         ("匯入安全", "匯入採交易驗證；group/session/snapshot 不一致、非法注音、未勾樣本等任何錯誤會整批拒絕。"),
@@ -2325,7 +2354,9 @@ def _write_actual_review_package(
         a = members[0]
         b = members[1] if len(members) > 1 else None
         image_names = ["", ""]
-        for sample_index, (label, entry, location) in enumerate(selected):
+        samples = profile["groups"][index - 1]["samples"]
+        blocked = any(sample["availability"] != "READABLE" for sample in samples.values())
+        for sample_index, (label, entry, location, availability) in enumerate(selected):
             if location is None:
                 continue
             annotation = images_dir / f"{group['group_id']}_{label}_annotation.png"
@@ -2339,10 +2370,10 @@ def _write_actual_review_package(
             a.get("pdf_name", ""), a.get("printed_page", ""),
             b.get("pdf_name", "") if b else "", b.get("printed_page", "") if b else "",
             a.get("actual", "") or "", a.get("actual_evidence", "") or "",
-            "UNRESOLVED" if statuses[(group["group_id"], "a")] == "SOURCE_DRAWING_CLIPPED" else "",
-            "", "", "N" if statuses[(group["group_id"], "a")] == "SOURCE_DRAWING_CLIPPED" else "", "", "",
+            "UNRESOLVED" if blocked else "",
+            "", "", "N" if blocked else "", "N" if blocked and b else "", "",
             statuses[(group["group_id"], "a")], statuses[(group["group_id"], "b")] if b else "",
-            "SOURCE_DRAWING_CLIPPED_v1" if statuses[(group["group_id"], "a")] == "SOURCE_DRAWING_CLIPPED" else "",
+            _group_availability_reason(samples),
         ])
 
     decision_col = headers.index("decision") + 1
@@ -2366,6 +2397,15 @@ def _write_actual_review_package(
         ws.column_dimensions[get_column_letter(headers.index(col_name) + 1)].hidden = True
     for sheet in wb.worksheets:
         _style_sheet(sheet)
+    # Worksheet protection is only a usability lock; import independently
+    # recomputes all source/profile facts and rejects forged blocked decisions.
+    editable = {"decision", "actual_reading", "confidence", "sample_a_checked", "sample_b_checked", "note"}
+    for row_index, group_profile in enumerate(profile["groups"], 2):
+        blocked = any(sample["availability"] != "READABLE" for sample in group_profile["samples"].values())
+        for column, name in enumerate(headers, 1):
+            ws.cell(row_index, column).protection = Protection(locked=blocked or name not in editable)
+    ws.protection.sheet = True
+    ws.protection.autoFilter = False
     if portable_source is not None:
         from pdf_portability import write_excel_content_proof
         manifest, db = portable_source

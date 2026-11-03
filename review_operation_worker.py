@@ -52,6 +52,10 @@ _PAYLOAD_FIELDS = {
                                "reading_from_original", "enable_format", "expected_manifest", "expected_db"},
                               {"review_id", "reading", "proof", "actor", "whole_unit_readable", "target_character_matches",
                                "reading_from_original", "enable_format", "expected_manifest", "expected_db"}),
+    "save_surface_review": ({"review_id", "reading", "proof", "actor", "whole_unit_readable", "target_character_matches",
+                              "reading_from_original", "enable_format", "expected_manifest", "expected_db", "user_expected_reading"},
+                             {"review_id", "reading", "proof", "actor", "whole_unit_readable", "target_character_matches",
+                              "reading_from_original", "enable_format", "expected_manifest", "expected_db", "user_expected_reading"}),
     "stage_actual": ({"review_id", "reading", "checked_occurrence_ids", "expected_manifest", "expected_db"},
                      {"review_id", "reading", "checked_occurrence_ids", "note", "expected_manifest", "expected_db"}),
     "stage_surface": ({"review_id", "reading", "proof", "actor", "whole_unit_readable", "target_character_matches",
@@ -85,7 +89,7 @@ def validate_payload(operation, payload):
             return
         raise ValueError("review payload must contain only plain data")
     pure(payload)
-    for key in ("review_id", "reading", "note", "snapshot_key", "group_id", "plan_token", "operation_id"):
+    for key in ("review_id", "reading", "user_expected_reading", "note", "snapshot_key", "group_id", "plan_token", "operation_id"):
         if key in payload and type(payload[key]) is not str:
             raise ValueError("review payload string field invalid")
     for key in ("expected_manifest", "expected_db"):
@@ -180,6 +184,8 @@ class ReviewOperationState:
                 raise
         if operation == "save_learning_surface":
             return self._surface_learning(payload, progress)
+        if operation == "save_surface_review":
+            return self._surface_review(payload, progress)
         if operation in {"reload", "actual_summary", "prepare_actual", "stage_actual", "stage_surface", "report", "apply_actual"}:
             expected = {key: payload[key] for key in ("expected_manifest", "expected_db")
                         if key in payload}
@@ -385,6 +391,54 @@ class ReviewOperationState:
         if not safety["location_readable"] or entry.get("manual_surface_actual") is not None:
             surface = sp.prepare_surface_actual_correction(self.output_dir, entry["review_id"])
         return dict(group=group, entry=entry, surface=surface)
+
+    def _surface_review(self, payload, progress):
+        """Two explicit human intents; two durable steps with a truthful boundary.
+
+        Expected input is validated before the surface write and never supplied
+        to the actual lane. A failed second step leaves the first recoverable.
+        """
+        import standalone_proofread as sp
+        import manual_surface_actual as surface
+        # Reject invalid first input before the resume service's lock boundary,
+        # just as the existing stage_surface and learning-surface paths do.
+        surface.record_for(payload['proof'],payload['reading'],actor=payload['actor'],
+            **{key:payload[key] for key in ('whole_unit_readable','target_character_matches','reading_from_original')})
+        if not sp.canonical_bopomofo(payload['user_expected_reading']):
+            raise ValueError('人工應標必須是合法注音')
+        prepared = sp.prepare_surface_actual_correction(self.output_dir,payload['review_id'])
+        if prepared['proof'] != payload['proof']:
+            raise ReviewOperationError('原頁已變更；未保存',commit_state='NOT_WRITTEN')
+        if prepared['requires_format_conversion'] and payload['enable_format'] is not True:
+            raise ReviewOperationError('未確認既有專案格式轉換',commit_state='NOT_WRITTEN')
+        expected = {key: payload[key] for key in ("expected_manifest", "expected_db")}
+        snapshot = self.service.load_resume_snapshot(**expected)
+        entry = next(row for row in snapshot.ledger if row["review_id"] == payload["review_id"])
+        event = sp.build_manual_expected_event(entry, operation="ENTER_EXPECTED",
+            expected_set=payload["user_expected_reading"], rationale="人工目視原頁後明確選定本位置應標注音")
+        previous = copy.deepcopy(snapshot.db.get("events", {}).get(entry["review_id"]))
+        if previous is not None:
+            previous.pop("undo_previous_event", None)
+        event["undo_previous_event"] = previous
+        local = self._surface_learning({key: value for key, value in payload.items()
+                                        if key != "user_expected_reading"}, progress)
+        try:
+            if local.get("snapshot") is None:
+                raise ValueError(local.get("reload_error") or "本位置 actual 已保存，尚未重新載入")
+            fresh = local["snapshot"]
+            if fresh.db != snapshot.db:
+                raise ValueError('人工判定資料庫已由其他操作變更；保留新判定，不覆寫')
+            progress("本位置實際注音已保存；正在另存人工應標判定")
+            self.service.save_event(entry["review_id"], event,
+                expected_manifest=fresh.manifest, expected_db=fresh.db, progress=progress)
+            final = self.remember(self.service.load_resume_snapshot())
+            return dict(snapshot=final, summary=self.service.validate_resume_staging(final),
+                        review_view=self.service._conflicts.review_view(final.db, final.ledger),
+                        result=dict(local_status="SAVED", global_status="LOCAL_ONLY", status="SURFACE_REVIEW_SAVED"))
+        except Exception as exc:
+            raise ReviewOperationError("本位置實際注音已保存；應標判定保存或更新尚未完成。"
+                "請重新載入核對已保存結果，再接續應標判定：" + str(exc),
+                commit_state="SURFACE_SAVED_EXPECTED_PENDING") from exc
 
     def _surface_learning(self, payload, progress):
         """Apply only the viewed surface occurrence, through the existing path."""
