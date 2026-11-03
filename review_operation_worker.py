@@ -20,6 +20,8 @@ import zlib
 import uuid
 from pathlib import Path, WindowsPath, PosixPath
 
+from review_process_context import review_spawn_context
+
 
 class ReviewOperationError(RuntimeError):
     def __init__(self, message, *, commit_state="UNKNOWN"):
@@ -534,7 +536,7 @@ class ReviewProcessService:
         self._process = None
         self._closed = False
         self._invalidate_pending = False
-        self._context = multiprocessing.get_context("spawn")
+        self._context = review_spawn_context()
         self._cancel_signal = self._context.Event()
 
     def _start(self):
@@ -743,7 +745,7 @@ def validate_preview_png(value):
 class PreviewJob:
     def __init__(self, payload):
         payload = self._payload(payload)
-        context = multiprocessing.get_context("spawn")
+        context = review_spawn_context()
         self.connection, child = context.Pipe()
         self.process = context.Process(target=_preview_child, args=(child, payload), daemon=True)
         try:

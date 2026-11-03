@@ -132,6 +132,10 @@
       "role": "runtime_module"
     },
     {
+      "path": "review_process_context.py",
+      "role": "runtime_module"
+    },
+    {
       "path": "review_save_service.py",
       "role": "runtime_module"
     },
@@ -314,6 +318,10 @@
     },
     {
       "path": "docs/USER_GUIDE.md",
+      "role": "document"
+    },
+    {
+      "path": "docs/licenses/CPython-3.13.0-LICENSE.txt",
       "role": "document"
     },
     {
