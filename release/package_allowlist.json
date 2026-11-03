@@ -12,6 +12,10 @@
       "role": "runtime_module"
     },
     {
+      "path": "actual_source_visual_safety.py",
+      "role": "runtime_module"
+    },
+    {
       "path": "cff_unseen_family_bootstrap.py",
       "role": "runtime_module"
     },
@@ -117,6 +121,10 @@
     },
     {
       "path": "pronunciation_rule_engine.py",
+      "role": "runtime_module"
+    },
+    {
+      "path": "review_context_display.py",
       "role": "runtime_module"
     },
     {
