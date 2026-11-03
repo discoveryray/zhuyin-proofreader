@@ -47,7 +47,7 @@ from standalone_proofread import (
     validate_output_artifact_hashes,
 )
 from actual_review import build_actual_group_for_entry
-from review_display import ActionRows, OccurrencePreview, WrappedLabel, scroll_canvas, scrollable_entry, wrap_checkbutton
+from review_display import ActionRows, OccurrencePreview, SelectableText, WrappedLabel, scroll_canvas, scrollable_entry, wrap_checkbutton
 from review_save_service import ReviewSaveService
 from review_operation_worker import ReviewProcessService, ReviewOperationError
 
@@ -64,6 +64,23 @@ STATE_HELP = {
     "SOURCE_INVALID": "校對資料來源檢查失敗，需先修復資料。",
     "DATA_INTEGRITY_ERROR": "工作資料完整性異常，需先修復資料。",
 }
+
+
+def review_context_text(entry):
+    """Present both stored context fields in one place without changing evidence."""
+    display = entry.get("_display_context")
+    if isinstance(display, str) and display.strip() and str(entry.get("char") or "") in display:
+        return display.strip()
+    source = entry.get("source_record") or {}
+    phrase = str(source.get("局部詞境") or entry.get("context_evidence") or "").strip()
+    sentence = str(source.get("所在行") or "").strip()
+    if not sentence:
+        return phrase
+    if not phrase or phrase in sentence:
+        return sentence
+    if sentence in phrase:
+        return phrase
+    return f"{sentence}（局部：{phrase}）"
 
 
 def screen_safe_window_size(screen_width: int, screen_height: int, desired_width: int, desired_height: int) -> tuple[int, int]:
@@ -415,9 +432,7 @@ class ExpectedDialog(_ReviewDialog):
 
         body, self.body_canvas = create_scrollable_body(self)
 
-        source = entry.get("source_record") or {}
-        phrase = str(source.get("局部詞境") or entry.get("context_evidence") or "").strip()
-        sentence = str(source.get("所在行") or "").strip()
+        context = review_context_text(entry)
 
         intro = tk.Frame(body)
         intro.pack(fill="x", padx=16, pady=(14, 8))
@@ -432,11 +447,10 @@ class ExpectedDialog(_ReviewDialog):
         summary.pack(fill="x", padx=16, pady=6)
         text = (
             f"課本頁：{entry.get('printed_page', '')}　目標字：{entry.get('char', '')}\n"
-            f"詞語／局部詞境：{phrase}\n"
-            f"所在句：{sentence}\n"
+            f"語境：{context}\n"
             f"課本目前注音：{entry.get('actual', '')}"
         )
-        WrappedLabel(summary, text=text, justify="left", anchor="w", wraplength=660).pack(fill="x", padx=10, pady=8)
+        SelectableText(summary, text=text, height=5).pack(fill="x", padx=10, pady=8)
         if entry.get("expected_business_conflict_pending") is True:
             WrappedLabel(summary, text="兩份證據均已保存，原目標判定仍保留。請依本位置獨立裁決：\n"
                          + expected_conflict_summary(entry), justify="left", anchor="w",
@@ -446,7 +460,7 @@ class ExpectedDialog(_ReviewDialog):
         form.pack(fill="x", padx=16, pady=4)
         self.expected = tk.StringVar(master=self)
         self.evidence = tk.StringVar(master=self)
-        default_context = f"完整詞／局部詞境：{phrase}；所在句：{sentence}；目標字：{entry.get('char', '')}"
+        default_context = f"語境：{context}；目標字：{entry.get('char', '')}"
         self.context = tk.StringVar(master=self, value=default_context)
         self.reason = tk.StringVar(master=self)
         labels = [
@@ -1496,7 +1510,7 @@ class ReviewApp:
 
         self.summary = tk.LabelFrame(body, text="這一筆要確認什麼")
         self.summary.pack(fill="x", padx=12, pady=5)
-        self.summary_text = WrappedLabel(self.summary, text="", justify="left", anchor="w", wraplength=1120, font=("Microsoft JhengHei", 11))
+        self.summary_text = SelectableText(self.summary, text="", height=7, font=("Microsoft JhengHei", 11))
         self.summary_text.pack(fill="x", padx=10, pady=8)
 
         self.image = OccurrencePreview(body, on_locate=self.body_canvas.reveal, on_failure=self._preview_failed,
@@ -1506,7 +1520,7 @@ class ReviewApp:
         self.image.pack(fill="both", expand=True, padx=12, pady=6)
 
         self.tech_frame = tk.LabelFrame(body, text="技術資訊")
-        self.tech_text = tk.Text(self.tech_frame, height=8, wrap="word", font=("Consolas", 9))
+        self.tech_text = SelectableText(self.tech_frame, text="", height=8, font=("Consolas", 9))
         self.tech_text.pack(fill="x", padx=8, pady=6)
 
         decision_actions = ActionRows(actions)
@@ -2476,7 +2490,10 @@ class ReviewApp:
                 or (review_lane(entry) not in {"expected", "other"}
                     and not valid_manual_expected_decision(entry))):
             return
-        dialog = ExpectedDialog(self.root, entry, "輸入其他應標注音")
+        display_entry = dict(entry)
+        if getattr(self, "_display_context_review_id", None) == entry.get("review_id"):
+            display_entry["_display_context"] = self._display_context
+        dialog = ExpectedDialog(self.root, display_entry, "輸入其他應標注音")
         if not dialog.result:
             return
         try:
@@ -3063,16 +3080,17 @@ class ReviewApp:
             self.summary_text.config(text=detail)
             self._rendered_review_id = None
             self.image.clear()
-            self.tech_text.delete("1.0", "end")
+            self.tech_text.configure(text="")
             self.primary.config(text=primary_text, state="disabled")
             if hasattr(self, "decision_actions"):
                 self.decision_actions.set_items([self.primary, self.later, self.more_button])
             return
 
-        source = entry.get("source_record") or {}
+        self._display_context_review_id = None
+        self._display_context = None
         state = str(entry.get("state") or "")
-        phrase = str(source.get("局部詞境") or entry.get("context_evidence") or "").strip()
-        sentence = str(source.get("所在行") or phrase).strip()
+        context = review_context_text(entry)
+        self._summary_context = context
         expected_text = " | ".join(entry.get("expected_set") or []) or "尚未確定"
         lane = review_lane(entry)
         if lane == "actual":
@@ -3097,8 +3115,7 @@ class ReviewApp:
         staged_line = "\nactual 狀態：已暫存人工核對結果，等待批次套用；上方目前注音是套用前的正式結果，應標仍須依語境獨立判定。" if is_staged else ""
         summary = (
             f"課本頁：{entry.get('printed_page', '')}　　目標字：{entry.get('char', '')}　　本組此字剩餘 {group_count} 筆（含本筆，不含稍後處理）\n"
-            f"詞語／局部詞境：{phrase}\n"
-            f"所在句：{sentence}\n"
+            f"語境：{context}\n"
             f"課本目前注音：{entry.get('actual', '') or '尚未辨識'}　　應標注音：{expected_text}\n"
             f"原因：{help_text}{staged_line}"
         )
@@ -3115,8 +3132,7 @@ class ReviewApp:
             f"context evidence: {entry.get('context_evidence', '')}",
             f"source view: {entry.get('source_view', '')}",
         ]
-        self.tech_text.delete("1.0", "end")
-        self.tech_text.insert("1.0", "\n".join(tech_lines))
+        self.tech_text.configure(text="\n".join(tech_lines))
         self.configure_actions(entry)
         self.render(entry)
 
@@ -3142,6 +3158,15 @@ class ReviewApp:
         entry = self.current()
         if (entry and preview is self.image and preview._entry == entry and preview.photo is not None
                 and preview.target is not None and not self._save_busy()):
+            display = getattr(preview, "display_context", None)
+            if (isinstance(display, str) and str(entry.get("char") or "") in display
+                    and display != getattr(self, "_summary_context", None)):
+                self._display_context_review_id = entry.get("review_id")
+                self._display_context = display
+                old = f"語境：{self._summary_context}\n"
+                new = f"語境：{display}\n"
+                self.summary_text.configure(text=self.summary_text.get("1.0", "end-1c").replace(old, new, 1))
+                self._summary_context = display
             self._rendered_review_id = entry.get("review_id")
             if entry.get("state") == "DIFFERENCE_PENDING_CONFIRMATION":
                 self.primary.config(state="normal")
@@ -3155,6 +3180,39 @@ class ReviewApp:
             self.primary.config(state="disabled")
         if entry and can_confirm_current_expected(entry):
             getattr(self, "_confirm_current_expected_button", self.primary).config(state="disabled")
+        diagnostic = getattr(self.image, "source_diagnostic", None)
+        display = getattr(self.image, "display_context", None)
+        if (entry and getattr(self.image, "_entry", None) == entry
+                and getattr(self.image, "photo", None) is not None
+                and isinstance(display, str) and str(entry.get("char") or "") in display
+                and display != getattr(self, "_summary_context", None)):
+            self._display_context_review_id = entry.get("review_id")
+            self._display_context = display
+            old = f"語境：{self._summary_context}\n"
+            self.summary_text.configure(text=self.summary_text.get("1.0", "end-1c").replace(
+                old, f"語境：{display}\n", 1))
+            self._summary_context = display
+        if (entry and getattr(self.image, "_entry", None) == entry
+                and isinstance(diagnostic, dict)
+                and diagnostic.get("reason") == "SOURCE_OVERPAINT_CONFIRMED"
+                and not self._save_busy()):
+            if (entry.get("manual_surface_actual") is not None
+                    and getattr(self.image, "photo", None) is not None
+                    and can_confirm_current_expected(entry)):
+                # A committed surface record is in the refreshed ledger. The
+                # same current PDF preview was verified, even though its text
+                # layer still cannot be used as an actual reading.
+                self._rendered_review_id = entry.get("review_id")
+                getattr(self, "_confirm_current_expected_button", self.primary).config(
+                    text="確認目前注音就是應標注音", state="normal",
+                    command=lambda rid=entry["review_id"]: self.confirm_current_expected(rid))
+                return
+            # The text-layer reading is not the overlaid final surface. First
+            # require the existing per-position human surface staging/apply;
+            # a later explicit expected click uses the freshly loaded actual.
+            button = (getattr(self, "_confirm_current_expected_button", self.primary)
+                      if can_confirm_current_expected(entry) else self.primary)
+            button.config(text="先核對合成畫面注音", state="normal", command=self.correct_actual)
 
 
 def main():

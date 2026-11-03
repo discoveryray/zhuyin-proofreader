@@ -18,6 +18,21 @@ from review_display import ActionRows, WrappedLabel, scrollable_entry
 VERSION = "5.8.0"
 
 
+def child_window_options():
+    """Hide only Windows console windows; keep pipes and process diagnostics."""
+    return {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
+
+
+def fitted_launcher_geometry(width, height, content_height, viewport_height,
+                             screen_width, screen_height, x, y):
+    """Grow to reveal content while keeping user enlargement and screen bounds."""
+    max_height = max(1, int(screen_height) - 80)
+    target = min(max_height, max(int(height), int(height) + max(0, int(content_height) - int(viewport_height))))
+    target_width = min(max(1, int(screen_width) - 40), int(width))
+    return (target_width, target, max(0, min(int(x), int(screen_width) - target_width)),
+            max(0, min(int(y), int(screen_height) - target - 40)))
+
+
 STATUS_TEXT = {
     "PROCESSING_FINISHED": "尚有項目待處理",
     "PROOFREAD_COMPLETE": "全冊校對完成",
@@ -226,7 +241,8 @@ def review_child_worker(cmd, env, messages, token):
     tail = ""
     try:
         with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                              text=True, encoding="utf-8", errors="replace", env=env) as child:
+                              text=True, encoding="utf-8", errors="replace", env=env,
+                              **child_window_options()) as child:
             for line in child.stdout:
                 tail = (tail + line)[-8192:]
                 messages.put(("__REVIEW_LOG__", token, line))
@@ -323,6 +339,11 @@ class App:
         self.log_frame = tk.LabelFrame(body, text="執行紀錄（進階）")
         self.log = tk.Text(self.log_frame, wrap="word", font=("Microsoft JhengHei UI", 10), height=10)
         self.log.pack(fill="both", expand=True, padx=6, pady=6)
+        self._fit_pending = None
+        self._fitting_window = False
+        body.bind("<Configure>", self._schedule_window_fit, add="+")
+        self.log_frame.bind("<Configure>", self._schedule_window_fit, add="+")
+        self._schedule_window_fit()
         root.after(100, self.poll)
         root.after(500, self.poll_project_status)
 
@@ -430,6 +451,28 @@ class App:
         else:
             self.log_frame.pack_forget()
         self.body_canvas.request_layout()
+        self._schedule_window_fit()
+
+    def _schedule_window_fit(self, _event=None):
+        if self._fit_pending is None and not self._fitting_window:
+            self._fit_pending = self.root.after_idle(self._fit_window_to_content)
+
+    def _fit_window_to_content(self):
+        self._fit_pending = None
+        if not self.root.winfo_exists() or self.body_canvas.winfo_height() <= 1:
+            return
+        self._fitting_window = True
+        try:
+            self.root.update_idletasks()
+            width, height, x, y = fitted_launcher_geometry(
+                self.root.winfo_width(), self.root.winfo_height(), self.body.winfo_reqheight(),
+                self.body_canvas.winfo_height(), self.root.winfo_screenwidth(),
+                self.root.winfo_screenheight(), self.root.winfo_x(), self.root.winfo_y())
+            if (width, height, x, y) != (self.root.winfo_width(), self.root.winfo_height(),
+                                      self.root.winfo_x(), self.root.winfo_y()):
+                self.root.geometry(f"{width}x{height}+{x}+{y}")
+        finally:
+            self._fitting_window = False
 
     def _install_notebook_layout(self):
         # Notebook's default request is the tallest *any* tab, including an
@@ -979,7 +1022,8 @@ class App:
             code, last_output, outcome = -1, "", None
             try:
                 with subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                    text=True, encoding="utf-8", errors="replace", env=env) as child:
+                    text=True, encoding="utf-8", errors="replace", env=env,
+                    **child_window_options()) as child:
                     for line in child.stdout:
                         messages.put(("__OP_LOG__", token, project, line))
                         if line.startswith("[ZHUYIN_OPERATION] "):

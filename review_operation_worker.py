@@ -595,6 +595,7 @@ def preview_png(entry, *, padding, output_dir, display_width):
     return dict(png=pixmap.tobytes("png"), width=pixmap.width, height=pixmap.height,
                 target=details["target"], warning_target=details["warning_target"],
                 diagnostic=details["diagnostic"], notice=details["notice"],
+                 display_context=details.get("display_context"),
                 physical_page=entry.get("physical_page"), pdf_name=entry.get("pdf_name"),
                 pid=os.getpid(), source_sha256=digest,
                 review_id=entry.get("review_id"), occurrence_id=entry.get("occurrence_id"))
@@ -643,6 +644,9 @@ def validate_preview_png(value):
             raise ValueError("不可確認的警示不能提供確認目標")
     if value.get("warning_target") is not None and value.get("target") is not None:
         raise ValueError("警示框與確認目標不能混用")
+    context = value.get("display_context")
+    if context is not None and (type(context) is not str or len(context) > 500):
+        raise ValueError("預覽原頁詞句不完整")
     for key in ("target", "warning_target"):
         region = value.get(key)
         if region is not None and (type(region) not in (tuple,list) or len(region) != 4

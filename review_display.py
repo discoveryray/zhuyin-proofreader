@@ -54,6 +54,31 @@ class WrappedLabel(tk.Label):
             self.configure(wraplength=width)
 
 
+class SelectableText(tk.Text):
+    """A copyable display field that never accepts user edits."""
+    def __init__(self, master, *, text="", **kwargs):
+        kwargs.setdefault("wrap", "word")
+        kwargs.setdefault("relief", "flat")
+        kwargs.setdefault("highlightthickness", 0)
+        kwargs.setdefault("background", master.cget("background"))
+        super().__init__(master, **kwargs)
+        self.configure(text=text)
+
+    def configure(self, cnf=None, **kwargs):
+        if cnf is not None:
+            kwargs.update(cnf)
+        if "text" in kwargs:
+            value = str(kwargs.pop("text"))
+            super().configure(state="normal")
+            self.delete("1.0", "end")
+            self.insert("1.0", value)
+            self.configure(height=min(14, max(3, len(value.splitlines()) + 1)))
+            kwargs["state"] = "disabled"
+        return super().configure(**kwargs)
+
+    config = configure
+
+
 def wrap_checkbutton(widget):
     widget.configure(anchor="w", justify="left", wraplength=400)
     widget.bind("<Configure>", lambda e: widget.configure(wraplength=max(1, e.width - 36)))
@@ -207,6 +232,7 @@ def _occurrence_preview(entry, *, padding, scale, output_dir, display_width, ret
         page = doc[int(number) - 1]
         target = None
         warning_target = None
+        display_context = None
         safety = None
         notice = "外框僅供定位，不屬於原始證據圖片。"
         try:
@@ -237,6 +263,11 @@ def _occurrence_preview(entry, *, padding, scale, output_dir, display_width, ret
                 # Never move to a neighboring character or reuse this box as
                 # a confirmation target, even if its coordinates are valid.
                 warning_target, target = target, None
+            if not contradictions and return_details and entry.get("char"):
+                # Text is a display hint only. A visibility warning cannot
+                # suppress independent context, or authorize the actual value.
+                from review_context_display import pdf_sentence_at_target
+                display_context = pdf_sentence_at_target(page.get_text("rawdict"), original, entry["char"])
             px, py = padding
             clip = (fitz.Rect(bounded.x0 - px, bounded.y0 - py, bounded.x1 + px, bounded.y1 + py)
                     & bounds) * page.rotation_matrix
@@ -269,7 +300,7 @@ def _occurrence_preview(entry, *, padding, scale, output_dir, display_width, ret
         )
         if return_details:
             return dict(pixmap=pix, target=rect, warning_target=warning_rect,
-                        notice=notice, diagnostic=safety)
+                        notice=notice, diagnostic=safety, display_context=display_context)
         return pix, rect, notice
 
 
@@ -298,6 +329,7 @@ class OccurrencePreview(tk.Frame):
             self.canvas.bind("<MouseWheel>", self._mousewheel)
         self.canvas.pack(side="left", fill="both", expand=True)
         self.pixmap = self.target = self.warning_target = self.photo = None
+        self.source_diagnostic = self.display_context = None
         self._entry = None
         self._draw_pending = self._render_pending = self._locate_pending = None
         self._render_width = None
@@ -348,6 +380,7 @@ class OccurrencePreview(tk.Frame):
         self.canvas.yview_moveto(0)
         self._request_height(self._minimum_height)
         self.pixmap = self.target = self.warning_target = self.photo = None
+        self.source_diagnostic = self.display_context = None
         self._entry = self._render_width = None
         self._needs_locate = False
         self.notice.configure(text=message)
@@ -420,6 +453,7 @@ class OccurrencePreview(tk.Frame):
         self._preview_generation = getattr(self, "_preview_generation", 0) + 1
         token = (self._preview_generation, copy.deepcopy(self._entry), self._output_dir, width)
         self.photo = self.target = self.warning_target = self.pixmap = None
+        self.source_diagnostic = self.display_context = None
         self.canvas.delete("all")
         self.notice.configure(text="正在載入原頁…")
         if getattr(self, "on_invalidated", None) is not None:
@@ -479,6 +513,8 @@ class OccurrencePreview(tk.Frame):
             self._failed(ValueError("預覽缺少目前來源的可見性檢查"))
             return
         self.pixmap = SimpleNamespace(width=result["width"], height=result["height"], png=result["png"])
+        self.source_diagnostic = result.get("diagnostic")
+        self.display_context = result.get("display_context")
         self.target = result["target"]
         self.warning_target = result.get("warning_target")
         self.notice.configure(text=result["notice"])
