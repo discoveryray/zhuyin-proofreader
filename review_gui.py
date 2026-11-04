@@ -1557,6 +1557,7 @@ class ReviewApp:
         self.status = WrappedLabel(top, text="", font=("Microsoft JhengHei UI", 11, "bold"))
         self.status.pack(fill="x")
         self.retry_startup_button = tk.Button(top, text="重新載入校對專案", command=self._start_review_loading)
+        self.cancel_actual_prepare_button = tk.Button(top, text="取消準備", command=self._cancel_actual_preparation)
         self.learning_recovery_button = tk.Button(top, text="接續已保存字形確認", command=self.open_learning_recovery)
         self.learning_recovery_button.pack(anchor="w")
         navigation = ActionRows(top)
@@ -2055,6 +2056,10 @@ class ReviewApp:
         if event.widget is not self.root:
             return
         self._async_disposed = True
+        self._cancel_actual_preparation()
+        # A destroyed owner cannot accept another request. Its worker still
+        # drains its terminal response and never publishes into this view.
+        self._operation_in_progress = False
         self._cancel_staging_validation()
         self._project_generation = getattr(self, "_project_generation", 0) + 1
         self._save_request = None
@@ -2098,6 +2103,8 @@ class ReviewApp:
                               else ReviewProcessService(self.output_dir))
 
     def close(self):
+        if self._cancel_actual_preparation(close_after=True):
+            return
         if (getattr(self, "_save_in_progress", False) or getattr(self, "_apply_in_progress", False)
                 or getattr(self, "_operation_in_progress", False)
                 or getattr(getattr(self, "_learning_dialog", None), "_learning_busy", False)):
@@ -2106,6 +2113,18 @@ class ReviewApp:
         self._cancel_staging_validation()
         self._project_generation = getattr(self, "_project_generation", 0) + 1
         self.root.destroy()
+
+    def _cancel_actual_preparation(self, *, close_after=False):
+        request = getattr(self, "_operation_request", None)
+        cancelled = request.get("prepare_cancelled") if request is not None else None
+        if cancelled is None:
+            return False
+        cancelled.set()
+        if close_after:
+            request["close_after_prepare"] = True
+        if not getattr(self, "_async_disposed", False):
+            self.status.config(text="正在取消原頁 actual 準備；等待安全收尾，未保存判定。")
+        return True
 
     def _invoke_operation(self, operation, payload, progress=None):
         return self._save_service.invoke(operation, payload, progress=progress)
@@ -2145,7 +2164,8 @@ class ReviewApp:
         self._publish_staging_summary(summary)
         self.status.config(text="actual 操作待核對；僅可接續已驗證的已提交復原紀錄。")
 
-    def _start_owned_operation(self, title, work, publish, *, committed=False, on_terminal=None):
+    def _start_owned_operation(self, title, work, publish, *, committed=False, on_terminal=None,
+                               prepare_cancelled=None):
         """One UI owner, one operation; all work receives plain request data."""
         if getattr(self, "_operation_in_progress", False) or getattr(self, "_async_disposed", False):
             return False
@@ -2153,6 +2173,11 @@ class ReviewApp:
         self._operation_in_progress = True
         request = dict(project=self.output_dir, generation=getattr(self, "_project_generation", 0),
                        manifest=self.manifest, db=self.db, title=title)
+        if prepare_cancelled is not None:
+            request["prepare_cancelled"] = prepare_cancelled
+            button = getattr(self, "cancel_actual_prepare_button", None)
+            if button is not None:
+                button.pack(anchor="w")
         if on_terminal is not None:
             request["on_terminal"] = on_terminal
         self._operation_request = request
@@ -2208,6 +2233,9 @@ class ReviewApp:
         if getattr(self, "_operation_request", None) is request:
             self._operation_request = None
             self._operation_in_progress = False
+            button = getattr(self, "cancel_actual_prepare_button", None)
+            if button is not None and not getattr(self, "_async_disposed", False):
+                button.pack_forget()
 
     def _poll_owned_operation(self, request, completed, progress, publish, committed):
         if getattr(self, "_async_disposed", False):
@@ -2232,6 +2260,14 @@ class ReviewApp:
             self._schedule_async_poll(self._poll_owned_operation, request, completed, progress, publish, committed)
             return
         self._finish_owned_operation(request)
+        if request.get("prepare_cancelled") is not None:
+            self._restore_save_controls()
+            if request.get("close_after_prepare"):
+                self.close()
+                return
+            if request["prepare_cancelled"].is_set():
+                self.status.config(text="原頁 actual 準備已取消；未保存判定，可重新準備。")
+                return
         owns = (request["project"] == self.output_dir and request["generation"] == getattr(self, "_project_generation", 0)
                 and request["manifest"] is self.manifest and request["db"] is self.db)
         if not owns:
@@ -2834,9 +2870,10 @@ class ReviewApp:
             return
         service = self._save_service
         payload = dict(expected_manifest=self.manifest, expected_db=self.db, review_id=entry["review_id"])
+        cancelled = threading.Event()
         def work(progress):
             progress("正在準備原頁 actual 核對群組")
-            return service.invoke("prepare_actual", payload, progress=progress)
+            return service.invoke("prepare_actual", payload, progress=progress, cancelled=cancelled.is_set)
         def prepared(value):
             if not self.current() or self.current().get("review_id") != entry.get("review_id"):
                 return
@@ -2878,7 +2915,7 @@ class ReviewApp:
                     count = int(result["summary"].get("staged_group_count") or 0)
                     self.status.config(text=f"actual 已暫存，尚未正式套用；目前 {count} 組等待套用，可繼續下一筆。")
             self._start_owned_operation("actual 暫存", stage, staged)
-        self._start_owned_operation("準備 actual 核對", work, prepared)
+        self._start_owned_operation("準備 actual 核對", work, prepared, prepare_cancelled=cancelled)
 
     def _save_surface_review(self, entry, prepared):
         self._review_action_in_progress = True
