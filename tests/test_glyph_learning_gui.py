@@ -441,9 +441,13 @@ def test_started_learning_worker_keeps_owner_after_thread_start_exception(monkey
 
 
 def test_main_close_waits_for_learning_writer():
-    app = SimpleNamespace(_learning_dialog=SimpleNamespace(_learning_busy=True), root=Mock(), status=Mock())
-    gui.ReviewApp.close(app)
+    app = gui.ReviewApp.__new__(gui.ReviewApp)
+    app._learning_dialog = SimpleNamespace(_learning_busy=True)
+    app.root, app.status = Mock(), Mock()
+    assert app._cancel_actual_preparation(close_after=True) is False
+    app.close()
     app.root.destroy.assert_not_called()
+    assert app._learning_dialog._learning_busy
     assert "完成後即可關閉" in app.status.config.call_args.kwargs["text"]
 
 
@@ -488,16 +492,32 @@ def test_actual_pending_uses_same_learning_confirmation_entry(monkeypatch):
     group = dict(group_id="exact-group", members=[row], candidate_members=[row])
     response = dict(group=group, learning_group=group, ledger=[row], summary={}, surface=None)
     service = SimpleNamespace(invoke=Mock(return_value=response))
+    prepare_tokens = []
+    progress = Mock()
+    def start_owned_operation(title, work, publish, *, prepare_cancelled):
+        assert isinstance(prepare_cancelled, threading.Event)
+        assert not prepare_cancelled.is_set()
+        prepare_tokens.append(prepare_cancelled)
+        return publish(work(progress))
     app = SimpleNamespace(_save_service=service, manifest={"session_id": "bound-session"}, db={"events": {}},
         current=lambda: row, _save_busy=lambda: False, _publish_staging_summary=Mock(),
         _set_actionable_records_from_ledger=Mock(), show=Mock(), _show_learning_target=Mock(),
-        _start_owned_operation=lambda title, work, publish: publish(work(lambda text: None)))
+        _start_owned_operation=start_owned_operation)
     legacy = Mock(side_effect=AssertionError("duplicate legacy confirmation must not open"))
     monkeypatch.setattr(gui, "ActualReadingDialog", legacy)
     gui.ReviewApp.correct_actual(app)
     service.invoke.assert_called_once()
     assert service.invoke.call_args.args == ("prepare_actual", dict(expected_manifest=app.manifest,
         expected_db=app.db, review_id=row["review_id"]))
+    assert service.invoke.call_args.args[1]["expected_manifest"] is app.manifest
+    assert service.invoke.call_args.args[1]["expected_db"] is app.db
+    assert len(prepare_tokens) == 1
+    assert set(service.invoke.call_args.kwargs) == {"progress", "cancelled"}
+    assert service.invoke.call_args.kwargs["progress"] is progress
+    cancelled = service.invoke.call_args.kwargs["cancelled"]
+    assert cancelled.__self__ is prepare_tokens[0]
+    assert cancelled.__func__ is threading.Event.is_set
+    assert cancelled() is False
     app._show_learning_target.assert_called_once_with(dict(entry=row, group=group, surface=None))
     legacy.assert_not_called()
 

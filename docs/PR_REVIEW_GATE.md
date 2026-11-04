@@ -314,6 +314,33 @@ SHA及record欄位只證明與所指定原件的一致性，不認證真人身�
 後續 PASS 仍需既有合法 non-code 補審、resolution、完整 coverage、最新適用 CI、
 兩輪及保護規則；任何尚未解除 BLOCKED 都繼續阻擋。
 
+#### usage-feedback 固定 anchor 的限定歷史橋接
+
+2026-11-04 使用者取代後第五輪指令只允許 blocker-links reader 承接原
+`usage-feedback-20261103` 的 `state-024.json`，SHA256
+`71479538ee0371bf627d6c9c119cde0e45ee22f0ca0e05e40efcfdf866da1387`。
+`blocker-links/1` schema 不變。只有讀取這份原 bytes 時，第3筆 feature
+`4b06bf3c160578fca25dd46b872f22cbede48c6b` → PR69 actual merge
+`81ec1be0edf4216ba3c0f70f6f5beccef85c59c7` → 第4筆 from 的橋接可接受。
+完整 task／baseline／branch、固定 current base/head、四筆 correction 身分均須核對；
+實讀 anchor 同目錄下 `USAGE_FEEDBACK_ANCHOR.originals` 的全部固定 SHA256 原件，
+包含原第四輪授權／解釋、第五輪補充與最新取代授權、兩份 raw Git commit。
+原始 merge object 重算 Git SHA1，ordered parents 必須為原 baseline、上述 feature，
+tree 必須 `1653d473bee801a1a0b1e7bab4b1c2dc6e60167c`；原第四輪 candidate
+object 亦重算 Git SHA1，核唯一 merge parent 與固定 tree。缺件或 bytes／身分不同均拒絕。
+
+此入口只讓同一共用 header／correction／review／tail 結構檢查在該精確橋接後繼續，
+其餘 closed fields、型別、SHA、ordered prefix、scope、reviewer、null relations
+及報告原件核對全部保留。只接受 anchor 原兩對 `review-r1-code-010` →
+`review-r1-blocked-023`、`review-r2-code-015` → `review-r2-blocked-024`，原順序不變。
+logical report_ref 依既有方式從固定 cwd 解析；隔離 artifact 內的 aliases 必須逐 byte
+等於原 MD 並符合原 SHA，不能更改 ref／record／原檔。缺失或不同仍拒絕。
+兩 CODE 只退為歷史，兩 BLOCKED 仍生效；新 HEAD 的完整獨立審查不可沿用舊 links。
+一般 current-state continuity、native correction cap 與其原拒絕不變，不能稱為 native PASS。
+本限定修改本身也須由兩位獨立 reviewer 親核原件與完整適用差異，不能以 gate 自證通過。
+CI 只用明示 synthetic pins／Git identities；真固定 pins 的本機 probe 另保存，私人報告、
+session 與本機路徑不加入 fixtures。
+
 `zhuyin-pr-review-gate/4` 明確區分開發、驗證及實際 merge 的短檢查。
 本節只適用明確採用 [VALIDATION_POLICY.md](VALIDATION_POLICY.md) 新流程的任務，
 及使用者事前指定的 `validation-flow-reduction` transition。原 v3 snapshot、
