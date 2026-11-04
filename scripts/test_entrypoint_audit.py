@@ -335,7 +335,7 @@ CALLABLE_ALIAS_SOURCE_HASHES = {'native_caller': 'ca39fdf2ceff04312cf16e1b048a42
  'busy_entry_report': '0c7cd0dc777ce960efcbded973ea30224b5e192e728740b71e3f693e3e153bc4',
  'busy_entry_apply_staged_actuals': '700bccf5365316fbc829ae55523c910807fb4371e402198e41204f523a2d91a3',
  'busy_entry_correct_actual': '6ac2f70789fd64e55e8acfdeca49cede8871b535af89b200e252581ba70ddd50',
- 'busy_body_correct_actual': '66e2dd8c79e0b1e5c135bfc38ad64a665fbbe901f3f3fb2be95ce6db78aa9cb7',
+ 'busy_body_correct_actual': '52b1e97b65c04a7908fe1e64fd3d08705055403e1c74f715a27fc6f17e5210f3',
  'busy_entry_create_reusable_expected_rule': 'e6ada20158aa71eac749b5e0f28982b09dbaac2e55f6b043de347692ec06d228'}
 _NO_CALLABLE_ADAPTER = object()
 _NATIVE_NON_TK_LEAF = object()

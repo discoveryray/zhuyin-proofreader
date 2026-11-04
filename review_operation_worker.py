@@ -189,6 +189,15 @@ class ReviewOperationState:
         if operation == "save_surface_review":
             return self._surface_review(payload, progress)
         if operation in {"reload", "actual_summary", "prepare_actual", "stage_actual", "stage_surface", "report", "apply_actual"}:
+            def check_preparation():
+                if operation == "prepare_actual" and cancelled():
+                    raise InterruptedError("原頁 actual 準備已取消；未保存判定")
+
+            def preparing(phase):
+                check_preparation()
+                progress(phase)
+                check_preparation()
+
             expected = {key: payload[key] for key in ("expected_manifest", "expected_db")
                         if key in payload}
             if operation == 'stage_surface':
@@ -205,6 +214,8 @@ class ReviewOperationState:
             # Caller dictionaries only describe what was displayed. The existing
             # service compares them with fully verified durable bytes.
             if not payload.get("recovery_only"):
+                if operation == "prepare_actual":
+                    preparing("正在核對專案快照與來源依賴")
                 try:
                     snapshot = self.service.load_resume_snapshot(**expected)
                 except Exception as exc:
@@ -225,25 +236,39 @@ class ReviewOperationState:
                 return self.service.validate_resume_staging(snapshot)
             if operation == "prepare_actual":
                 from actual_review import build_actual_group_for_entry
+                preparing("正在建立本位置 actual 核對群組")
                 rows = {row["review_id"]: row for row in snapshot.ledger}
                 entry = rows[payload["review_id"]]
                 group = build_actual_group_for_entry(snapshot.ledger, entry)
-                summary = self.service.validate_resume_staging(snapshot)
+                preparing("正在核對既有 actual 暫存")
+                summary = self.service.validate_resume_staging(snapshot, cancelled=cancelled)
+                # Staging reports validation exceptions as staging_error,
+                # including InterruptedError. Cancellation still retires this
+                # preparation rather than authorizing a dialog from that view.
+                preparing("正在建立完整校對檢視")
                 view = self.service._conflicts.review_view(snapshot.db, snapshot.ledger)
                 from actual_review import actual_visual_source_safety
+                preparing("正在核對本位置原頁來源安全性")
                 safety = actual_visual_source_safety(entry, self.output_dir)
                 surface = None
                 if not safety['location_readable'] or entry.get('manual_surface_actual') is not None:
                     # Exact native eligibility is re-proven; an unsafe/unknown
                     # slot is not made eligible by the presence of pixels.
+                    preparing("正在核對本位置原頁表面 actual 證據")
                     surface = sp.prepare_surface_actual_correction(self.output_dir, payload['review_id'])
+                check_preparation()
+                if surface is not None:
+                    return dict(group=group, summary=summary, ledger=view, surface=surface,
+                                learning_group=None)
                 from glyph_learning_service import collect_learning_candidates
+                preparing("正在核對可讀字形的學習候選")
                 learning = collect_learning_candidates(snapshot.ledger,
                     sp._global_direct_source_context(self.output_dir, snapshot.manifest),
                     evidence_root=sp.project_actual_evidence_root(self.output_dir))
                 learning_group = next((candidate for candidate in learning["groups"]
                     if any(member.get("occurrence_id") == entry.get("occurrence_id")
                            for member in candidate.get("candidate_members", candidate["members"]))), None)
+                check_preparation()
                 return dict(group=group, summary=summary, ledger=view, surface=surface,
                             learning_group=learning_group)
             if operation == "stage_actual":
@@ -571,7 +596,7 @@ class ReviewProcessService:
             self._connection.send((number, str(self.output_dir), operation, copy.deepcopy(payload)))
             progress_error = None
             while True:
-                if operation == "validate_staging" and cancelled is not None and cancelled():
+                if operation in {"validate_staging", "prepare_actual"} and cancelled is not None and cancelled():
                     self._cancel_signal.set()
                 if not self._connection.poll(.05):
                     if not self._process.is_alive():
@@ -593,6 +618,10 @@ class ReviewProcessService:
                                 self._cancel_signal.set()
                     continue
                 self.worker_pid = response[4]
+                # Always drain the owned terminal response before releasing
+                # the serial lock, even if a result arrived after cancellation.
+                if operation == "prepare_actual" and cancelled is not None and cancelled():
+                    raise InterruptedError("原頁 actual 準備已取消；未保存判定")
                 if progress_error is not None:
                     raise progress_error
                 if response[1] == "error":

@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import hashlib
 import tempfile
+import threading
 import tkinter as tk
 from tests.no_window_review_support import (
     Surface, ActualDialog as HeadlessActualDialog, Preview, Value,
@@ -911,10 +912,27 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
         service._conflicts = _VerifiedExpectedConflicts(None, {"records": ledger})
         return service, snapshot
 
-    def assert_resume_loaded(self, app, service, snapshot):
+    def assert_resume_validation(self, validation_call, snapshot, *, prepare_cancelled=None):
+        self.assertEqual(len(validation_call.args), 1)
+        self.assertIs(validation_call.args[0], snapshot)
+        if prepare_cancelled is None:
+            self.assertEqual(validation_call.kwargs, {})
+        else:
+            self.assertIsInstance(prepare_cancelled, threading.Event)
+            self.assertEqual(set(validation_call.kwargs), {"cancelled"})
+            cancelled = validation_call.kwargs["cancelled"]
+            self.assertTrue(callable(cancelled))
+            self.assertIs(cancelled.__self__, prepare_cancelled)
+            self.assertIs(cancelled.__func__, threading.Event.is_set)
+            self.assertFalse(prepare_cancelled.is_set())
+            self.assertIs(cancelled(), False)
+
+    def assert_resume_loaded(self, app, service, snapshot, *, prepare_cancelled=None):
         service.load_resume_snapshot.assert_called_once_with(
             expected_manifest=app.manifest, expected_db=app.db)
-        service.validate_resume_staging.assert_called_once_with(snapshot)
+        service.validate_resume_staging.assert_called_once()
+        self.assert_resume_validation(service.validate_resume_staging.call_args, snapshot,
+            prepare_cancelled=prepare_cancelled)
 
     def test_all_exact_group_occurrences_are_listed_with_checked_peers_last(self):
         ledger = [entry(name, "f" * 64) for name in "abcd"]
@@ -956,9 +974,13 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
             # route independently of the new collector's source contract.
             patch("glyph_learning_service.collect_learning_candidates", return_value={"groups": []}),
             patch.object(review_gui, "ActualReadingDialog", return_value=SimpleNamespace(result=None)) as dialog,
+            patch.object(app, "_start_owned_operation", wraps=app._start_owned_operation) as owned,
         ):
             app.correct_actual()
-        self.assert_resume_loaded(app, service, snapshot)
+        owned.assert_called_once()
+        self.assertEqual(set(owned.call_args.kwargs), {"prepare_cancelled"})
+        self.assert_resume_loaded(app, service, snapshot,
+            prepare_cancelled=owned.call_args.kwargs["prepare_cancelled"])
         self.assertEqual(dialog.call_args.kwargs["verified_checked_occurrence_ids"], ())
         self.assertEqual([row["occurrence_id"] for row in review_gui.actual_review_samples(ledger[2], group)], ["c", "a", "b"])
 
@@ -989,9 +1011,13 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
             patch("glyph_learning_service.collect_learning_candidates", return_value={"groups": []}),
             patch.object(review_gui, "ActualReadingDialog", return_value=SimpleNamespace(result=None)) as dialog,
             patch.object(sp, "stage_manual_actual_correction") as stage,
+            patch.object(app, "_start_owned_operation", wraps=app._start_owned_operation) as owned,
         ):
             app.correct_actual()
-        self.assert_resume_loaded(app, service, snapshot)
+        owned.assert_called_once()
+        self.assertEqual(set(owned.call_args.kwargs), {"prepare_cancelled"})
+        self.assert_resume_loaded(app, service, snapshot,
+            prepare_cancelled=owned.call_args.kwargs["prepare_cancelled"])
         dialog.assert_called_once()
         stage.assert_not_called()
         self.assertEqual(dialog.call_args.kwargs["verified_checked_occurrence_ids"], ())
@@ -1187,13 +1213,22 @@ class ManualActualGuiBehaviorTests(unittest.TestCase):
             patch.object(review_gui.messagebox, "showinfo") as info,
             patch.object(review_gui.messagebox, "showwarning") as warning,
             patch.object(review_gui.messagebox, "showerror") as error,
+            patch.object(app, "_start_owned_operation", wraps=app._start_owned_operation) as owned,
         ):
             app.correct_actual()
         self.assertEqual(service.load_resume_snapshot.call_args_list, [
             ((), {"expected_manifest": app.manifest, "expected_db": app.db}),
             ((), {"expected_manifest": app.manifest, "expected_db": app.db}), ((), {}),
         ])
-        self.assertEqual(service.validate_resume_staging.call_args_list, [((snapshot,), {}), ((snapshot,), {})])
+        self.assertEqual(owned.call_count, 2)
+        prepare_call, stage_call = owned.call_args_list
+        self.assertEqual(set(prepare_call.kwargs), {"prepare_cancelled"})
+        self.assertEqual(stage_call.kwargs, {})
+        self.assertEqual(service.validate_resume_staging.call_count, 2)
+        prepare_validation, saved_validation = service.validate_resume_staging.call_args_list
+        self.assert_resume_validation(prepare_validation, snapshot,
+            prepare_cancelled=prepare_call.kwargs["prepare_cancelled"])
+        self.assert_resume_validation(saved_validation, snapshot)
         info.assert_not_called()
         self.assertIn("actual 已暫存", app.status.cget("text"))
         self.assertIn("尚未正式套用", app.status.cget("text"))

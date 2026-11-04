@@ -263,12 +263,15 @@ class InlineReviewService(ReviewSaveService):
 
 class ImmediateOperations:
     """Legacy handler fixtures retire scheduling, while running actual work."""
-    def _start_owned_operation(self, title, work, publish, *, committed=False, on_terminal=None):
+    def _start_owned_operation(self, title, work, publish, *, committed=False, on_terminal=None,
+                               prepare_cancelled=None):
         if getattr(self, "_operation_in_progress", False):
             return False
         self._operation_in_progress = True
         request = dict(project=self.output_dir, generation=getattr(self, "_project_generation", 0),
                        manifest=self.manifest, db=self.db, title=title)
+        if prepare_cancelled is not None:
+            request["prepare_cancelled"] = prepare_cancelled
         if on_terminal is not None:
             request["on_terminal"] = on_terminal
         self._operation_request = request

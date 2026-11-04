@@ -19,6 +19,27 @@ STAGED_SCHEMA = "zhuyin-pr-review-gate/4"
 NO_WINDOW_POLICY = "validation-flow/no-real-tk/1"
 CURRENT_POLICY = "validation-flow/current-evidence/1"
 BLOCKER_LINKS_SCHEMA = "zhuyin-review-history-blocker-links/1"
+# Only the retained pre-adoption anchor may use this historical merge bridge.
+# These are integrity pins, not a new correction-limit or authorization adapter.
+USAGE_FEEDBACK_ANCHOR = {
+    "sha256": "71479538ee0371bf627d6c9c119cde0e45ee22f0ca0e05e40efcfdf866da1387",
+    "task": {"id": "usage-feedback-20261103", "repository": "discoveryray/zhuyin-proofreader",
+             "baseline": "4f11e527673f2f18d8d58704ba2002e0dbdefcc5", "base_branch": "develop",
+             "head_branch": "codex/usage-feedback-20261103-corrective4"},
+    "feature": "4b06bf3c160578fca25dd46b872f22cbede48c6b",
+    "merge": "81ec1be0edf4216ba3c0f70f6f5beccef85c59c7",
+    "merge_tree": "1653d473bee801a1a0b1e7bab4b1c2dc6e60167c",
+    "head": "cd0cee40df4e770cad6f87dc5a41a83606068b9a",
+    "head_tree": "c4405bf04d594e989823edc96bb4040ea5c9949b",
+    "originals": {
+        "user-authorization-001.md": "b7c015c3a7d6294f7e428ca4f9f1ac135ac20c21145256d7ebede9ee592aaeb4",
+        "cap4-external-interpretation-007.md": "00c707b1d5cbfacaa71c6c01e308f00e5eaa4ad99b6810c9ecaeee3737cb16c9",
+        "corrective5/cap5-external-supplement-004.md": "e52a2bf7cfda43ebc4632cc2b1346d9ec89092d9b7731890d34b59acbdf35ca8",
+        "corrective5/user-replacement-authorization-008.md": "737cf553e214f86fedb5c1143d871949ddbff3a73cadf3387d3680572920070e",
+        "candidate-009/prior-merge-commit.raw": "57b9406705a2cdeff19a997a6cbd2efaa5572073823b26e9feb4e13dcd74f64f",
+        "candidate-009/candidate-commit.raw": "79d3c9dce515ecc1ad046dab01600a8fe161e933a5a8a23c1ebdebae8c8d4a91",
+    },
+}
 REPOSITORY = "discoveryray/zhuyin-proofreader"
 WORKFLOW = ".github/workflows/ci.yml"
 PYTHONS = ("3.13",)
@@ -905,7 +926,7 @@ def _validate_state_header_structure(state):
              "invalid unavailable review rounds")
 
 
-def _validate_state_reviews_structure(state):
+def _validate_state_reviews_structure(state, *, _blocker_links_anchor=None):
     """Shared correction records/reviews after the public correction-limit check."""
     staged = state["schema"] == STAGED_SCHEMA
     _require(type(state["corrections"]) is list, "corrections must be a list")
@@ -922,8 +943,9 @@ def _validate_state_reviews_structure(state):
             postmerge_bridge = (number == 7 and previous == PR43_INTEGRATION_HEAD
                 and correction["from_head"] == PR43_ACTUAL_MERGE
                 and state.get("correction_exception", {}).get("schema") == PR43_POSTMERGE_SCHEMA)
-            _require(previous == correction["from_head"] or postmerge_bridge,
-                     "correction history is discontinuous")
+            if previous != correction["from_head"] and not postmerge_bridge:
+                _require(_blocker_links_anchor is not None, "correction history is discontinuous")
+                _usage_feedback_anchor_bridge(state, _blocker_links_anchor, number, previous, correction)
         previous = correction["to_head"]
     _require(type(state["reviews"]) is list, "reviews: expected list")
     for review in state["reviews"]:
@@ -1002,8 +1024,8 @@ def _validate_state_tail_structure(state):
         _sha(handoff["head"], "handoff.head")
 
 
-def _validate_state_structure(state):
-    """Complete shared structure, without saved history or authorization reads."""
+def _validate_state_structure(state, *, _blocker_links_anchor=None):
+    """Complete shared structure; only the pinned historical bridge reads originals."""
     _validate_state_header_structure(state)
     if "review_history_links" in state:
         _history_original_structure(state["review_history_links"])
@@ -1012,7 +1034,7 @@ def _validate_state_structure(state):
             _history_adapter_structure(name, state[name])
     if "correction_exception" in state:
         _correction_exception_structure(state["correction_exception"])
-    _validate_state_reviews_structure(state)
+    _validate_state_reviews_structure(state, _blocker_links_anchor=_blocker_links_anchor)
     _validate_state_tail_structure(state)
 
 
@@ -1435,6 +1457,30 @@ def _same_json_value(left, right):
     return left == right
 
 
+def _usage_feedback_anchor_bridge(state, pointer, number, previous, correction):
+    """Verify the one authorized PR69 bridge inside the immutable links anchor."""
+    fixed = USAGE_FEEDBACK_ANCHOR
+    _require(pointer["sha256"] == fixed["sha256"] and
+             _same_json_value(state, _linked_json(pointer)), "unsupported historical bridge anchor")
+    _require(_same_json_value(state["task"], fixed["task"]) and
+             state["schema"] == STAGED_SCHEMA and len(state["corrections"]) == 4 and
+             state["current"]["base"] == fixed["merge"] and state["current"]["head"] == fixed["head"] and
+             number == 4 and previous == fixed["feature"] and
+             correction["from_head"] == fixed["merge"] and correction["to_head"] == fixed["head"],
+             "historical bridge identity differs")
+    root = Path(pointer["ref"].split("#", 1)[0]).parent
+    for name, digest in fixed["originals"].items():
+        _linked_original({"ref": str(root / name), "sha256": digest})
+    tree, parents = _pr43_commit({"sha": fixed["merge"],
+                                 "object_ref": str(root / "candidate-009/prior-merge-commit.raw")})
+    _require(tree == fixed["merge_tree"] and parents == [fixed["task"]["baseline"], fixed["feature"]],
+             "historical merge ordered parents/tree differ")
+    tree, parents = _pr43_commit({"sha": fixed["head"],
+                                 "object_ref": str(root / "candidate-009/candidate-commit.raw")})
+    _require(tree == fixed["head_tree"] and parents == [fixed["merge"]],
+             "historical corrective commit parent/tree differ")
+
+
 def _blocker_link_document(pointer, visited=None):
     visited = set() if visited is None else visited
     key = str(Path(pointer["ref"]).resolve())
@@ -1465,7 +1511,7 @@ def _historical_code_refs(state):
     _require(_same_json_value(document["task"], state["task"]), "blocker links belong to another task/repository")
     anchor = _linked_json(document["anchor"])
     _require(type(anchor) is dict, "blocker link anchor must be a state object")
-    _validate_state_structure(anchor)
+    _validate_state_structure(anchor, _blocker_links_anchor=document["anchor"])
     _require(anchor.get("schema") == STAGED_SCHEMA and _same_json_value(anchor.get("task"), state["task"]),
              "blocker link anchor task/schema differs")
     _require("review_history_links" not in anchor, "initial anchor must be the retained pre-adoption state")
@@ -1480,7 +1526,7 @@ def _historical_code_refs(state):
              _same_json_value(state["corrections"][:len(anchor["corrections"])], anchor["corrections"]),
              "anchored correction history changed")
     reports = {r["report_ref"]: (i, r) for i, r in enumerate(state["reviews"])}
-    retired, targets = set(), set()
+    retired, targets, pairs = set(), set(), []
     for link in document["links"]:
         _fields(link, "round baseline base head scope code_reviewer blocked_reviewer code blocked", "blocker link")
         _require(type(link["round"]) is int and link["round"] in (1, 2), "invalid blocker link round")
@@ -1516,6 +1562,11 @@ def _historical_code_refs(state):
                      "blocker link reviewer is not independent or scope is incomplete")
         retired.add(code["report_ref"])
         targets.add(blocked["report_ref"])
+        pairs.append((code["report_ref"], blocked["report_ref"]))
+    if document["anchor"]["sha256"] == USAGE_FEEDBACK_ANCHOR["sha256"]:
+        _require(len(anchor["reviews"]) == 13 and pairs ==
+                 [(anchor["reviews"][a]["report_ref"], anchor["reviews"][b]["report_ref"])
+                  for a, b in ((9, 11), (10, 12))], "fixed anchor permits only the two retained blocker pairs")
     return retired
 
 
