@@ -1,6 +1,6 @@
 # 兩輪審查流程的證據 gate
 
-程序與適用版本先讀[開發與審查入口](DEVELOPMENT_REVIEW.md#applicability)，AGENTS 仍是安全／授權權威。本文件專責 schema、工具介面與有限歷史 adapter；下列 v3／v4 及其原件保持原義。新 `development-flow/tiered-review/1` 設計已採納、實作中、尚未啟用；`zhuyin-pr-review-gate/5` 公開路由目前只能 pending activation／STOP，不能由 state flags 啟用或用來放行本次改革。新有限欄位契約隨實作核對後另列，不將舊 `evidence_gap` 擴成跨候選補審。
+程序與適用版本先讀[開發與審查入口](DEVELOPMENT_REVIEW.md#applicability)，AGENTS 仍是安全／授權權威。本文件專責 schema、工具介面與有限歷史 adapter；下列 v3／v4 及其原件保持原義。新 `development-flow/tiered-review/1` 設計已採納、實作中、尚未啟用；[v5 有限契約](#pending-v5)公開路由目前只能 pending activation／STOP，不能由 state flags 啟用或用來放行本次改革，不將舊 `evidence_gap` 擴成跨候選補審。
 
 新政策下，既有 review-history adapter 仍核對原任務、審查與修正紀錄的身分、順序、授權及已確認 blocker；不再讀取其歷史 CI archive、execution manifest、JUnit、events 或執行輸出作為前置條件。這項分流只適用明示的 current-evidence 政策，舊 snapshot 的原 reader、schema 及判定保持。
 
@@ -27,6 +27,36 @@ python -m pytest tests/test_pr_review_gate.py -q
 `next-action` 回傳 JSON decision；`STOP` exit code 為 2，其餘為 0。
 **Exit code 0 不表示 PASS、merge 授權或完成**，必須讀取 `action`。
 Python 介面為 `validate_state(state)` 與 `next_action(state)`；後者不修改輸入。
+
+<a id="pending-v5"></a>
+## v5 有限契約：已採納設計、實作中、尚未啟用
+
+`schema: "zhuyin-pr-review-gate/5"`、`policy: "development-flow/tiered-review/1"` 是新 task 的有限實作；不是舊 snapshot 遷移器。欄位與拒絕條件以 [pr_review_gate.py](../scripts/pr_review_gate.py) 的 `_validate_tiered_structure`／`validate_tiered_reviews` 及 [pr_flow_policy.py](../scripts/pr_flow_policy.py) 共享 validators 為準。以下只定位主要欄位，不另建平行 schema 或新證據平台；未知／缺欄、重複 JSON keys、錯 bytes／hash／版本或鏈均拒絕。
+
+V5 state 的 closed 頂層恰為 `schema`、`policy`、`task_policy`、`candidate`、`classification`、`implementers`、`corrections`、`review_originals`、`authorization`、`execution`、`current`、`pr`、`pr_ci`、`coverage`、`documentation_checks`。
+
+| 主要物件 | 與 consumer 的對應 |
+| --- | --- |
+| `task_policy` | `policy`、`task_id`、`baseline`、`origin: "new_task"`、`starting_head`、`base_branch: "develop"`、`head_branch`、`source_ref`。`starting_head` 是初次凍結候選，不是 task baseline，也不能每輪重設。 |
+| `candidate` | `task_id`、`repository`、`baseline`、`base`、`merge_base`、`head`、`tree`、`scope`、完整 `changed_files`、有限 `risks`。Review、分類與 checks 都綁此候選，不採舊 HEAD／base 結論。 |
+| `classification` | `tier: "docs"／"local"／"core"`、`author`、`rationale`、`known_consumers`、`impact_known`；必要 reviewer 在原審查內確認，無額外分類輪。有限 protected paths／risks 是防降級護欄，不能代替語義影響判斷。 |
+| `review_originals` | Canonical pointer list；每個 pointer 恰含 `report_ref`、絕對可讀 `source_file`、`sha256`、`backups`，每份 backup 恰含 `source_file`／`sha256` 且 bytes 須相同。不同版本各有原件，hash 不認證身分或授權。 |
+| `corrections` | 原三輪上限的連續 `number`／`from_head`／`to_head`／`evidence_ref`；current HEAD 及每份原件的 reviewed HEAD 都須在保留的初始／修正鏈內，不以舊 review 搭空 history 重設計數。 |
+
+Canonical JSON report 使用 closed `pr-flow-code-review/1`，保留政策、`report_ref`、完整 candidate、reviewer／session／independent、`confirmed_tier`、`mode`、前版／完整初審引用、`delta_from`、`reviewed_range`、影響／架構／整合判斷、非空 `impact_summary`、所用 `review_checks` 原件引用、`verdict`、`findings` 與 `resolutions`。`full` 的 `reviewed_range` 必須是 baseline→HEAD，`delta` 必須是前版 HEAD→最新 HEAD，並由 `delta_from` 綁前版 base／HEAD；更換 reviewer、架構改變或未知影響不能走 delta。所有必要原件必須實讀核 bytes；新空 PASS 不會抹去舊 finding，resolution 須明指原 finding 及可驗證原件，code finding 不能同 HEAD 解除。
+
+`authorization`、`execution`、`current` 仍分別核有效操作、明確正式驗證授權、當前精確候選／clean；`pr`／`pr_ci` 沿用既有 closed current 結構而不混入歷史 adapters。一般／核心讀當次完整 coverage；純文件同時核實文檢原件及真實最新 PR CI 身分／steps，不接受本機 fixture 冒充 hosted CI。CI handoff 與傳遞缺口見 [TESTING](../TESTING.md#pending-pr-flow-ci)。
+
+Python 評估入口可獨立讀 code review，待 CI 完成再讀 checks，不重寫 canonical code 原件：
+
+```python
+from scripts import pr_review_gate as gate
+code = gate.validate_tiered_reviews(candidate, classification, implementers, review_originals)
+assessment = gate.validate_tiered_evidence(state)
+decision = gate.next_action(state)  # v5 始終 action=STOP
+```
+
+`validate_state`／CLI `validate` 只核結構；`validate_tiered_evidence` 分別回傳 `code_ready`、`checks_ready`、`requirements_satisfied`，同時固定 `activation_pending: true`、`merge_ready: false`。即使條件評估為 true 或修改共享 `ENABLED`，public `next_action`／CLI `next-action` 仍 STOP，不能由 state 啟用。Canonical 的 code `PASS` 只是此格式的程式審查結論，不是本次改革的正式 PASS。正式驗收、可信 Actions 整合、明確版本啟用及有效授權仍缺一不可；舊 v3／v4 判定與歷史保持。
 
 ## 信任邊界與留存
 

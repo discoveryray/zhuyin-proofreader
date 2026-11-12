@@ -92,6 +92,10 @@ PR 一次 full、develop actual merge 短驗證、取消歷史 CI 自動閉包�
 
 三批依序完成文件／角色、review／原件／gate、文檢／CI 整合及相應定向負控後，仍須按本次事前凍結舊規完成獨立審查與正式驗收。受審新 gate、測試 fixtures 或本文件不能放行本次改革。實作未同步或驗收／整合未完，一律維持未啟用。
 
+目前已有本機 canonical 原件鏈、分類／code review 與 checks 分離評估，以及真實文檢子程序的有限 consumer；這些本機工具與隔離負控不等於正式 CI 免 full 已完成。CI consumer 的固定 local capture 及來源核實責任見 [TESTING 的有限交接](../TESTING.md#pending-pr-flow-ci)，gate 欄位與評估 API 見 [v5 待啟用契約](PR_REVIEW_GATE.md#pending-v5)。未啟用時 PR／main push 保持 full、develop push 保持 short，dispatch 不讀 capture。
+
+**尚缺經審查的 canonical 原件／capture → GitHub Actions runner 傳遞整合。** 標準 checkout 沒有這些本機原件；即使未來常數改為啟用，缺 capture 仍走 full fallback。純文件免 full 的正式端到端流程尚未完成，需要先解決來源可信度、原件可取回與傳遞／事件綁定整合，再完成適用驗收；不是只差再跑一次 CI。本次不新增傳遞平台、分支或外部服務，也不以 PR 作者單一 manifest 自證豁免。
+
 之後正式啟用須保存明確政策版本、生效點與新 task 適用性；舊 task 的基線、原審查、計數、STOP／BLOCKED、原件與有限例外保持。G1、T1／T2／T3 均未採納，不改產品 proof、交易／恢復、來源信任或安全優先序；P5 工作管理已結案，原 STOP、三輪／第四輪歷史及 symlink 中斷原義不動，不讀寫其工作樹。
 
 候選外文件與未授權研究只以文字來源定位，不建立不存在的本地連結。歷史決策及保留 anchors 見[決策稿歷史](DEVELOPMENT_FLOW_DECISIONS.md#flow-history)。

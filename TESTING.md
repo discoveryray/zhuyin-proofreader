@@ -40,6 +40,28 @@ git diff --check
 git status --short
 ```
 
+<a id="pending-pr-flow-ci"></a>
+## 待啟用 PR 流程的有限本機交接
+
+本節只說明 [pr_flow_ci.py](scripts/pr_flow_ci.py) 已實作的 consumer，不啟用豁免；適用規則與未完成整合見[程序入口](docs/DEVELOPMENT_REVIEW.md#pending-transition)。協調者須先從獨立原始來源核實 reviewer／session、分類、原件及有效授權，保存 raw bytes、引用與 hash，再寫入固定、不納 Git 的 `tmp/pr-review-automation/pr-flow-ci/current-capture.json`；不能由 PR 作者單一 JSON 自證。沒有 CLI／環境變數可以替換此來源或啟用政策。
+
+Capture 使用有限 closed `pr-flow-ci-capture/1`：`schema`、`policy`、`coordinator`、`candidate`、`classification`、`implementers`、`review_originals`。`coordinator` 恰含 `actor`、非空且不重複的 `source_refs`、`authorization_ref`、`independent_sources_checked: true`；其餘物件重用 [v5 gate 的共享契約](docs/PR_REVIEW_GATE.md#pending-v5)，不另建分類或原件規則。Hash 只核 bytes，不能認證身分或授權。
+
+`dispatch` 未啟用時不讀 capture：PR→develop／main 與 main push 維持 full，develop push 維持 short。未來啟用後，仍須核 canonical 原件鏈、必要 reviewer 確認、完整 Git candidate／files 及當次真實 PR event／synthetic merge；缺 capture 或不具可用純文件分類即保留 full，不因檔名推定豁免。初版文檢只支援候選中仍存在的 Markdown；其他格式／刪除保留 full。
+
+以下為既有 CLI 介面；後三項須由真正 Actions context 與相符 plan 執行，目前文檢 route 不可啟用。本機 `inspect` 只讀固定候選 Git objects，不創造 CI 身分或 merge 權限：
+
+```powershell
+python scripts/pr_flow_ci.py inspect --candidate candidate.json --check local_links
+python scripts/pr_flow_ci.py dispatch --output tmp/pr-flow-ci/plan.json
+python scripts/pr_flow_ci.py documentation --plan tmp/pr-flow-ci/plan.json --output tmp/pr-flow-ci/docs/checks.json
+python scripts/pr_flow_ci.py verify-documentation tmp/pr-flow-ci/docs/checks.json
+```
+
+文檢真正執行 `bytes`（UTF-8、非空）、`local_links`（本地路徑／anchors）、`diff` 三個子程序，保存各 stdout／stderr、命令、退出碼、hash、candidate 及原始檢查結果；verifier 重核原件與候選，不能接受空成功。Workflow summary 分別核 docs／full／short 的真實必要 outcomes，docs 還須綁當次 PR、run／attempt、tested SHA、parents／tree 與 Windows Python 3.13.0。
+
+目前本機 consumer 與隔離負控可驗證上述行為；**未建立本機 canonical 原件／capture 到 Actions runner 的可信 transport，正式純文件免 full 端到端未完成**。標準 checkout 不帶本機原件，未來缺 capture 也保留 full。需先完成可信傳遞整合及適用驗收，不能寫成「只需跑一次 CI」；本次不新增傳遞平台或服務。一般／核心的完整 inventory／coverage 保持，舊 schema／歷史判定不遷移。
+
 ## PR 的當前完整非視窗驗證
 
 一般 PR→develop、PR→main 都由 GitHub hosted Windows Python3.13.0 與 requirements-ci-lock.txt 執行全部有效非視窗 pytest/verify-active。正常入口不呼叫 restore-history，不要求舊CI artifact或hand-off/ledger/continuation新版閉包；保留原 task/baseline/source_ref/封存/失敗，不bootstrap/unseal/換目錄歸零。以下為功能入口，不可本機自填 CI 身分或把短測稱正式CI：
