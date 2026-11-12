@@ -3,7 +3,7 @@
 <a id="flow-adoption-20261112"></a>
 ## 採納附記：設計已採納、實作中、尚未啟用
 
-本附記記錄使用者本次明確裁定，取代下方凍結提案中「尚未採納」「另行授權」及待裁定值的當時狀態。唯一程序入口為從零建立的 [DEVELOPMENT_REVIEW.md](DEVELOPMENT_REVIEW.md#applicability)；未匯入來源候選的同名草案。AGENTS 仍是安全與授權權威。
+本附記記錄使用者本次明確裁定，取代下方凍結提案中「尚未採納」「另行授權」及待裁定值的當時狀態。下表保留初始採納內容，首版最新範圍以[後續縮減裁定](#flow-first-edition-20261112)為準，純文件亦須 full。唯一程序入口為從零建立的 [DEVELOPMENT_REVIEW.md](DEVELOPMENT_REVIEW.md#applicability)；未匯入來源候選的同名草案。AGENTS 仍是安全與授權權威。
 
 | 裁定 | 本次採納內容與邊界 |
 | --- | --- |
@@ -20,7 +20,26 @@
 
 本機整合續作以 `752e7a2f935066c8f408a80262946c0ab13876bf` 為來源，沿原 task／baseline／corrective 1/3；先保留無 capture 的 full fallback 與 docs artifact 進入舊 short consumer 的原拒絕，再補原未完成的三路 checks、生命週期及既有 artifact API 接線。缺必要文檢時拒絕仍正確，不能把 full pytest 當文檢。這不是新的政策裁定、正式驗證或啟用；本機 API fixture 與真正平台來源／權限的缺口分開交付。程序與原件規格只在[單一入口](DEVELOPMENT_REVIEW.md#pending-checks-routes)及其專屬引用維護，不新增平行決策稿。
 
-下方保留固定實作起點的新版方案及 G1–G5 原提案，供來源與歷史 anchors 追溯；其中「尚未採納」「本輪不授權」及 G4 兩輪無進展建議均是**當時提案文字**，目前裁定以本附記與程序入口為準。請展開後閱讀原文。
+<a id="flow-first-edition-20261112"></a>
+## 後續裁定：縮減首版，限定第四輪 4/4，尚未啟用
+
+使用者在固定來源 `822d4941b6913dd62b75eb49615c156fb248641b` 的兩份獨立 `BLOCKED/code` 後，明確採納以下首版縮減，並授權原 task 追加**一次限定第四輪，上限 4/4**。原 baseline、前三輪起訖、計數、失敗、RA5-F1／RB5-F1 原件與判定全部保持；這是當次任務例外，不改一般三輪政策、不採納 G4、不另開同義 task，也不以新 gate 放行自身。
+
+| 首版保留 | 首版延後，退出執行與授權路徑 |
+| --- | --- |
+| docs／local／core 的 1／1／2 位獨立 reviewer；首次完整審查、同 reviewer 有限補審；canonical 原件、same-bytes 備份與 PR 摘要；code review、CI、merge eligibility 分開；單一程序入口與 v5 必要生命週期。 | 純文件免 full；自製 Markdown／HTML 語義檢查器；專為文件豁免使用的 Actions capture／producer；文件專屬 CI artifact 與 post-merge 路徑。 |
+
+首版**所有 PR 均保留既有完整有效非視窗 CI／當次 full `/3` 證據要求**，develop actual merge 保留既有短驗證 `/3`。審查人數與檢查路徑分開：docs 仍需一位 reviewer，但沒有免 full 權利；local／core 亦不能以文檢替代 full。Full pytest 不代表已檢查所有文件內容、連結、anchor 或 render；必要文件確認由 reviewer 親自執行、如實記錄，缺必要證據仍阻擋。
+
+本輪必須解除 workflow／summary、full／fallback gate 及 full post-merge 對延後 parser 原件的強制依賴，首版不以 capture／producer 決定豁免。研究來源如保留，只能明確隔離；原兩個反例必須留存，並證明不能再產生首版放行證據。正確處置是「**含缺陷的能力已延後並退出首版**」，不是「缺陷已修復」；不得刪掉失敗 oracle 或改成成功。
+
+[研究來源 ZIP](research/PR_FLOW_DEFERRED_822d494.zip)保存 `822d494` 的三份研究程式、三份研究測試、policy 測試、workflow 測試及 workflow 共九件原始 bytes，含原 assertions；ZIP SHA256 為 `a33a9a69236e40b66646f384360d7e0b90a70d5c14340b5917f90bb1870d9679`。封裝內維持原路徑，各件 SHA256 與逐 byte 解封核對結果寫入原 task INDEX／`corrective-04/research-preservation.json`。這是來源附件，不是平行決策稿、可獨立啟動工具或首版 CI 輸入；不自動解壓／import／執行。原 Git object、RA5-F1／RB5-F1 報告及 ignored tmp 原件亦保持。
+
+新政策維持 `ENABLED=False`。第四輪固定候選依起點有效舊規，由兩位未參與修改的 reviewer 審完整原 baseline → 最新候選及縮減範圍，不只審移除片段。若仍有 confirmed code blocker，保存原件並 STOP，不自啟第五輪。六項依賴、真實 hosted／full 證據，以及舊 gate 對 `752→3b` 功能續作歷史的表示缺口分列保留；不捏造連續端點、不新增歷史 adapter。
+
+本輪僅本機必要實作、定向檢查及 commit；沒有安裝、fetch、push、PR、遠端 CI、merge、外部保護或正式資料操作授權，不接續 P5。正式驗證與明確版本啟用仍待後續授權及驗收。本節是較新的有限範圍裁定，取代前述首版文件豁免／parser／producer 接線目標；舊文字保留為當時設計來源，現行導航仍見 [DEVELOPMENT_REVIEW.md](DEVELOPMENT_REVIEW.md#applicability)。
+
+下方保留固定實作起點的新版方案及 G1–G5 原提案，供來源與歷史 anchors 追溯；其中「尚未採納」「本輪不授權」及 G4 兩輪無進展建議均是**當時提案文字**，目前裁定以本附記、較新的首版縮減及程序入口為準。請展開後閱讀原文。
 
 <details>
 <summary>42b1985 新版待採納方案與歷史提案原文（凍結快照）</summary>

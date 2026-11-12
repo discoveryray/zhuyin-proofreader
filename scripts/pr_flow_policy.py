@@ -12,6 +12,9 @@ import re
 
 POLICY_ID = "development-flow/tiered-review/1"
 ENABLED = False
+# The adopted first edition changes reviewer counts, not test exemptions.
+# This source constant is not an input/environment activation switch.
+FIRST_EDITION_CHECKS_ROUTE = "full"
 TIERS = {"docs": 1, "local": 1, "core": 2}
 RISKS = {"commands", "authorization", "safety", "actual_expected", "evidence",
          "identity", "transaction_recovery", "gate_ci", "core_contract",

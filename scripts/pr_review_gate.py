@@ -2180,17 +2180,18 @@ def _validate_tiered_structure(state):
     # Reuse the existing closed current PR/CI structure, without historical adapters.
     _validate_state_tail_structure({"pr": state["pr"], "pr_ci": state["pr_ci"], "push_ci": None,
                                     "merge": None, "handoffs": []})
-    for field in ("coverage", "documentation_checks"):
-        if state[field] is not None:
-            policy.text(state[field], field)
+    if state["coverage"] is not None:
+        policy.text(state["coverage"], "coverage")
+    # Retain the pending v5 slot so old draft inputs fail explicitly, rather
+    # than silently turning experimental documentation evidence into full CI.
+    policy.require(state["documentation_checks"] is None,
+                   "documentation evidence is deferred outside the first edition")
     if "lifecycle" in state:
         lifecycle = state["lifecycle"]
         policy.fields(lifecycle, "schema checks_route premerge_recheck merge push_ci short_validation", "lifecycle")
         policy.require(lifecycle["schema"] == TIERED_LIFECYCLE_SCHEMA, "unknown lifecycle contract")
-        policy.require(lifecycle["checks_route"] in {"full", "docs", "docs_fallback_full"}, "unknown checks route")
-        policy.require((state["classification"]["tier"] == "docs") ==
-                       (lifecycle["checks_route"] in {"docs", "docs_fallback_full"}),
-                       "documentation routes require documentation classification; local/core require full")
+        policy.require(lifecycle["checks_route"] == policy.FIRST_EDITION_CHECKS_ROUTE,
+                       "first edition requires full checks for every classification")
         _validate_state_tail_structure({"pr": state["pr"], "pr_ci": state["pr_ci"],
                                        "merge": lifecycle["merge"], "push_ci": lifecycle["push_ci"], "handoffs": []})
         if lifecycle["short_validation"] is not None:
@@ -2216,20 +2217,36 @@ def _validate_tiered_review_heads(state, reviewed):
 
 
 def _tiered_checks(state, reviewed):
-    policy = _tiered_policy()
-    route = state.get("lifecycle", {}).get("checks_route")
-    if route is None:
-        route = "docs" if reviewed["classification"]["tier"] == "docs" else "full"
-    if route in {"docs", "docs_fallback_full"}:
-        policy.require(reviewed["code_ready"], "documentation route requires confirmed independent code review")
+    """Read the existing current full evidence for all first-edition tiers.
+
+    No producer plan, capture, parser, or experimental documentation artifact
+    participates in this path. Reviewer content/link checks are separate from
+    the full test evidence, never inferred from a pytest result.
+    """
+    policy, candidate, ci, pr = _tiered_policy(), state["candidate"], state["pr_ci"], state["pr"]
+    policy.require(ci is not None and pr is not None, "missing current PR CI")
+    problem = _current_ci_problem(ci, "pull_request", pr["head_branch"], candidate["head"],
+                                  [candidate["base"], candidate["head"]])
+    policy.require(problem is None, problem or "invalid full CI")
+    policy.require(state["coverage"] is not None, "missing full current coverage")
     try:
-        from scripts.pr_flow_ci import verify_pr_checks
+        from scripts.validation_evidence import verify_current_coverage
     except ModuleNotFoundError:
-        from pr_flow_ci import verify_pr_checks
-    result = verify_pr_checks(state["pr_ci"], state["pr"], state["candidate"], route,
-                              coverage_path=state["coverage"], documentation_path=state["documentation_checks"])
-    policy.require(result["source_route"] == route, "verified checks route differs")
-    return result
+        from validation_evidence import verify_current_coverage
+    coverage = verify_current_coverage(Path(state["coverage"]))
+    policy.require(coverage["candidate"] == {"head": ci["tested_sha"], "tree": ci["tree"],
+                                              "parents": [candidate["base"], candidate["head"]]},
+                   "full coverage belongs to another PR integration")
+    policy.require(coverage["ci"] == {"run_id": ci["run_id"], "attempt": ci["attempt"],
+                                      "job": "test", "event": "pull_request"},
+                   "full coverage belongs to another PR run/attempt")
+    checkout = coverage["checkout"]
+    policy.require(checkout["number"] == pr["number"]
+                   and checkout["head_ref"] == pr["head_branch"] and checkout["base_ref"] == pr["base_branch"]
+                   and checkout["base_sha"] == candidate["base"] and checkout["head_sha"] == candidate["head"]
+                   and all(checkout[key] == REPOSITORY for key in ("repository", "base_repository", "head_repository")),
+                   "full coverage belongs to another PR/repository/base/branch")
+    return {"source_route": policy.FIRST_EDITION_CHECKS_ROUTE, "candidate": coverage["candidate"], "ci": coverage["ci"]}
 
 
 def validate_tiered_evidence(state, *, original_resolver=None):
@@ -2390,14 +2407,13 @@ def evaluate_tiered_lifecycle(state, *, original_resolver=None):
             return decide("REFRESH_EVIDENCE", "retrieve actual merge short validation originals", "push_short")
         try:
             try:
-                from scripts.pr_flow_ci import verify_tiered_post_merge
+                from scripts.validation_evidence import verify_reuse
             except ModuleNotFoundError:
-                from pr_flow_ci import verify_tiered_post_merge
-            short = verify_tiered_post_merge(Path(lifecycle["short_validation"]), candidate, checked["source_route"], ci,
-                                             coverage_path=state["coverage"], documentation_path=state["documentation_checks"])
+                from validation_evidence import verify_reuse
+            short = verify_reuse(Path(state["coverage"]), Path(lifecycle["short_validation"]), current_only=True)
             _tiered_policy().require(short["candidate"] == {"head": merge["sha"], "tree": merge["tree"], "parents": merge["parents"]},
                                      "short evidence differs from actual merge")
-            _tiered_policy().require(short["source_route"] == checked["source_route"] and short["ci"]["event"] == "push"
+            _tiered_policy().require(checked["source_route"] == _tiered_policy().FIRST_EDITION_CHECKS_ROUTE and short["ci"]["event"] == "push"
                                      and all(short["ci"][key] == push[key] for key in ("run_id", "attempt")),
                                      "short evidence differs from actual push run/attempt/route")
         except (OSError, ValueError, TypeError, KeyError, zipfile.BadZipFile) as exc:

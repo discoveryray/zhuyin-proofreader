@@ -1,5 +1,11 @@
-"""Bounded synthetic v5 contracts; no activation, product full run or real CI."""
+"""First-edition v5 contracts: full CI for every tier, no automatic document exemption.
+
+Experimental route oracles remain byte-preserved in the deferred 822d494 ZIP.
+These current parser/CLI tests use explicit synthetic full evidence, never a real
+full/hosted success claim. Canonical/review/lifecycle safety oracles are retained.
+"""
 from copy import deepcopy
+import builtins
 import hashlib
 import json
 from pathlib import Path
@@ -8,7 +14,6 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
-import zipfile
 
 from scripts import pr_flow_policy as policy
 from scripts import pr_review_gate as gate
@@ -80,7 +85,6 @@ class TieredReviewPolicyTests(unittest.TestCase):
         pr = deepcopy(evidence_state()["pr"])
         pr["head_branch"] = "codex/fixture"
         coverage = bundle(self.root / "coverage")
-        self.full_plan(coverage)
         return {"schema": gate.TIERED_SCHEMA, "policy": policy.POLICY_ID,
                 "task_policy": {"policy": policy.POLICY_ID, "task_id": candidate["task_id"], "baseline": BASE,
                                 "origin": "new_task", "starting_head": HEAD, "base_branch": "develop",
@@ -94,12 +98,6 @@ class TieredReviewPolicyTests(unittest.TestCase):
                             "working_tree_clean": True, "evidence_ref": "synthetic://exact-current-git"},
                 "pr": pr, "pr_ci": ci, "coverage": str(coverage), "documentation_checks": None}
 
-    def full_plan(self, coverage):
-        from scripts import pr_flow_ci as ci
-        path = Path(coverage).parent / "pr-flow-ci/plan.json"; path.parent.mkdir(parents=True, exist_ok=True)
-        plan = ci.dispatch({"pull_request": {"base": {"ref": "develop"}}},
-                           {"GITHUB_EVENT_NAME": "pull_request", "GITHUB_REF": "refs/pull/20/merge"})
-        path.write_text(json.dumps(plan), encoding="utf-8")
 
     def test_reviewer_counts_are_one_one_two_without_classification_round(self):
         for tier in ("docs", "local", "core"):
@@ -111,6 +109,99 @@ class TieredReviewPolicyTests(unittest.TestCase):
                 if tier == "core":
                     report2 = self.report(candidate, reviewer="reviewer-2", session="session-2", ref="review-2")
                     self.assertTrue(self.review(candidate, classification, [report, report2])["code_ready"])
+
+    def test_first_edition_all_tiers_require_full_evidence_without_capture_or_producer(self):
+        for tier, count in (("docs", 1), ("local", 1), ("core", 2)):
+            with self.subTest(tier=tier):
+                state = self.state(tier)
+                self.assertEqual(len(state["review_originals"]), count)
+                self.assertFalse((Path(state["coverage"]).parent / "pr-flow-ci").exists())
+                result = gate.validate_tiered_evidence(state)
+                self.assertTrue(result["code_ready"] and result["checks_ready"] and result["requirements_satisfied"], result)
+                state["coverage"] = None
+                result = gate.validate_tiered_evidence(state)
+                self.assertTrue(result["code_ready"])
+                self.assertFalse(result["checks_ready"] or result["requirements_satisfied"], result)
+
+    def test_first_edition_branch_pair_and_full_steps_remain_required_without_router(self):
+        state = self.state()
+        state["pr_ci"]["jobs"][0]["steps"].pop("Resolve current validation route")
+        self.assertTrue(gate.validate_tiered_evidence(state)["checks_ready"])
+        state["pr_ci"]["jobs"][0]["steps"]["Run full pytest suite"] = "skipped"
+        self.assertFalse(gate.validate_tiered_evidence(state)["checks_ready"])
+        state = self.state()
+        state["task_policy"]["head_branch"] = "codex/different"
+        self.assertFalse(gate.validate_tiered_evidence(state)["requirements_satisfied"])
+
+    def test_first_edition_deferred_routes_and_documentation_slot_are_rejected(self):
+        for tier in ("docs", "local", "core"):
+            for route in ("docs", "docs_fallback_full"):
+                state = self.lifecycle_state(tier)
+                state["lifecycle"]["checks_route"] = route
+                with self.subTest(tier=tier, route=route), self.assertRaisesRegex(policy.PolicyError, "first edition"):
+                    gate.evaluate_tiered_lifecycle(state)
+            state = self.state(tier)
+            state["documentation_checks"] = str(self.root / "deferred-success.json")
+            with self.subTest(tier=tier), self.assertRaisesRegex(policy.PolicyError, "deferred"):
+                gate.validate_tiered_evidence(state)
+
+    def test_first_edition_known_parser_counterexamples_cannot_replace_full_originals(self):
+        # Preserve the actual known stimuli as regression inputs. Their old
+        # parser result is known defective, not repaired or trusted here. The
+        # original source/reproductions remain in the 822d494 research ZIP and
+        # reports RA5-F1/RB5-F1. Only full /3 can satisfy this release's checks.
+        cases = {
+            "RA5-F1": '# Target\n\nParagraph <pre></pre>\n`<a id="example-only"></a>`\n',
+            "RB5-F1": '# Guide\n\n<!-- comment block -->\n<span>\n`<a href="missing.md">Real HTML resource</a>`\n</span>\n',
+        }
+        for finding, stimulus in cases.items():
+            state = self.lifecycle_state("docs")
+            packet = self.root / (finding + ".json")
+            packet.write_text(json.dumps({"schema": "pr-flow-documentation-checks/1", "status": "success",
+                                          "original_finding": finding, "stimulus": stimulus,
+                                          "notice": "retained defective research result, never full evidence"}), encoding="utf-8")
+            state["coverage"] = str(packet)
+            with self.subTest(finding=finding):
+                result = gate.validate_tiered_evidence(state)
+                self.assertTrue(result["code_ready"])
+                self.assertFalse(result["checks_ready"] or result["requirements_satisfied"], result)
+                self.assertEqual(gate.evaluate_tiered_lifecycle(state)["action"], "REFRESH_EVIDENCE")
+                self.assertEqual(gate.next_action(state)["action"], "STOP")
+
+    def test_first_edition_runtime_graph_never_imports_deferred_research(self):
+        deferred = {"pr_flow_ci", "pr_flow_evidence", "pr_flow_transport",
+                    "test_pr_flow_ci", "test_pr_flow_evidence", "test_pr_flow_transport"}
+        original_import = builtins.__import__
+        imports = []
+        def guarded(name, globals=None, locals=None, fromlist=(), level=0):
+            requested = [name, *(name + "." + member for member in (fromlist or ()) if isinstance(member, str))]
+            imports.extend(requested)
+            if any(item.rsplit(".", 1)[-1] in deferred for item in requested):
+                raise AssertionError("First-edition gate imported deferred research: " + name)
+            return original_import(name, globals, locals, fromlist, level)
+        with patch.object(builtins, "__import__", side_effect=guarded):
+            for tier in ("docs", "local", "core"):
+                state = self.lifecycle_state(tier)
+                self.premerge_recheck(state)
+                self.assertTrue(gate.validate_tiered_evidence(state)["requirements_satisfied"])
+                self.assertEqual(gate.evaluate_tiered_lifecycle(state)["action"], "MERGE_PROPOSAL")
+                self.assertEqual(gate.next_action(state)["action"], "STOP")
+            merged = self.full_merged_lifecycle()
+            self.assertEqual(gate.evaluate_tiered_lifecycle(merged)["action"], "COMPLETE")
+        self.assertTrue(any("validation_evidence" in name for name in imports))
+
+    def test_first_edition_full_rejects_wrong_repository_and_missing_original(self):
+        for case in ("repository", "missing-original"):
+            state = self.state("docs")
+            coverage = Path(state["coverage"])
+            with self.subTest(case=case):
+                if case == "repository":
+                    value = json.loads(coverage.read_text())
+                    value["repository"] = "other/repository"
+                    coverage.write_text(json.dumps(value), encoding="utf-8")
+                else:
+                    (coverage.parent / "pytest.log").unlink()
+                self.assertFalse(gate.validate_tiered_evidence(state)["checks_ready"])
 
     def test_core_markdown_mixed_and_risks_cannot_downgrade(self):
         for files, risks in ((["AGENTS.md"], []), (["docs/PR_REVIEW_GATE.md"], []),
@@ -399,72 +490,9 @@ class TieredReviewPolicyTests(unittest.TestCase):
         state["pr_ci"] = None
         self.assertFalse(gate.validate_tiered_evidence(state)["requirements_satisfied"])
 
-    def test_exact_branch_pair_and_route_step_are_merge_requirements(self):
-        state = self.state()
-        state["task_policy"]["head_branch"] = "codex/different"
-        self.assertFalse(gate.validate_tiered_evidence(state)["requirements_satisfied"])
-        state = self.state()
-        state["pr_ci"]["jobs"][0]["steps"]["Resolve current validation route"] = "skipped"
-        self.assertFalse(gate.validate_tiered_evidence(state)["checks_ready"])
 
-    def documentation_state(self):
-        from scripts import pr_flow_ci as ci
-        from scripts import pr_flow_transport as transport
-        from test_pr_flow_ci import synthetic_ci
-        from test_pr_flow_transport import SyntheticAPI, SyntheticFixture
-        source = self.root / "document-source"
-        fixture = SyntheticFixture(source)
-        candidate, event, environment = fixture.candidate, fixture.event, fixture.environment
-        environment["GITHUB_RUN_ID"] = "1234"
-        binding = ci.bind_event(candidate, event, environment, source)
-        transfer = transport.fetch_capture(SyntheticAPI(fixture), candidate, event, source / "tmp/pr-flow-ci/transport", source)
-        capture = transfer["capture"]
-        self.documentation_resolver = transfer["original_resolver"]
-        plan = ci.validated_documentation_plan(capture, event, environment, source, original_resolver=self.documentation_resolver)
-        plan["source"] = transfer["source"]
-        (source / "tmp/pr-flow-ci/plan.json").write_text(json.dumps(plan), encoding="utf-8")
-        output = source / "tmp/pr-flow-ci/docs/checks.json"
-        self.assertEqual(ci.run_documentation_checks(candidate, binding, output, source)["status"], "success")
-        current_ci, current_pr = synthetic_ci(candidate, binding)
-        state = self.state("docs")
-        current_ci.update(url="synthetic://CI/1234", evidence_ref="synthetic://current-original-CI")
-        current_ci["jobs"][0]["evidence_ref"] = "synthetic://current-original-job"
-        state.update(candidate=candidate, classification=capture["classification"], implementers=capture["implementers"],
-                     review_originals=capture["review_originals"], pr_ci=current_ci, coverage=None,
-                     documentation_checks=str(output))
-        state["pr"].update(current_pr, base_sha=candidate["base"], head_sha=candidate["head"])
-        state["authorization"]["task_id"] = candidate["task_id"]
-        state["task_policy"].update(task_id=candidate["task_id"], baseline=candidate["baseline"],
-                                    starting_head=candidate["head"], head_branch=current_pr["head_branch"])
-        state["current"].update({key: candidate[key] for key in ("base", "head", "tree", "scope")})
-        return source, state
 
-    def test_real_documentation_checks_integrate_with_current_ci_and_inactive_gate(self):
-        from scripts import pr_flow_ci as ci
-        source, state = self.documentation_state()
-        pointer = state["review_originals"][0]
-        raw = policy.verify_original(pointer, resolver=self.documentation_resolver)
-        with patch.object(ci, "ROOT", source):
-            result = gate.validate_tiered_evidence(state, original_resolver=self.documentation_resolver)
-            self.assertTrue(result["requirements_satisfied"], result)
-            public = gate.next_action(state, original_resolver=self.documentation_resolver)
-            self.assertEqual(public["action"], "STOP")
-            self.assertFalse(public["merge_ready"])
-        self.assertEqual(policy.verify_original(pointer, resolver=self.documentation_resolver), raw)
 
-    def test_documentation_ci_wrong_run_or_missing_confirmation_cannot_exempt(self):
-        from scripts import pr_flow_ci as ci
-        source, state = self.documentation_state()
-        with patch.object(ci, "ROOT", source):
-            state["pr_ci"]["latest_attempt"] = 2
-            result = gate.validate_tiered_evidence(state, original_resolver=self.documentation_resolver)
-            self.assertTrue(result["code_ready"])
-            self.assertFalse(result["checks_ready"])
-            state["pr_ci"]["latest_attempt"] = 1
-            state["review_originals"] = []
-            result = gate.validate_tiered_evidence(state, original_resolver=self.documentation_resolver)
-            self.assertFalse(result["code_ready"])
-            self.assertFalse(result["checks_ready"])
 
     def test_public_gate_remains_stop_even_with_all_requirements_and_fake_enable(self):
         state = self.state()
@@ -487,7 +515,7 @@ class TieredReviewPolicyTests(unittest.TestCase):
         state = self.state(tier)
         state["authorization"]["operations"] = sorted(gate.OPERATIONS)
         state["lifecycle"] = {"schema": gate.TIERED_LIFECYCLE_SCHEMA,
-                              "checks_route": "docs" if tier == "docs" else "full",
+                              "checks_route": "full",
                               "premerge_recheck": None, "merge": None, "push_ci": None, "short_validation": None}
         return state
 
@@ -501,18 +529,6 @@ class TieredReviewPolicyTests(unittest.TestCase):
         from test_current_validation_evidence import current_short
         folder = self.root / "actual-full-short"; folder.mkdir()
         coverage, short = current_short(folder)
-        self.full_plan(coverage)
-        from scripts import validation_evidence as evidence
-        data = json.loads(short.read_text())
-        with zipfile.ZipFile(folder / "pr-artifact.zip", "w") as archive:
-            for file in coverage.parent.rglob("*"):
-                if file.is_file(): archive.write(file, file.relative_to(coverage.parent).as_posix())
-        data["source"]["archive"]["sha256"] = evidence.sha256_file(folder / "pr-artifact.zip")
-        artifact_path = folder / "artifact.json"; artifact = json.loads(artifact_path.read_text())
-        artifact["digest"] = "sha256:" + evidence.sha256_file(folder / "pr-artifact.zip")
-        artifact_path.write_text(json.dumps(artifact), encoding="utf-8")
-        data["source"]["artifact"]["sha256"] = evidence.sha256_file(artifact_path)
-        short.write_text(json.dumps(data), encoding="utf-8")
         state = self.lifecycle_state()
         state["coverage"] = str(coverage)
         state["pr"]["state"] = "merged"
@@ -630,63 +646,7 @@ class TieredReviewPolicyTests(unittest.TestCase):
             with self.subTest(field=field): self.assertEqual(gate.evaluate_tiered_lifecycle(changed)["action"], action)
         self.assertEqual(gate.next_action(state)["action"], "STOP")
 
-    def test_lifecycle_documentation_source_cannot_complete_without_actual_merge_push_and_short(self):
-        from scripts import pr_flow_ci as ci
-        source, state = self.documentation_state()
-        state["lifecycle"] = {"schema": gate.TIERED_LIFECYCLE_SCHEMA, "checks_route": "docs", "premerge_recheck": None,
-                              "merge": None, "push_ci": None, "short_validation": None}
-        state["pr"]["state"] = "merged"
-        with patch.object(ci, "ROOT", source):
-            assess = lambda: gate.evaluate_tiered_lifecycle(state, original_resolver=self.documentation_resolver)
-            self.assertEqual(assess()["action"], "VERIFY_MERGE")
-            parents = [state["candidate"]["base"], state["candidate"]["head"]]
-            state["lifecycle"]["merge"] = {"sha": NEW, "parents": parents, "tree": state["pr_ci"]["tree"],
-                "develop_head": NEW, "develop_contains_merge": True, "evidence_ref": "synthetic://actual-merge-model"}
-            self.assertEqual(assess()["action"], "WAIT_PUSH_CI")
-            push = ci_evidence("push")
-            push.update(head_sha=NEW, tested_sha=NEW, parents=parents, tree=state["pr_ci"]["tree"])
-            for job in push["jobs"]: job["tested_sha"] = NEW; job["steps"]["Verify required validation results"] = "success"
-            push["jobs"].append(dict(push["jobs"][0], name="Merge short validation", steps={name: "success" for name in (
-                "Check out repository", "Set up Python", "Install locked validation dependencies",
-                "Verify merge and run short validation", "Upload validation evidence")}))
-            state["lifecycle"]["push_ci"] = push
-            self.assertEqual(assess()["action"], "REFRESH_EVIDENCE")
 
-    def test_lifecycle_documentation_zip_and_short_parser_positive_is_only_inactive_diagnosis(self):
-        from scripts import pr_flow_ci as ci
-        from test_pr_flow_evidence import documentation_short_fixture
-        fixture = documentation_short_fixture(self.root / "documentation-short-model")
-        self.assertIn("synthetic", fixture["fixture_context"]["short_commands"])
-        candidate, capture, actual = fixture["candidate"], fixture["capture"], fixture["actual_merge"]
-        state = self.lifecycle_state("docs")
-        state.update(candidate=candidate, classification=capture["classification"], implementers=capture["implementers"],
-                     review_originals=capture["review_originals"], coverage=None, documentation_checks=str(fixture["documentation_path"]))
-        state["task_policy"].update(task_id=candidate["task_id"], baseline=candidate["baseline"], starting_head=candidate["head"],
-                                     head_branch=fixture["pr"]["head_branch"])
-        state["authorization"]["task_id"] = candidate["task_id"]
-        state["current"].update({key: candidate[key] for key in ("base", "head", "tree", "scope")})
-        state["pr"].update(fixture["pr"], state="merged", base_sha=candidate["base"], head_sha=candidate["head"])
-        state["pr_ci"] = deepcopy(fixture["pr_ci"])
-        state["pr_ci"].update(url="synthetic://PR-CI", evidence_ref="synthetic://PR-CI-original")
-        for job in state["pr_ci"]["jobs"]: job["evidence_ref"] = "synthetic://PR-job-original"
-        push = ci_evidence("push")
-        push.update(head_sha=actual["head"], tested_sha=actual["head"], tree=actual["tree"], parents=actual["parents"],
-                    run_id=501, latest_run_id=501)
-        for job in push["jobs"]:
-            job.update(run_id=501, tested_sha=actual["head"])
-            job["steps"]["Verify required validation results"] = "success"
-        push["jobs"].append(dict(push["jobs"][0], name="Merge short validation", steps={name: "success" for name in (
-            "Check out repository", "Set up Python", "Install locked validation dependencies",
-            "Verify merge and run short validation", "Upload validation evidence")}))
-        state["lifecycle"].update(merge={"sha": actual["head"], "tree": actual["tree"], "parents": actual["parents"],
-            "develop_head": actual["head"], "develop_contains_merge": True, "evidence_ref": "synthetic://Git-actual-merge"},
-            push_ci=push, short_validation=str(fixture["short_path"]))
-        with patch.object(ci, "ROOT", fixture["source_root"]):
-            result = gate.evaluate_tiered_lifecycle(state, original_resolver=fixture["original_resolver"])
-            self.assertEqual(result["action"], "COMPLETE", result)
-            self.assertEqual(result["merge_sha"], actual["head"])
-            self.assertNotEqual(result["merge_sha"], state["pr_ci"]["tested_sha"])
-            self.assertEqual(gate.next_action(state, original_resolver=fixture["original_resolver"])["action"], "STOP")
 
     def test_lifecycle_postmerge_failure_retains_task_actual_merge_and_count(self):
         state = self.full_merged_lifecycle()

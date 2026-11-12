@@ -463,11 +463,6 @@ def fetch_pr_evidence(client, candidate, output, *, current_only=False):
 
 
 def post_merge(evidence_root, *, current_only=False):
-    if current_only:
-        from scripts import pr_flow_policy
-        if pr_flow_policy.ENABLED:
-            from scripts.pr_flow_evidence import post_merge_current
-            return post_merge_current(evidence_root)
     runner = runner_module()
     output = Path(evidence_root) / ("short-" + str(uuid.uuid4()))
     output.mkdir(parents=True, exist_ok=False)

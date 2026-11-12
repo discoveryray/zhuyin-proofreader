@@ -45,7 +45,7 @@ V5 state 的 closed 頂層恰為 `schema`、`policy`、`task_policy`、`candidat
 
 Canonical JSON report 使用 closed `pr-flow-code-review/1`，保留政策、`report_ref`、完整 candidate、reviewer／session／independent、`confirmed_tier`、`mode`、前版／完整初審引用、`delta_from`、`reviewed_range`、影響／架構／整合判斷、非空 `impact_summary`、所用 `review_checks` 原件引用、`verdict`、`findings` 與 `resolutions`。`full` 的 `reviewed_range` 必須是 baseline→HEAD，`delta` 必須是前版 HEAD→最新 HEAD，並由 `delta_from` 綁前版 base／HEAD；更換 reviewer、架構改變或未知影響不能走 delta。所有必要原件必須實讀核 bytes；新空 PASS 不會抹去舊 finding，resolution 須明指原 finding 及可驗證原件，code finding 不能同 HEAD 解除。
 
-`authorization`、`execution`、`current` 仍分別核有效操作、明確正式驗證授權、當前精確候選／clean；`pr`／`pr_ci` 沿用既有 closed current 結構而不混入歷史 adapters。一般／核心讀當次完整 coverage；純文件同時核實文檢原件及真實最新 PR CI 身分／steps，不接受本機 fixture 冒充 hosted CI。CI handoff 與傳遞缺口見 [TESTING](../TESTING.md#pending-pr-flow-ci)。
+`authorization`、`execution`、`current` 仍分別核有效操作、明確正式驗證授權、當前精確候選／clean；`pr`／`pr_ci` 沿用既有 closed current 結構而不混入歷史 adapters。依[首版縮減](DEVELOPMENT_FLOW_DECISIONS.md#flow-first-edition-20261112)，docs／local／core 全部核當次完整 coverage `/3` 及真實最新 PR CI 身分／steps，不讀 parser、capture、producer、plan 或文件專屬 artifact。分類仍決定 1／1／2 位必要 reviewer，不決定免 full。不接受本機 fixture 冒充 hosted CI；必要文件內容／連結由 reviewer 在原有報告欄位記錄，full 不替代它。
 
 Python 評估入口可獨立讀 code review，待 CI 完成再讀 checks，不重寫 canonical code 原件：
 
@@ -56,12 +56,12 @@ assessment = gate.validate_tiered_evidence(state)
 decision = gate.next_action(state)  # v5 始終 action=STOP
 ```
 
-`validate_state`／CLI `validate` 只核結構；`validate_tiered_evidence` 分別回傳 `code_ready`、`checks_ready`、`requirements_satisfied`，同時固定 `activation_pending: true`、`merge_ready: false`。即使條件評估為 true 或修改共享 `ENABLED`，public `next_action`／CLI `next-action` 仍 STOP，不能由 state 啟用。Canonical 的 code `PASS` 只是此格式的程式審查結論，不是本次改革的正式 PASS。正式驗收、可信 Actions 整合、明確版本啟用及有效授權仍缺一不可；舊 v3／v4 判定與歷史保持。
+`validate_state`／CLI `validate` 只核結構；`validate_tiered_evidence` 分別回傳 `code_ready`、`checks_ready`、`requirements_satisfied`，同時固定 `activation_pending: true`、`merge_ready: false`。即使條件評估為 true 或修改共享 `ENABLED`，public `next_action`／CLI `next-action` 仍 STOP，不能由 state 啟用。Canonical 的 code `PASS` 只是此格式的程式審查結論，不是本次改革的正式 PASS。正式驗收、既有 full／short 的真實 CI 證據、明確版本啟用及有效授權仍缺一不可；舊 v3／v4 判定與歷史保持。
 
 <a id="pending-v5-lifecycle"></a>
 ### 752e7a2 之後的有限生命週期接線
 
-原 task、baseline 與 corrective 歷史保持。沒有 `lifecycle` 的原 v5 仍保留診斷／拒絕原義，不推定已完成；新 envelope 為 `pr-flow-lifecycle/1`，封閉欄位定位 `_validate_tiered_structure`／`evaluate_tiered_lifecycle` 的實作。它包含實際 `checks_route`、合併前重新核對、actual merge、push CI 與 short 原件；不能以分類字串假裝已走該檢查路徑。
+原 task、baseline 與 corrective 歷史保持。沒有 `lifecycle` 的原 v5 仍保留診斷／拒絕原義，不推定已完成；envelope 為 `pr-flow-lifecycle/1`，封閉欄位定位 `_validate_tiered_structure`／`evaluate_tiered_lifecycle`。首版 `checks_route` 只接受 `full`，`documentation_checks` 保留槽必為 null；docs／fallback 研究路徑明確拒絕，不機械改名或讓已知錯誤原件放行。合併前重核、actual merge、push CI 與 short 原件仍分開；分類字串不代表已執行檢查。
 
 | 階段 | 有限下一步與必要條件 |
 | --- | --- |
@@ -74,9 +74,9 @@ decision = gate.next_action(state)  # v5 始終 action=STOP
 
 `evaluate_tiered_lifecycle(state, original_resolver=...)` 執行完整有限判定；正式 `next-action` 仍受未啟用鎖保護。CLI `diagnose-lifecycle` 外層固定 `action=STOP`，完整結果只在 `evaluation`；沒有 state／環境開關或可放行的診斷命令。原 v3／v4、舊 adapters 及已確認 STOP 不遷移。
 
-原件 resolver 僅依 `(source_file, sha256, report_ref)` 映射已驗包內位置；canonical、`review_checks`、resolution 與備份都用原 bytes 重核，未知 tuple 拒絕。包來源認證、離線完整性重核及後續 fresh API 分開；介面與平台前置見 [TESTING](../TESTING.md#pending-pr-flow-ci)。
+Canonical、`review_checks`、resolution 與 same-bytes 備份仍實讀核對；協調者負責從實際獨立 reviewer 取得原件並確認來源。既有精確 tuple resolver 只是本機位置介面，不是 Actions producer 或身分憑證，不能拿作者 JSON／hash 自證。首版不 import 研究 parser／transport／post-merge adapter。完整 CI 直接使用既有 `verify_current_coverage`，合併後直接用 `verify_reuse(current_only=True)`；保持 `/3` 原件、reviewed base／head 與 actual merge／push 的獨立身分，不新增文件 sidecar 或強制研究 plan。
 
-Active producer plan 帶 `execution_scope` 時必須有中立 `/2` 文檢原件，即使文件集合為空也須核實實跑的 scope／diff／raw。僅 752e7a2 既有明確 `reason=policy-inactive` 的 closed full plan、且候選沒有必要文件檢查時，可保留原當次 full `/3` 語義；不宣稱它做了中立檢查或新政策已啟用。含文件、docs fallback 或未知 plan 缺必要原件仍拒絕，不能以缺欄推定舊制成功。
+RA5-F1／RB5-F1 原判定及[來源附件](research/PR_FLOW_DEFERRED_822d494.zip)保持。含缺陷能力已退出首版，不宣稱修復；研究原件不能替 full `/3`，未解現行 finding、CI 失敗／缺失、stale HEAD／base 或缺 canonical 仍拒絕。本任務限定第四輪只見[當次裁定](DEVELOPMENT_FLOW_DECISIONS.md#flow-first-edition-20261112)，不改本節一般三輪／歷史契約，也不解決 `752→3b` 正式歷史表示缺口。
 
 ## 信任邊界與留存
 

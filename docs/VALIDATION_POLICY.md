@@ -1,10 +1,10 @@
 # Windows 無視窗分階段驗證政策
 
-待啟用 `development-flow/tiered-review/1` 的本機整合另見[程序入口的三路 checks 矩陣](DEVELOPMENT_REVIEW.md#pending-checks-routes)及 [TESTING 原件／短驗證 consumer](../TESTING.md#pending-pr-flow-ci)。它區分 docs、docs fallback full、一般／核心 full；原 full `/3` 與新 docs short 保留各自格式，公開未啟用鎖不變。API fixture／模型環境、真本機短命令與正式 hosted 原件必須分開，不因缺依賴、歷史 SHA 或 consumer 而補造成功；本段不改下列現行政策及歷史判定。
+程序先讀[開發與審查入口](DEVELOPMENT_REVIEW.md#applicability)。`development-flow/tiered-review/1` 設計已採納、首版已縮減、尚未啟用；本次改革仍按固定起點舊規由兩位獨立 reviewer 完整審查。首版 docs／local／core 的 reviewer 數為 1／1／2，但全部 PR 仍須既有 full `/3`，develop actual merge 保留 short `/3`，main push 保留完整驗證。
 
-程序先讀[開發與審查入口](DEVELOPMENT_REVIEW.md#applicability)。本文件專責驗證／證據政策及有限歷史契約，AGENTS 仍是安全與授權權威。`development-flow/tiered-review/1` 已採納設計、實作中、尚未啟用；下列當前完整非視窗驗證與兩位 reviewer 舊規繼續適用，不能先依新分類免除 CI。新政策待驗收的文檢／完整 CI 邊界只在[入口對應章](DEVELOPMENT_REVIEW.md#pending-validation)定義。
+[最新裁定](DEVELOPMENT_FLOW_DECISIONS.md#flow-first-edition-20261112)將文件免 full、自製 parser、文件豁免 capture／producer 及文件專屬 artifact／post-merge 延後並退出首版。Workflow／summary、gate、full post-merge 及 active test collection 不依賴這些研究能力。原件與已知缺陷保存於[研究來源附件](research/PR_FLOW_DEFERRED_822d494.zip)，RA5-F1／RB5-F1 不改標修復或 PASS。介面與來源定位見 [TESTING](../TESTING.md#pending-pr-flow-ci)。
 
-待啟用文檢 consumer 的本機交接與命令見 [TESTING](../TESTING.md#pending-pr-flow-ci)。有限 artifact API consumer 與隔離 fixture 已接入，但真實 producer、可信 base 設定及 hosted 端到端驗收仍缺；標準 checkout 缺可信 capture 仍 full fallback。本機整合與正式 CI 免 full 驗收分開，不能把工具可執行或一次 CI 綠燈當成新政策啟用。
+Reviewer 如實記錄必要文件內容／連結確認，full pytest 不代表已驗證所有 links／anchors／render；缺必要證據仍拒絕。模型 fixture、真實 full／hosted 與 actual merge push 證據分列。六項凍結依賴與 `752→3b` 真實歷史表示缺口保留；本 task 第四輪例外不修改一般三輪，不啟用政策，不自行開始正式全集、安裝或遠端操作。以下現行政策及歷史判定維持原義。
 
 ## 現行永久政策：當前候選證據
 
