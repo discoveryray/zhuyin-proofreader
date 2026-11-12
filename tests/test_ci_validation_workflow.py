@@ -492,14 +492,18 @@ class CurrentValidationWorkflowTests(unittest.TestCase):
     def test_inactive_workflow_has_real_documentation_consumers_without_enabling_an_exemption(self):
         route=step(current_job('test'),'Resolve current validation route')
         self.assertIn('python scripts/pr_flow_ci.py dispatch --output tmp/pr-flow-ci/plan.json',route)
-        for name,command in (('Run required documentation checks','documentation --plan tmp/pr-flow-ci/plan.json --output tmp/pr-flow-ci/docs/checks.json'),
-                             ('Verify required documentation checks','verify-documentation tmp/pr-flow-ci/docs/checks.json')):
+        for name,command in (('Run required documentation checks','documentation-pr --output tmp/pr-flow-ci/docs/checks.json'),
+                             ('Verify required documentation checks','verify-pr-documentation tmp/pr-flow-ci/docs/checks.json')):
             body=step(current_job('test'),name)
-            self.assertIn("steps.route.outputs.route == 'docs'",body)
+            self.assertIn("steps.route.outputs.policy_active == 'true'",body)
+            self.assertIn("github.event_name == 'pull_request'",body)
             self.assertIn(command,body)
             self.assertIn('if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }',body)
         upload=step(current_job('test'),'Upload documentation evidence')
-        self.assertIn("steps.route.outputs.route == 'docs'",upload)
+        self.assertIn("steps.route.outputs.policy_active == 'true'",upload)
+        self.assertIn("github.event_name == 'pull_request'",upload)
+        self.assertIn('tmp/pr-flow-ci/docs/tested-commit.raw',upload)
+        self.assertIn('tmp/pr-flow-ci/transport/originals/capture.json',upload)
         for check in ('bytes','local_links','diff'):
             self.assertIn('tmp/pr-flow-ci/docs/'+check+'.stdout.json',upload)
             self.assertIn('tmp/pr-flow-ci/docs/'+check+'.stderr.log',upload)
@@ -507,6 +511,36 @@ class CurrentValidationWorkflowTests(unittest.TestCase):
             self.assertIn(value,upload)
         self.assertNotIn('**',upload)
         self.assertNotIn('--ignore',LIVE_WORKFLOW)
+
+    def test_active_full_fallback_summary_requires_both_full_and_neutral_checks(self):
+        context=event_context()
+        context['steps']={'route':{'outputs':{'route':'full','policy_active':'true'}},
+                          'documentation':{'outputs':{'check_count':'3'}}}
+        names=('checkout','python','version','route','pip','dependencies','runtime','inventory','pytest','active','compile','diff_pr',
+               'clean','main_environment','coverage','coverage_verify','main_evidence','documentation','documentation_verify','documentation_evidence')
+        success={name:'success' for name in names}
+        cases=[(context,success,True)]
+        for outcome in ('failure','skipped','cancelled',''):
+            for name in names:cases.append((context,{**success,name:outcome},False))
+        for count in ('','0','2','4'):
+            changed={**context,'steps':{**context['steps'],'documentation':{'outputs':{'check_count':count}}}}
+            cases.append((changed,success,False))
+        # Inactive policy preserves the existing PR route and refuses new mixed
+        # results. Main push stays full and never claims PR documentation work.
+        changed={**context,'steps':{**context['steps'],'route':{'outputs':{'route':'full','policy_active':'false'}}}}
+        cases.append((changed,success,False))
+        main=event_context('push','refs/heads/main')
+        main['steps']={'route':{'outputs':{'route':'full','policy_active':'true'}}}
+        main_success={name:value for name,value in success.items() if not name.startswith('documentation') and name!='diff_pr'}
+        main_success['diff_push']='success'
+        cases.append((main,main_success,True));cases.append((main,{**main_success,'documentation':'success'},False))
+        self.execute_current_summary(cases)
+        future={**event_context(),'env':{'FULL_CURRENT_VALIDATION':'true'},
+                'steps':{'route':{'outputs':{'route':'full','policy_active':'true'}}}}
+        for name in ('Run required documentation checks','Verify required documentation checks','Upload documentation evidence'):
+            self.assertTrue(condition(step(current_job('test'),name),future))
+            inactive={**future,'steps':{'route':{'outputs':{'route':'full','policy_active':'false'}}}}
+            self.assertFalse(condition(step(current_job('test'),name),inactive))
 
     def test_current_commands_lock_capture_scope_and_finite_artifacts_are_explicit(self):
         full=current_job('test');short=current_job('short')

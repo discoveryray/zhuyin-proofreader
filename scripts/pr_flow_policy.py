@@ -123,7 +123,7 @@ def validate_classification(candidate, classification, implementers, confirmatio
             and classification["impact_known"] and "unknown" not in candidate["risks"]}
 
 
-def verify_original(pointer):
+def verify_original(pointer, *, resolver=None):
     """Read one canonical immutable version and any same-byte backup copies."""
     fields(pointer, "report_ref source_file sha256 backups", "original")
     text(pointer["report_ref"], "original.report_ref")
@@ -131,18 +131,30 @@ def verify_original(pointer):
     text(pointer["source_file"], "original.source_file")
     source = Path(pointer["source_file"])
     require(source.is_absolute(), "canonical original requires an absolute retrievable file")
-    raw = source.read_bytes()
+    def resolved(file, digest, original):
+        if resolver is None:
+            return file
+        target = resolver(original, digest, pointer["report_ref"])
+        require(isinstance(target, Path) and target.is_absolute(),
+                "original resolver must return an absolute verified file")
+        return target
+
+    actual = resolved(source, pointer["sha256"], pointer["source_file"])
+    raw = actual.read_bytes()
     require(hashlib.sha256(raw).hexdigest() == pointer["sha256"], "canonical original hash mismatch")
     require(type(pointer["backups"]) is list, "backups must be a list")
-    seen = {source.resolve()}
+    seen, originals = {actual.resolve()}, {source.resolve()}
     for backup in pointer["backups"]:
         fields(backup, "source_file sha256", "backup")
         text(backup["source_file"], "backup.source_file")
         sha(backup["sha256"], "backup.sha256", 64)
         file = Path(backup["source_file"])
-        require(file.is_absolute() and file.resolve() not in seen, "backup must be a separate absolute file")
-        seen.add(file.resolve())
-        data = file.read_bytes()
+        require(file.is_absolute() and file.resolve() not in originals, "backup must be a separate absolute file")
+        originals.add(file.resolve())
+        actual = resolved(file, backup["sha256"], backup["source_file"])
+        require(actual.resolve() not in seen, "backup must resolve to a separate absolute file")
+        seen.add(actual.resolve())
+        data = actual.read_bytes()
         require(backup["sha256"] == pointer["sha256"] and data == raw,
                 "backup differs from canonical original bytes")
     return raw

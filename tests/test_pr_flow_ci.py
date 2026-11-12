@@ -282,6 +282,107 @@ class PrFlowCiTests(unittest.TestCase):
         self.assertTrue(drift_output.is_file(), "raw child evidence must survive producer rejection")
         self.assertEqual(ci.load(drift_output)["status"], "failed")
 
+    def test_neutral_pr_scope_runs_without_capture_and_keeps_task_identity_separate(self):
+        with patch.object(policy, "ENABLED", True):
+            plan = ci.dispatch(self.event, self.environment, self.root)
+        self.assertEqual((plan["route"], plan["reason"]), ("full", "trusted-source-unconfigured"))
+        output = self.root / "neutral/docs/checks.json"
+        record = ci.run_pr_documentation_checks(self.event, self.environment, output, self.root)
+        self.assertEqual(record["schema"], ci.PR_SCHEMA)
+        self.assertNotIn("candidate", record)
+        self.assertNotIn("task_id", record["execution_scope"])
+        self.assertEqual(ci.verify_pr_documentation_checks(output, self.candidate, _root=self.root), record)
+        self.assertEqual(ci.raw_commit_identity((output.parent / "tested-commit.raw").read_bytes())["head"], self.environment["GITHUB_SHA"])
+        bad = deepcopy(self.candidate); bad["base"] = "f" * 40
+        with self.assertRaises((ValueError, subprocess.SubprocessError)):
+            ci.verify_pr_documentation_checks(output, bad, _root=self.root)
+        # The old task-bound reader still refuses a neutral execution record.
+        with self.assertRaises(ValueError): ci.verify_documentation_checks(output, self.candidate, _root=self.root)
+
+    def test_docs_full_fallback_requires_real_full_and_neutral_documentation_evidence(self):
+        from test_current_validation_evidence import bundle, write, reference
+        root = self.root / "full"
+        coverage_path = bundle(root)
+        coverage = ci.load(coverage_path)
+        binding = self.binding
+        identity = {"head": binding["checkout"]["checkout_sha"], "tree": binding["checkout"]["checkout_tree"],
+                    "parents": binding["checkout"]["checkout_parents"]}
+        checkout = {key: value for key, value in binding["checkout"].items() if key not in {"checkout_sha", "checkout_tree", "checkout_parents"}}
+        coverage.update(candidate=identity, ci=binding["ci"], checkout=checkout)
+        environment = ci.load(root / "environment.json"); environment.update(candidate=identity, ci=binding["ci"], checkout=checkout)
+        write(root / "environment.json", environment); write(root / "event.json", {"ci": binding["ci"], "checkout": checkout})
+        for name in ("environment", "event"):
+            coverage["artifacts"][name] = reference(root, root / (name + ".json"))
+        diff = next(item for item in coverage["checks"] if item["name"] == "diff")
+        diff["command"] = ["git", "diff", "--check", self.candidate["base"] + "..." + self.candidate["head"]]
+        (root / "diff.log").write_text(json.dumps({"argv": diff["command"]}) + "\nexit_code=0\n", encoding="utf-8")
+        diff["log"] = reference(root, root / "diff.log"); write(coverage_path, coverage)
+        with patch.object(policy, "ENABLED", True):
+            producer_plan = ci.dispatch(self.event, self.environment, self.root)
+        ci.write(root / "pr-flow-ci/plan.json", producer_plan)
+        documentation = root / "pr-flow-ci/docs/checks.json"
+        ci.run_pr_documentation_checks(self.event, self.environment, documentation, self.root)
+        current, pr = synthetic_ci(self.candidate, binding)
+        for name in ci.FULL_STEPS:
+            current["jobs"][0]["steps"][name] = "skipped" if name == "Check committed whitespace (push)" else "success"
+        with patch.object(ci, "ROOT", self.root):
+            verified = ci.verify_pr_checks(current, pr, self.candidate, "docs_fallback_full", coverage_path=coverage_path,
+                                           documentation_path=documentation)
+            self.assertEqual(verified["source_route"], "docs_fallback_full")
+            with self.assertRaises(ValueError):
+                ci.verify_pr_checks(current, pr, self.candidate, "docs_fallback_full", coverage_path=coverage_path)
+            with self.assertRaises(ValueError):
+                ci.verify_pr_checks(current, pr, self.candidate, "docs", documentation_path=documentation)
+            current["jobs"][0]["steps"]["Run full pytest suite"] = "skipped"
+            with self.assertRaises(ValueError):
+                ci.verify_pr_checks(current, pr, self.candidate, "docs_fallback_full", coverage_path=coverage_path, documentation_path=documentation)
+
+    def test_active_empty_scope_requires_neutral_original_and_inactive_compatibility_is_finite(self):
+        coverage = {"ci": self.binding["ci"], "candidate": {"head": self.binding["checkout"]["checkout_sha"],
+                    "tree": self.binding["checkout"]["checkout_tree"], "parents": self.binding["checkout"]["checkout_parents"]}}
+        pure = {**self.candidate, "changed_files": ["labels.py"]}
+        inactive = {"schema": "pr-flow-ci-plan/1", "policy": policy.POLICY_ID, "route": "full", "reason": "policy-inactive"}
+        ci.verify_full_plan_scope(inactive, coverage, pure)
+        with self.assertRaises(ValueError): ci.verify_full_plan_scope(inactive, coverage, self.candidate)
+        with self.assertRaises(ValueError): ci.verify_full_plan_scope({**inactive, "reason": "unknown"}, coverage, pure)
+        active = {**inactive, "checks_route": "full", "reason": "trusted-source-unconfigured", "execution_scope": {
+                    "repository": pure["repository"], "base": pure["base"], "head": pure["head"], "merge_base": pure["merge_base"], "changed_files": ["labels.py"]},
+                  "ci": self.binding["ci"], "checkout": self.binding["checkout"]}
+        with self.assertRaises(ValueError): ci.verify_full_plan_scope(active, coverage, pure)
+
+    def test_neutral_documentation_cli_stays_inactive_and_raw_scope_tampering_fails(self):
+        output = self.root / "neutral/docs/checks.json"
+        record = ci.run_pr_documentation_checks(self.event, self.environment, output, self.root)
+        bad = deepcopy(record); bad["execution_scope"]["changed_files"] = []
+        output.write_text(json.dumps(bad), encoding="utf-8")
+        with self.assertRaises(ValueError): ci.verify_pr_documentation_checks(output, self.candidate, _root=self.root)
+        command = [sys.executable, str(Path(ci.__file__).resolve()), "documentation-pr", "--output", str(self.root / "public.json")]
+        result = subprocess.run(command, cwd=self.root, capture_output=True)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn(b"inactive", result.stderr)
+
+    def test_neutral_unsupported_format_and_deleted_markdown_remain_explicit_failures(self):
+        for change in ("unsupported-rst", "deleted-markdown"):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as folder:
+                root = Path(folder)
+                candidate, event, environment = documentation_fixture(root)
+                if change == "unsupported-rst":
+                    (root / "plain.rst").write_text("Heading\n=======\n", encoding="utf-8")
+                else:
+                    (root / "guide.md").unlink()
+                def git(*args, input=None):
+                    return subprocess.run(["git", *args], cwd=root, input=input, capture_output=True, check=True).stdout.decode().strip()
+                git("add", "-A"); git("commit", "-m", "synthetic unsupported documentation")
+                head, tree = git("rev-parse", "HEAD"), git("rev-parse", "HEAD^{tree}")
+                tested = git("commit-tree", tree, "-p", candidate["base"], "-p", head, input=b"synthetic integration\n")
+                git("update-ref", "refs/heads/synthetic", tested)
+                event["pull_request"]["head"]["sha"] = head; environment["GITHUB_SHA"] = tested
+                output = root / "evidence/checks.json"
+                record = ci.run_pr_documentation_checks(event, environment, output, root)
+                self.assertEqual(record["status"], "failed")
+                self.assertTrue(any(item["exit_code"] != 0 for item in record["checks"]))
+                with self.assertRaises(ValueError): ci.verify_pr_documentation_checks(output, _root=root)
+
 
 if __name__ == "__main__":
     unittest.main()

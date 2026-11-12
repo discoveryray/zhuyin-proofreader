@@ -43,24 +43,35 @@ git status --short
 <a id="pending-pr-flow-ci"></a>
 ## 待啟用 PR 流程的有限本機交接
 
-本節只說明 [pr_flow_ci.py](scripts/pr_flow_ci.py) 已實作的 consumer，不啟用豁免；適用規則與未完成整合見[程序入口](docs/DEVELOPMENT_REVIEW.md#pending-transition)。協調者須先從獨立原始來源核實 reviewer／session、分類、原件及有效授權，保存 raw bytes、引用與 hash，再寫入固定、不納 Git 的 `tmp/pr-review-automation/pr-flow-ci/current-capture.json`；不能由 PR 作者單一 JSON 自證。沒有 CLI／環境變數可以替換此來源或啟用政策。
+本節定位 [pr_flow_ci.py](scripts/pr_flow_ci.py)、[pr_flow_transport.py](scripts/pr_flow_transport.py) 及 [pr_flow_evidence.py](scripts/pr_flow_evidence.py) 的本機 consumer，不啟用政策；適用規則及[三路檢查矩陣](docs/DEVELOPMENT_REVIEW.md#pending-checks-routes)由單一程序入口維護。協調者仍須核實 reviewer／session、分類、原件及有效授權；作者 JSON、label、hash 或布林值不能認證身分。固定 `tmp/pr-review-automation/pr-flow-ci/` 是 runner-local 原件位置，不是可信來源設定。
 
 Capture 使用有限 closed `pr-flow-ci-capture/1`：`schema`、`policy`、`coordinator`、`candidate`、`classification`、`implementers`、`review_originals`。`coordinator` 恰含 `actor`、非空且不重複的 `source_refs`、`authorization_ref`、`independent_sources_checked: true`；其餘物件重用 [v5 gate 的共享契約](docs/PR_REVIEW_GATE.md#pending-v5)，不另建分類或原件規則。Hash 只核 bytes，不能認證身分或授權。
 
-`dispatch` 未啟用時不讀 capture：PR→develop／main 與 main push 維持 full，develop push 維持 short。未來啟用後，仍須核 canonical 原件鏈、必要 reviewer 確認、完整 Git candidate／files 及當次真實 PR event／synthetic merge；缺 capture 或不具可用純文件分類即保留 full，不因檔名推定豁免。初版文檢只支援候選中仍存在的 Markdown；其他格式／刪除保留 full。
+來源方式只使用既有 Actions artifact API。Public loader 以 `git show <exact base>:.github/pr-flow-review-source.json` 讀固定 base 版本設定，缺少就 unconfigured／full；不讀受審 PR 新增或修改的設定。`pr-flow-review-source/1` 明列 repository／repository_id、workflow_id／workflow_path、base_ref、allowed_actor_ids、artifact_prefix 及 `review-capture-coordinator` authority。實際值須來自另行核定的可信 producer／管理者；本輪不建立真設定或捏造 IDs。
 
-以下為既有 CLI 介面；後三項須由真正 Actions context 與相符 plan 執行，目前文檢 route 不可啟用。本機 `inspect` 只讀固定候選 Git objects，不創造 CI 身分或 merge 權限：
+Loader 用固定 repo API 核當前 PR、source run 為該 base 的 workflow_dispatch、workflow identity、actor／triggering actor ID allowlist 與 collaborator 權限。權限採 API 的 `(permission, role_name)`：`(admin, admin)` 或 `(write, maintain)`；不是 JSON 自宣 actor。見 [GitHub permission API](https://docs.github.com/en/rest/collaborators/collaborators#get-repository-permissions-for-a-user)。只取固定 base／workflow 的全域最新來源 run／attempt；較新來源失敗、進行中或不屬該候選時保留 full，不退回較舊成功。唯一 artifact 名為 `<prefix>-<PR number>-<head SHA>-<run id>-<attempt>`，下載前後重核來源、候選與 digest。
+
+包內 `manifest.json`／`capture.json` 與 canonical attachments 保留原 bytes、hash、report_ref、source_file；tuple resolver 僅將精確 `(source_file, sha256, report_ref)` 指向已驗 runner-local 檔案，包含 nested check／resolution／備份。拒絕重複、大小寫別名、絕對／drive／反斜線／越界路徑、link、超限包與內容變更。離線 `verify_retained_capture` 只驗來源快照和完整性，不替代 fresh API 認證；post-merge 重新核來源，不把 snapshot 當身分憑證。
+
+`dispatch` 未啟用時不取新來源：PR／main push 維持 full，develop push 維持舊 short。新政策的 workflow／summary 守衛不由 state／環境變數啟用。隔離測試及日後啟用時，無可信 capture 仍 full，但 PR 的中立必要文檢另行執行；不因檔名推定豁免。現存 Markdown 使用有限 parser；其他格式／刪除或任務必要能力未支援即明列缺口／拒絕，不能把 full 當作已完成 links／anchors。
+
+以下只定位 CLI 介面，不是本輪的執行或啟用授權。`inspect` 只讀固定 Git objects；`diagnose-lifecycle` 外層仍 STOP。正式的 documentation 產生／驗證命令須政策已啟用且當次 Actions context／plan 相符，目前公開入口拒絕啟用；隔離測試直接驗有限 consumer，不新增繞過鎖的 CLI：
 
 ```powershell
 python scripts/pr_flow_ci.py inspect --candidate candidate.json --check local_links
 python scripts/pr_flow_ci.py dispatch --output tmp/pr-flow-ci/plan.json
 python scripts/pr_flow_ci.py documentation --plan tmp/pr-flow-ci/plan.json --output tmp/pr-flow-ci/docs/checks.json
 python scripts/pr_flow_ci.py verify-documentation tmp/pr-flow-ci/docs/checks.json
+python scripts/pr_flow_ci.py documentation-pr --output tmp/pr-flow-ci/docs/checks.json
+python scripts/pr_flow_ci.py verify-pr-documentation tmp/pr-flow-ci/docs/checks.json
+python scripts/pr_review_gate.py diagnose-lifecycle tmp/review-state.json
 ```
 
-文檢真正執行 `bytes`（UTF-8、非空）、`local_links`（本地路徑／anchors）、`diff` 三個子程序，保存各 stdout／stderr、命令、退出碼、hash、candidate 及原始檢查結果；verifier 重核原件與候選，不能接受空成功。Workflow summary 分別核 docs／full／short 的真實必要 outcomes，docs 還須綁當次 PR、run／attempt、tested SHA、parents／tree 與 Windows Python 3.13.0。
+文檢真正執行 `bytes`（UTF-8、非空）、`local_links`（本地路徑／anchors）、`diff` 三個子程序，保存 stdout／stderr、命令、退出碼、hash 與 tested Git object。中立 `/2` 記 PR execution scope，不宣稱 task 分類或授權；gate 再核必要文件範圍與同候選適用性。Workflow summary 依真實 route 判定；full fallback 必須同時滿足 full 及必要文檢，完整 pytest 不取代連結檢查。`diagnose-lifecycle` 僅外層 STOP 的診斷，不產生執行權限。
 
-目前本機 consumer 與隔離負控可驗證上述行為；**未建立本機 canonical 原件／capture 到 Actions runner 的可信 transport，正式純文件免 full 端到端未完成**。標準 checkout 不帶本機原件，未來缺 capture 也保留 full。需先完成可信傳遞整合及適用驗收，不能寫成「只需跑一次 CI」；本次不新增傳遞平台或服務。一般／核心的完整 inventory／coverage 保持，舊 schema／歷史判定不遷移。
+本機 API fixture 可以實跑 API-shaped metadata、ZIP、原件搬移、parser、CLI、summary 及 consumer；必須明標 synthetic，不能稱真 Actions 傳遞已驗收。真正缺少的是 base 的可信 producer 設定／實際 IDs、可讀來源權限、hosted 原件與正式驗證；沒有這些不能啟用。Full `/3` 的十四項凍結依賴及完整非視窗驗證不放寬，本機缺六項套件不能改填成已安裝。
+
+Post-merge consumer 保留不同格式：full／fallback 仍是 `/3` full reuse，docs 用 `pr-flow-documentation-merge-short/1`，不補造 full coverage。核來源 PR、最新 run／attempt、artifact 與 actual merge parents／tree；PR synthetic SHA 不必仍在本地，保留的 `tested-commit.raw` 重算原 Git identity，再證明 actual tree 等價並保存另行重檢原件。六項 runtime／non-window import／CLI／compile／diff／clean 真執行，缺任何項目不完成，不改原 stdout 假稱在 actual SHA 重跑。Full 真環境不符須拒絕，main push 的完整驗證及舊 readers／歷史判定保持。
 
 ## PR 的當前完整非視窗驗證
 

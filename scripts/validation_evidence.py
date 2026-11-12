@@ -399,9 +399,12 @@ def extract_evidence(data, destination):
     with zipfile.ZipFile(io.BytesIO(data)) as archive:
         names = set()
         for info in archive.infolist():
-            require(info.filename not in names, "duplicate archive entry")
-            names.add(info.filename)
-            require("\\" not in info.filename and not PurePosixPath(info.filename).is_absolute(), "invalid artifact archive path")
+            normalized = info.filename.rstrip("/")
+            require(normalized.casefold() not in names, "duplicate/case-aliased archive entry")
+            names.add(normalized.casefold())
+            require("\\" not in info.filename and ":" not in info.filename and not PurePosixPath(info.filename).is_absolute()
+                    and all(part not in {".", ".."} for part in PurePosixPath(normalized).parts)
+                    and PurePosixPath(normalized).as_posix() == normalized, "invalid artifact archive path")
             require((info.external_attr >> 16) & 0o170000 != 0o120000, "artifact contains symbolic link")
             target = local_path(destination, info.filename)
             if info.is_dir():
@@ -460,6 +463,11 @@ def fetch_pr_evidence(client, candidate, output, *, current_only=False):
 
 
 def post_merge(evidence_root, *, current_only=False):
+    if current_only:
+        from scripts import pr_flow_policy
+        if pr_flow_policy.ENABLED:
+            from scripts.pr_flow_evidence import post_merge_current
+            return post_merge_current(evidence_root)
     runner = runner_module()
     output = Path(evidence_root) / ("short-" + str(uuid.uuid4()))
     output.mkdir(parents=True, exist_ok=False)

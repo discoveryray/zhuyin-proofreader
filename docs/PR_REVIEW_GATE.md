@@ -58,6 +58,26 @@ decision = gate.next_action(state)  # v5 始終 action=STOP
 
 `validate_state`／CLI `validate` 只核結構；`validate_tiered_evidence` 分別回傳 `code_ready`、`checks_ready`、`requirements_satisfied`，同時固定 `activation_pending: true`、`merge_ready: false`。即使條件評估為 true 或修改共享 `ENABLED`，public `next_action`／CLI `next-action` 仍 STOP，不能由 state 啟用。Canonical 的 code `PASS` 只是此格式的程式審查結論，不是本次改革的正式 PASS。正式驗收、可信 Actions 整合、明確版本啟用及有效授權仍缺一不可；舊 v3／v4 判定與歷史保持。
 
+<a id="pending-v5-lifecycle"></a>
+### 752e7a2 之後的有限生命週期接線
+
+原 task、baseline 與 corrective 歷史保持。沒有 `lifecycle` 的原 v5 仍保留診斷／拒絕原義，不推定已完成；新 envelope 為 `pr-flow-lifecycle/1`，封閉欄位定位 `_validate_tiered_structure`／`evaluate_tiered_lifecycle` 的實作。它包含實際 `checks_route`、合併前重新核對、actual merge、push CI 與 short 原件；不能以分類字串假裝已走該檢查路徑。
+
+| 階段 | 有限下一步與必要條件 |
+| --- | --- |
+| 開發／審查 | 缺適用原件要求必要 reviewer；confirmed code 才回修正並沿原三輪，evidence 補證，capability／contract 停止。中間 code 結論不代表正式驗證授權。 |
+| 正式時段／PR／CI | 等明確開始驗證授權；核唯一 branch-pair PR。CI 未完等待，失敗調查，缺檢查／原件補證；review 通過但 CI 未完不能合併。 |
+| 合併前 | 重新核精確 reviewed base／head／tree／scope、clean、未解 finding、可合併與保護條件，齊備才提出 `MERGE_PROPOSAL`；gate 不執行 merge。 |
+| 已合併 | reviewed base／head 不覆寫成 actual merge。缺 actual commit 取回核對，不重複 merge；核 actual ordered parents／tree 與來源 PR tested tree。 |
+| actual merge push | 缺該 merge 自己的最新 push CI／short 原件即等待／補證。失敗保留 merge 及計數並停止，不重跑 full 掩蓋 consumer 缺失。 |
+| 完成判定 | 必要審查、原路徑檢查、actual merge、其 push CI 與適用 short 原件全部相符，隔離 evaluator 才可判 `COMPLETE`；不是本批正式完成宣告。 |
+
+`evaluate_tiered_lifecycle(state, original_resolver=...)` 執行完整有限判定；正式 `next-action` 仍受未啟用鎖保護。CLI `diagnose-lifecycle` 外層固定 `action=STOP`，完整結果只在 `evaluation`；沒有 state／環境開關或可放行的診斷命令。原 v3／v4、舊 adapters 及已確認 STOP 不遷移。
+
+原件 resolver 僅依 `(source_file, sha256, report_ref)` 映射已驗包內位置；canonical、`review_checks`、resolution 與備份都用原 bytes 重核，未知 tuple 拒絕。包來源認證、離線完整性重核及後續 fresh API 分開；介面與平台前置見 [TESTING](../TESTING.md#pending-pr-flow-ci)。
+
+Active producer plan 帶 `execution_scope` 時必須有中立 `/2` 文檢原件，即使文件集合為空也須核實實跑的 scope／diff／raw。僅 752e7a2 既有明確 `reason=policy-inactive` 的 closed full plan、且候選沒有必要文件檢查時，可保留原當次 full `/3` 語義；不宣稱它做了中立檢查或新政策已啟用。含文件、docs fallback 或未知 plan 缺必要原件仍拒絕，不能以缺欄推定舊制成功。
+
 ## 信任邊界與留存
 
 JSON 裡自行填入 `PASS`、agent ID、URL、SHA 或 `protection_satisfied: true`，

@@ -85,6 +85,19 @@ Code review 可與 CI 並行。CI 完成後追加 checks／eligibility 結果，
 
 PR 一次 full、develop actual merge 短驗證、取消歷史 CI 自動閉包與真 Tk 自動驗證均為既有成果。初版不改選測或取消 obsolete PR run；產品 GUI／Tk 保留。
 
+<a id="pending-checks-routes"></a>
+#### 分類與實際檢查路徑分開
+
+| 路徑 | 合併前必要原件與檢查 | 合併後必要原件 |
+| --- | --- | --- |
+| docs | 已確認的純文件分類、可信 coordinator 原件來源、真文檢及同一 PR／run／attempt／tested SHA 的 summary；不產生 full coverage | 保留 docs 格式及原始 tested commit，核 source PR 與 actual merge 的 ordered parents／tree 等價，再做六項短驗證。 |
+| docs fallback full | 分類仍是 docs；保留真正 full `/3` coverage，另補必要文檢。缺 capture 不取得免 full 權限，full pytest 也不代表已驗連結／anchor | full `/3` short 與文件原件分別核對，保留 fallback 路徑，不改名 docs 成功，也不造 coverage。 |
+| 一般／核心 full | 真正 full `/3`、原 inventory／JUnit／環境與 summary；有文件改動也須有相應必要文檢，不能用 docs 取代 full | 原 full `/3` reuse 及六項短驗證；來源與依賴等價仍嚴格，文件原件另核。 |
+
+必要文檢為實際的 bytes、local links／anchors、diff 子程序及可取回原件。中立 PR 檢查 `pr-flow-documentation-checks/2` 只陳述 event／Git execution scope，沒有 task 分類、身分或免測授權；gate 核對同候選及 reviewer 所需文件範圍覆蓋。原 task-bound `/1` 保留原義。型別、刪檔或必要 parser 未支援時須拒絕／補證，不以 full 遮掩；沒有文件時也保存真實 scope、diff 與非空檢查紀錄。
+
+未啟用時，正式 workflow 沿用原 full／short 結果要求；新路徑在隔離測試驗證，不能從 state／環境變數開啟。Main push 的原完整驗證保持。
+
 **G4 延後：沿用同 task 最多三輪 confirmed code corrective，不增加「同 finding 連續兩輪無進展」提前停止規則。** 只有確定 code finding 的實際修正消耗 corrective count；evidence 補證據、capability／contract STOP 仍依既有分類。不能藉拆 commit、換 branch／session／工作區、改 task 或新政策重設歷史；既有限定例外按原授權及有限 adapter，無額外一般額度。
 
 <a id="pending-transition"></a>
@@ -92,9 +105,11 @@ PR 一次 full、develop actual merge 短驗證、取消歷史 CI 自動閉包�
 
 三批依序完成文件／角色、review／原件／gate、文檢／CI 整合及相應定向負控後，仍須按本次事前凍結舊規完成獨立審查與正式驗收。受審新 gate、測試 fixtures 或本文件不能放行本次改革。實作未同步或驗收／整合未完，一律維持未啟用。
 
-目前已有本機 canonical 原件鏈、分類／code review 與 checks 分離評估，以及真實文檢子程序的有限 consumer；這些本機工具與隔離負控不等於正式 CI 免 full 已完成。CI consumer 的固定 local capture 及來源核實責任見 [TESTING 的有限交接](../TESTING.md#pending-pr-flow-ci)，gate 欄位與評估 API 見 [v5 待啟用契約](PR_REVIEW_GATE.md#pending-v5)。未啟用時 PR／main push 保持 full、develop push 保持 short，dispatch 不讀 capture。
+本機 consumer 包含 canonical 原件鏈、分類／code review 與 checks 分離評估、實際文檢、三條原件路徑及有限 v5 生命週期。來源與命令見 [TESTING 的有限交接](../TESTING.md#pending-pr-flow-ci)，完整判定與啟用鎖的分離見 [v5 待啟用契約](PR_REVIEW_GATE.md#pending-v5)。本機 API fixture、模型 full 原件及真短命令各自標示，不冒稱 hosted CI 或正式 PASS。
 
-**尚缺經審查的 canonical 原件／capture → GitHub Actions runner 傳遞整合。** 標準 checkout 沒有這些本機原件；即使未來常數改為啟用，缺 capture 仍走 full fallback。純文件免 full 的正式端到端流程尚未完成，需要先解決來源可信度、原件可取回與傳遞／事件綁定整合，再完成適用驗收；不是只差再跑一次 CI。本次不新增傳遞平台、分支或外部服務，也不以 PR 作者單一 manifest 自證豁免。
+原件傳遞選用既有 Actions artifact API：可信設定只取 exact base 的固定 `.github/pr-flow-review-source.json`；核 repo／workflow／base、最新 source run／attempt、已授權 actor／triggering actor 的 API 身分與權限、唯一 candidate-bound artifact，再下載、驗包並重核來源。沒有真設定、可信 producer 或可驗權限時保留 full，不讀作者任意 JSON／label 自證。原件 bytes／hash／report_ref／原來源定位不改，只以精確 tuple resolver 重建 runner-local 參照；same-bytes 備份也逐份核對。
+
+**真實平台前置仍需補齊：** 可信 producer workflow、實際 repository／workflow／actor IDs、base 設定、取得來源 API／權限所需能力，以及 hosted 傳遞與 actual merge push 的正式原件。本輪不建立這些真設定、不發 repository API 或遠端 CI，也不新增簽章平台或背景 AI。離線原件重核只證完整性；fresh API 認證與正式驗收仍不能由 snapshot／hash／布林值代替。
 
 之後正式啟用須保存明確政策版本、生效點與新 task 適用性；舊 task 的基線、原審查、計數、STOP／BLOCKED、原件與有限例外保持。G1、T1／T2／T3 均未採納，不改產品 proof、交易／恢復、來源信任或安全優先序；P5 工作管理已結案，原 STOP、三輪／第四輪歷史及 symlink 中斷原義不動，不讀寫其工作樹。
 

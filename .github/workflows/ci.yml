@@ -65,6 +65,11 @@ jobs:
             tmp/validation-evidence/**/*.log
             tmp/validation-evidence/**/pr-artifact.zip
             tmp/validation-evidence/**/pr-evidence/main-full/lock.txt
+            tmp/validation-evidence/**/pr-evidence/docs/tested-commit.raw
+            tmp/validation-evidence/**/pr-evidence/pr-flow-ci/docs/tested-commit.raw
+            tmp/validation-evidence/**/pr-evidence/transport/artifact.zip
+            tmp/validation-evidence/**/pr-evidence/pr-flow-ci/transport/artifact.zip
+            tmp/validation-evidence/**/capture-source/artifact.zip
             !tmp/validation-evidence/**/temp/**
           if-no-files-found: error
           overwrite: false
@@ -80,6 +85,7 @@ jobs:
       PYTHONIOENCODING: "utf-8"
       PYTEST_ADDOPTS: ""
       FULL_CURRENT_VALIDATION: ${{ (github.event_name == 'pull_request' && (github.event.pull_request.base.ref == 'develop' || github.event.pull_request.base.ref == 'main')) || (github.event_name == 'push' && github.ref == 'refs/heads/main') }}
+      GITHUB_TOKEN: ${{ github.token }}
     strategy:
       fail-fast: false
       matrix:
@@ -99,8 +105,8 @@ jobs:
         id: version
         run: python --version
       # The public dispatcher reads the shared, currently false activation latch.
-      # Missing coordinator-captured originals retain full CI. Actions transport
-      # for that local handoff must be reviewed before the docs route is enabled.
+      # Missing base-owned source policy/producer retains full CI. Neutral PR
+      # documentation checks run independently of review capture or activation.
       - name: Resolve current validation route
         id: route
         shell: pwsh
@@ -206,6 +212,53 @@ jobs:
         if: ${{ success() && env.FULL_CURRENT_VALIDATION == 'true' && steps.route.outputs.route == 'full' }}
         run: |
           & $env:CI_PYTHON scripts/validation_evidence.py verify-coverage tmp/current-coverage.json
+      - name: Run required documentation checks
+        id: documentation
+        if: ${{ success() && env.FULL_CURRENT_VALIDATION == 'true' && github.event_name == 'pull_request' && steps.route.outputs.policy_active == 'true' }}
+        shell: pwsh
+        run: |
+          python scripts/pr_flow_ci.py documentation-pr --output tmp/pr-flow-ci/docs/checks.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Verify required documentation checks
+        id: documentation_verify
+        if: ${{ success() && env.FULL_CURRENT_VALIDATION == 'true' && github.event_name == 'pull_request' && steps.route.outputs.policy_active == 'true' }}
+        shell: pwsh
+        run: |
+          python scripts/pr_flow_ci.py verify-pr-documentation tmp/pr-flow-ci/docs/checks.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Upload documentation evidence
+        id: documentation_evidence
+        if: ${{ always() && env.FULL_CURRENT_VALIDATION == 'true' && github.event_name == 'pull_request' && steps.route.outputs.policy_active == 'true' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: documentation-validation-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            tmp/pr-flow-ci/plan.json
+            tmp/pr-flow-ci/transport/source-policy.json
+            tmp/pr-flow-ci/transport/repository.json
+            tmp/pr-flow-ci/transport/pr.json
+            tmp/pr-flow-ci/transport/runs-before.json
+            tmp/pr-flow-ci/transport/runs-after.json
+            tmp/pr-flow-ci/transport/run-before.json
+            tmp/pr-flow-ci/transport/run-after.json
+            tmp/pr-flow-ci/transport/permission-actor.json
+            tmp/pr-flow-ci/transport/permission-triggering_actor.json
+            tmp/pr-flow-ci/transport/artifacts.json
+            tmp/pr-flow-ci/transport/artifact.zip
+            tmp/pr-flow-ci/transport/source.json
+            tmp/pr-flow-ci/transport/originals/capture.json
+            tmp/pr-flow-ci/docs/checks.json
+            tmp/pr-flow-ci/docs/scope.json
+            tmp/pr-flow-ci/docs/tested-commit.raw
+            tmp/pr-flow-ci/docs/bytes.stdout.json
+            tmp/pr-flow-ci/docs/bytes.stderr.log
+            tmp/pr-flow-ci/docs/local_links.stdout.json
+            tmp/pr-flow-ci/docs/local_links.stderr.log
+            tmp/pr-flow-ci/docs/diff.stdout.json
+            tmp/pr-flow-ci/docs/diff.stderr.log
+          if-no-files-found: error
+          overwrite: false
+          include-hidden-files: false
       - name: Upload main full evidence
         id: main_evidence
         if: ${{ always() && env.FULL_CURRENT_VALIDATION == 'true' && steps.route.outputs.route == 'full' }}
@@ -231,33 +284,22 @@ jobs:
             tmp/main-full/assets.json
             tmp/current-coverage.json
             tmp/pr-flow-ci/plan.json
-          if-no-files-found: error
-          overwrite: false
-          include-hidden-files: false
-      - name: Run required documentation checks
-        id: documentation
-        if: ${{ success() && env.FULL_CURRENT_VALIDATION == 'true' && steps.route.outputs.route == 'docs' }}
-        shell: pwsh
-        run: |
-          python scripts/pr_flow_ci.py documentation --plan tmp/pr-flow-ci/plan.json --output tmp/pr-flow-ci/docs/checks.json
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Verify required documentation checks
-        id: documentation_verify
-        if: ${{ success() && env.FULL_CURRENT_VALIDATION == 'true' && steps.route.outputs.route == 'docs' }}
-        shell: pwsh
-        run: |
-          python scripts/pr_flow_ci.py verify-documentation tmp/pr-flow-ci/docs/checks.json
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-      - name: Upload documentation evidence
-        id: documentation_evidence
-        if: ${{ always() && env.FULL_CURRENT_VALIDATION == 'true' && steps.route.outputs.route == 'docs' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: documentation-validation-evidence-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            tmp/pr-flow-ci/plan.json
+            tmp/pr-flow-ci/transport/source-policy.json
+            tmp/pr-flow-ci/transport/repository.json
+            tmp/pr-flow-ci/transport/pr.json
+            tmp/pr-flow-ci/transport/runs-before.json
+            tmp/pr-flow-ci/transport/runs-after.json
+            tmp/pr-flow-ci/transport/run-before.json
+            tmp/pr-flow-ci/transport/run-after.json
+            tmp/pr-flow-ci/transport/permission-actor.json
+            tmp/pr-flow-ci/transport/permission-triggering_actor.json
+            tmp/pr-flow-ci/transport/artifacts.json
+            tmp/pr-flow-ci/transport/artifact.zip
+            tmp/pr-flow-ci/transport/source.json
+            tmp/pr-flow-ci/transport/originals/capture.json
             tmp/pr-flow-ci/docs/checks.json
-            tmp/pr-flow-ci/docs/candidate.json
+            tmp/pr-flow-ci/docs/scope.json
+            tmp/pr-flow-ci/docs/tested-commit.raw
             tmp/pr-flow-ci/docs/bytes.stdout.json
             tmp/pr-flow-ci/docs/bytes.stderr.log
             tmp/pr-flow-ci/docs/local_links.stdout.json
@@ -309,9 +351,15 @@ jobs:
             if ($env:SHORT_RESULT -ne 'skipped') { throw 'Current full validation must not schedule develop short' }
             $required += $full | Where-Object { $_ -notin @('DIFF_PR_RESULT', 'DIFF_PUSH_RESULT') }
             if ($env:EVENT_NAME -eq 'push' -and $env:EVENT_REF -eq 'refs/heads/main') { $required += 'DIFF_PUSH_RESULT'; $skipped += 'DIFF_PR_RESULT' }
-            elseif ($env:EVENT_NAME -eq 'pull_request') { $required += 'DIFF_PR_RESULT'; $skipped += 'DIFF_PUSH_RESULT' }
+            elseif ($env:EVENT_NAME -eq 'pull_request') {
+              $required += 'DIFF_PR_RESULT'; $skipped += 'DIFF_PUSH_RESULT'
+              if ($env:POLICY_ACTIVE -eq 'true') {
+                $required += $docs
+                if ($env:DOCUMENTATION_CHECK_COUNT -ne '3') { throw 'Full PR validation requires supplemental documentation checks' }
+              } else { $skipped += $docs }
+            }
             else { throw 'Full validation has an unsupported event' }
-            $skipped += $docs
+            if ($env:EVENT_NAME -ne 'pull_request') { $skipped += $docs }
           } elseif ($env:VALIDATION_ROUTE -eq 'docs' -and $env:CURRENT_FULL_VALIDATION -eq 'true' -and $env:EVENT_NAME -eq 'pull_request') {
             if ($env:POLICY_ACTIVE -ne 'true' -or $env:SHORT_RESULT -ne 'skipped' -or $env:DOCUMENTATION_CHECK_COUNT -ne '3') { throw 'Inactive, mixed or empty documentation validation' }
             $required += $docs
@@ -328,4 +376,4 @@ jobs:
           foreach ($name in $skipped) {
             if ([Environment]::GetEnvironmentVariable($name) -ne 'skipped') { throw "Mixed or missing current-validation result: $name" }
           }
-          if ($env:VALIDATION_ROUTE -ne 'docs' -and $env:DOCUMENTATION_CHECK_COUNT) { throw 'Unexpected documentation result on another route' }
+          if (($env:EVENT_NAME -ne 'pull_request' -or $env:POLICY_ACTIVE -ne 'true') -and $env:DOCUMENTATION_CHECK_COUNT) { throw 'Unexpected documentation result on an inactive or non-PR route' }

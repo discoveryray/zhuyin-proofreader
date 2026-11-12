@@ -1,8 +1,10 @@
 # Windows 無視窗分階段驗證政策
 
+待啟用 `development-flow/tiered-review/1` 的本機整合另見[程序入口的三路 checks 矩陣](DEVELOPMENT_REVIEW.md#pending-checks-routes)及 [TESTING 原件／短驗證 consumer](../TESTING.md#pending-pr-flow-ci)。它區分 docs、docs fallback full、一般／核心 full；原 full `/3` 與新 docs short 保留各自格式，公開未啟用鎖不變。API fixture／模型環境、真本機短命令與正式 hosted 原件必須分開，不因缺依賴、歷史 SHA 或 consumer 而補造成功；本段不改下列現行政策及歷史判定。
+
 程序先讀[開發與審查入口](DEVELOPMENT_REVIEW.md#applicability)。本文件專責驗證／證據政策及有限歷史契約，AGENTS 仍是安全與授權權威。`development-flow/tiered-review/1` 已採納設計、實作中、尚未啟用；下列當前完整非視窗驗證與兩位 reviewer 舊規繼續適用，不能先依新分類免除 CI。新政策待驗收的文檢／完整 CI 邊界只在[入口對應章](DEVELOPMENT_REVIEW.md#pending-validation)定義。
 
-待啟用文檢 consumer 的本機交接與命令見 [TESTING](../TESTING.md#pending-pr-flow-ci)。目前 local consumer／隔離負控與正式 CI 免 full 端到端驗收分開：尚缺 canonical 原件與 capture 到 Actions 的可信傳遞整合；標準 checkout 缺 capture 仍 full fallback。該整合與正式驗收未完成前，不能把工具可執行或一次 CI 綠燈當成新政策啟用。
+待啟用文檢 consumer 的本機交接與命令見 [TESTING](../TESTING.md#pending-pr-flow-ci)。有限 artifact API consumer 與隔離 fixture 已接入，但真實 producer、可信 base 設定及 hosted 端到端驗收仍缺；標準 checkout 缺可信 capture 仍 full fallback。本機整合與正式 CI 免 full 驗收分開，不能把工具可執行或一次 CI 綠燈當成新政策啟用。
 
 ## 現行永久政策：當前候選證據
 

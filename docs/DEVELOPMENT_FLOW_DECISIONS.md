@@ -18,6 +18,8 @@
 
 原 task `pr-flow-decisions-20261112`、baseline `8d08c5a05d8143c353fb47b9be4f33471d99ba10`、歷史審查與計數保留。所有舊 task、STOP／BLOCKED、原件與 schema 保持其原義，不遷移成功、不重設。P5 工作管理已結案，其原三輪／第四輪與 symlink 中斷歷史不動，也不讀寫該工作樹。
 
+本機整合續作以 `752e7a2f935066c8f408a80262946c0ab13876bf` 為來源，沿原 task／baseline／corrective 1/3；先保留無 capture 的 full fallback 與 docs artifact 進入舊 short consumer 的原拒絕，再補原未完成的三路 checks、生命週期及既有 artifact API 接線。缺必要文檢時拒絕仍正確，不能把 full pytest 當文檢。這不是新的政策裁定、正式驗證或啟用；本機 API fixture 與真正平台來源／權限的缺口分開交付。程序與原件規格只在[單一入口](DEVELOPMENT_REVIEW.md#pending-checks-routes)及其專屬引用維護，不新增平行決策稿。
+
 下方保留固定實作起點的新版方案及 G1–G5 原提案，供來源與歷史 anchors 追溯；其中「尚未採納」「本輪不授權」及 G4 兩輪無進展建議均是**當時提案文字**，目前裁定以本附記與程序入口為準。請展開後閱讀原文。
 
 <details>
