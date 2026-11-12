@@ -407,14 +407,17 @@ def current_job(name):
 
 def current_plan(context):
     predicate = re.search(r'^      FULL_CURRENT_VALIDATION: (.*)$', current_job('test'), re.M).group(1)
-    context = {**context, 'env': {'FULL_CURRENT_VALIDATION': str(expression(predicate, context)).lower()}}
+    full = expression(predicate, context)
+    route = 'full' if full else 'short' if context['github']['event_name'] == 'push' and context['github']['ref'] == 'refs/heads/develop' else ''
+    context = {**context, 'env': {'FULL_CURRENT_VALIDATION': str(full).lower()},
+               'steps': {'route': {'outputs': {'route': route, 'policy_active': 'false'}}}}
     return {name: [(label, action(body)) for label, body in steps(current_job(name)) if condition(body, context)]
             for name in ('short', 'test') if condition(current_job(name).split('    steps:', 1)[0], context)}
 
 
 class CurrentValidationWorkflowTests(unittest.TestCase):
     def test_current_four_routes_and_original_legacy_shapes_have_no_live_exemption(self):
-        full_names = {'Check out repository', 'Set up Python', 'Show Python version', 'Upgrade pip',
+        full_names = {'Check out repository', 'Set up Python', 'Show Python version', 'Resolve current validation route', 'Upgrade pip',
             'Install development dependencies', 'Validate runtime asset integrity', 'Audit test entrypoint coverage',
             'Run full pytest suite', 'Verify active test execution', 'Compile Python sources', 'Check repository working tree',
             'Capture main full environment', 'Produce current validation coverage', 'Verify current validation coverage',
@@ -432,13 +435,13 @@ class CurrentValidationWorkflowTests(unittest.TestCase):
                 self.assertEqual(re.search(r'^          python-version: (.*)$',step(current_job('test'),'Set up Python'),re.M).group(1),"'3.13.0'")
                 self.assertEqual(re.search(r'^      PYTEST_ADDOPTS: (.*)$',current_job('test'),re.M).group(1),'""')
                 for label in ('Capture main full environment','Upload main full evidence','Check repository working tree','Verify required validation results'):
-                    declared={'env':{'FULL_CURRENT_VALIDATION':'true'}}
+                    declared={'env':{'FULL_CURRENT_VALIDATION':'true'},'steps':{'route':{'outputs':{'route':'full'}}}}
                     self.assertTrue(condition(step(current_job('test'),label),{**context,**declared,'_success':False}))
                 for label in ('Run full pytest suite', 'Verify active test execution', 'Compile Python sources'):
-                    self.assertFalse(condition(step(current_job('test'), label), {**context, 'env': {'FULL_CURRENT_VALIDATION': 'true'}, '_success': False}), 'failed environment precheck must stop expensive validation')
+                    self.assertFalse(condition(step(current_job('test'), label), {**context, **declared, '_success': False}), 'failed environment precheck must stop expensive validation')
         for context in (event_context('push','refs/heads/develop'),event_context('push','refs/heads/develop',event__before='502414b3b38e004a6d8d9cb693cf21b65148765a')):
             self.assertEqual(set(current_plan(context)),{'short','test'})
-            self.assertEqual(set(dict(current_plan(context)['test'])),{'Check out repository','Set up Python','Show Python version','Verify required validation results'})
+            self.assertEqual(set(dict(current_plan(context)['test'])),{'Check out repository','Set up Python','Show Python version','Resolve current validation route','Verify required validation results'})
         for forbidden in ('restore-history','validation_runner.py','Aggregate functional coverage','Run full unittest suite','--capture=sys','LEGACY_VALIDATION','GROUPED_RESULT','needs.grouped.result','--group gui','verify-gui','gui_preflight','Configure same-installation Tcl/Tk'):
             self.assertNotIn(forbidden,LIVE_WORKFLOW)
 
@@ -464,6 +467,47 @@ class CurrentValidationWorkflowTests(unittest.TestCase):
             cases.append((other,success,False))
         self.execute_current_summary(cases)
 
+    def test_documentation_summary_requires_real_checks_and_rejects_inactive_missing_or_mixed_results(self):
+        context=event_context()
+        context['steps']={'route':{'outputs':{'route':'docs','policy_active':'true'}},
+                          'documentation':{'outputs':{'check_count':'3'}}}
+        success={name:'success' for name in ('checkout','python','version','route','documentation','documentation_verify','documentation_evidence')}
+        cases=[(context,success,True)]
+        for outcome in ('failure','skipped','cancelled',''):
+            for key in success:cases.append((context,{**success,key:outcome},False))
+        for count in ('','0','1','2','4'):
+            changed={**context,'steps':{**context['steps'],'documentation':{'outputs':{'check_count':count}}}}
+            cases.append((changed,success,False))
+        for active in ('false',''):
+            changed={**context,'steps':{**context['steps'],'route':{'outputs':{'route':'docs','policy_active':active}}}}
+            cases.append((changed,success,False))
+        for key in ('pip','dependencies','main_environment','runtime','inventory','pytest','active','compile','diff_pr','diff_push','clean','coverage','coverage_verify','main_evidence'):
+            cases.append((context,{**success,key:'success'},False))
+        full={name:'success' for name in ('checkout','python','version','route','pip','dependencies','runtime','inventory','pytest','active','compile','diff_pr','clean','main_environment','coverage','coverage_verify','main_evidence')}
+        cases.append((event_context(),{**full,'documentation':'success'},False))
+        short=event_context('push','refs/heads/develop');short['needs']['short']['result']='success'
+        cases.append((short,{'checkout':'success','python':'success','version':'success','pytest':'success'},False))
+        self.execute_current_summary(cases)
+
+    def test_inactive_workflow_has_real_documentation_consumers_without_enabling_an_exemption(self):
+        route=step(current_job('test'),'Resolve current validation route')
+        self.assertIn('python scripts/pr_flow_ci.py dispatch --output tmp/pr-flow-ci/plan.json',route)
+        for name,command in (('Run required documentation checks','documentation --plan tmp/pr-flow-ci/plan.json --output tmp/pr-flow-ci/docs/checks.json'),
+                             ('Verify required documentation checks','verify-documentation tmp/pr-flow-ci/docs/checks.json')):
+            body=step(current_job('test'),name)
+            self.assertIn("steps.route.outputs.route == 'docs'",body)
+            self.assertIn(command,body)
+            self.assertIn('if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }',body)
+        upload=step(current_job('test'),'Upload documentation evidence')
+        self.assertIn("steps.route.outputs.route == 'docs'",upload)
+        for check in ('bytes','local_links','diff'):
+            self.assertIn('tmp/pr-flow-ci/docs/'+check+'.stdout.json',upload)
+            self.assertIn('tmp/pr-flow-ci/docs/'+check+'.stderr.log',upload)
+        for value in ('always()','if-no-files-found: error','overwrite: false','include-hidden-files: false'):
+            self.assertIn(value,upload)
+        self.assertNotIn('**',upload)
+        self.assertNotIn('--ignore',LIVE_WORKFLOW)
+
     def test_current_commands_lock_capture_scope_and_finite_artifacts_are_explicit(self):
         full=current_job('test');short=current_job('short')
         self.assertEqual(action(step(short,'Verify merge and run short validation')),('run','& $env:CI_PYTHON scripts/validation_evidence.py post-merge --current-only --evidence-root tmp/validation-evidence'))
@@ -487,7 +531,7 @@ class CurrentValidationWorkflowTests(unittest.TestCase):
         self.assertLess(full.index('Install development dependencies'), full.index('Capture main full environment'))
         self.assertIn('verify-environment', step(short, 'Install locked validation dependencies'))
         for name, body in steps(full):
-            if name not in ('Show Python version', 'Upgrade pip') and action(body)[0] == 'run' and name != 'Verify required validation results':
+            if name not in ('Show Python version', 'Upgrade pip', 'Resolve current validation route', 'Run required documentation checks', 'Verify required documentation checks') and action(body)[0] == 'run' and name != 'Verify required validation results':
                 self.assertIn('& $env:CI_PYTHON', body)
         for section,name in ((full,'Upload main full evidence'),(short,'Upload validation evidence')):
             upload=step(section,name)
@@ -526,7 +570,14 @@ class CurrentValidationWorkflowTests(unittest.TestCase):
         bindings=body.split('        env:\n',1)[1].split('        run:',1)[0]
         inputs=[]
         for context,outcomes,accepted in cases:
-            context={**context,'steps':{key:dict(outcome=value) for key,value in outcomes.items()}}
+            full = context['github']['event_name'] == 'pull_request' and context['github']['event']['pull_request']['base']['ref'] in ('develop','main') or context['github']['event_name'] == 'push' and context['github']['ref'] == 'refs/heads/main'
+            route = 'full' if full else 'short' if context['github']['event_name'] == 'push' and context['github']['ref'] == 'refs/heads/develop' else ''
+            declared={re.search(r'^        id: (.*)$',section,re.M).group(1):{'outcome':'skipped','outputs':{}}
+                      for _,section in steps(current_job('test')) if re.search(r'^        id: ',section,re.M)}
+            declared['route']={'outcome':'success','outputs':{'route':route,'policy_active':'false'}}
+            for key,value in context.get('steps',{}).items():declared[key].update(value)
+            for key,value in outcomes.items():declared[key]['outcome']=value
+            context={**context,'steps':declared}
             environment={}
             for key,value in re.findall(r'^          ([A-Z_]+): (.*)$',bindings,re.M):
                 actual=expression(value,context);environment[key]=str(actual).lower() if isinstance(actual,bool) else str(actual)
