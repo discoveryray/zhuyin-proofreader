@@ -1,5 +1,7 @@
 # Testing
 
+開發、審查與驗證版本先由[唯一程序入口](docs/DEVELOPMENT_REVIEW.md#applicability)選定；本文件提供測試命令、依賴及 artifact 操作。`development-flow/tiered-review/1` 已採納設計、實作中、尚未啟用，不能先用純文件分類跳過下列現行 CI。未來文檢／完整 CI 邊界以[入口待啟用章](docs/DEVELOPMENT_REVIEW.md#pending-validation)為準，本次只執行已授權定向檢查，不啟動 full 或遠端 CI。
+
 現行驗證政策是 [`validation-flow/current-evidence/1`](docs/VALIDATION_POLICY.md)，永久取消 CI 歷史自動重播前置門檻，適用本次未結案任務及後續一般工作。舊原件/失敗/判定/計數保持，歷史工具退出正常自動路徑，不以舊成功代替當前測試。所有自動化入口繼續取消真 Tk，包括 hidden root、虛擬顯示器、fixture/import/子程序及 configure/preflight/retry；產品 GUI/Tk/正式 .bat 保留。當前 actual/expected、identity、封印、資料、交易、保存/恢復安全測試仍全部必要。
 
 ## 依賴與隔離環境

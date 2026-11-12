@@ -1,3 +1,28 @@
+# 開發流程決策：2026-11-12 採納附記與原提案
+
+<a id="flow-adoption-20261112"></a>
+## 採納附記：設計已採納、實作中、尚未啟用
+
+本附記記錄使用者本次明確裁定，取代下方凍結提案中「尚未採納」「另行授權」及待裁定值的當時狀態。唯一程序入口為從零建立的 [DEVELOPMENT_REVIEW.md](DEVELOPMENT_REVIEW.md#applicability)；未匯入來源候選的同名草案。AGENTS 仍是安全與授權權威。
+
+| 裁定 | 本次採納內容與邊界 |
+| --- | --- |
+| Reviewer 分級 | 純文件／一般局部程式／核心或未知為 **1／1／2 位獨立 reviewer**；作者分類，由該級既有 reviewer 確認，不新增分類輪；mixed 取最高級。 |
+| 審查與最新候選 | 各必要 reviewer 首次完整 baseline → 候選審查；同 reviewer 後續 delta＋impact＋原 findings＋integration 補審，另給最新候選結論。換 reviewer、架構改變或影響未知回到完整審查。 |
+| 原件與結論 | 每個 review 版本一份可取回 canonical 原件，允許 same-bytes 備份；PR 僅摘要、版本引用與 hash。Code review、CI／checks、merge eligibility 分開；CI 完成不要求 reviewer 代簽或重寫全文。 |
+| 驗證 | 純文件必要文檢；一般／核心正式驗證保留完整有效非視窗 CI。選測與取消 obsolete run 不採入初版。 |
+| G4 | **延後，沿用現有三輪上限。原方案「同 finding 連續兩輪無可核實進展提前 STOP」不採入本次，不能照抄為新規。** 原 corrective count、non-code 補證據及既有限定例外保持。 |
+| G1、T1／T2／T3 | 均未採納，不授權產品、安全優先序、proof、交易或信任標準修改。 |
+| 生效 | 政策 ID `development-flow/tiered-review/1`；目前**設計已採納、實作中、尚未啟用**。正式驗收與整合完成後，以明確版本／生效點僅對新 task 啟用；不能以 state flags 或受審新 gate 自行啟用。 |
+| 本次授權與驗收 | 三批本機實作及必要定向驗證依序接續，不逐批重問。改革屬核心，按固定實作起點 `42b1985b43aa8ba62bff93edde8583c03d4da5c9` 舊規取得兩位獨立完整 code review；目前沒有正式 PASS，亦無 fetch／push／PR／遠端 CI／merge／安裝／資料操作授權。 |
+
+原 task `pr-flow-decisions-20261112`、baseline `8d08c5a05d8143c353fb47b9be4f33471d99ba10`、歷史審查與計數保留。所有舊 task、STOP／BLOCKED、原件與 schema 保持其原義，不遷移成功、不重設。P5 工作管理已結案，其原三輪／第四輪與 symlink 中斷歷史不動，也不讀寫該工作樹。
+
+下方保留固定實作起點的新版方案及 G1–G5 原提案，供來源與歷史 anchors 追溯；其中「尚未採納」「本輪不授權」及 G4 兩輪無進展建議均是**當時提案文字**，目前裁定以本附記與程序入口為準。請展開後閱讀原文。
+
+<details>
+<summary>42b1985 新版待採納方案與歷史提案原文（凍結快照）</summary>
+
 # 開發流程決策稿：2026-11-12 新版待採納方案
 
 <a id="flow-20261112-status"></a>
@@ -211,3 +236,5 @@ T3 待研究不同 ID 是否同模板／同錯誤鏈的相關來源；專家資�
 4. 檢驗純排版誤混指令、M 級新增消費者、H 級誤降級、缺原報告／hash 錯誤、同根因重複與計數跨批延續；確認原失敗仍在。正式採納和實際工具啟用狀態分開記錄。
 
 本輪停在決策稿與任務卡，保留先前暫停／遠端操作受拒及舊審查紀錄；新 HEAD 不沿用舊 HEAD 的 PASS。未實測的開發工時節省不提供估算。
+
+</details>

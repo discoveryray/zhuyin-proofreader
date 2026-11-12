@@ -412,6 +412,14 @@ Codex 不得僅依自己的 implementation、tests 或自我 code review
 
 ## 17. 兩輪獨立審查與 Codex 執行期間自動接續
 
+開發、審查、驗證與合併先讀唯一[程序入口](docs/DEVELOPMENT_REVIEW.md#applicability)，由其選定適用版本及專屬契約。本文件仍是永久安全、授權與 scope 權威，新增入口不撤銷下列現行契約、歷史原義或 task 計數。
+
+`development-flow/tiered-review/1` 已採納設計、實作中、尚未啟用；目前預設仍是下列兩位獨立 reviewer 的舊規。本次改革自身按固定實作起點舊規完整審查，不以新政策或新 gate 放行。
+
+<a id="current-review-contract"></a>
+<details>
+<summary>現行兩輪契約保留原文（目前仍適用；精確歷史版本依原採納範圍）</summary>
+
 新執行使用 `validation-flow/current-evidence/1` 當次 coverage `/3` 與 merge-short `/3`；不遞迴重驗全部舊 CI。下文舊 `/2` 的格式描述只適用原政策快照，其 schema/判定保留原義。兩輪完整scope、當前必需證據、已知未解產品/資料安全blocker、授權、原task/計數與GitHub保護保持。
 
 除已明確採納的無視窗義務遷移外，新制度只適用採用後的新任務；未收尾任務維持其餘凍結契約。開發／驗證模式及使用者事前明確採納的制度變更過渡驗收見 [驗證政策](docs/VALIDATION_POLICY.md)，不得用受審新 gate 自行創造授權或追認舊 PASS。
@@ -433,3 +441,5 @@ Codex 不得僅依自己的 implementation、tests 或自我 code review
 新 v4 的 `CODE_REVIEWED` 原文持續保留；正式 PASS 以 `finalizes_report_ref` 連到相同 round/baseline/base/head/scope 的中間報告，附 `resolution_evidence_ref` 與 `coverage_sha256`。這與 non-code BLOCKED 的 `supersedes_report_ref` 補審鏈分開，不將中間狀態偽裝成 BLOCKED 或 PASS。同 reviewer 可核對證據缺口，替代 reviewer 仍須完整 scope review。
 
 - 此流程僅於 Codex 任務執行期間協調，不新增 GitHub Actions 背景 AI、外部 AI API、排程或額外計費設定。中斷後由同一 task evidence 恢復；無法執行時如實回報，不能偽稱背景仍在工作。
+
+</details>

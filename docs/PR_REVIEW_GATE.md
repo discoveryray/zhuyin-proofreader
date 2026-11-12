@@ -1,5 +1,7 @@
 # 兩輪審查流程的證據 gate
 
+程序與適用版本先讀[開發與審查入口](DEVELOPMENT_REVIEW.md#applicability)，AGENTS 仍是安全／授權權威。本文件專責 schema、工具介面與有限歷史 adapter；下列 v3／v4 及其原件保持原義。新 `development-flow/tiered-review/1` 設計已採納、實作中、尚未啟用；`zhuyin-pr-review-gate/5` 公開路由目前只能 pending activation／STOP，不能由 state flags 啟用或用來放行本次改革。新有限欄位契約隨實作核對後另列，不將舊 `evidence_gap` 擴成跨候選補審。
+
 新政策下，既有 review-history adapter 仍核對原任務、審查與修正紀錄的身分、順序、授權及已確認 blocker；不再讀取其歷史 CI archive、execution manifest、JUnit、events 或執行輸出作為前置條件。這項分流只適用明示的 current-evidence 政策，舊 snapshot 的原 reader、schema 及判定保持。
 
 2026-10-12 永久採納 `validation-flow/current-evidence/1`。新 v4 snapshot 明示此 validation_policy，以 coverage `/3`、對應 actual merge-short `/3` 核當前候選，不以歷史 aggregate、旧artifact/封存新版閉包重播作前置。舊無旗標或 no-real-tk/1 snapshot 仍按原 schema/政策讀取；下列原 `/1`、`/2` 歷史描述不追溯改義。當次完整 pytest/verify-active、raw hashes、CI身分/SHA/parents/tree、兩輪完整 PASS、產品安全 blocker、授權、corrective 上限及 GitHub 保護不放寬。Gate 不證明輸入真實性或創造授權；原 native STOP 不改標 PASS。詳見[現行政策](VALIDATION_POLICY.md)。

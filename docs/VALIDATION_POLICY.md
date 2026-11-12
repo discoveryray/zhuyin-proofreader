@@ -1,5 +1,7 @@
 # Windows 無視窗分階段驗證政策
 
+程序先讀[開發與審查入口](DEVELOPMENT_REVIEW.md#applicability)。本文件專責驗證／證據政策及有限歷史契約，AGENTS 仍是安全與授權權威。`development-flow/tiered-review/1` 已採納設計、實作中、尚未啟用；下列當前完整非視窗驗證與兩位 reviewer 舊規繼續適用，不能先依新分類免除 CI。新政策待驗收的文檢／完整 CI 邊界只在[入口對應章](DEVELOPMENT_REVIEW.md#pending-validation)定義。
+
 ## 現行永久政策：當前候選證據
 
 2026-10-12 使用者採納 `validation-flow/current-evidence/1`，立即適用未結案任務及後續一般工作，取代發布分支特例。正常入口不呼叫 restore-history，不要求全部舊 run/attempt、舊 artifact 或 handoff/ledger/continuation 通過新版閉包解讀；coverage、沿用與 gate 亦不得間接要求。歷史工具、封存、失敗與原判定只供查阅，不修 parser、不新增 PR/run 例外、不改寫舊 schema。
