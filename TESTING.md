@@ -51,9 +51,9 @@ Capture 使用有限 closed `pr-flow-ci-capture/1`：`schema`、`policy`、`coor
 
 Loader 用固定 repo API 核當前 PR、source run 為該 base 的 workflow_dispatch、workflow identity、actor／triggering actor ID allowlist 與 collaborator 權限。權限採 API 的 `(permission, role_name)`：`(admin, admin)` 或 `(write, maintain)`；不是 JSON 自宣 actor。見 [GitHub permission API](https://docs.github.com/en/rest/collaborators/collaborators#get-repository-permissions-for-a-user)。只取固定 base／workflow 的全域最新來源 run／attempt；較新來源失敗、進行中或不屬該候選時保留 full，不退回較舊成功。唯一 artifact 名為 `<prefix>-<PR number>-<head SHA>-<run id>-<attempt>`，下載前後重核來源、候選與 digest。
 
-包內 `manifest.json`／`capture.json` 與 canonical attachments 保留原 bytes、hash、report_ref、source_file；tuple resolver 僅將精確 `(source_file, sha256, report_ref)` 指向已驗 runner-local 檔案，包含 nested check／resolution／備份。拒絕重複、大小寫別名、絕對／drive／反斜線／越界路徑、link、超限包與內容變更。離線 `verify_retained_capture` 只驗來源快照和完整性，不替代 fresh API 認證；post-merge 重新核來源，不把 snapshot 當身分憑證。
+包內 `manifest.json`／`capture.json` 與 canonical attachments 保留原 bytes、hash、report_ref、source_file；tuple resolver 僅將精確 `(source_file, sha256, report_ref)` 指向已驗 runner-local 檔案，包含 nested check／resolution／備份。拒絕重複、大小寫別名、絕對／drive／反斜線／越界路徑、link、超限包與內容變更。這個有限傳遞 profile 不支援 dot-prefixed 包內路徑或 DOS hidden member；原始 `source_file` 定位字串不改。下載階段建立本機副本，上傳保留完整受綁定的 originals 及必要 raw commit；離線 `verify_retained_capture` 完全唯讀，缺件拒絕，不重新解包、建立目錄或修復原件。它只驗來源快照和完整性，不替代 fresh API 認證；post-merge 重新核來源，不把 snapshot 當身分憑證。
 
-`dispatch` 未啟用時不取新來源：PR／main push 維持 full，develop push 維持舊 short。新政策的 workflow／summary 守衛不由 state／環境變數啟用。隔離測試及日後啟用時，無可信 capture 仍 full，但 PR 的中立必要文檢另行執行；不因檔名推定豁免。現存 Markdown 使用有限 parser；其他格式／刪除或任務必要能力未支援即明列缺口／拒絕，不能把 full 當作已完成 links／anchors。
+`dispatch` 未啟用時不取新來源：PR／main push 維持 full，develop push 維持舊 short。新政策的 workflow／summary 守衛不由 state／環境變數啟用。隔離測試及日後啟用時，無可信 capture 仍 full，但 PR 的中立必要文檢另行執行；不因檔名推定豁免。現存 Markdown 使用有限 parser；HTML 資源與不支援的混合語法不得默默略過。本地目錄只核 tested Git tree 的存在性與原件，不推定 README 或頁面 render，目錄 fragment 拒絕。其他格式／刪除或任務必要能力未支援即明列缺口／拒絕，不能把 full 當作已完成 links／anchors。
 
 以下只定位 CLI 介面，不是本輪的執行或啟用授權。`inspect` 只讀固定 Git objects；`diagnose-lifecycle` 外層仍 STOP。正式的 documentation 產生／驗證命令須政策已啟用且當次 Actions context／plan 相符，目前公開入口拒絕啟用；隔離測試直接驗有限 consumer，不新增繞過鎖的 CLI：
 

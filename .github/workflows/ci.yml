@@ -70,6 +70,9 @@ jobs:
             tmp/validation-evidence/**/pr-evidence/transport/artifact.zip
             tmp/validation-evidence/**/pr-evidence/pr-flow-ci/transport/artifact.zip
             tmp/validation-evidence/**/capture-source/artifact.zip
+            tmp/validation-evidence/**/pr-evidence/transport/originals/**
+            tmp/validation-evidence/**/pr-evidence/pr-flow-ci/transport/originals/**
+            tmp/validation-evidence/**/capture-source/originals/**
             !tmp/validation-evidence/**/temp/**
           if-no-files-found: error
           overwrite: false
@@ -246,7 +249,7 @@ jobs:
             tmp/pr-flow-ci/transport/artifacts.json
             tmp/pr-flow-ci/transport/artifact.zip
             tmp/pr-flow-ci/transport/source.json
-            tmp/pr-flow-ci/transport/originals/capture.json
+            tmp/pr-flow-ci/transport/originals/
             tmp/pr-flow-ci/docs/checks.json
             tmp/pr-flow-ci/docs/scope.json
             tmp/pr-flow-ci/docs/tested-commit.raw
@@ -296,7 +299,7 @@ jobs:
             tmp/pr-flow-ci/transport/artifacts.json
             tmp/pr-flow-ci/transport/artifact.zip
             tmp/pr-flow-ci/transport/source.json
-            tmp/pr-flow-ci/transport/originals/capture.json
+            tmp/pr-flow-ci/transport/originals/
             tmp/pr-flow-ci/docs/checks.json
             tmp/pr-flow-ci/docs/scope.json
             tmp/pr-flow-ci/docs/tested-commit.raw

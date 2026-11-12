@@ -9,6 +9,8 @@ import io
 import json
 import os
 from pathlib import Path
+import re
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -22,9 +24,29 @@ from scripts import pr_flow_transport as transport
 from scripts import validation_evidence as evidence
 from scripts import validation_runner as runner
 try:
-    from tests.test_pr_flow_transport import SyntheticAPI, SyntheticFixture
+    from tests.test_pr_flow_transport import SyntheticAPI, SyntheticFixture, evidence_tree, forbid_evidence_writes
 except ModuleNotFoundError:
-    from test_pr_flow_transport import SyntheticAPI, SyntheticFixture
+    from test_pr_flow_transport import SyntheticAPI, SyntheticFixture, evidence_tree, forbid_evidence_writes
+
+
+def upload_payload_files(workspace, job, upload):
+    """Project the actual workflow's bounded paths, including directory inputs."""
+    try:
+        from tests.test_ci_validation_workflow import current_job, step
+    except ModuleNotFoundError:
+        from test_ci_validation_workflow import current_job, step
+    body = step(current_job(job), upload)
+    block = re.search(r"^          path: \|\n((?:            .*\n)+)", body, re.M).group(1)
+    included = set()
+    for pattern in (line.strip() for line in block.splitlines()):
+        matches = set()
+        for path in workspace.glob(pattern.removeprefix("!")):
+            matches.update(file for file in path.rglob("*") if file.is_file()) if path.is_dir() else matches.add(path)
+        if pattern.startswith("!"): included.difference_update(matches)
+        else: included.update(matches)
+    if "include-hidden-files: false" in body:
+        included = {path for path in included if not any(part.startswith(".") for part in path.relative_to(workspace).parts)}
+    return included
 
 
 def documentation_api_fixture(folder, *, initial_files=None):
@@ -60,10 +82,8 @@ def documentation_api_fixture(folder, *, initial_files=None):
                   status="completed", conclusion="success", repository=deepcopy(fixture.repository))
     archive_io = io.BytesIO()
     with zipfile.ZipFile(archive_io, "w", zipfile.ZIP_DEFLATED) as archive:
-        for file in sorted((root / "tmp/pr-flow-ci").rglob("*")):
-            if file.is_file() and ("originals" not in file.relative_to(root / "tmp/pr-flow-ci").parts
-                                   or file.relative_to(root / "tmp/pr-flow-ci").as_posix() == "transport/originals/capture.json"):
-                archive.write(file, file.relative_to(root / "tmp/pr-flow-ci").as_posix())
+        for file in sorted(upload_payload_files(root, "test", "Upload documentation evidence")):
+            archive.write(file, file.relative_to(root / "tmp/pr-flow-ci").as_posix())
     pr_archive = archive_io.getvalue()
     artifact = dict(id=901, name=f"documentation-validation-evidence-{pr_run['id']}-1", expired=False,
                     digest="sha256:" + ci.digest(pr_archive), size_in_bytes=len(pr_archive),
@@ -142,6 +162,11 @@ def full_fallback_short_fixture(folder):
     coverage_path = bundle(root / "tmp/full-source")
     scope = coverage_path.parent
     record = evidence.load_json(coverage_path)
+    # Match the actual current full producer's retained lock location; the
+    # generic bundle helper deliberately uses a flattened parser-only layout.
+    (scope / "main-full").mkdir()
+    (scope / "lock.txt").rename(scope / "main-full/lock.txt")
+    record["artifacts"]["lock"] = reference(scope, scope / "main-full/lock.txt")
     docs_record = ci.load(result["documentation_path"])
     identity, binding = flow._source_identity(docs_record), docs_record["ci"]
     checkout = {key: value for key, value in docs_record["checkout"].items() if not key.startswith("checkout_")}
@@ -198,6 +223,47 @@ def full_fallback_short_fixture(folder):
 
 
 class PrFlowEvidenceTests(unittest.TestCase):
+    def test_actual_upload_paths_preserve_readonly_docs_and_fallback_payloads_on_relocation(self):
+        # These fixtures model short-command transport; Git/CLI checks, ZIPs,
+        # payload selection and every reader below execute normally.
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            for route, make in (("docs", documentation_short_fixture), ("docs_fallback_full", full_fallback_short_fixture)):
+                fixture = make(root / route)
+                workspace = root / (route + "-workspace")
+                staged = workspace / "tmp/validation-evidence/short-synthetic"
+                shutil.copytree(fixture["short_path"].parent, staged)
+                (staged / "personal.bin").write_bytes(b"excluded canary")
+                included = upload_payload_files(workspace, "short", "Upload validation evidence")
+                self.assertNotIn(staged / "personal.bin", included)
+                stream = io.BytesIO()
+                with zipfile.ZipFile(stream, "w", zipfile.ZIP_DEFLATED) as archive:
+                    for file in sorted(included):
+                        archive.write(file, file.relative_to(workspace / "tmp/validation-evidence").as_posix())
+                relocated = root / (route + "-relocated")
+                evidence.extract_evidence(stream.getvalue(), relocated)
+                moved = relocated / "short-synthetic"
+                documentation = moved / ("pr-evidence/docs/checks.json" if route == "docs" else "pr-evidence/pr-flow-ci/docs/checks.json")
+                coverage = None if route == "docs" else moved / fixture["short_record"]["coverage_path"]
+                def verify():
+                    before = evidence_tree(moved)
+                    try:
+                        with patch.object(ci, "ROOT", fixture["source_root"]), forbid_evidence_writes():
+                            return flow.verify_tiered_post_merge(moved / "short.json", fixture["candidate"], route, fixture["pr_ci"],
+                                                                coverage_path=coverage, documentation_path=documentation)
+                    finally:
+                        self.assertEqual(evidence_tree(moved), before)
+                self.assertEqual(verify()["source_route"], route)
+                missing_paths = [documentation.parent / "tested-commit.raw"]
+                if route == "docs":
+                    missing_paths += [moved / "pr-evidence/transport/originals/raw/check.raw",
+                                      moved / "capture-source/originals/backups/review-1.json"]
+                for path in missing_paths:
+                    raw = path.read_bytes(); path.unlink()
+                    with self.subTest(route=route, missing=path.relative_to(moved)), self.assertRaises((ValueError, OSError)):
+                        verify()
+                    self.assertFalse(path.exists()); path.write_bytes(raw)
+
     def test_full_fallback_preserves_full_short_schema_and_requires_retained_documentation(self):
         with tempfile.TemporaryDirectory() as folder:
             fixture = full_fallback_short_fixture(folder)

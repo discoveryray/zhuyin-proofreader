@@ -1,5 +1,7 @@
 """Synthetic API-shaped local fixtures; no hosted attestation or network calls."""
 from copy import deepcopy
+from contextlib import contextmanager
+import builtins
 import io
 import json
 from pathlib import Path
@@ -8,6 +10,7 @@ import stat
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 import warnings
 import zipfile
 
@@ -26,6 +29,27 @@ def zip_bytes(members):
         for name, raw in members.items():
             archive.writestr(name, raw)
     return stream.getvalue()
+
+
+def evidence_tree(root):
+    """Record paths, kinds and exact file bytes, including empty directories."""
+    return {path.relative_to(root).as_posix(): ("directory", None) if path.is_dir() else
+            ("file", transport.digest(path.read_bytes())) for path in root.rglob("*")}
+
+
+@contextmanager
+def forbid_evidence_writes():
+    """Tripwires retain genuine reads/validators, rejecting any write attempt."""
+    path_open, builtin_open = Path.open, builtins.open
+    def guarded_path_open(path, mode="r", *args, **kwargs):
+        if any(flag in mode for flag in "wax+"): raise AssertionError("Path.open attempted an evidence write")
+        return path_open(path, mode, *args, **kwargs)
+    def guarded_open(file, mode="r", *args, **kwargs):
+        if any(flag in mode for flag in "wax+"): raise AssertionError("open attempted an evidence write")
+        return builtin_open(file, mode, *args, **kwargs)
+    with patch.object(Path, "mkdir", side_effect=AssertionError("mkdir attempted during readonly verification")), \
+         patch.object(Path, "open", guarded_path_open), patch.object(builtins, "open", guarded_open):
+        yield
 
 
 class SyntheticAPI:
@@ -274,6 +298,101 @@ class PrFlowTransportTests(unittest.TestCase):
         row = self.f.attachment_rows[0]
         path = result["original_resolver"](row["source_file"], row["sha256"], row["report_ref"])
         self.assertTrue(path.is_relative_to(relocated))
+
+    def test_retained_verification_never_writes_or_repairs_any_missing_file_or_directory(self):
+        value = self.fetch()
+        output = self.folder / "output-1"
+        def verify():
+            before = evidence_tree(output)
+            try:
+                with forbid_evidence_writes():
+                    return transport.verify_retained_capture(value["source"], self.f.event, output, self.f.root, candidate=self.f.candidate)
+            finally:
+                self.assertEqual(evidence_tree(output), before)
+        self.assertEqual(verify()["capture"], self.f.capture)
+        # Every metadata file and every canonical/check/resolution/backup is
+        # required on disk, even though the trusted ZIP still has its bytes.
+        for path in sorted(output.rglob("*")):
+            if not path.is_file(): continue
+            raw = path.read_bytes(); path.unlink()
+            with self.subTest(missing=path.relative_to(output)), self.assertRaises(ValueError): verify()
+            self.assertFalse(path.exists())
+            path.write_bytes(raw)
+        originals = output / "originals"
+        shutil.rmtree(originals)
+        with self.assertRaises(ValueError): verify()
+        self.assertFalse(originals.exists())
+        # Only an explicit fresh producer call may materialize those originals.
+        restored = transport.fetch_capture(SyntheticAPI(self.f), self.f.candidate, self.f.event, output, self.f.root)
+        self.assertEqual(restored["capture"], self.f.capture)
+        self.assertTrue(originals.is_dir())
+
+    def test_retained_forged_or_tampered_evidence_is_rejected_without_writes(self):
+        value = self.fetch()
+        output = self.folder / "output-1"
+        for name in ("source.json", "originals/raw/check.raw", "originals/backups/review-0.json"):
+            path = output / name; raw = path.read_bytes(); path.write_bytes(raw + b"tamper")
+            before = evidence_tree(output)
+            with self.subTest(name=name), forbid_evidence_writes(), self.assertRaises(ValueError):
+                transport.verify_retained_capture(value["source"], self.f.event, output, self.f.root)
+            self.assertEqual(evidence_tree(output), before)
+            path.write_bytes(raw)
+        forged = deepcopy(value["source"]); forged["artifact_name"] = "forged"
+        before = evidence_tree(output)
+        with forbid_evidence_writes(), self.assertRaises(ValueError):
+            transport.verify_retained_capture(forged, self.f.event, output, self.f.root)
+        self.assertEqual(evidence_tree(output), before)
+
+    def test_public_gate_and_lifecycle_do_not_repair_missing_transport_originals(self):
+        from test_pr_flow_policy import TieredReviewPolicyTests
+        from scripts import pr_flow_ci as ci
+        from scripts import pr_review_gate as gate
+        helper = TieredReviewPolicyTests()
+        helper.setUp()
+        self.addCleanup(helper.doCleanups)
+        source, state = helper.documentation_state()
+        state["lifecycle"] = dict(schema=gate.TIERED_LIFECYCLE_SCHEMA, checks_route="docs", premerge_recheck=None,
+                                  merge=None, push_ci=None, short_validation=None)
+        helper.premerge_recheck(state)
+        evidence = source / "tmp/pr-flow-ci"
+        members = transport._archive((evidence / "transport/artifact.zip").read_bytes())
+        manifest = json.loads(members["manifest.json"])
+        cache = self.folder / "independent-originals"; cache.mkdir()
+        mapping = {}
+        for index, row in enumerate(manifest["attachments"]):
+            path = cache / str(index); path.write_bytes(members[row["path"]])
+            mapping[row["source_file"], row["sha256"], row["report_ref"]] = path
+        def independent_resolver(source_file, sha256, report_ref):
+            return mapping[source_file, sha256, report_ref]
+        def assess(ready):
+            before = evidence_tree(evidence)
+            with patch.object(ci, "ROOT", source), forbid_evidence_writes():
+                result = gate.validate_tiered_evidence(state, original_resolver=independent_resolver)
+                self.assertEqual(result["checks_ready"], ready, result)
+                self.assertEqual(gate.next_action(state, original_resolver=independent_resolver)["action"], "STOP")
+                action = gate.evaluate_tiered_lifecycle(state, original_resolver=independent_resolver)["action"]
+                self.assertEqual(action, "MERGE_PROPOSAL" if ready else "REFRESH_EVIDENCE")
+            self.assertEqual(evidence_tree(evidence), before)
+        assess(True)
+        for name in ("originals/raw/review-0.json", "originals/raw/check.raw", "originals/raw/resolution.raw",
+                     "originals/backups/review-1.json", "permission-actor.json"):
+            path = evidence / "transport" / name; raw = path.read_bytes(); path.unlink()
+            with self.subTest(missing=name): assess(False)
+            self.assertFalse(path.exists()); path.write_bytes(raw)
+        path = evidence / "transport/originals/raw/check.raw"
+        raw = path.read_bytes(); path.write_bytes(raw + b"forged")
+        assess(False)
+        self.assertEqual(path.read_bytes(), raw + b"forged")
+
+    def test_hidden_archive_paths_and_dos_hidden_entries_are_explicitly_unsupported(self):
+        for name in (".report", "raw/.report", ".hidden/report", "raw/.hidden/report"):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, "hidden"):
+                transport._archive(zip_bytes({name: b"original"}))
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, "w") as archive:
+            member = zipfile.ZipInfo("raw/report"); member.external_attr = 0x02
+            archive.writestr(member, b"original")
+        with self.assertRaisesRegex(ValueError, "hidden"): transport._archive(stream.getvalue())
 
     def test_retained_source_requires_every_fixed_reference_exact_bytes_and_git_policy(self):
         value = self.fetch()

@@ -1,5 +1,6 @@
 """Synthetic local evidence only; no product suite, GUI, remote or installs."""
 from copy import deepcopy
+import base64
 import hashlib
 import json
 import os
@@ -14,7 +15,7 @@ from scripts import pr_flow_ci as ci
 from scripts import pr_flow_policy as policy
 
 
-def documentation_fixture(folder, text="# Guide\n\n[Target](target.md#details)\n"):
+def documentation_fixture(folder, text="# Guide\n\n[Target](target.md#details)\n", *, assets=None):
     """Create an isolated synthetic Git object graph, never modify task Git."""
     root = Path(folder)
     def git(*args, input=None):
@@ -25,7 +26,10 @@ def documentation_fixture(folder, text="# Guide\n\n[Target](target.md#details)\n
     git("config", "user.email", "synthetic@example.invalid")
     (root / "guide.md").write_text("# Guide\n", encoding="utf-8")
     (root / "target.md").write_text("# Target\n\n## Details\n", encoding="utf-8")
-    git("add", "guide.md", "target.md"); git("commit", "-m", "synthetic baseline")
+    for name, raw in (assets or {}).items():
+        path = root / name; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(raw)
+    git("add", "guide.md", "target.md", *(name for name in (assets or {}) if name not in {"guide.md", "target.md"}))
+    git("commit", "-m", "synthetic baseline")
     baseline = git("rev-parse", "HEAD")
     (root / "guide.md").write_text(text, encoding="utf-8")
     git("add", "guide.md"); git("commit", "-m", "synthetic documentation candidate")
@@ -111,6 +115,108 @@ def diverged_documentation_fixture(folder, change):
 
 
 class PrFlowCiTests(unittest.TestCase):
+    def html_checks(self, text, *, assets=None, succeeds=True, error=None):
+        """Run three actual child CLIs and the real bounded artifact verifier."""
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            candidate, event, environment = documentation_fixture(root, text, assets=assets)
+            binding = ci.bind_event(candidate, event, environment, root)
+            output = root / "checks/checks.json"
+            record = ci.run_documentation_checks(candidate, binding, output, root)
+            self.assertEqual([item["name"] for item in record["checks"]], list(ci.CHECKS))
+            self.assertEqual(record["status"], "success" if succeeds else "failed")
+            if succeeds:
+                ci.verify_documentation_checks(output, candidate, _root=root)
+                return ci.load(output.parent / "local_links.stdout.json")
+            local = next(item for item in record["checks"] if item["name"] == "local_links")
+            self.assertNotEqual(local["exit_code"], 0)
+            if error:
+                self.assertIn(error, (output.parent / local["stderr"]["path"]).read_text(encoding="utf-8"))
+            with self.assertRaises(ValueError): ci.verify_documentation_checks(output, candidate, _root=root)
+
+    def test_html_href_src_and_explicit_anchors_use_actual_targets_and_legal_external_schemes(self):
+        png = base64.b64decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aWQAAAABJRU5ErkJggg==")
+        target = b'# Target\n\n## Details\n<a id="explicit&amp;anchor"></a>\n<a name="legacy"></a>\n'
+        result = self.html_checks('# Guide\n\n<details open><summary>Targets</summary>\n'
+            '<A HREF="target.md#details">Heading</A>\n<a href="target.md#explicit%26anchor">Entity anchor</a>\n'
+            '<a href=target.md#legacy>Unquoted target</a>\n<img src="pixel.png" alt="Pixel" width="1" height="1" />\n'
+            '<a href="https://example.invalid/?a=1&amp;b=2">External</a>\n'
+            '<img src="//example.invalid/pixel.png" alt="External" />\n<a href="mailto:example@example.invalid">Mail</a>\n</details>\n',
+            assets={"pixel.png": png, "target.md": target})
+        self.assertEqual([item["target"] for item in result["local_links"]],
+                         ["target.md#details", "target.md#explicit%26anchor", "target.md#legacy", "pixel.png"])
+
+    def test_missing_html_href_src_and_anchor_are_real_cli_failures(self):
+        for markup, message in (('<a href="missing.md#absent">Missing</a>', "missing local documentation target"),
+                                ('<img src="missing.png">', "missing local documentation target"),
+                                ('<a href="target.md#absent">Missing anchor</a>', "missing local documentation anchor"),
+                                ('<a href="#example-only">Missing anchor</a>\n`<a id="example-only"></a>`', "missing local documentation anchor")):
+            with self.subTest(markup=markup): self.html_checks("# Guide\n\n" + markup + "\n", succeeds=False, error=message)
+
+    def test_html_examples_are_ignored_without_rewriting_resource_url_bytes(self):
+        result = self.html_checks('# Guide\n\n````html\n```\n<a href="missing-fenced.md">Example</a>\n````\n'
+            '`<img src="missing-inline.png">` and ``<a href="missing`inline.md">Example</a>``\n'
+            '&lt;a href="missing-escaped.md"&gt;Example&lt;/a&gt;\n<!-- [Example](missing-comment.md) -->\n'
+            '<a href="#guide">Actual anchor</a>\n')
+        self.assertEqual([item["target"] for item in result["local_links"]], ["#guide"])
+        self.html_checks('# Guide\n\n<a href="tar`example`get.md#details">Must preserve URL</a>\n',
+                         succeeds=False, error="missing local documentation target: tar`example`get.md")
+
+    def test_raw_html_blocks_cannot_hide_resources_or_create_markdown_anchors(self):
+        for markup in ('<div>\n```\n<a href="missing.md">Actual HTML</a>\n```\n</div>',
+                       '<pre>\n\n```\n<img src="missing.png">\n```\n</pre>'):
+            with self.subTest(markup=markup):
+                self.html_checks("# Guide\n\n" + markup + "\n", succeeds=False, error="unsupported raw HTML/code-fence mixture")
+        self.html_checks('# Guide\n\n<div>\n`<a href="missing-raw.md">Actual HTML</a>`\n</div>\n',
+                         succeeds=False, error="missing local documentation target: missing-raw.md")
+        for tag in ("script", "style", "textarea"):
+            with self.subTest(tag=tag):
+                self.html_checks(f'# Guide\n\n<{tag}>\n\n```\n<a href="missing.md">Actual HTML</a>\n```\n</{tag}>\n',
+                                 succeeds=False, error="unsupported HTML documentation tag: " + tag)
+        self.html_checks('# Guide\n\n<a href="target.md#not-a-heading">Not an actual Markdown heading</a>\n',
+                         assets={"target.md": b"# Target\n\n<div>\n## Not a heading\n</div>\n"},
+                         succeeds=False, error="missing local documentation anchor")
+        result = self.html_checks('# Guide\n\n```html\n<div>\n<script>\n<a href="missing-example.md">Example</a>\n</script>\n</div>\n```\n'
+                                  '\n<!--\n```\n-->\n\n[Actual](target.md#details)\n')
+        self.assertEqual([item["target"] for item in result["local_links"]], ["target.md#details"])
+
+    def test_local_directory_targets_require_actual_git_tree_without_fragment(self):
+        assets = {"nested/guide.md": b"# Nested guide\n"}
+        checked = self.html_checks('# Guide\n\n[Directory](nested/)\n<a href="nested">HTML directory</a>\n', assets=assets)
+        self.assertEqual([item["target"] for item in checked["local_links"]], ["nested/", "nested"])
+        self.assertTrue(all(item["path"] == "nested" and item["git_type"] == "tree" for item in checked["local_links"]))
+        self.assertEqual(checked["local_links"][0]["tree"], checked["local_links"][1]["tree"])
+        # Independently calculate the one-entry Git tree from fixed fixture
+        # bytes, rather than derive the expected identity from the checker.
+        blob = b"# Nested guide\n"
+        blob_id = hashlib.sha1(b"blob " + str(len(blob)).encode() + b"\0" + blob).digest()
+        raw_tree = b"100644 guide.md\0" + blob_id
+        tree_id = hashlib.sha1(b"tree " + str(len(raw_tree)).encode() + b"\0" + raw_tree).hexdigest()
+        self.assertEqual(checked["local_links"][0]["tree"], tree_id)
+        self.assertEqual(checked["local_links"][0]["sha256"], hashlib.sha256(raw_tree).hexdigest())
+        for target, error in (("missing-directory/", "missing local documentation target"),
+                              ("../outside/", "documentation link escapes repository"),
+                              ("nested/#guide", "local directory anchors require another checker")):
+            with self.subTest(target=target):
+                self.html_checks('# Guide\n\n<a href="' + target + '">Directory</a>\n',
+                                 assets=assets, succeeds=False, error=error)
+
+    def test_unsafe_or_unsupported_html_resource_syntax_fails_closed(self):
+        cases = [('<a href="&#46;&#46;/outside.md">Escape</a>', "escapes repository"),
+                 ('<img src="/absolute.png">', "non-relative local documentation link"),
+                 ('<a href="javascript:alert(1)">Unsafe</a>', "unsupported documentation link scheme"),
+                 ('<img src="target.md" srcset="missing.png 2x">', "unsupported HTML documentation attribute: srcset"),
+                 ('<span style="background:url(missing.png)">Unsupported</span>', "unsupported HTML documentation attribute: style"),
+                 ('<iframe src="missing.md"></iframe>', "unsupported HTML documentation tag: iframe"),
+                 ('<base href="https://example.invalid/">', "unsupported HTML documentation tag: base"),
+                 ('<a href="target.md" href="missing.md">Duplicate</a>', "duplicate HTML documentation attribute"),
+                 ('<a href="target.md#details"', "incomplete HTML documentation tag"),
+                 ('<a href="target.md?query=1">Unsupported query</a>', "local documentation link query is unsupported"),
+                 ('<a href="pixel.png#part">Unsupported anchor format</a>', "local non-Markdown anchor requires another checker")]
+        for markup, message in cases:
+            with self.subTest(markup=markup):
+                self.html_checks("# Guide\n\n" + markup + "\n", assets={"pixel.png": b"synthetic existence-only target"}, succeeds=False, error=message)
+
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()
         self.addCleanup(self.folder.cleanup)

@@ -1,14 +1,16 @@
 """Inactive tiered CI wiring and bounded, file-backed documentation checks.
 
-The coordinator captures independently obtained review originals at CAPTURE.
-That local handoff is not an authenticity proof or an Actions transport.  A
-normal checkout without the capture keeps full CI, including after activation.
-No CLI argument or environment variable can enable the policy.
+CAPTURE names the legacy local handoff; that file supplies no source authority.
+Configured Actions transport instead binds coordinator-attested originals to
+base-owned policy and checked GitHub API identity. Missing trusted sources keep
+full CI. Neutral PR checks assert no classification or reviewer identity, and
+no CLI argument or environment variable can enable the policy.
 """
 from __future__ import annotations
 
 import argparse
 import hashlib
+from html.parser import HTMLParser
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -281,25 +283,127 @@ def inspect_pr_documentation(scope, check, root=ROOT, *, tested_sha):
     return _inspect_documentation(candidate, check, root, tested)
 
 
-def _visible(text, *, preserve_inline=False):
-    # Fenced examples and inline code are not rendered links/anchors.
-    lines, fence = [], None
-    for line in text.splitlines():
-        match = re.match(r"^\s*(`{3,}|~{3,})", line)
-        if match:
-            marker = match[1][0]
-            if fence is None: fence = marker
-            elif fence == marker: fence = None
-            continue
-        if fence is None:
-            lines.append(re.sub(r"`+([^`]*)`+", r"\1" if preserve_inline else "", line))
+def _visible(text, *, preserve_inline=False, exclude_html_blocks=False):
+    """Bounded lexical profile, refusing ambiguous raw-HTML/code mixtures."""
+    text = "\n".join(text.splitlines())
+    visible, index, fence, raw_html, raw_pre = [], 0, None, False, False
+    while index < len(text):
+        if index == 0 or text[index - 1] == "\n":
+            line_end = text.find("\n", index)
+            line_end = len(text) if line_end == -1 else line_end
+            line = text[index:line_end]
+            match = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
+            if fence is not None:
+                if match and match[1][0] == fence[0] and len(match[1]) >= len(fence) and not match[2].strip():
+                    fence = None
+                index = line_end + 1
+                continue
+            if not line.strip() and not raw_pre:
+                raw_html = False
+            elif re.match(r"^ {0,3}</?[A-Za-z][A-Za-z0-9-]*(?:\s|/?>|$)", line):
+                # Treat possible HTML blocks conservatively until a blank
+                # line; pre retains raw context through blanks until </pre>.
+                raw_html = True
+            if match:
+                policy.require(not raw_html and not raw_pre, "unsupported raw HTML/code-fence mixture")
+                policy.require(match[1][0] != "`" or "`" not in match[2], "unsupported Markdown fence info")
+                fence = match[1]
+                index = line_end + 1
+                continue
+        if text.startswith("<!--", index):
+            end = text.find("-->", index + 4)
+            policy.require(end != -1, "unclosed HTML documentation comment")
+            index = end + 3
+        elif text[index] == "`" and not raw_html and not raw_pre:
+            run = re.match(r"`+", text[index:])[0]
+            end = next((index + len(run) + match.start() for match in re.finditer(r"`+", text[index + len(run):])
+                        if len(match[0]) == len(run)), None)
+            if end is None:
+                visible.append(run); index += len(run)
+            else:
+                content = text[index + len(run):end]
+                policy.require(re.search(r"\n\s*\n|\n {0,3}(?:</?[A-Za-z]|`{3,}|~{3,}|#{1,6}\s)", content) is None,
+                               "unsupported code span across Markdown/HTML blocks")
+                if preserve_inline: visible.append(content)
+                index = end + len(run)
+        elif text[index] == "<" and re.match(r"</?[A-Za-z]", text[index:]):
+            # Keep a whole quoted HTML tag intact: backticks inside an href/src
+            # are URL bytes, not Markdown code-span delimiters.
+            end, quote = index + 1, None
+            while end < len(text):
+                value = text[end]
+                if quote:
+                    if value == quote: quote = None
+                elif value in {"'", '"'}: quote = value
+                elif value == ">": break
+                end += 1
+            policy.require(end < len(text), "incomplete HTML documentation tag")
+            tag = text[index:end + 1]
+            if re.match(r"<pre(?:\s|/?>)", tag, re.I): raw_pre = True; raw_html = True
+            if not exclude_html_blocks or not raw_html: visible.append(tag)
+            if re.match(r"</pre\s*>", tag, re.I): raw_pre = False
+            index = end + 1
+        else:
+            if not exclude_html_blocks or not raw_html: visible.append(text[index])
+            index += 1
     policy.require(fence is None, "unclosed Markdown code fence")
-    return "\n".join(lines)
+    return "".join(visible)
+
+
+class _DocumentationHTML(HTMLParser):
+    """Finite display HTML only; unsupported resource syntax never passes."""
+    TAGS = set("a img details summary div span p br hr h1 h2 h3 h4 h5 h6 table thead tbody tfoot tr th td ul ol li dl dt dd strong em b i s del ins sub sup kbd samp code pre blockquote figure figcaption".split())
+    GLOBAL_ATTRIBUTES = {"id", "class", "title", "align", "role", "aria-label", "dir", "lang"}
+    ATTRIBUTES = {"a": {"href", "name", "target", "rel"}, "img": {"src", "alt", "width", "height", "loading", "decoding"},
+                  "details": {"open"}, "th": {"colspan", "rowspan", "scope"}, "td": {"colspan", "rowspan"},
+                  "ol": {"start", "reversed", "type"}, "li": {"value"}}
+
+    def __init__(self):
+        # Attribute values are decoded by HTMLParser independently; keeping
+        # text references separate prevents escaped examples becoming tags.
+        super().__init__(convert_charrefs=False)
+        self.targets, self.anchors = [], set()
+
+    def handle_starttag(self, tag, attrs):
+        policy.require(tag in self.TAGS, "unsupported HTML documentation tag: " + tag)
+        seen = set()
+        for name, value in attrs:
+            policy.require(name not in seen, "duplicate HTML documentation attribute: " + name)
+            seen.add(name)
+            policy.require(name in self.GLOBAL_ATTRIBUTES | self.ATTRIBUTES.get(tag, set()), "unsupported HTML documentation attribute: " + name)
+            if (tag, name) in {("a", "href"), ("img", "src")}:
+                policy.require(type(value) is str and bool(value) and value == value.strip()
+                               and not any(ord(char) < 32 or ord(char) == 127 for char in value), "invalid HTML documentation target")
+                self.targets.append(value)
+            elif name == "id" or (tag == "a" and name == "name"):
+                policy.require(type(value) is str and bool(value), "invalid HTML documentation anchor")
+                self.anchors.add(value)
+
+    def handle_endtag(self, tag):
+        policy.require(tag in self.TAGS, "unsupported HTML documentation tag: " + tag)
+
+    def handle_data(self, data):
+        policy.require(re.search(r"<\s*/?\s*[A-Za-z!?]", data) is None, "unsupported or incomplete HTML documentation syntax")
+
+    def handle_decl(self, decl):
+        raise policy.PolicyError("unsupported HTML documentation declaration")
+
+    def handle_pi(self, data):
+        raise policy.PolicyError("unsupported HTML documentation processing instruction")
+
+    def unknown_decl(self, data):
+        raise policy.PolicyError("unsupported HTML documentation declaration")
+
+
+def _html_references(visible):
+    parser = _DocumentationHTML()
+    parser.feed(visible); parser.close()
+    return parser.targets, parser.anchors
 
 
 def _anchors(text):
-    text = _visible(text, preserve_inline=True)
-    anchors = set(re.findall(r"\b(?:id|name)\s*=\s*['\"]([^'\"]+)['\"]", text))
+    _, anchors = _html_references(_visible(text))
+    text = _visible(text, preserve_inline=True, exclude_html_blocks=True)
     used = {}
     for line in text.splitlines():
         match = re.match(r"^ {0,3}#{1,6}\s+(.+?)(?:\s+#+)?$", line)
@@ -345,6 +449,8 @@ def _inspect_documentation(candidate, check, root, tested):
         visible = _visible(text)
         definitions = dict(re.findall(r"^ {0,3}\[([^\]]+)\]:\s*<?([^\s>]+)>?", visible, re.M))
         targets = [a or b for a, b in re.findall(r"!?\[[^\]]*\]\(\s*(?:<([^>]+)>|([^\s)]+))(?:\s+[^)]*)?\)", visible)]
+        html_targets, _ = _html_references(visible)
+        targets += html_targets
         for label in re.findall(r"!?\[[^\]]+\]\[([^\]]+)\]", visible):
             policy.require(label in definitions, "missing Markdown reference definition: " + label)
             targets.append(definitions[label])
@@ -360,9 +466,19 @@ def _inspect_documentation(candidate, check, root, tested):
             resolved = posixpath.normpath(posixpath.join(posixpath.dirname(name), path)) if path else name
             policy.require(resolved not in {".", ".."} and not resolved.startswith("../"), "documentation link escapes repository")
             try:
-                content = git(root, "cat-file", "blob", tested["head"] + ":" + resolved)
+                kind = git(root, "cat-file", "-t", tested["head"] + ":" + resolved).decode("ascii").strip()
             except subprocess.CalledProcessError as error:
                 raise policy.PolicyError("missing local documentation target: " + resolved) from error
+            if kind == "tree":
+                policy.require(not split.fragment, "local directory anchors require another checker")
+                tree = git(root, "rev-parse", tested["head"] + ":" + resolved).decode("ascii").strip()
+                policy.sha(tree, "local directory tree")
+                content = git(root, "cat-file", "tree", tree)
+                checked.append({"source": name, "target": target, "path": resolved, "git_type": "tree",
+                                "tree": tree, "sha256": digest(content)})
+                continue
+            policy.require(kind == "blob", "unsupported local documentation Git object type: " + kind)
+            content = git(root, "cat-file", "blob", tested["head"] + ":" + resolved)
             if split.fragment:
                 policy.require(PurePosixPath(resolved).suffix.lower() == ".md", "local non-Markdown anchor requires another checker")
                 policy.require(unquote(split.fragment) in _anchors(content.decode("utf-8")), "missing local documentation anchor: " + target)

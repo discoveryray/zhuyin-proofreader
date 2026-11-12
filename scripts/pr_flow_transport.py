@@ -132,10 +132,21 @@ def _retain(path, raw):
     return path
 
 
-def _snapshot(output, name, value):
+def _existing_bytes(path, raw):
+    """Read-only replay: missing evidence is never recreated from the ZIP."""
+    path = Path(path)
+    for item in (path, *path.parents):
+        policy.require(not item.is_symlink() and not (hasattr(item, "is_junction") and item.is_junction()),
+                       "retained evidence path contains a link")
+    policy.require(path.is_file(), "retained evidence file is missing: " + path.name)
+    policy.require(path.read_bytes() == raw, "retained evidence bytes changed: " + path.name)
+    return path
+
+
+def _snapshot(output, name, value, *, retainer):
     raw = (json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2) + "\n").encode("utf-8")
     policy.require(len(raw) <= MAX_EXPANDED_BYTES, "API metadata snapshot exceeds size limit")
-    return _retain(output / name, raw)
+    return retainer(output / name, raw)
 
 
 def _reference(output, path):
@@ -176,6 +187,10 @@ def _archive(raw):
         policy.require(0 < len(members) <= MAX_MEMBERS, "artifact member count exceeds limit")
         for member in members:
             name = _safe_path(member.filename)
+            # upload-artifact excludes hidden entries. This bounded protocol
+            # rejects them instead of publishing an incomplete canonical set.
+            policy.require(all(not part.startswith(".") for part in PurePosixPath(name).parts)
+                           and not member.external_attr & 0x02, "hidden artifact members are unsupported")
             policy.require(member.orig_filename == name and not member.is_dir(), "unsupported archive directory or NUL path")
             alias = name.casefold()
             policy.require(alias not in aliases, "duplicate/case-aliased archive member")
@@ -204,7 +219,7 @@ def _tuple(ref, source_file, sha256):
     return source_file, sha256, ref
 
 
-def _unpack(raw, output, expected, event):
+def _unpack(raw, output, expected, event, *, retainer):
     members = _archive(raw)
     policy.require("manifest.json" in members and "capture.json" in members, "artifact manifest/capture is missing")
     policy.require(len(members["manifest.json"]) <= MAX_JSON_BYTES and len(members["capture.json"]) <= MAX_JSON_BYTES,
@@ -259,7 +274,7 @@ def _unpack(raw, output, expected, event):
     policy.require(needed == set(mapping), "attachment is not bound to a canonical pointer")
     extracted = output / "originals"
     for name, data in members.items():
-        _retain(extracted / name, data)
+        retainer(extracted / name, data)
     def resolver(source_file, sha256, report_ref):
         key = _tuple(report_ref, source_file, sha256)
         policy.require(key in mapping, "unknown original resolver binding")
@@ -285,6 +300,11 @@ def fetch_capture(client, candidate, event, output, root):
     still bind to the current PR; downstream bind_event checks exact Git scope.
     API snapshots retain checked parsed API objects, not raw HTTP wire bytes.
     """
+    return _fetch_capture(client, candidate, event, output, root, retainer=_retain)
+
+
+def _fetch_capture(client, candidate, event, output, root, *, retainer):
+    """Share validation; only the two fixed entrypoints select storage behavior."""
     raw_policy = _source_bytes(event, root)
     policy.require(raw_policy is not None, "review transport source is unconfigured")
     source = _source_policy(raw_policy, event)
@@ -294,9 +314,9 @@ def fetch_capture(client, candidate, event, output, root):
         policy.require((candidate["repository"], candidate["base"], candidate["head"]) ==
                        (REPOSITORY, pr["base"]["sha"], pr["head"]["sha"]), "expected candidate differs from event")
     output = Path(output).absolute()
-    retained = {"policy": _reference(output, _retain(output / "source-policy.json", raw_policy))}
+    retained = {"policy": _reference(output, retainer(output / "source-policy.json", raw_policy))}
     def snapshot(name, value):
-        retained[name] = _reference(output, _snapshot(output, name + ".json", value))
+        retained[name] = _reference(output, _snapshot(output, name + ".json", value, retainer=retainer))
         return value
     repository = snapshot("repository", client.request(""))
     policy.require(repository["full_name"] == REPOSITORY and type(repository["id"]) is int
@@ -351,11 +371,11 @@ def fetch_capture(client, candidate, event, output, root):
                    "artifact workflow/repository identity differs")
     raw = client.request(f"actions/artifacts/{artifact['id']}/zip", binary=True)
     policy.require(type(raw) is bytes and len(raw) <= MAX_ARCHIVE_BYTES, "artifact download exceeds limit")
-    archive = _retain(output / "artifact.zip", raw)
+    archive = retainer(output / "artifact.zip", raw)
     retained["archive"] = _reference(output, archive)
     policy.require(artifact["digest"] == "sha256:" + digest(raw) and len(raw) == artifact["size_in_bytes"],
                    "GitHub artifact digest/size differs")
-    capture, resolver, capture_path = _unpack(raw, output, candidate, event)
+    capture, resolver, capture_path = _unpack(raw, output, candidate, event, retainer=retainer)
     # A rerun/new run between inventory and download must not validate an old
     # attempt. These calls also retain the checked end-of-download API state.
     after = snapshot("runs-after", client.pages(endpoint, "workflow_runs"))
@@ -369,17 +389,19 @@ def fetch_capture(client, candidate, event, output, root):
                 "policy_git": {"base": pr["base"]["sha"], "path": SOURCE_PATH, "sha256": digest(raw_policy)},
                 "run_id": run["id"], "run_attempt": run["run_attempt"], "artifact_id": artifact["id"],
                 "artifact_name": wanted, "artifacts": retained}
-    _snapshot(output, "source.json", metadata)
+    _snapshot(output, "source.json", metadata, retainer=retainer)
     return {"capture": capture, "original_resolver": resolver, "source": metadata}
 
 
 def verify_retained_capture(metadata, event, output, root, *, candidate=None):
-    """Verify retained context/bytes without claiming fresh API authentication.
+    """Read existing context/bytes without writes or fresh API authentication.
 
     These parsed API snapshots preserve the checked retrieval context. Their
     hashes cannot prove that an API call occurred; the coordinator must verify
     live provenance separately. A retained open-PR snapshot stays historical
     when a caller separately verifies the current actual merged source PR.
+    Every materialized canonical attachment must already exist; preparation or
+    rematerialization belongs to the fresh transport producer, never this gate.
     """
     policy.fields(metadata, "schema authority repository repository_id policy_git run_id run_attempt artifact_id artifact_name artifacts",
                   "retained review source metadata")
@@ -457,7 +479,8 @@ def verify_retained_capture(metadata, event, output, root, *, candidate=None):
     historical_pr["merged"] = saved["pr"].get("merged") is True
     if historical_pr["merged"]:
         historical_pr["merge_commit_sha"] = saved["pr"]["merge_commit_sha"]
-    result = fetch_capture(RetainedAPI(), candidate, {"pull_request": historical_pr}, output, root)
+    result = _fetch_capture(RetainedAPI(), candidate, {"pull_request": historical_pr}, output, root,
+                            retainer=_existing_bytes)
     policy.require(result["source"] == metadata, "retained source metadata differs from checked context")
     result["verification_context"] = "retained-source-integrity-only"
     return result

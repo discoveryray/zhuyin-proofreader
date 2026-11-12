@@ -503,7 +503,7 @@ class CurrentValidationWorkflowTests(unittest.TestCase):
         self.assertIn("steps.route.outputs.policy_active == 'true'",upload)
         self.assertIn("github.event_name == 'pull_request'",upload)
         self.assertIn('tmp/pr-flow-ci/docs/tested-commit.raw',upload)
-        self.assertIn('tmp/pr-flow-ci/transport/originals/capture.json',upload)
+        self.assertIn('tmp/pr-flow-ci/transport/originals/',upload)
         for check in ('bytes','local_links','diff'):
             self.assertIn('tmp/pr-flow-ci/docs/'+check+'.stdout.json',upload)
             self.assertIn('tmp/pr-flow-ci/docs/'+check+'.stderr.log',upload)
