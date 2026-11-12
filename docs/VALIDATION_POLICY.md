@@ -1,5 +1,11 @@
 # Windows 無視窗分階段驗證政策
 
+程序先讀[開發與審查入口](DEVELOPMENT_REVIEW.md#applicability)。`development-flow/tiered-review/1` 設計已採納、首版已縮減、尚未啟用；本次改革仍按固定起點舊規由兩位獨立 reviewer 完整審查。首版 docs／local／core 的 reviewer 數為 1／1／2，但全部 PR 仍須既有 full `/3`，develop actual merge 保留 short `/3`，main push 保留完整驗證。
+
+[最新裁定](DEVELOPMENT_FLOW_DECISIONS.md#flow-first-edition-20261112)將文件免 full、自製 parser、文件豁免 capture／producer 及文件專屬 artifact／post-merge 延後並退出首版。Workflow／summary、gate、full post-merge 及 active test collection 不依賴這些研究能力。原件與已知缺陷保存於[研究來源附件](research/PR_FLOW_DEFERRED_822d494.zip)，RA5-F1／RB5-F1 不改標修復或 PASS。介面與來源定位見 [TESTING](../TESTING.md#pending-pr-flow-ci)。
+
+Reviewer 如實記錄必要文件內容／連結確認，full pytest 不代表已驗證所有 links／anchors／render；缺必要證據仍拒絕。模型 fixture、真實 full／hosted 與 actual merge push 證據分列。六項凍結依賴與 `752→3b` 真實歷史表示缺口保留；本 task 第四輪例外不修改一般三輪，不啟用政策，不自行開始正式全集、安裝或遠端操作。以下現行政策及歷史判定維持原義。
+
 ## 現行永久政策：當前候選證據
 
 2026-10-12 使用者採納 `validation-flow/current-evidence/1`，立即適用未結案任務及後續一般工作，取代發布分支特例。正常入口不呼叫 restore-history，不要求全部舊 run/attempt、舊 artifact 或 handoff/ledger/continuation 通過新版閉包解讀；coverage、沿用與 gate 亦不得間接要求。歷史工具、封存、失敗與原判定只供查阅，不修 parser、不新增 PR/run 例外、不改寫舊 schema。

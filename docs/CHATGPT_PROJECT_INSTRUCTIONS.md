@@ -1,27 +1,19 @@
 # 可貼入 ChatGPT 專案指令
 
-2026-10-07 使用者明確採納 `validation-flow/no-real-tk/1`，完全取消所有自動化入口的真視窗驗證（含 hidden root、虛擬顯示器、fixture／import／子程序）、Tcl/Tk configure／preflight／初始化能力門檻及 GUI retry／補驗。新政策適用本身與後續驗證；尚未結案任務只遷移 window 義務，其餘凍結契約、baseline、修正計數、原 Tk 失敗及 retry 額度保留，其他 blocker 不自動解除。產品 GUI／Tk／launcher 保留；有效非視窗資料／交易／恢復與功能測試、Python 3.13.0、runtime／compile／diff、兩輪審查與 actual merge 短驗證仍必要。詳見 [驗證政策](VALIDATION_POLICY.md)。
+本專案為 discoveryray/zhuyin-proofreader。每次開始相關任務，先讀實際 AGENTS.md 與唯一程序入口 docs/DEVELOPMENT_REVIEW.md，再讀入口所列任務必要契約。AGENTS 是永久安全／授權權威；VALIDATION_POLICY 專責驗證，PR_REVIEW_AUTOMATION 專責現行操作，PR_REVIEW_GATE 專責 schema／有限 adapter，v5.8 完整規範保留產品安全／階段契約與歷史。未指定 ref 時從核對後的 develop 取規範；以即時 Git／PR／CI 與原始證據判定事實，不把 main 舊版、候選文件或受審新規當已啟用政策。
 
-本專案為 discoveryray/zhuyin-proofreader。每次開始相關任務，先讀實際 AGENTS.md 與 docs/V58_MASTER_DEVELOPMENT_REVIEW_PLAN_v1.1.md；流程細節見 docs/PR_REVIEW_AUTOMATION.md。未指定 ref 時，從核對後的最新 develop 讀取規範；不要以 GitHub 預設 main 的舊版代替。受審 branch 的規範變更仍須與已採納契約交叉核對。以即時 Git／PR／CI 為事實，不沿用歷史 SHA 或狀態。
+`development-flow/tiered-review/1` 設計已採納、實作中、尚未啟用；目前仍由協調者安排實作代理與兩位不同 session、獨立於所有實作者的 reviewer，依入口的現行舊規完整審查。不能先選 1／1／2、跨候選 delta 補審、PR 摘要取代全文或 reviewer／CI 分離結論；待正式驗收與整合後按明確版本／生效點只對新 task 啟用。State flags 或新 gate 不創造啟用、PASS、授權或 merge eligibility。
 
-我明確交付的開發任務，預設授權該任務範圍與階段內的檔案修改、代理委派、測試、commit、push、建立／更新 PR，及通過全部門檻後以 Create a merge commit 合併至 develop、執行 post-merge 驗證。我可另行收窄或撤銷；純討論／唯讀審查不屬於開發交付。不要逐步要求轉貼或重複授權，也不自行開始未交付階段。
+我明確交付的開發任務，預設授權該 repository、scope 與階段內的修改、代理委派、測試、commit、push、建立／更新 PR，以及通過適用全部門檻後以 Create a merge commit 合併至 develop 並執行 post-merge 驗證。我可收窄、暫停或撤銷；較窄當次指示優先。純討論／唯讀審查不等於開發交付，不重問有效授權，也不自行開始未交付階段。
 
-由協調者自動安排實作代理、第一輪 cumulative reviewer、第二輪 PR reviewer。Work 或符合完整契約的獨立代理均可正式審查。兩位 reviewer 必須是不同 session、均與所有實作者分離、不修改受審檔案，親自審查完整差異及安全契約；不能用實作摘要、另一輪 PASS 或 CI 綠燈代替審查。
+新任務預設開發模式，只做必要短定向 regression、compile／diff與本機 commit；完整 code review 的 CODE_REVIEWED 是中間狀態，回報「已修改、待正式驗證」。只有我明確說「開始驗證」或已有等效時段授權才固定候選進入正式驗證。現行完整非視窗 CI、兩輪正式 PASS、當次原件、保護條件、actual merge 與 push 短驗證仍依入口與驗證政策核對；不得宣稱未執行的檢查為 PASS。
 
-新任務預設開發模式，先短定向測試／compile／diff與本機 commit；第一輪完整程式審查可記 CODE_REVIEWED 中間狀態，回報「已修改、待正式驗證」。只有我明確說「開始驗證」後固定候選，無 confirmed code blocker 才建立唯一 draft PR。PR 一次有效非視窗測試全集，第二輪完整 PR 程式審查可與 CI 重疊；證據齊備兩位各自補核才給正式 PASS，兩輪正式 PASS 且必要 CI／保護規則全通過才 merge。BLOCKED 明確分類：code 是已證實的程式／設定／指令缺陷，才新增 corrective commit、使用同 task 最多三輪修正並重跑測試、重做新 HEAD 兩輪完整審查；evidence 先補證據，capability／contract 先 STOP。解決 non-code 限制後原 HEAD 完整補審，不耗次數、不新增空 commit；三輪用完仍可合法補證據，不能重設 task／count。HEAD／base 改變時舊 PASS 不適用，保留 task baseline，重做受影響審查與整合驗證。
+依入口與 gate 的原版本分類 BLOCKED、保存原件及 append-only 關係；只有 confirmed code finding 的實際修正消耗原 task 三輪 corrective。Non-code 缺口補證據或 STOP，不新增空 commit、不重設 task／baseline／count。G4 延後，不加同 finding 兩輪無進展規則。既有 task 的原件、失敗、STOP／BLOCKED、有限例外與歷史判定不改寫，既有已採納驗證政策的有限遷移依原採納條款；新政策不使舊任務自動完成。
 
-每份 review 保留唯一 report_ref、blocker_kind、findings 及原文；PASS 的 kind=null、findings為空。Non-code 補審依 gate v3 以 supersedes_report_ref 指向同 round／baseline／base／head／scope 的較早未取代 BLOCKED，附原始 resolution_evidence_ref；無補審時兩欄null。保留單向 append-only 歷史，原／新 reviewer 仍獨立，原 reviewer 可依 gate v3 核對缺口及原始證據，第二輪補審核對最新適用 CI。Code BLOCKED 不可同 HEAD supersede，也不能只靠 CI rerun 或無關 PASS 清除。
+永久維持 actual／expected 獨立、exact identity、quorum、交易／恢復、per-PDF fingerprint、runtime integrity 與 fail-closed。不得修改 main、直接 push develop、squash／rebase merge、force push、降低保護規則、tag／release、live DB mutation 或未交付階段；較窄任務授權也可排除 push／PR／merge。取消真 Tk 自動驗證與歷史 CI 自動閉包的既有政策保持，產品 GUI／Tk 保留。能力不足、原件缺失、CI 未完或失敗都不是 PASS。
 
-新 v4 的 `CODE_REVIEWED` 原文持續保留；正式 PASS 以 `finalizes_report_ref` 連到相同 round/baseline/base/head/scope 的中間報告，附 `resolution_evidence_ref` 與 `coverage_sha256`。這與 non-code BLOCKED 的 `supersedes_report_ref` 補審鏈分開，不將中間狀態偽裝成 BLOCKED 或 PASS。同 reviewer 可核對證據缺口，替代 reviewer 仍須完整 scope review。
-
-合併前重新核對遠端、findings、保護規則、CI event／attempt／tested SHA／必要 jobs，綁定 reviewed HEAD。合併後查實際 merge SHA、parents、tree、develop HEAD，並核對該 merge SHA 的 develop push 短 CI（PR artifacts 適用性、依賴／資產、runtime、非視窗 smoke、compile／diff／clean-tree）；不能以 PR CI 代替。功能 coverage 只在 ordered parents／tree／Python／實際依賴／capture／命令／範圍和完整 raw artifacts 可驗證時沿用，不改稱已在 merge SHA 重跑。保存兩輪 SHA／scope／verdict／證據及交接紀錄；所有門檻通過才宣告完成。
-
-永久維持 actual／expected 獨立、exact identity、quorum、交易、per-PDF fingerprint、runtime integrity 與 fail-closed 契約。不得修改 main、直接 push develop、squash／rebase merge、force push、降低保護規則、tag／release、live DB mutation 或未交付階段。代理不可用、結果缺失、CI 未通過都不是 PASS。只於 Codex 執行期間協調，不新增背景 AI 工作或額外 API 計費設定。
-
-以繁體中文回報實際檔案、SHA、兩輪審查、測試與限制、PR、merge、post-merge CI 及 working tree。
-
-支援 Windows Python 3.13.0，依賴及實際啟動證據見 docs/VALIDATION_POLICY.md。pytest 是唯一例行完整測試入口；保留必要非視窗針對性、runtime integrity、compile、diff、CI 與 post-merge 驗證。修正期間先受影響短 tests，驗證模式固定版本後才完成分組功能覆蓋，不例行跑本機 full、完整 unittest、混合 full 或 post-merge full。不開真視窗、configure／preflight或GUI重試／補驗，原始失敗不可刪，未知原因不標flaky或已修復。未受影響證據可沿用，但保留原測試 SHA、原始 logs 及新 HEAD 影響評估，不改稱新版本已執行。每次重跑須有修改影響、失敗線索或明確門檻，不因等待 CI／重開 session／整理報告無理由重跑。程式、baseline、base、HEAD、scope 未變的補證據，原 reviewer 核對缺口、原始補充證據和既有結論；換 reviewer 須讀足以自行負責完整 scope 的原始材料。新制度只供新任務採用，尚未收尾任務僅遷移真視窗義務，保留其餘凍結舊契約；本次制度變更不得自行降低自身驗收門檻。只到 PR 的任務 operations 排除 merge，交付未合併 PR 不宣稱 COMPLETE。
+以繁體中文如實回報實際檔案、SHA、適用審查、已執行與未執行驗證、限制及 working tree。中斷後從原 task evidence 與 Git 狀態恢復；只在 Codex 執行期間協調，不新增背景 AI、排程或額外 API 計費設定。
 
 ## 日後最短啟動指令
 
-請依 repository 的兩輪獨立審查自動流程，完成：〈任務與驗收條件〉。
+請依 repository 的 docs/DEVELOPMENT_REVIEW.md 適用現行流程，完成：〈任務與驗收條件〉。

@@ -16,6 +16,8 @@ import zipfile
 
 SCHEMA = "zhuyin-pr-review-gate/3"
 STAGED_SCHEMA = "zhuyin-pr-review-gate/4"
+TIERED_SCHEMA = "zhuyin-pr-review-gate/5"
+TIERED_LIFECYCLE_SCHEMA = "pr-flow-lifecycle/1"
 NO_WINDOW_POLICY = "validation-flow/no-real-tk/1"
 CURRENT_POLICY = "validation-flow/current-evidence/1"
 BLOCKER_LINKS_SCHEMA = "zhuyin-review-history-blocker-links/1"
@@ -1038,8 +1040,14 @@ def _validate_state_structure(state, *, _blocker_links_anchor=None):
     _validate_state_tail_structure(state)
 
 
-def validate_state(state):
+def validate_state(state, *, original_resolver=None):
     """Validate complete structure and review history; never grant permission."""
+    if type(state) is dict and state.get("schema") == TIERED_SCHEMA:
+        _validate_tiered_structure(state)
+        reviewed = validate_tiered_reviews(state["candidate"], state["classification"],
+                                           state["implementers"], state["review_originals"], original_resolver=original_resolver)
+        _validate_tiered_review_heads(state, reviewed)
+        return
     _validate_state_header_structure(state)
     _require(type(state["corrections"]) is list and len(state["corrections"]) <= _correction_limit(state),
              "correction rounds exceed the applicable task limit")
@@ -1054,14 +1062,15 @@ def _decision(state, action, reason, **details):
         "ENSURE_PR": {"pr"}, "ENSURE_DRAFT_PR": {"pr"}, "MERGE_PROPOSAL": {"merge"},
         "CORRECT_IMPLEMENTATION": {"implement", "test", "commit", "push", "delegate"},
     }.get(action, set())
-    if (action == "CORRECT_IMPLEMENTATION" and state["schema"] == STAGED_SCHEMA
+    if (action == "CORRECT_IMPLEMENTATION" and state["schema"] in (STAGED_SCHEMA, TIERED_SCHEMA)
             and state["execution"]["mode"] == "development"):
         needed = needed - {"push"}
         details["delivery"] = "local_commit_only"
     missing = needed - set(state["authorization"]["operations"])
     if missing:
         action, reason, details = "STOP", f"next action is not authorized: {sorted(missing)}", {}
-    identity = {"task": state["task"], "base": state["current"]["base"],
+    task = state["task_policy"] if state["schema"] == TIERED_SCHEMA else state["task"]
+    identity = {"task": task, "base": state["current"]["base"],
                 "head": state["current"]["head"], "action": action}
     key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()
     return {"action": action, "reason": reason, "idempotency_key": key, **details}
@@ -1705,8 +1714,17 @@ def _ci_problem(ci, event, branch, head, parents, *, no_window=False):
     return None
 
 
-def next_action(state):
+def next_action(state, *, original_resolver=None):
     """Return an advisory action; never perform or acknowledge external writes."""
+    if type(state) is dict and state.get("schema") == TIERED_SCHEMA:
+        try:
+            result = validate_tiered_evidence(state, original_resolver=original_resolver)
+        except (OSError, UnicodeError, ValueError, TypeError, KeyError, zipfile.BadZipFile) as exc:
+            return {"action": "STOP", "reason": f"invalid tiered evidence: {exc}"}
+        # This implementation cannot activate itself, even if its input claims
+        # authorization or a caller changes the informational ENABLED constant.
+        return {"action": "STOP", "reason": "tiered policy pending versioned activation and formal acceptance",
+                **result}
     try:
         validate_state(state)
     except (EvidenceError, TypeError, KeyError) as exc:
@@ -1986,6 +2004,439 @@ def _next_action_staged(state):
                      pr_number=pr["number"], merge_method="merge", expected_head_sha=head, expected_base_sha=base)
 
 
+def _tiered_policy():
+    try:
+        from scripts import pr_flow_policy
+    except ModuleNotFoundError:
+        import pr_flow_policy
+    return pr_flow_policy
+
+
+def validate_tiered_reviews(candidate, classification, implementers, pointers, *, original_resolver=None):
+    """Check canonical code conclusions independently of any CI completion.
+
+    This bounded current-task chain does not reinterpret historical gate schemas.
+    A fresh full review never implicitly erases an earlier finding.
+    """
+    policy = _tiered_policy()
+    policy.validate_classification(candidate, classification, implementers, [])
+    policy.require(type(pointers) is list, "review originals must be a list")
+    reports, by_ref, latest, roots, unresolved, sources = [], {}, {}, {}, {}, set()
+    for pointer in pointers:
+        raw = policy.verify_original(pointer, resolver=original_resolver)
+        report = json.loads(raw.decode("utf-8-sig"), object_pairs_hook=_unique_object,
+                            parse_constant=lambda value: (_ for _ in ()).throw(EvidenceError(value)))
+        policy.fields(report, "schema policy report_ref candidate reviewer session independent confirmed_tier "
+                      "mode reviewed_range previous_report_ref full_review_ref delta_from impact_known architecture_changed "
+                      "integration_reviewed impact_summary review_checks verdict findings resolutions", "code review")
+        policy.require(report["schema"] == "pr-flow-code-review/1" and report["policy"] == policy.POLICY_ID,
+                       "unknown code review contract")
+        ref, reviewed = report["report_ref"], report["candidate"]
+        policy.require(ref == pointer["report_ref"] and ref not in by_ref, "duplicate or mismatched report reference")
+        source = Path(pointer["source_file"]).resolve()
+        policy.require(source not in sources, "different versions require separate canonical originals")
+        sources.add(source)
+        policy.validate_candidate(reviewed)
+        policy.require(all(reviewed[key] == candidate[key] for key in ("task_id", "repository", "baseline", "scope")),
+                       "review belongs to a different task/baseline/scope")
+        for field in ("reviewer", "session"):
+            policy.text(report[field], field)
+            policy.require(report[field] not in implementers, "reviewer/session is an implementer")
+        policy.require(report["independent"] is True, "independent reviewer required")
+        policy.require(report["confirmed_tier"] in policy.TIERS, "unknown reviewer classification")
+        for key in ("impact_known", "architecture_changed", "integration_reviewed"):
+            policy.boolean(report[key], key)
+        policy.text(report["impact_summary"], "review impact summary")
+        policy.require(type(report["review_checks"]) is list, "review check originals must be a list")
+        for check in report["review_checks"]:
+            policy.verify_original(check, resolver=original_resolver)
+        actor = (report["reviewer"], report["session"])
+        previous_ref = report["previous_report_ref"]
+        previous = by_ref.get(previous_ref) if type(previous_ref) is str else None
+        if previous_ref is not None:
+            policy.require(previous is not None, "previous review original is missing or forward-referenced")
+            policy.require((previous["reviewer"], previous["session"]) == actor,
+                           "review chain changed reviewer/session; start a new full review")
+            policy.require(latest.get(actor) is previous, "review chain branches or skips a newer version")
+        else:
+            policy.require(actor not in latest, "reviewer cannot discard an existing review chain")
+        if report["mode"] == "full":
+            policy.require(report["full_review_ref"] == ref and report["delta_from"] is None,
+                           "full review must identify its own baseline-to-head original")
+            policy.require(report["reviewed_range"] == {"from_head": reviewed["baseline"], "to_head": reviewed["head"]},
+                           "full review must cover the complete task baseline-to-head range")
+            roots[actor] = ref
+        else:
+            policy.require(report["mode"] == "delta" and previous is not None, "initial review must be full")
+            policy.require(report["full_review_ref"] == roots.get(actor), "delta lost its full-review original")
+            policy.require(report["delta_from"] == {key: previous["candidate"][key] for key in ("base", "head")},
+                           "delta does not start at the previous reviewed base/head")
+            policy.require(report["reviewed_range"] == {"from_head": previous["candidate"]["head"], "to_head": reviewed["head"]},
+                           "delta reviewed range differs from its previous/current HEAD")
+            policy.require(report["impact_known"] and not report["architecture_changed"]
+                           and "architecture" not in reviewed["risks"] and "unknown" not in reviewed["risks"],
+                           "architecture or unknown impact requires a full baseline-to-head review")
+        policy.require(report["verdict"] in {"PASS", "BLOCKED"}, "unknown code verdict")
+        policy.require(type(report["findings"]) is list and type(report["resolutions"]) is list,
+                       "findings/resolutions must be lists")
+        policy.require((report["verdict"] == "PASS") == (not report["findings"]),
+                       "PASS requires empty findings; BLOCKED requires named findings")
+        ids = set()
+        for finding in report["findings"]:
+            policy.fields(finding, "id kind description", "finding")
+            policy.text(finding["id"], "finding.id")
+            policy.text(finding["description"], "finding.description")
+            policy.require(finding["kind"] in {"code", "evidence", "capability", "contract"}, "unknown blocker kind")
+            policy.require(finding["id"] not in ids, "duplicate finding identity")
+            ids.add(finding["id"])
+            unresolved[(ref, finding["id"])] = (finding, reviewed)
+        for resolution in report["resolutions"]:
+            policy.fields(resolution, "finding_id report_ref evidence", "resolution")
+            key = (resolution["report_ref"], resolution["finding_id"])
+            policy.require(key in unresolved and key[0] != ref, "resolution names no earlier unresolved finding")
+            finding, original_candidate = unresolved[key]
+            policy.require(finding["kind"] != "code" or reviewed["head"] != original_candidate["head"],
+                           "code finding cannot be resolved at the same HEAD")
+            policy.verify_original(resolution["evidence"], resolver=original_resolver)
+            del unresolved[key]
+        by_ref[ref] = report
+        latest[actor] = report
+        reports.append(report)
+    current = [report for report in latest.values() if report["candidate"] == candidate]
+    confirmed = policy.validate_classification(candidate, classification, implementers, current)
+    usable = [report for report in current if report["verdict"] == "PASS"
+              and report["impact_known"] and report["integration_reviewed"]]
+    code_ready = (confirmed["confirmed"] and not unresolved
+                  and len({r["reviewer"] for r in usable}) >= confirmed["reviewers_required"]
+                  and len({r["session"] for r in usable}) >= confirmed["reviewers_required"])
+    reasons = []
+    if not confirmed["confirmed"]:
+        reasons.append("latest candidate classification lacks required independent confirmation or known impact")
+    if unresolved:
+        reasons.append("retained unresolved findings require explicit resolution evidence")
+    if not code_ready:
+        reasons.append("required latest base/head/tree/scope code conclusions are missing or blocked")
+    blockers = [{"report_ref": ref, "finding": finding, "candidate": reviewed}
+                for (ref, _), (finding, reviewed) in unresolved.items()]
+    return {"code_ready": code_ready, "classification": confirmed, "reports": reports,
+            "ready_reviewers": min(len({r["reviewer"] for r in usable}), len({r["session"] for r in usable})),
+            "blockers": blockers,
+            "unresolved_findings": [ref + "#" + finding for ref, finding in unresolved], "reasons": reasons}
+
+
+def _validate_tiered_structure(state):
+    policy = _tiered_policy()
+    policy.fields(state, "schema policy task_policy candidate classification implementers corrections review_originals "
+                  "authorization execution current pr pr_ci coverage documentation_checks"
+                  + (" lifecycle" if type(state) is dict and "lifecycle" in state else ""), "tiered state")
+    policy.require(state["schema"] == TIERED_SCHEMA and state["policy"] == policy.POLICY_ID,
+                   "unknown tiered gate contract")
+    candidate = state["candidate"]
+    policy.validate_candidate(candidate)
+    task = state["task_policy"]
+    policy.fields(task, "policy task_id baseline origin starting_head base_branch head_branch source_ref", "task_policy")
+    policy.require(task["policy"] == policy.POLICY_ID and task["origin"] == "new_task"
+                   and task["task_id"] == candidate["task_id"] and task["baseline"] == candidate["baseline"],
+                   "tiered schema is only for explicitly identified future new tasks, never historical migration")
+    policy.sha(task["starting_head"], "task_policy.starting_head")
+    policy.require(task["base_branch"] == "develop" and type(task["head_branch"]) is str
+                   and task["head_branch"] not in {"main", "develop"}
+                   and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/-]*", task["head_branch"]) is not None,
+                   "task policy requires an exact develop/feature branch pair")
+    policy.text(task["source_ref"], "task_policy.source_ref")
+    policy.texts(state["implementers"], "implementers", nonempty=True)
+    policy.require(type(state["corrections"]) is list and len(state["corrections"]) <= 3,
+                   "original three corrective rounds remain the limit")
+    head = task["starting_head"]
+    for number, correction in enumerate(state["corrections"], 1):
+        policy.fields(correction, "number from_head to_head evidence_ref", "correction")
+        policy.require(type(correction["number"]) is int and correction["number"] == number
+                       and correction["from_head"] == head, "correction history was reset or is discontinuous")
+        policy.sha(correction["to_head"], "correction.to_head")
+        policy.require(correction["to_head"] != head, "corrective round requires a new HEAD")
+        policy.text(correction["evidence_ref"], "correction.evidence_ref")
+        head = correction["to_head"]
+    policy.require(head == candidate["head"], "current HEAD differs from retained corrective history")
+    auth = state["authorization"]
+    policy.fields(auth, "task_id active operations source_ref", "authorization")
+    policy.require(auth["task_id"] == candidate["task_id"], "authorization belongs to another task")
+    policy.boolean(auth["active"], "authorization.active")
+    policy.texts(auth["operations"], "authorization.operations")
+    policy.require(set(auth["operations"]) <= OPERATIONS, "unknown authorized operation")
+    policy.text(auth["source_ref"], "authorization.source_ref")
+    execution = state["execution"]
+    policy.fields(execution, "mode validation_authorization_ref", "execution")
+    policy.require(execution["mode"] in {"development", "validation"}, "unknown execution phase")
+    if execution["mode"] == "validation":
+        policy.text(execution["validation_authorization_ref"], "explicit start-validation authorization")
+    else:
+        policy.require(execution["validation_authorization_ref"] is None, "development cannot claim validation authorization")
+    current = state["current"]
+    policy.fields(current, "base head tree scope working_tree_clean evidence_ref", "current")
+    policy.require(all(current[key] == candidate[key] for key in ("base", "head", "tree", "scope")),
+                   "current candidate identity differs")
+    policy.boolean(current["working_tree_clean"], "current.working_tree_clean")
+    policy.text(current["evidence_ref"], "current.evidence_ref")
+    # Reuse the existing closed current PR/CI structure, without historical adapters.
+    _validate_state_tail_structure({"pr": state["pr"], "pr_ci": state["pr_ci"], "push_ci": None,
+                                    "merge": None, "handoffs": []})
+    if state["coverage"] is not None:
+        policy.text(state["coverage"], "coverage")
+    # Retain the pending v5 slot so old draft inputs fail explicitly, rather
+    # than silently turning experimental documentation evidence into full CI.
+    policy.require(state["documentation_checks"] is None,
+                   "documentation evidence is deferred outside the first edition")
+    if "lifecycle" in state:
+        lifecycle = state["lifecycle"]
+        policy.fields(lifecycle, "schema checks_route premerge_recheck merge push_ci short_validation", "lifecycle")
+        policy.require(lifecycle["schema"] == TIERED_LIFECYCLE_SCHEMA, "unknown lifecycle contract")
+        policy.require(lifecycle["checks_route"] == policy.FIRST_EDITION_CHECKS_ROUTE,
+                       "first edition requires full checks for every classification")
+        _validate_state_tail_structure({"pr": state["pr"], "pr_ci": state["pr_ci"],
+                                       "merge": lifecycle["merge"], "push_ci": lifecycle["push_ci"], "handoffs": []})
+        if lifecycle["short_validation"] is not None:
+            policy.text(lifecycle["short_validation"], "lifecycle.short_validation")
+        recheck = lifecycle["premerge_recheck"]
+        if recheck is not None:
+            policy.fields(recheck, "base head tree scope working_tree_clean findings_checked new_blockers "
+                          "mergeable protection_satisfied evidence_ref", "premerge_recheck")
+            for field in ("base", "head", "tree"):
+                policy.sha(recheck[field], "premerge_recheck." + field)
+            for field in ("scope", "evidence_ref"):
+                policy.text(recheck[field], "premerge_recheck." + field)
+            for field in ("working_tree_clean", "findings_checked", "mergeable", "protection_satisfied"):
+                policy.boolean(recheck[field], "premerge_recheck." + field)
+            policy.texts(recheck["new_blockers"], "premerge_recheck.new_blockers")
+
+
+def _validate_tiered_review_heads(state, reviewed):
+    retained_heads = {state["task_policy"]["starting_head"],
+                      *(entry["to_head"] for entry in state["corrections"])}
+    _tiered_policy().require(all(report["candidate"]["head"] in retained_heads for report in reviewed["reports"]),
+                            "reviewed HEAD is missing from retained corrective history")
+
+
+def _tiered_checks(state, reviewed):
+    """Read the existing current full evidence for all first-edition tiers.
+
+    No producer plan, capture, parser, or experimental documentation artifact
+    participates in this path. Reviewer content/link checks are separate from
+    the full test evidence, never inferred from a pytest result.
+    """
+    policy, candidate, ci, pr = _tiered_policy(), state["candidate"], state["pr_ci"], state["pr"]
+    policy.require(ci is not None and pr is not None, "missing current PR CI")
+    problem = _current_ci_problem(ci, "pull_request", pr["head_branch"], candidate["head"],
+                                  [candidate["base"], candidate["head"]])
+    policy.require(problem is None, problem or "invalid full CI")
+    policy.require(state["coverage"] is not None, "missing full current coverage")
+    try:
+        from scripts.validation_evidence import verify_current_coverage
+    except ModuleNotFoundError:
+        from validation_evidence import verify_current_coverage
+    coverage = verify_current_coverage(Path(state["coverage"]))
+    policy.require(coverage["candidate"] == {"head": ci["tested_sha"], "tree": ci["tree"],
+                                              "parents": [candidate["base"], candidate["head"]]},
+                   "full coverage belongs to another PR integration")
+    policy.require(coverage["ci"] == {"run_id": ci["run_id"], "attempt": ci["attempt"],
+                                      "job": "test", "event": "pull_request"},
+                   "full coverage belongs to another PR run/attempt")
+    checkout = coverage["checkout"]
+    policy.require(checkout["number"] == pr["number"]
+                   and checkout["head_ref"] == pr["head_branch"] and checkout["base_ref"] == pr["base_branch"]
+                   and checkout["base_sha"] == candidate["base"] and checkout["head_sha"] == candidate["head"]
+                   and all(checkout[key] == REPOSITORY for key in ("repository", "base_repository", "head_repository")),
+                   "full coverage belongs to another PR/repository/base/branch")
+    return {"source_route": policy.FIRST_EDITION_CHECKS_ROUTE, "candidate": coverage["candidate"], "ci": coverage["ci"]}
+
+
+def validate_tiered_evidence(state, *, original_resolver=None):
+    """Evaluate code, checks and current merge requirements while policy is inactive."""
+    _validate_tiered_structure(state)
+    policy = _tiered_policy()
+    candidate, pr = state["candidate"], state["pr"]
+    reviewed = validate_tiered_reviews(candidate, state["classification"], state["implementers"], state["review_originals"],
+                                       original_resolver=original_resolver)
+    _validate_tiered_review_heads(state, reviewed)
+    reasons = list(reviewed["reasons"])
+    checks_ready = False
+    try:
+        _tiered_checks(state, reviewed)
+        checks_ready = True
+    except (OSError, ValueError, TypeError, KeyError, zipfile.BadZipFile) as exc:
+        reasons.append("checks unavailable or invalid: " + str(exc))
+    merge_conditions = (state["authorization"]["active"] and "merge" in state["authorization"]["operations"]
+                        and state["execution"]["mode"] == "validation" and state["current"]["working_tree_clean"]
+                        and pr is not None and pr["state"] == "open"
+                        and (pr["base_branch"], pr["head_branch"]) ==
+                        (state["task_policy"]["base_branch"], state["task_policy"]["head_branch"])
+                        and (pr["base_sha"], pr["head_sha"]) == (candidate["base"], candidate["head"])
+                        and pr["findings_checked"] and not pr["new_blockers"]
+                        and pr["mergeable"] and pr["protection_satisfied"])
+    if "lifecycle" in state:
+        recheck = state["lifecycle"]["premerge_recheck"]
+        merge_conditions = (merge_conditions and recheck is not None
+                            and all(recheck[key] == candidate[key] for key in ("base", "head", "tree", "scope"))
+                            and all(recheck[key] for key in ("working_tree_clean", "findings_checked", "mergeable", "protection_satisfied"))
+                            and not recheck["new_blockers"])
+    if not merge_conditions:
+        reasons.append("current authorization/phase/clean PR scope/findings/protection conditions are unsatisfied")
+    return {"policy": policy.POLICY_ID, "activation_pending": True,
+            "code_ready": reviewed["code_ready"], "checks_ready": checks_ready,
+            "requirements_satisfied": reviewed["code_ready"] and checks_ready and bool(merge_conditions),
+            "merge_ready": False, "reasons": reasons}
+
+
+def _tiered_decision(state, action, reason, stage, **details):
+    return {**_decision(state, action, reason, **details), "stage": stage,
+            "policy": _tiered_policy().POLICY_ID, "activation_pending": True,
+            "merge_ready": False, "authenticity_verified": False}
+
+
+def _tiered_post_merge_blocked(state, reason):
+    merge = state["lifecycle"]["merge"]
+    return _tiered_decision(state, "STOP", "post-merge blocker: " + reason, "postmerge_failure",
+                            task_id=state["candidate"]["task_id"], baseline=state["candidate"]["baseline"],
+                            merge_sha=merge["sha"] if merge else None,
+                            corrections_used=len(state["corrections"]), correction_limit=3,
+                            handoff="retain this task ledger and correction limit; do not reset the task; "
+                                    "do not re-merge, push develop, or revert")
+
+
+def _tiered_correct(state, reason):
+    if len(state["corrections"]) >= 3:
+        return _tiered_decision(state, "STOP", "three corrective rounds exhausted: " + reason, "correction")
+    return _tiered_decision(state, "CORRECT_IMPLEMENTATION", reason, "correction",
+                            correction_round=len(state["corrections"]) + 1)
+
+
+def evaluate_tiered_lifecycle(state, *, original_resolver=None):
+    """Read-only, inactive lifecycle diagnosis; never permission to execute it.
+
+    The reviewed candidate is retained through merge. Actual merge identity,
+    current develop containment and its own push/short evidence are separate.
+    Historical v5 premerge inputs gain no lifecycle or completion meaning.
+    """
+    _validate_tiered_structure(state)
+    reviewed = validate_tiered_reviews(state["candidate"], state["classification"], state["implementers"],
+                                       state["review_originals"], original_resolver=original_resolver)
+    _validate_tiered_review_heads(state, reviewed)
+    decide = lambda action, reason, stage, **details: _tiered_decision(state, action, reason, stage, **details)
+    if "lifecycle" not in state:
+        return decide("STOP", "legacy pending v5 input has no lifecycle contract", "pending_contract")
+    lifecycle, candidate, pr = state["lifecycle"], state["candidate"], state["pr"]
+    merged = pr is not None and pr["state"] == "merged"
+    post_blocked = lambda reason: _tiered_post_merge_blocked(state, reason)
+    if not state["authorization"]["active"]:
+        return decide("STOP", "task authorization is absent or revoked", "authorization")
+    if merged and "merge" not in state["authorization"]["operations"]:
+        return post_blocked("retained task authorization does not include merge")
+    if not state["current"]["working_tree_clean"]:
+        return post_blocked("working tree is not clean") if merged else decide("STOP", "working tree is not clean", "development")
+    if lifecycle["merge"] is not None and not merged:
+        return decide("STOP", "actual merge evidence contradicts PR state", "actual_merge")
+    if not merged and (lifecycle["push_ci"] is not None or lifecycle["short_validation"] is not None):
+        return decide("STOP", "post-merge evidence contradicts unmerged PR state", "actual_merge")
+    if pr is not None:
+        if (pr["base_branch"], pr["head_branch"]) != (state["task_policy"]["base_branch"], state["task_policy"]["head_branch"]):
+            return post_blocked("PR branch pair differs from task") if merged else decide("STOP", "PR branch pair differs from task", "review")
+        if pr["state"] == "closed":
+            return decide("STOP", "closed unmerged PR must not be duplicated", "review")
+        if (pr["base_sha"], pr["head_sha"]) != (candidate["base"], candidate["head"]):
+            return post_blocked("PR source scope differs from reviewed candidate") if merged else decide("REFRESH_EVIDENCE", "PR base/head changed; obtain current review conclusions", "review")
+        if not pr["findings_checked"]:
+            return decide("REFRESH_EVIDENCE", "latest PR findings have not been checked", "findings")
+        if pr["new_blockers"]:
+            return post_blocked("confirmed PR code finding") if merged else _tiered_correct(state, "confirmed PR code finding")
+    blockers = reviewed["blockers"]
+    code = [entry for entry in blockers if entry["finding"]["kind"] == "code"]
+    if code:
+        return post_blocked("retained unresolved code finding") if merged else _tiered_correct(state, "retained unresolved code finding requires correction and current applicable reviews")
+    for entry in sorted(blockers, key=lambda item: item["finding"]["kind"] == "evidence"):
+        kind = entry["finding"]["kind"]
+        if merged:
+            return post_blocked("retained unresolved " + kind + " finding")
+        return decide("REFRESH_EVIDENCE" if kind == "evidence" else "STOP",
+                      "retained unresolved " + kind + " finding", "review", blocked_report_ref=entry["report_ref"])
+    if not state["classification"]["impact_known"] or "unknown" in candidate["risks"]:
+        return post_blocked("candidate impact remains unknown") if merged else decide("STOP", "candidate impact remains unknown", "review")
+    if not reviewed["code_ready"]:
+        if merged:
+            return post_blocked("required current independent code conclusions are missing")
+        number = min(reviewed["ready_reviewers"] + 1, reviewed["classification"]["reviewers_required"])
+        return decide("REQUEST_REVIEW_" + str(number), "current applicable independent code review required", "review")
+    if state["execution"]["mode"] == "development":
+        return post_blocked("merged source has no formal validation authorization") if merged else decide(
+            "WAIT_VALIDATION_AUTHORIZATION", "code review is intermediate; wait for explicit start-validation instruction", "wait_validation_authorization")
+    if pr is None:
+        return decide("ENSURE_DRAFT_PR", "find the unique branch-pair PR before draft creation", "review",
+                      base_branch="develop", head_branch=state["task_policy"]["head_branch"])
+    ci = state["pr_ci"]
+    if ci is not None and ((ci["workflow"], ci["event"], ci["branch"], ci["head_sha"], ci["parents"]) !=
+                          (WORKFLOW, "pull_request", pr["head_branch"], candidate["head"], [candidate["base"], candidate["head"]])
+                          or (ci["run_id"], ci["attempt"]) != (ci["latest_run_id"], ci["latest_attempt"])):
+        return post_blocked("current source PR CI identity or latest attempt differs") if merged else decide(
+            "REFRESH_EVIDENCE", "current PR CI identity or latest attempt differs", "checks")
+    if ci is None or ci["status"] in {"queued", "in_progress"}:
+        return post_blocked("current source PR CI is missing or pending") if merged else decide("WAIT_PR_CI", "current PR checks are pending", "checks")
+    if ci["status"] == "completed" and ci["conclusion"] != "success":
+        return post_blocked("current source PR CI did not succeed") if merged else decide("INVESTIGATE_CI", "current PR CI did not succeed; no confirmed code finding", "checks")
+    try:
+        checked = _tiered_checks(state, reviewed)
+    except (OSError, ValueError, TypeError, KeyError, zipfile.BadZipFile) as exc:
+        return post_blocked("current source checks are invalid: " + str(exc)) if merged else decide(
+            "REFRESH_EVIDENCE", "current checks unavailable or invalid: " + str(exc), "checks")
+    if merged:
+        merge = lifecycle["merge"]
+        if merge is None:
+            return decide("VERIFY_MERGE", "retrieve the actual merge commit; never repeat merge", "actual_merge")
+        if (merge["parents"] != [candidate["base"], candidate["head"]] or merge["tree"] != ci["tree"]
+                or merge["sha"] in {candidate["base"], candidate["head"]}
+                or not merge["develop_contains_merge"]):
+            return post_blocked("actual merge SHA/ordered parents/tree/develop containment differ")
+        push = lifecycle["push_ci"]
+        if push is not None and ((push["workflow"], push["event"], push["branch"], push["head_sha"], push["tested_sha"], push["parents"], push["tree"]) !=
+                                 (WORKFLOW, "push", "develop", merge["sha"], merge["sha"], merge["parents"], merge["tree"])
+                                 or (push["run_id"], push["attempt"]) != (push["latest_run_id"], push["latest_attempt"])):
+            return post_blocked("push identity or latest attempt differs from actual merge")
+        if push is None or push["status"] in {"queued", "in_progress"}:
+            return decide("WAIT_PUSH_CI", "actual merge requires its own develop push short validation", "push_short")
+        problem = _current_ci_problem(push, "push", "develop", merge["sha"], [candidate["base"], candidate["head"]])
+        if problem or push["tree"] != merge["tree"]:
+            return post_blocked(problem or "push tree differs from actual merge")
+        if lifecycle["short_validation"] is None:
+            return decide("REFRESH_EVIDENCE", "retrieve actual merge short validation originals", "push_short")
+        try:
+            try:
+                from scripts.validation_evidence import verify_reuse
+            except ModuleNotFoundError:
+                from validation_evidence import verify_reuse
+            short = verify_reuse(Path(state["coverage"]), Path(lifecycle["short_validation"]), current_only=True)
+            _tiered_policy().require(short["candidate"] == {"head": merge["sha"], "tree": merge["tree"], "parents": merge["parents"]},
+                                     "short evidence differs from actual merge")
+            _tiered_policy().require(checked["source_route"] == _tiered_policy().FIRST_EDITION_CHECKS_ROUTE and short["ci"]["event"] == "push"
+                                     and all(short["ci"][key] == push[key] for key in ("run_id", "attempt")),
+                                     "short evidence differs from actual push run/attempt/route")
+        except (OSError, ValueError, TypeError, KeyError, zipfile.BadZipFile) as exc:
+            return post_blocked("actual merge short evidence invalid: " + str(exc))
+        return decide("COMPLETE", "current reviews, source checks, actual merge and its own push short evidence verified", "complete",
+                      merge_sha=merge["sha"], develop_head=merge["develop_head"])
+    recheck = lifecycle["premerge_recheck"]
+    if not pr["mergeable"] or not pr["protection_satisfied"]:
+        return decide("STOP", "mergeability or protection requirements are unsatisfied", "ready")
+    if recheck is None:
+        return decide("REFRESH_EVIDENCE", "recheck current remote scope/findings/protection before merge", "premerge_recheck")
+    if any(recheck[field] != candidate[field] for field in ("base", "head", "tree", "scope")):
+        return decide("REFRESH_EVIDENCE", "premerge recheck differs from reviewed candidate", "premerge_recheck")
+    if not recheck["findings_checked"]:
+        return decide("REFRESH_EVIDENCE", "premerge findings check is missing", "premerge_recheck")
+    if recheck["new_blockers"]:
+        return _tiered_correct(state, "confirmed premerge code finding")
+    if not all(recheck[field] for field in ("working_tree_clean", "mergeable", "protection_satisfied")):
+        return decide("STOP", "premerge clean/protection/mergeability conditions are unsatisfied", "premerge_recheck")
+    return decide("MERGE_PROPOSAL", "inactive diagnosis: current merge requirements and immediate recheck are satisfied", "ready",
+                  pr_number=pr["number"], merge_method="merge", expected_head_sha=candidate["head"], expected_base_sha=candidate["base"])
+
+
 def _unique_object(pairs):
     result = {}
     for key, value in pairs:
@@ -1997,7 +2448,7 @@ def _unique_object(pairs):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("validate", "next-action"))
+    parser.add_argument("command", choices=("validate", "next-action", "diagnose-lifecycle"))
     parser.add_argument("evidence", type=Path)
     args = parser.parse_args(argv)
     try:
@@ -2007,6 +2458,10 @@ def main(argv=None):
         if args.command == "validate":
             validate_state(state)
             result = {"schema_valid": True, "authenticity_verified": False}
+        elif args.command == "diagnose-lifecycle":
+            result = {"action": "STOP", "reason": "inactive lifecycle diagnosis grants no execution authorization",
+                      "activation_pending": True, "merge_ready": False, "authenticity_verified": False,
+                      "evaluation": evaluate_tiered_lifecycle(state)}
         else:
             result = next_action(state)
     except (OSError, UnicodeError, ValueError, TypeError, KeyError) as exc:

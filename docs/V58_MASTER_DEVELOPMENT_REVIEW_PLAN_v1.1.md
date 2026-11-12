@@ -1,5 +1,7 @@
 # zhuyin-proofreader v5.8 Master Development & Independent Review Plan
 
+程序與適用版本先讀[開發與審查入口](DEVELOPMENT_REVIEW.md#applicability)，AGENTS 仍是安全與授權權威。本文件 §§3–4 的產品安全／階段契約保留；§§1、5–8 的現行兩輪程序細節與後段歷史定位，依入口選定的版本及原 task scope 使用。`development-flow/tiered-review/1` 設計已採納、實作中、尚未啟用，不取代本次改革自身適用的舊規，也不改寫本文件歷史計數或判定。
+
 2026-10-12 使用者永久採納 `validation-flow/current-evidence/1`：正常驗證/合併/發布不要求CI歷史自動重播、舊artifact可下載或封存新版閉包。當前完整非視窗pytest/verify-active、raw證據、兩輪完整適用PASS、actual merge及必要push驗證仍必要；旧原件/schema/判定、baseline/source_ref/計數及安全/授權/保護不變。下文原歷史前置說明不適用新執行，詳見[現行驗證政策](VALIDATION_POLICY.md)。
 
 文件版本：1.5（保留既有檔名以維持引用）
@@ -14,7 +16,7 @@ Repository：`discoveryray/zhuyin-proofreader`
 
 2026-10-07 使用者明確採納 `validation-flow/no-real-tk/1`，完全取消所有自動化入口的真視窗驗證（含 hidden root、虛擬顯示器、fixture／import／子程序）、Tcl/Tk configure／preflight／初始化能力門檻及 GUI retry／補驗。新政策適用本身與後續驗證；尚未結案任務只遷移 window 義務，其餘凍結契約、baseline、修正計數、原 Tk 失敗及 retry 額度保留，其他 blocker 不自動解除。產品 GUI／Tk／launcher 保留；有效非視窗資料／交易／恢復與功能測試、Python 3.13.0、runtime／compile／diff、兩輪審查與 actual merge 短驗證仍必要。詳見 [驗證政策](VALIDATION_POLICY.md)。
 
-專案指令保留精簡版核心規則，並指定本文件為完整規範。新的相關工作開始時，先讀本文件與該次任務的適用條款；同一任務內已讀取且未改版的內容無須反覆全文重讀。來源缺失、內容不完整或版本衝突時，明確指出缺口，不得假裝已讀取或據此給出無證據的 PASS。
+專案指令保留精簡版核心規則；程序由開發與審查入口選定，本文件提供完整產品／階段契約及適用舊制細節。新的相關工作開始時，讀該次任務所需適用條款；同一任務內已讀取且未改版的內容無須反覆全文重讀。來源缺失、內容不完整或版本衝突時，明確指出缺口，不得假裝已讀取或據此給出無證據的 PASS。
 
 本專案建立安全、可稽核、actual / expected 完全獨立的臺灣國小教材 PDF 注音校對系統。v5.8 的主要目標是 Global Exact Glyph Library，讓跨教材、跨專案的「實際字形 → 實際注音」只在嚴格 evidence contract 下重用，防止錯誤 learning 污染後續教材。
 

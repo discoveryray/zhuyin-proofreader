@@ -407,7 +407,9 @@ def current_job(name):
 
 def current_plan(context):
     predicate = re.search(r'^      FULL_CURRENT_VALIDATION: (.*)$', current_job('test'), re.M).group(1)
-    context = {**context, 'env': {'FULL_CURRENT_VALIDATION': str(expression(predicate, context)).lower()}}
+    full = expression(predicate, context)
+    route = 'full' if full else 'short' if context['github']['event_name'] == 'push' and context['github']['ref'] == 'refs/heads/develop' else ''
+    context = {**context, 'env': {'FULL_CURRENT_VALIDATION': str(full).lower()}}
     return {name: [(label, action(body)) for label, body in steps(current_job(name)) if condition(body, context)]
             for name in ('short', 'test') if condition(current_job(name).split('    steps:', 1)[0], context)}
 
@@ -435,7 +437,7 @@ class CurrentValidationWorkflowTests(unittest.TestCase):
                     declared={'env':{'FULL_CURRENT_VALIDATION':'true'}}
                     self.assertTrue(condition(step(current_job('test'),label),{**context,**declared,'_success':False}))
                 for label in ('Run full pytest suite', 'Verify active test execution', 'Compile Python sources'):
-                    self.assertFalse(condition(step(current_job('test'), label), {**context, 'env': {'FULL_CURRENT_VALIDATION': 'true'}, '_success': False}), 'failed environment precheck must stop expensive validation')
+                    self.assertFalse(condition(step(current_job('test'), label), {**context, **declared, '_success': False}), 'failed environment precheck must stop expensive validation')
         for context in (event_context('push','refs/heads/develop'),event_context('push','refs/heads/develop',event__before='502414b3b38e004a6d8d9cb693cf21b65148765a')):
             self.assertEqual(set(current_plan(context)),{'short','test'})
             self.assertEqual(set(dict(current_plan(context)['test'])),{'Check out repository','Set up Python','Show Python version','Verify required validation results'})
@@ -462,6 +464,43 @@ class CurrentValidationWorkflowTests(unittest.TestCase):
             for key in success:cases.append((context,{**success,key:outcome},False))
         for other in (event_context('workflow_dispatch','refs/heads/main'),event_context('push','refs/heads/other'),event_context(event__pull_request__base__ref='unknown')):
             cases.append((other,success,False))
+        self.execute_current_summary(cases)
+
+
+
+
+    def test_first_edition_workflow_has_no_documentation_or_capture_consumers(self):
+        # Classification still belongs to reviewers. No file extension, label,
+        # author request or future activation state selects less than full CI.
+        forbidden = ('pr_flow_ci.py', 'pr_flow_transport', 'pr_flow_evidence',
+                     'documentation-validation-evidence', 'documentation-pr',
+                     'verify-pr-documentation', 'policy_active', 'tmp/pr-flow-ci',
+                     'capture-source', 'DOCUMENTATION_CHECK_COUNT')
+        for value in forbidden:
+            self.assertNotIn(value, LIVE_WORKFLOW)
+        expected = set(dict(current_plan(event_context())['test']))
+        for tier in ('docs', 'local', 'core'):
+            context = event_context()
+            context['github']['event']['pull_request']['labels'] = [{'name': tier}]
+            context['github']['event']['author_request'] = {'route': 'docs', 'full_exempt': True}
+            actual = set(dict(current_plan(context)['test']))
+            self.assertEqual(actual, expected)
+            self.assertIn('Run full pytest suite', actual)
+            self.assertIn('Verify active test execution', actual)
+            self.assertIn('Verify current validation coverage', actual)
+
+    def test_first_edition_documentation_claims_cannot_replace_any_required_full_step(self):
+        ids = ('checkout', 'python', 'version', 'pip', 'dependencies', 'runtime', 'inventory',
+               'pytest', 'active', 'compile', 'diff_pr', 'clean', 'main_environment',
+               'coverage', 'coverage_verify', 'main_evidence')
+        context = event_context()
+        context['github']['event']['author_request'] = {'route': 'docs', 'parser_status': 'success',
+                                                      'capture_available': True, 'policy_active': True}
+        success = {name: 'success' for name in ids}
+        cases = [(context, success, True)]
+        for name in ids:
+            for outcome in ('failure', 'skipped', 'cancelled', ''):
+                cases.append((context, {**success, name: outcome}, False))
         self.execute_current_summary(cases)
 
     def test_current_commands_lock_capture_scope_and_finite_artifacts_are_explicit(self):
@@ -526,7 +565,12 @@ class CurrentValidationWorkflowTests(unittest.TestCase):
         bindings=body.split('        env:\n',1)[1].split('        run:',1)[0]
         inputs=[]
         for context,outcomes,accepted in cases:
-            context={**context,'steps':{key:dict(outcome=value) for key,value in outcomes.items()}}
+            full = context['github']['event_name'] == 'pull_request' and context['github']['event']['pull_request']['base']['ref'] in ('develop','main') or context['github']['event_name'] == 'push' and context['github']['ref'] == 'refs/heads/main'
+            route = 'full' if full else 'short' if context['github']['event_name'] == 'push' and context['github']['ref'] == 'refs/heads/develop' else ''
+            declared={re.search(r'^        id: (.*)$',section,re.M).group(1):{'outcome':'skipped','outputs':{}}
+                      for _,section in steps(current_job('test')) if re.search(r'^        id: ',section,re.M)}
+            for key,value in outcomes.items():declared[key]['outcome']=value
+            context={**context,'steps':declared}
             environment={}
             for key,value in re.findall(r'^          ([A-Z_]+): (.*)$',bindings,re.M):
                 actual=expression(value,context);environment[key]=str(actual).lower() if isinstance(actual,bool) else str(actual)
