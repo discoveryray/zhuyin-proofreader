@@ -161,6 +161,13 @@ class PrFlowCiTests(unittest.TestCase):
         self.assertEqual([item["target"] for item in result["local_links"]], ["#guide"])
         self.html_checks('# Guide\n\n<a href="tar`example`get.md#details">Must preserve URL</a>\n',
                          succeeds=False, error="missing local documentation target: tar`example`get.md")
+        self.html_checks('# Guide\n\n- text `foo\n    <div>\n    <a href="missing.md">Bad</a>\n    </div>\n  bar`\n',
+                         succeeds=False, error="unsupported code span across Markdown/HTML blocks")
+        self.html_checks('# Guide\n\n`foo\n- [broken](missing.md)\nbar`\n',
+                         succeeds=False, error="unsupported code span across Markdown/HTML blocks")
+        for marker in ('> quoted', '1. item', '===', '- - -', '___', '<!-- note -->', '<!DOCTYPE html>', '<?xml?>'):
+            with self.subTest(marker=marker), self.assertRaisesRegex(ValueError, "unsupported code span"):
+                ci._visible('`foo\n' + marker + '\nbar`')
 
     def test_raw_html_blocks_cannot_hide_resources_or_create_markdown_anchors(self):
         for markup in ('<div>\n```\n<a href="missing.md">Actual HTML</a>\n```\n</div>',
@@ -200,6 +207,48 @@ class PrFlowCiTests(unittest.TestCase):
             with self.subTest(target=target):
                 self.html_checks('# Guide\n\n<a href="' + target + '">Directory</a>\n',
                                  assets=assets, succeeds=False, error=error)
+
+    def test_only_original_atx_markers_create_plain_or_inline_code_heading_slugs(self):
+        result = self.html_checks('# Guide\n\n[First](target.md#example-only)\n[Second](target.md#example-only-1)\n[Escaped](target.md#amp-title)\n',
+            assets={"target.md": b"# Target\n\n## `Example` only\n## `Example` only\n## \\&amp; title\n"})
+        self.assertEqual(len(result["local_links"]), 3)
+        for raw, error in ((b"# Target\n\n`## Example only`\n", "missing local documentation anchor"),
+                           (b"# Target\n\n\\## Example only\n", "missing local documentation anchor"),
+                           (b"# Target\n\n# `<em>Example</em>`\n", "unsupported HTML-like code in heading"),
+                           (b"# Target\n\n# `&lt;em&gt;Example&lt;/em&gt;`\n", "unsupported HTML-like code in heading")):
+            with self.subTest(raw=raw):
+                self.html_checks('# Guide\n\n[Absent](target.md#example-only)\n', assets={"target.md": raw}, succeeds=False, error=error)
+
+    def test_indented_container_and_escaped_html_cannot_supply_anchors(self):
+        for body in ('    <a id="example-only"></a>', '\t<a id="example-only"></a>',
+                     '>     <a id="example-only"></a>', '- Item\n      <a id="example-only"></a>'):
+            with self.subTest(body=body):
+                self.html_checks('# Guide\n\n[Absent](target.md#example-only)\n',
+                    assets={"target.md": ("# Target\n\n" + body + "\n").encode()}, succeeds=False,
+                    error="unsupported HTML in indented/container documentation")
+        for body in ('\\<a id="example-only"></a>', '&lt;a id="example-only"&gt;&lt;/a&gt;'):
+            with self.subTest(body=body):
+                self.html_checks('# Guide\n\n[Absent](target.md#example-only)\n',
+                    assets={"target.md": ("# Target\n\n" + body + "\n").encode()}, succeeds=False,
+                    error="missing local documentation anchor")
+
+    def test_type7_standalone_tag_and_known_paragraph_context_are_distinct(self):
+        result = self.html_checks('# Guide\n\n[Actual](target.md#actual)\n',
+            assets={"target.md": b'# Target\n\n<span>\n<a id="actual"></a>\n</span>\n\n'})
+        self.assertEqual(result["local_links"][0]["target"], "target.md#actual")
+        for body in ('Paragraph\n<a>\n`<a id="example-only"></a>`\n',
+                     '<span>Inline text</span>\n`<a id="example-only"></a>`\n'):
+            with self.subTest(body=body):
+                self.html_checks('# Guide\n\n[Absent](target.md#example-only)\n',
+                    assets={"target.md": ("# Target\n\n" + body).encode()}, succeeds=False, error="missing local documentation anchor")
+        self.html_checks('# Guide\n\n[Unknown](target.md#example-only)\n',
+            assets={"target.md": b'# Target\n\n- Container\n<span>\n<a id="example-only"></a>\n</span>\n'},
+            succeeds=False, error="unsupported HTML tag after container context")
+        for tag in ('<a id=x=y>', '</a junk>'):
+            with self.subTest(tag=tag):
+                self.html_checks('# Guide\n\n[Unknown](target.md#example-only)\n',
+                    assets={"target.md": ('# Target\n\n' + tag + '\n`<a id="example-only"></a>`\n').encode()},
+                    succeeds=False, error="unsupported noncanonical HTML documentation tag")
 
     def test_unsafe_or_unsupported_html_resource_syntax_fails_closed(self):
         cases = [('<a href="&#46;&#46;/outside.md">Escape</a>', "escapes repository"),

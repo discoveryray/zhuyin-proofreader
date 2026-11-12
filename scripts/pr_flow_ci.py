@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 from html.parser import HTMLParser
+from html import unescape
 import json
 import os
 from pathlib import Path, PurePosixPath
@@ -283,10 +284,37 @@ def inspect_pr_documentation(scope, check, root=ROOT, *, tested_sha):
     return _inspect_documentation(candidate, check, root, tested)
 
 
-def _visible(text, *, preserve_inline=False, exclude_html_blocks=False):
-    """Bounded lexical profile, refusing ambiguous raw-HTML/code mixtures."""
+def _html_tag(text, index):
+    end, quote = index + 1, None
+    while end < len(text):
+        value = text[end]
+        if quote:
+            if value == quote: quote = None
+        elif value in {"'", '"'}: quote = value
+        elif value == ">": break
+        end += 1
+    policy.require(end < len(text), "incomplete HTML documentation tag")
+    return text[index:end + 1], end + 1
+
+
+def _canonical_html_tag(tag):
+    name = r"[A-Za-z][A-Za-z0-9-]*"
+    attribute = r"[A-Za-z_:][A-Za-z0-9_.:-]*"
+    value = r'''(?:"[^"]*"|'[^']*'|[^ \t\r\n\f"'=<>`]+)'''
+    assigned = r"(?:[ \t]*=[ \t]*" + value + r")?"
+    opening = r"<" + name + r"(?:[ \t]+" + attribute + assigned + r")*[ \t]*/?>"
+    closing = r"</" + name + r"[ \t]*>"
+    return re.fullmatch("(?:" + opening + "|" + closing + ")", tag) is not None
+
+
+def _documentation_lex(text):
+    """Keep original block context; masking cannot manufacture HTML or ATX."""
     text = "\n".join(text.splitlines())
-    visible, index, fence, raw_html, raw_pre = [], 0, None, False, False
+    visible, headings, index, fence = [], [], 0, None
+    raw_html, raw_pre, context, container = False, False, "blank", False
+    block_tags = set("blockquote dd details div dl dt figcaption figure h1 h2 h3 h4 h5 h6 hr li ol p pre table tbody td tfoot th thead tr ul".split())
+    def mask(raw):
+        return "".join("\n" if char == "\n" else " " for char in raw)
     while index < len(text):
         if index == 0 or text[index - 1] == "\n":
             line_end = text.find("\n", index)
@@ -295,25 +323,54 @@ def _visible(text, *, preserve_inline=False, exclude_html_blocks=False):
             match = re.match(r"^ {0,3}(`{3,}|~{3,})(.*)$", line)
             if fence is not None:
                 if match and match[1][0] == fence[0] and len(match[1]) >= len(fence) and not match[2].strip():
-                    fence = None
+                    fence = None; context = "block"
+                visible.append(mask(text[index:line_end + 1]))
                 index = line_end + 1
                 continue
+            container = bool(re.match(r"^(?: {4}| *\t| {0,3}(?:>|[-+*]\s|\d+[.)]\s))", line)) and not raw_html and not raw_pre
             if not line.strip() and not raw_pre:
-                raw_html = False
-            elif re.match(r"^ {0,3}</?[A-Za-z][A-Za-z0-9-]*(?:\s|/?>|$)", line):
-                # Treat possible HTML blocks conservatively until a blank
-                # line; pre retains raw context through blanks until </pre>.
-                raw_html = True
+                raw_html = False; context = "blank"
+            elif not raw_html and not raw_pre and not container:
+                opening = re.match(r"^ {0,3}</?([A-Za-z][A-Za-z0-9-]*)(?:\s|/?>|$)", line)
+                if opening:
+                    start = index + len(line) - len(line.lstrip(" "))
+                    tag, end = _html_tag(text, start)
+                    single = end <= line_end and not text[end:line_end].strip()
+                    name = opening[1].lower()
+                    if name in block_tags:
+                        raw_html = True; context = "block"
+                    elif name == "summary":
+                        raise policy.PolicyError("unsupported summary outside a known HTML block")
+                    elif single:
+                        policy.require(_canonical_html_tag(tag), "unsupported noncanonical HTML documentation tag")
+                        policy.require(context != "unknown", "unsupported HTML tag after container context")
+                        # Type 7 is one complete tag on the line, and cannot
+                        # interrupt a paragraph. Inline <a>text</a> is neither.
+                        if context != "paragraph": raw_html = True; context = "block"
             if match:
                 policy.require(not raw_html and not raw_pre, "unsupported raw HTML/code-fence mixture")
                 policy.require(match[1][0] != "`" or "`" not in match[2], "unsupported Markdown fence info")
                 fence = match[1]
+                visible.append(mask(text[index:line_end + 1]))
                 index = line_end + 1
                 continue
+            if not raw_html and not raw_pre and line.strip():
+                heading = re.match(r"^ {0,3}#{1,6}[ \t]+(.+?)(?:[ \t]+#+[ \t]*)?$", line)
+                if heading and not container:
+                    policy.require(context != "unknown", "unsupported heading after container context")
+                    headings.append(heading[1]); context = "block"
+                elif container:
+                    context = "unknown"
+                elif context != "unknown":
+                    context = "paragraph"
         if text.startswith("<!--", index):
             end = text.find("-->", index + 4)
             policy.require(end != -1, "unclosed HTML documentation comment")
-            index = end + 3
+            visible.append(mask(text[index:end + 3])); index = end + 3
+        elif text[index] == "\\" and not raw_html and not raw_pre and index + 1 < len(text) and text[index + 1] in r"!\"#$%&'()*+,-./:;<=>?@[\]^_`{|}~":
+            # Escaped punctuation is text. In particular, escaped '<' must not
+            # be delivered to HTMLParser as an actual opening delimiter.
+            visible.append(mask(text[index:index + 2])); index += 2
         elif text[index] == "`" and not raw_html and not raw_pre:
             run = re.match(r"`+", text[index:])[0]
             end = next((index + len(run) + match.start() for match in re.finditer(r"`+", text[index + len(run):])
@@ -322,32 +379,51 @@ def _visible(text, *, preserve_inline=False, exclude_html_blocks=False):
                 visible.append(run); index += len(run)
             else:
                 content = text[index + len(run):end]
-                policy.require(re.search(r"\n\s*\n|\n {0,3}(?:</?[A-Za-z]|`{3,}|~{3,}|#{1,6}\s)", content) is None,
+                policy.require(re.search(r"\n\s*\n|\n[ \t]*(?:<|`{3,}|~{3,}|#{1,6}\s|>|(?:[-+*]|\d+[.)])(?:[ \t]+|(?=\n|$))|[=-]+[ \t]*(?=\n|$)|[-*_](?:[ \t]*[-*_]){2,}[ \t]*(?=\n|$))", content) is None,
                                "unsupported code span across Markdown/HTML blocks")
-                if preserve_inline: visible.append(content)
+                visible.append(mask(text[index:end + len(run)]))
                 index = end + len(run)
         elif text[index] == "<" and re.match(r"</?[A-Za-z]", text[index:]):
-            # Keep a whole quoted HTML tag intact: backticks inside an href/src
-            # are URL bytes, not Markdown code-span delimiters.
-            end, quote = index + 1, None
-            while end < len(text):
-                value = text[end]
-                if quote:
-                    if value == quote: quote = None
-                elif value in {"'", '"'}: quote = value
-                elif value == ">": break
-                end += 1
-            policy.require(end < len(text), "incomplete HTML documentation tag")
-            tag = text[index:end + 1]
+            policy.require(not container, "unsupported HTML in indented/container documentation")
+            tag, end = _html_tag(text, index)
+            policy.require(raw_html or raw_pre or _canonical_html_tag(tag), "unsupported noncanonical HTML documentation tag")
             if re.match(r"<pre(?:\s|/?>)", tag, re.I): raw_pre = True; raw_html = True
-            if not exclude_html_blocks or not raw_html: visible.append(tag)
+            visible.append(tag)
             if re.match(r"</pre\s*>", tag, re.I): raw_pre = False
-            index = end + 1
+            index = end
         else:
-            if not exclude_html_blocks or not raw_html: visible.append(text[index])
+            visible.append(text[index])
             index += 1
     policy.require(fence is None, "unclosed Markdown code fence")
-    return "".join(visible)
+    return "".join(visible), headings
+
+
+def _visible(text):
+    return _documentation_lex(text)[0]
+
+
+def _heading_text(title):
+    """Only plain ATX titles and ordinary inline-code words have slug proof."""
+    result, plain, index = [], [], 0
+    def flush():
+        result.append(unescape("".join(plain))); plain.clear()
+    while index < len(title):
+        if title[index] == "`":
+            flush()
+            run = re.match(r"`+", title[index:])[0]
+            end = next((index + len(run) + match.start() for match in re.finditer(r"`+", title[index + len(run):]) if len(match[0]) == len(run)), None)
+            policy.require(end is not None, "unsupported unmatched code delimiter in heading")
+            value = title[index + len(run):end]
+            policy.require(not any(char in value for char in "<>&\n\r"), "unsupported HTML-like code in heading")
+            result.append(value); index = end + len(run)
+        elif title[index] == "\\" and index + 1 < len(title):
+            flush()
+            result.append(title[index + 1]); index += 2
+        else:
+            policy.require(title[index] not in "[]<>_~", "unsupported rich Markdown heading")
+            plain.append(title[index]); index += 1
+    flush()
+    return "".join(result)
 
 
 class _DocumentationHTML(HTMLParser):
@@ -402,16 +478,14 @@ def _html_references(visible):
 
 
 def _anchors(text):
-    _, anchors = _html_references(_visible(text))
-    text = _visible(text, preserve_inline=True, exclude_html_blocks=True)
+    visible, headings = _documentation_lex(text)
+    _, anchors = _html_references(visible)
     used = {}
-    for line in text.splitlines():
-        match = re.match(r"^ {0,3}#{1,6}\s+(.+?)(?:\s+#+)?$", line)
-        if match:
-            title = re.sub(r"<[^>]+>", "", match[1]).lower()
-            title = re.sub(r"[^\w\-\s]", "", title).replace(" ", "-")
-            count = used.get(title, 0); used[title] = count + 1
-            anchors.add(title + ("-" + str(count) if count else ""))
+    for heading in headings:
+        title = _heading_text(heading).lower()
+        title = re.sub(r"[^\w\-\s]", "", title).replace(" ", "-")
+        count = used.get(title, 0); used[title] = count + 1
+        anchors.add(title + ("-" + str(count) if count else ""))
     return anchors
 
 
