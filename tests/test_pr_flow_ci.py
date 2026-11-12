@@ -77,6 +77,39 @@ def synthetic_ci(candidate, binding):
     return value, pr
 
 
+def diverged_documentation_fixture(folder, change):
+    """Keep feature scope fixed while testing a distinct current base/merge."""
+    candidate, event, environment = documentation_fixture(folder)
+    root = Path(folder)
+    def git(*args, input=None):
+        return subprocess.run(["git", *args], cwd=root, input=input, capture_output=True, check=True).stdout.decode().strip()
+    def tree(files):
+        entries = []
+        for name, raw in sorted(files.items()):
+            blob = git("hash-object", "-w", "--stdin", input=raw)
+            entries.append("100644 blob " + blob + "\t" + name + "\n")
+        return git("mktree", input="".join(entries).encode())
+    base_files = {"guide.md": b"# Guide\n", "target.md": b"# Target\n\n## Details\n"}
+    merge_files = {**base_files, "guide.md": b"# Guide\n\n[Target](target.md#details)\n"}
+    if change == "missing_target":
+        del base_files["target.md"]; del merge_files["target.md"]
+    elif change == "missing_anchor":
+        base_files["target.md"] = merge_files["target.md"] = b"# Target\n\n## Renamed\n"
+    elif change in {"guide_bytes", "whitespace"}:
+        prefix = b"Base note  \n\n" if change == "whitespace" else b"Base note\n\n"
+        base_files["guide.md"] = prefix + base_files["guide.md"]
+        merge_files["guide.md"] = prefix + merge_files["guide.md"]
+    else:
+        raise AssertionError(change)
+    base = git("commit-tree", tree(base_files), "-p", candidate["baseline"], input=b"synthetic divergent base\n")
+    merged = git("commit-tree", tree(merge_files), "-p", base, "-p", candidate["head"], input=b"synthetic tested integration\n")
+    git("update-ref", "refs/heads/synthetic", merged)
+    candidate["base"] = base
+    event["pull_request"]["base"]["sha"] = base
+    environment["GITHUB_SHA"] = merged
+    return candidate, event, environment
+
+
 class PrFlowCiTests(unittest.TestCase):
     def setUp(self):
         self.folder = tempfile.TemporaryDirectory()
@@ -193,6 +226,61 @@ class PrFlowCiTests(unittest.TestCase):
             result = subprocess.run([sys.executable, str(Path(ci.__file__)), *arguments], cwd=self.root, capture_output=True,
                                     env={**os.environ,"GITHUB_EVENT_PATH":str(self.root/'missing-event.json')})
             self.assertNotEqual(result.returncode, 0)
+
+    def test_documentation_checks_use_actual_integration_bytes_links_and_diff(self):
+        for change in ("missing_target", "missing_anchor", "guide_bytes", "whitespace"):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as folder:
+                candidate, event, environment = diverged_documentation_fixture(folder, change)
+                binding = ci.bind_event(candidate, event, environment, folder)
+                output = Path(folder) / "evidence/checks.json"
+                result = ci.run_documentation_checks(candidate, binding, output, folder)
+                self.assertNotEqual(candidate["tree"], binding["checkout"]["checkout_tree"])
+                actual = ci.load(output.parent / "bytes.stdout.json")
+                tested = actual["tested_checkout"]
+                self.assertEqual(tested["head"], binding["checkout"]["checkout_sha"])
+                self.assertEqual(tested["tree"], binding["checkout"]["checkout_tree"])
+                raw = ci.git(folder, "cat-file", "blob", tested["head"] + ":guide.md")
+                self.assertEqual(actual["files"][0]["sha256"], ci.digest(raw))
+                if change == "guide_bytes":
+                    self.assertEqual(result["status"], "success")
+                    self.assertNotEqual(raw, ci.git(folder, "cat-file", "blob", candidate["head"] + ":guide.md"))
+                    ci.verify_documentation_checks(output, candidate, _root=folder)
+                    diff = ci.load(output.parent / "diff.stdout.json")
+                    self.assertEqual([entry["command"][4] for entry in diff["results"]], [candidate["head"], tested["head"]])
+                else:
+                    self.assertEqual(result["status"], "failed")
+                    failed = "diff" if change == "whitespace" else "local_links"
+                    self.assertNotEqual(next(item["exit_code"] for item in result["checks"] if item["name"] == failed), 0)
+                    with self.assertRaises(ValueError): ci.verify_documentation_checks(output, candidate, _root=folder)
+
+    def test_documentation_binding_rejects_forged_git_identity_and_producer_drift(self):
+        output = self.root / "evidence/checks.json"
+        record = ci.run_documentation_checks(self.candidate, self.binding, output, self.root)
+        for field, value in (("checkout_sha", self.candidate["head"]), ("checkout_tree", "f"*40),
+                             ("checkout_parents", [self.candidate["head"], self.candidate["base"]])):
+            bad = deepcopy(record); bad["checkout"][field] = value
+            output.write_text(json.dumps(bad), encoding="utf-8")
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                ci.verify_documentation_checks(output, self.candidate, _root=self.root)
+        output.write_text(json.dumps(record), encoding="utf-8")
+        # Verification reads the bound immutable merge object even when the
+        # coordinator's current checkout is the feature candidate instead.
+        subprocess.run(["git", "update-ref", "refs/heads/synthetic", self.candidate["head"]], cwd=self.root, check=True, capture_output=True)
+        ci.verify_documentation_checks(output, self.candidate, _root=self.root)
+        with self.assertRaises(ValueError):
+            ci.run_documentation_checks(self.candidate, self.binding, self.root / "wrong-start/checks.json", self.root)
+        subprocess.run(["git", "update-ref", "refs/heads/synthetic", self.binding["checkout"]["checkout_sha"]], cwd=self.root, check=True, capture_output=True)
+        original_run = ci.subprocess.run
+        def drift(command, *args, **kwargs):
+            result = original_run(command, *args, **kwargs)
+            if "inspect" in command:
+                original_run(["git", "update-ref", "refs/heads/synthetic", self.candidate["head"]], cwd=self.root, check=True, capture_output=True)
+            return result
+        drift_output = self.root / "drift/checks.json"
+        with patch.object(ci.subprocess, "run", side_effect=drift), self.assertRaises(ValueError):
+            ci.run_documentation_checks(self.candidate, self.binding, drift_output, self.root)
+        self.assertTrue(drift_output.is_file(), "raw child evidence must survive producer rejection")
+        self.assertEqual(ci.load(drift_output)["status"], "failed")
 
 
 if __name__ == "__main__":

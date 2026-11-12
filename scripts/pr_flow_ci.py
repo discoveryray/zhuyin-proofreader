@@ -128,7 +128,7 @@ def validated_documentation_plan(capture, event, environment, root=ROOT):
     supported = all(PurePosixPath(name).suffix.lower() == ".md" for name in candidate["changed_files"])
     if ready and supported:
         for name in candidate["changed_files"]:
-            git(root, "cat-file", "blob", candidate["head"] + ":" + name)
+            git(root, "cat-file", "blob", binding["checkout"]["checkout_sha"] + ":" + name)
     return {"schema": "pr-flow-ci-plan/1", "policy": policy.POLICY_ID,
             "route": "docs" if ready and supported else "full", "candidate": candidate,
             "reason": "confirmed-documentation" if ready and supported else "full-validation-required", **binding}
@@ -159,12 +159,35 @@ def dispatch(event, environment, root=ROOT):
     return result
 
 
-def _markdown(root, candidate):
+def _tested_checkout(root, candidate, tested_sha=None):
+    """Resolve the actual integration object, never substitute the feature tree."""
     bind_git(candidate, root)
+    sha = tested_sha or git(root, "rev-parse", "HEAD").decode().strip()
+    policy.sha(sha, "tested checkout SHA")
+    identity = {"head": sha, "tree": git(root, "rev-parse", sha + "^{tree}").decode().strip(),
+                "parents": git(root, "show", "-s", "--format=%P", sha).decode().strip().split()}
+    policy.require(identity["parents"] == [candidate["base"], candidate["head"]] and sha not in identity["parents"],
+                   "tested checkout must be the actual ordered PR integration")
+    return identity
+
+
+def _bound_checkout(root, candidate, checkout, *, current=False):
+    identity = _tested_checkout(root, candidate, checkout["checkout_sha"])
+    policy.require(identity == {"head": checkout["checkout_sha"], "tree": checkout["checkout_tree"],
+                                "parents": checkout["checkout_parents"]}, "tested checkout Git identity differs from binding")
+    policy.require((checkout["base_sha"], checkout["head_sha"]) == (candidate["base"], candidate["head"]),
+                   "tested checkout candidate binding differs")
+    if current:
+        policy.require(git(root, "rev-parse", "HEAD").decode().strip() == identity["head"],
+                       "tested checkout changed during documentation checks")
+    return identity
+
+
+def _markdown(root, candidate, tested_sha):
     result = {}
     for name in candidate["changed_files"]:
         policy.require(PurePosixPath(name).suffix.lower() == ".md", "bounded documentation checker requires Markdown")
-        raw = git(root, "cat-file", "blob", candidate["head"] + ":" + name)
+        raw = git(root, "cat-file", "blob", tested_sha + ":" + name)
         text = raw.decode("utf-8")
         policy.require(bool(text.strip()) and "\0" not in text, "empty or binary documentation")
         result[name] = (raw, text)
@@ -201,16 +224,20 @@ def _anchors(text):
     return anchors
 
 
-def inspect_documentation(candidate, check, root=ROOT):
-    documents = _markdown(root, candidate)
+def inspect_documentation(candidate, check, root=ROOT, *, tested_sha=None):
+    tested = _tested_checkout(root, candidate, tested_sha)
+    documents = _markdown(root, candidate, tested["head"])
     files = [{"path": name, "sha256": digest(raw), "size": len(raw)} for name, (raw, _) in documents.items()]
     if check == "bytes":
-        return {"files": files, "inspected_files": len(files)}
+        return {"files": files, "inspected_files": len(files), "tested_checkout": tested}
     if check == "diff":
-        command = ["git", "diff", "--check", candidate["baseline"], candidate["head"]]
-        result = subprocess.run(command, cwd=root, capture_output=True, check=False)
-        policy.require(result.returncode == 0, "documentation diff check failed: " + result.stdout.decode("utf-8", errors="replace"))
-        return {"command": command, "inspected_files": len(files), "stdout": result.stdout.decode("utf-8"), "stderr": result.stderr.decode("utf-8")}
+        results = []
+        for end in (candidate["head"], tested["head"]):
+            command = ["git", "diff", "--check", candidate["baseline"], end, "--", *candidate["changed_files"]]
+            result = subprocess.run(command, cwd=root, capture_output=True, check=False)
+            policy.require(result.returncode == 0, "documentation diff check failed: " + result.stdout.decode("utf-8", errors="replace"))
+            results.append({"command": command, "stdout": result.stdout.decode("utf-8"), "stderr": result.stderr.decode("utf-8")})
+        return {"results": results, "inspected_files": len(files), "tested_checkout": tested}
     policy.require(check == "local_links", "unknown documentation check")
     checked = []
     for name, (_, text) in documents.items():
@@ -232,14 +259,14 @@ def inspect_documentation(candidate, check, root=ROOT):
             resolved = posixpath.normpath(posixpath.join(posixpath.dirname(name), path)) if path else name
             policy.require(resolved not in {".", ".."} and not resolved.startswith("../"), "documentation link escapes repository")
             try:
-                content = git(root, "cat-file", "blob", candidate["head"] + ":" + resolved)
+                content = git(root, "cat-file", "blob", tested["head"] + ":" + resolved)
             except subprocess.CalledProcessError as error:
                 raise policy.PolicyError("missing local documentation target: " + resolved) from error
             if split.fragment:
                 policy.require(PurePosixPath(resolved).suffix.lower() == ".md", "local non-Markdown anchor requires another checker")
                 policy.require(unquote(split.fragment) in _anchors(content.decode("utf-8")), "missing local documentation anchor: " + target)
             checked.append({"source": name, "target": target, "path": resolved, "sha256": digest(content)})
-    return {"inspected_files": len(files), "local_links": checked}
+    return {"inspected_files": len(files), "local_links": checked, "tested_checkout": tested}
 
 
 def _reference(parent, path):
@@ -262,20 +289,31 @@ def run_documentation_checks(candidate, binding, output, root=ROOT):
     output.parent.mkdir(parents=True, exist_ok=True)
     candidate_path = output.parent / "candidate.json"
     write(candidate_path, candidate)
+    tested = _bound_checkout(root, candidate, binding["checkout"], current=True)
     checks = []
     for name in CHECKS:
-        command = [sys.executable, str(Path(__file__).resolve()), "inspect", "--candidate", str(candidate_path.resolve()), "--check", name]
+        command = [sys.executable, str(Path(__file__).resolve()), "inspect", "--candidate", str(candidate_path.resolve()), "--check", name,
+                   "--tested-sha", tested["head"]]
         result = subprocess.run(command, cwd=root, capture_output=True, check=False)
         stdout, stderr = output.parent / (name + ".stdout.json"), output.parent / (name + ".stderr.log")
         with stdout.open("xb") as stream: stream.write(result.stdout)
         with stderr.open("xb") as stream: stream.write(result.stderr)
-        checks.append({"name": name, "command": ["<python>", "scripts/pr_flow_ci.py", "inspect", "--candidate", "candidate.json", "--check", name],
+        checks.append({"name": name, "command": ["<python>", "scripts/pr_flow_ci.py", "inspect", "--candidate", "candidate.json", "--check", name,
+                                                   "--tested-sha", tested["head"]],
                        "exit_code": result.returncode, "stdout": _reference(output.parent, stdout), "stderr": _reference(output.parent, stderr)})
     record = {"schema": SCHEMA, "policy": policy.POLICY_ID, "candidate": candidate,
               "status": "success" if all(item["exit_code"] == 0 for item in checks) else "failed",
               "execution": {"python": platform.python_version(), "platform": platform.system(),
                             "checker_sha256": digest(Path(__file__).read_bytes())},
               "candidate_original": _reference(output.parent, candidate_path), "checks": checks, **binding}
+    # Retain failed evidence when the checkout drifts while a child runs.
+    # Immutable object reads stay bound to the original tested SHA.
+    try:
+        _bound_checkout(root, candidate, binding["checkout"], current=True)
+    except (OSError, ValueError, KeyError, subprocess.SubprocessError):
+        record["status"] = "failed"
+        write(output, record)
+        raise
     write(output, record)
     return record
 
@@ -287,6 +325,8 @@ def verify_documentation_checks(path, candidate, *, _root=None):
     policy.require(record["schema"] == SCHEMA and record["policy"] == policy.POLICY_ID and record["status"] == "success"
                    and record["candidate"] == candidate, "unsuccessful or stale documentation checks")
     policy.validate_candidate(candidate)
+    root = ROOT if _root is None else _root
+    tested = _bound_checkout(root, candidate, record["checkout"])
     execution = record["execution"]
     policy.fields(execution, "python platform checker_sha256", "documentation execution")
     policy.require(execution == {"python": "3.13.0", "platform": "Windows", "checker_sha256": digest(Path(__file__).read_bytes())},
@@ -297,16 +337,18 @@ def verify_documentation_checks(path, candidate, *, _root=None):
     for item in record["checks"]:
         policy.fields(item, "name command exit_code stdout stderr", "documentation check")
         policy.require(type(item["exit_code"]) is int and item["exit_code"] == 0 and item["command"] ==
-                       ["<python>", "scripts/pr_flow_ci.py", "inspect", "--candidate", "candidate.json", "--check", item["name"]],
+                       ["<python>", "scripts/pr_flow_ci.py", "inspect", "--candidate", "candidate.json", "--check", item["name"],
+                        "--tested-sha", tested["head"]],
                        "failed or changed documentation command")
         actual = load(_artifact(path.parent, item["stdout"]))
         policy.require(type(actual) is dict and actual.get("inspected_files") == len(candidate["changed_files"])
                        and type(actual["inspected_files"]) is int and actual["inspected_files"] > 0,
                        "documentation check did not inspect the actual nonempty candidate")
+        policy.require(actual.get("tested_checkout") == tested, "raw documentation tested identity differs")
         policy.require(not _artifact(path.parent, item["stderr"]).read_bytes().strip(), "documentation command emitted errors")
         # Recompute these bounded checks from the same immutable Git objects;
         # a hand-written empty success log is never enough.
-        policy.require(actual == inspect_documentation(candidate, item["name"], ROOT if _root is None else _root), "documentation result differs from actual candidate bytes/links/diff")
+        policy.require(actual == inspect_documentation(candidate, item["name"], root, tested_sha=tested["head"]), "documentation result differs from actual candidate bytes/links/diff")
     return record
 
 
@@ -346,11 +388,12 @@ def main(argv=None):
     run = commands.add_parser("documentation"); run.add_argument("--plan", type=Path, required=True); run.add_argument("--output", type=Path, required=True)
     verify = commands.add_parser("verify-documentation"); verify.add_argument("path", type=Path)
     inspect = commands.add_parser("inspect"); inspect.add_argument("--candidate", type=Path, required=True); inspect.add_argument("--check", choices=CHECKS, required=True)
+    inspect.add_argument("--tested-sha")
     args = parser.parse_args(argv)
     try:
         if args.command == "inspect":
             # Read-only bounded checker; supplies no route or merge permission.
-            result = inspect_documentation(load(args.candidate), args.check, Path.cwd())
+            result = inspect_documentation(load(args.candidate), args.check, Path.cwd(), tested_sha=args.tested_sha)
         elif args.command == "verify-documentation":
             policy.require(policy.ENABLED, "tiered documentation dispatch is inactive")
             record = load(args.path); result = verify_documentation_checks(args.path, record["candidate"])
