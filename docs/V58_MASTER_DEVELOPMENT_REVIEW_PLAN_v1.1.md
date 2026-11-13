@@ -1,6 +1,6 @@
 # zhuyin-proofreader v5.8 Master Development & Independent Review Plan
 
-程序與適用版本先讀[開發與審查入口](DEVELOPMENT_REVIEW.md#applicability)，AGENTS 仍是安全與授權權威。本文件 §§3–4 的產品安全／階段契約保留；§§1、5–8 的現行兩輪程序細節與後段歷史定位，依入口選定的版本及原 task scope 使用。`development-flow/tiered-review/1` 設計已採納、實作中、尚未啟用，不取代本次改革自身適用的舊規，也不改寫本文件歷史計數或判定。
+程序與適用版本先讀[開發與審查入口](DEVELOPMENT_REVIEW.md#applicability)，AGENTS 仍是安全與授權權威。本文件 §§3–4 的產品安全／階段契約保持，程序及歷史按原 task scope 使用。`development-flow/tiered-review/1` 的 PR #71 未啟用首版已完成驗證整合；本啟用候選尚未生效。先依[單一入口](DEVELOPMENT_REVIEW.md#activation-contract)核對成功啟用後新建立且明確採用的 task 資格，只有合格 `/6` 選用 1／1／2、有限補審及 canonical 原件／摘要分流；其他 task、本啟用任務及舊 `/5` 保持原契約，不能由作者 state／source_ref／hash／常數自證。下文舊兩輪、完整 PR 報告及 review／CI 關係只對所選舊規 task 有效；新 task 的同項程序以入口為唯一來源，安全、授權、full／actual short／保護均不減。
 
 2026-10-12 使用者永久採納 `validation-flow/current-evidence/1`：正常驗證/合併/發布不要求CI歷史自動重播、舊artifact可下載或封存新版閉包。當前完整非視窗pytest/verify-active、raw證據、兩輪完整適用PASS、actual merge及必要push驗證仍必要；旧原件/schema/判定、baseline/source_ref/計數及安全/授權/保護不變。下文原歷史前置說明不適用新執行，詳見[現行驗證政策](VALIDATION_POLICY.md)。
 

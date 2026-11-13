@@ -17,6 +17,7 @@ import zipfile
 SCHEMA = "zhuyin-pr-review-gate/3"
 STAGED_SCHEMA = "zhuyin-pr-review-gate/4"
 TIERED_SCHEMA = "zhuyin-pr-review-gate/5"
+ACTIVATED_TIERED_SCHEMA = "zhuyin-pr-review-gate/6"
 TIERED_LIFECYCLE_SCHEMA = "pr-flow-lifecycle/1"
 NO_WINDOW_POLICY = "validation-flow/no-real-tk/1"
 CURRENT_POLICY = "validation-flow/current-evidence/1"
@@ -1042,8 +1043,10 @@ def _validate_state_structure(state, *, _blocker_links_anchor=None):
 
 def validate_state(state, *, original_resolver=None):
     """Validate complete structure and review history; never grant permission."""
-    if type(state) is dict and state.get("schema") == TIERED_SCHEMA:
+    if type(state) is dict and state.get("schema") in (TIERED_SCHEMA, ACTIVATED_TIERED_SCHEMA):
         _validate_tiered_structure(state)
+        if state["schema"] == ACTIVATED_TIERED_SCHEMA:
+            _tiered_policy().validate_adoption(state["adoption"], state["candidate"], state["task_policy"], resolver=original_resolver)
         reviewed = validate_tiered_reviews(state["candidate"], state["classification"],
                                            state["implementers"], state["review_originals"], original_resolver=original_resolver)
         _validate_tiered_review_heads(state, reviewed)
@@ -1062,14 +1065,14 @@ def _decision(state, action, reason, **details):
         "ENSURE_PR": {"pr"}, "ENSURE_DRAFT_PR": {"pr"}, "MERGE_PROPOSAL": {"merge"},
         "CORRECT_IMPLEMENTATION": {"implement", "test", "commit", "push", "delegate"},
     }.get(action, set())
-    if (action == "CORRECT_IMPLEMENTATION" and state["schema"] in (STAGED_SCHEMA, TIERED_SCHEMA)
+    if (action == "CORRECT_IMPLEMENTATION" and state["schema"] in (STAGED_SCHEMA, TIERED_SCHEMA, ACTIVATED_TIERED_SCHEMA)
             and state["execution"]["mode"] == "development"):
         needed = needed - {"push"}
         details["delivery"] = "local_commit_only"
     missing = needed - set(state["authorization"]["operations"])
     if missing:
         action, reason, details = "STOP", f"next action is not authorized: {sorted(missing)}", {}
-    task = state["task_policy"] if state["schema"] == TIERED_SCHEMA else state["task"]
+    task = state["task_policy"] if state["schema"] in (TIERED_SCHEMA, ACTIVATED_TIERED_SCHEMA) else state["task"]
     identity = {"task": task, "base": state["current"]["base"],
                 "head": state["current"]["head"], "action": action}
     key = hashlib.sha256(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()
@@ -1716,6 +1719,12 @@ def _ci_problem(ci, event, branch, head, parents, *, no_window=False):
 
 def next_action(state, *, original_resolver=None):
     """Return an advisory action; never perform or acknowledge external writes."""
+    if type(state) is dict and state.get("schema") == ACTIVATED_TIERED_SCHEMA:
+        try:
+            return evaluate_tiered_lifecycle(state, original_resolver=original_resolver)
+        except (OSError, UnicodeError, ValueError, TypeError, KeyError, zipfile.BadZipFile) as exc:
+            return {"action": "STOP", "reason": f"invalid activation or tiered evidence: {exc}",
+                    "activation_pending": True, "merge_ready": False, "authenticity_verified": False}
     if type(state) is dict and state.get("schema") == TIERED_SCHEMA:
         try:
             result = validate_tiered_evidence(state, original_resolver=original_resolver)
@@ -2128,9 +2137,13 @@ def _validate_tiered_structure(state):
     policy = _tiered_policy()
     policy.fields(state, "schema policy task_policy candidate classification implementers corrections review_originals "
                   "authorization execution current pr pr_ci coverage documentation_checks"
-                  + (" lifecycle" if type(state) is dict and "lifecycle" in state else ""), "tiered state")
-    policy.require(state["schema"] == TIERED_SCHEMA and state["policy"] == policy.POLICY_ID,
+                  + (" lifecycle" if type(state) is dict and "lifecycle" in state else "")
+                  + (" adoption" if type(state) is dict and state.get("schema") == ACTIVATED_TIERED_SCHEMA else ""), "tiered state")
+    policy.require(state["schema"] in (TIERED_SCHEMA, ACTIVATED_TIERED_SCHEMA) and state["policy"] == policy.POLICY_ID,
                    "unknown tiered gate contract")
+    if state["schema"] == ACTIVATED_TIERED_SCHEMA:
+        policy.require("lifecycle" in state, "activated task requires the existing complete lifecycle contract")
+        policy.fields(state["adoption"], "activation task", "adoption")
     candidate = state["candidate"]
     policy.validate_candidate(candidate)
     task = state["task_policy"]
@@ -2250,9 +2263,12 @@ def _tiered_checks(state, reviewed):
 
 
 def validate_tiered_evidence(state, *, original_resolver=None):
-    """Evaluate code, checks and current merge requirements while policy is inactive."""
+    """Evaluate code/checks separately; /5 never gains activation eligibility."""
     _validate_tiered_structure(state)
     policy = _tiered_policy()
+    eligible = state["schema"] == ACTIVATED_TIERED_SCHEMA
+    if eligible:
+        policy.validate_adoption(state["adoption"], state["candidate"], state["task_policy"], resolver=original_resolver)
     candidate, pr = state["candidate"], state["pr"]
     reviewed = validate_tiered_reviews(candidate, state["classification"], state["implementers"], state["review_originals"],
                                        original_resolver=original_resolver)
@@ -2280,16 +2296,28 @@ def validate_tiered_evidence(state, *, original_resolver=None):
                             and not recheck["new_blockers"])
     if not merge_conditions:
         reasons.append("current authorization/phase/clean PR scope/findings/protection conditions are unsatisfied")
-    return {"policy": policy.POLICY_ID, "activation_pending": True,
+    satisfied = reviewed["code_ready"] and checks_ready and bool(merge_conditions)
+    if eligible:
+        # /6 exposes the existing complete lifecycle, including contradictory
+        # actual-merge/push inputs and action-specific authorization. Do not
+        # let this premerge assessment disagree with the public decision.
+        lifecycle = evaluate_tiered_lifecycle(state, original_resolver=original_resolver)
+        satisfied = satisfied and lifecycle["action"] == "MERGE_PROPOSAL"
+        if not satisfied:
+            reasons.append("lifecycle: " + lifecycle["reason"])
+    return {"policy": policy.POLICY_ID, "activation_pending": not eligible,
             "code_ready": reviewed["code_ready"], "checks_ready": checks_ready,
-            "requirements_satisfied": reviewed["code_ready"] and checks_ready and bool(merge_conditions),
-            "merge_ready": False, "reasons": reasons}
+            "requirements_satisfied": satisfied,
+            "merge_ready": eligible and satisfied,
+            "reasons": reasons}
 
 
 def _tiered_decision(state, action, reason, stage, **details):
-    return {**_decision(state, action, reason, **details), "stage": stage,
-            "policy": _tiered_policy().POLICY_ID, "activation_pending": True,
-            "merge_ready": False, "authenticity_verified": False}
+    result = _decision(state, action, reason, **details)
+    eligible = state["schema"] == ACTIVATED_TIERED_SCHEMA
+    return {**result, "stage": stage,
+            "policy": _tiered_policy().POLICY_ID, "activation_pending": not eligible,
+            "merge_ready": eligible and result["action"] == "MERGE_PROPOSAL", "authenticity_verified": False}
 
 
 def _tiered_post_merge_blocked(state, reason):
@@ -2310,16 +2338,26 @@ def _tiered_correct(state, reason):
 
 
 def evaluate_tiered_lifecycle(state, *, original_resolver=None):
-    """Read-only, inactive lifecycle diagnosis; never permission to execute it.
+    """Read-only lifecycle decision; never independent execution permission.
 
     The reviewed candidate is retained through merge. Actual merge identity,
     current develop containment and its own push/short evidence are separate.
     Historical v5 premerge inputs gain no lifecycle or completion meaning.
     """
     _validate_tiered_structure(state)
-    reviewed = validate_tiered_reviews(state["candidate"], state["classification"], state["implementers"],
-                                       state["review_originals"], original_resolver=original_resolver)
-    _validate_tiered_review_heads(state, reviewed)
+    if state["schema"] == ACTIVATED_TIERED_SCHEMA:
+        _tiered_policy().validate_adoption(state["adoption"], state["candidate"], state["task_policy"], resolver=original_resolver)
+    try:
+        reviewed = validate_tiered_reviews(state["candidate"], state["classification"], state["implementers"],
+                                           state["review_originals"], original_resolver=original_resolver)
+        _validate_tiered_review_heads(state, reviewed)
+    except (OSError, UnicodeError, ValueError, TypeError, KeyError, zipfile.BadZipFile) as exc:
+        if state["schema"] != ACTIVATED_TIERED_SCHEMA:
+            raise
+        # Only this downstream review stage is caught after actual adoption
+        # qualification succeeded above. Missing or invalid review bytes do
+        # not revoke that evidence, and never make the candidate merge-ready.
+        return _tiered_decision(state, "STOP", "current review originals unavailable or invalid: " + str(exc), "review")
     decide = lambda action, reason, stage, **details: _tiered_decision(state, action, reason, stage, **details)
     if "lifecycle" not in state:
         return decide("STOP", "legacy pending v5 input has no lifecycle contract", "pending_contract")
@@ -2433,7 +2471,7 @@ def evaluate_tiered_lifecycle(state, *, original_resolver=None):
         return _tiered_correct(state, "confirmed premerge code finding")
     if not all(recheck[field] for field in ("working_tree_clean", "mergeable", "protection_satisfied")):
         return decide("STOP", "premerge clean/protection/mergeability conditions are unsatisfied", "premerge_recheck")
-    return decide("MERGE_PROPOSAL", "inactive diagnosis: current merge requirements and immediate recheck are satisfied", "ready",
+    return decide("MERGE_PROPOSAL", "current merge requirements and immediate recheck are satisfied", "ready",
                   pr_number=pr["number"], merge_method="merge", expected_head_sha=candidate["head"], expected_base_sha=candidate["base"])
 
 
@@ -2459,9 +2497,10 @@ def main(argv=None):
             validate_state(state)
             result = {"schema_valid": True, "authenticity_verified": False}
         elif args.command == "diagnose-lifecycle":
-            result = {"action": "STOP", "reason": "inactive lifecycle diagnosis grants no execution authorization",
-                      "activation_pending": True, "merge_ready": False, "authenticity_verified": False,
-                      "evaluation": evaluate_tiered_lifecycle(state)}
+            evaluation = evaluate_tiered_lifecycle(state)
+            result = {"action": "STOP", "reason": "lifecycle diagnosis grants no execution authorization",
+                      "activation_pending": evaluation["activation_pending"], "merge_ready": False,
+                      "authenticity_verified": False, "evaluation": evaluation}
         else:
             result = next_action(state)
     except (OSError, UnicodeError, ValueError, TypeError, KeyError) as exc:

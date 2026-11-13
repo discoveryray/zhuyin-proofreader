@@ -1,6 +1,6 @@
 # Testing
 
-開發、審查與驗證版本先由[唯一程序入口](docs/DEVELOPMENT_REVIEW.md#applicability)選定；本文件提供測試命令、依賴及 artifact 操作。`development-flow/tiered-review/1` 已採納設計、實作中、尚未啟用，不能先用純文件分類跳過下列現行 CI。未來文檢／完整 CI 邊界以[入口待啟用章](docs/DEVELOPMENT_REVIEW.md#pending-validation)為準，本次只執行已授權定向檢查，不啟動 full 或遠端 CI。
+開發、審查與驗證版本先由[唯一程序入口](docs/DEVELOPMENT_REVIEW.md#applicability)選定；本文件提供命令、依賴及 artifact 操作。PR #71 未啟用首版已完成驗證整合，本啟用候選仍未生效。只有[生效及新 task 採納契約](docs/DEVELOPMENT_REVIEW.md#activation-contract)成立的 `/6` task 才適用新分級流程，舊 `/5` 永 pending，其餘 task 及本啟用任務保持舊規。全部 PR full、actual merge short 不因 docs 分類豁免；本輪只做已授權定向檢查，不開始 full 或遠端 CI。
 
 現行驗證政策是 [`validation-flow/current-evidence/1`](docs/VALIDATION_POLICY.md)，永久取消 CI 歷史自動重播前置門檻，適用本次未結案任務及後續一般工作。舊原件/失敗/判定/計數保持，歷史工具退出正常自動路徑，不以舊成功代替當前測試。所有自動化入口繼續取消真 Tk，包括 hidden root、虛擬顯示器、fixture/import/子程序及 configure/preflight/retry；產品 GUI/Tk/正式 .bat 保留。當前 actual/expected、identity、封印、資料、交易、保存/恢復安全測試仍全部必要。
 
@@ -43,7 +43,7 @@ git status --short
 <a id="pending-pr-flow-ci"></a>
 ## 待啟用首版：全 PR full，既有 actual merge short
 
-依[最新首版裁定](docs/DEVELOPMENT_FLOW_DECISIONS.md#flow-first-edition-20261112)及[單一程序入口](docs/DEVELOPMENT_REVIEW.md#pending-checks-routes)，docs／local／core 審查人數為 1／1／2，但正式檢查路徑全部是既有完整非視窗 CI／當次 coverage `/3`。Develop actual merge 仍用既有 short `/3`；main push 保留完整驗證。新政策未啟用，本次本機檢查不是正式全集或 hosted 結果。
+依[最新首版裁定](docs/DEVELOPMENT_FLOW_DECISIONS.md#flow-first-edition-20261112)及[單一程序入口](docs/DEVELOPMENT_REVIEW.md#pending-checks-routes)，符合啟用／新 task 採納資格後，docs／local／core 審查人數為 1／1／2，但正式檢查路徑全部是既有完整非視窗 CI／當次 coverage `/3`。Develop actual merge 仍用既有 short `/3`；main push 保留完整驗證。新政策未啟用，本次本機檢查不是正式全集或 hosted 結果。
 
 必要文件內容、連結、anchor 或 render 由 reviewer 親自確認，透過既有 canonical `impact_summary`／`review_checks` 記錄範圍、方法、原件與限制；full pytest 不代表這些確認已完成。原件仍須可取回、hash／candidate 相符，來源由協調者獨立核對；作者 JSON、label、hash 或布林值不認證 reviewer 身分或授權。
 
@@ -54,11 +54,12 @@ git status --short
 ```powershell
 python scripts/pr_review_gate.py validate state.json
 python scripts/pr_review_gate.py diagnose-lifecycle state.json
+python scripts/pr_review_gate.py next-action state.json
 python scripts/validation_evidence.py verify-coverage current-coverage.json
 python scripts/validation_evidence.py verify-reuse current-coverage.json short.json
 ```
 
-`pr_flow_ci.py` 僅保留 full／short 的有限相容 router，不能產生 docs 豁免或 parser 證據；正式 workflow 不依賴它。V5 只接受 `checks_route=full`、`documentation_checks=null`，公開 `next-action`／`diagnose-lifecycle` 外層仍 STOP；不能用 state／環境變數啟用。
+`pr_flow_ci.py` 僅保留 full／short 的有限相容 router，不能產生 docs 豁免或 parser 證據；正式 workflow 不依賴它。V5／V6 只接受 `checks_route=full`、`documentation_checks=null`。舊 V5 公開 `next-action` 永 pending／STOP；V6 只有通過 [activation／adoption 原件核對](docs/PR_REVIEW_GATE.md#activation-v6)才進入原生命週期，沒有 state／環境開關。`diagnose-lifecycle` 外層仍 STOP，不能當公開放行。
 
 ### 延後研究與原件
 
@@ -66,7 +67,7 @@ python scripts/validation_evidence.py verify-reuse current-coverage.json short.j
 
 自製 Markdown／HTML parser、Actions 文件免測 producer／capture、文件專屬 artifact／short 均不在首版。RA5-F1／RB5-F1 保留原 `BLOCKED/code`，只能說含缺陷能力已延後並退出首版，不能說已修復。原兩個錯誤成功 packet 不能充當 full `/3`，也不能藉研究開關取得首版授權。
 
-本機 fixture／模型原件只驗接線與拒絕行為，與真實 full／hosted／actual merge push 證據分列。六項依賴、真實平台原件及舊 gate 的 `752→3b` 歷史表示缺口仍保留；第四輪是原 task 明確一次例外 4/4，不改一般三輪、不採納 G4、不增 adapter。固定第四輪若仍有 confirmed code finding 必須 STOP，不自啟第五輪。
+本機 fixture／模型原件只驗接線與拒絕行為，與真實 full／hosted／actual merge push 證據分列。PR #71 當時的六項本機缺件仍未安裝，其 hosted 完整 lock、正式審查及 actual short 已有真實原件；使用者採納的 task 限定歷史過渡只處理 `752→3b` 功能續作與第四輪表示，沒有宣稱舊 gate 通過。原 task 以 4/4 結案，全部舊報告保持；本啟用候選另按起點舊規驗收，不能沿用其正式 PASS 或取得第五輪。
 
 ## PR 的當前完整非視窗驗證
 

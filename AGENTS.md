@@ -414,7 +414,7 @@ Codex 不得僅依自己的 implementation、tests 或自我 code review
 
 開發、審查、驗證與合併先讀唯一[程序入口](docs/DEVELOPMENT_REVIEW.md#applicability)，由其選定適用版本及專屬契約。本文件仍是永久安全、授權與 scope 權威，新增入口不撤銷下列現行契約、歷史原義或 task 計數。
 
-`development-flow/tiered-review/1` 已採納設計、實作中、尚未啟用；目前預設仍是下列兩位獨立 reviewer 的舊規。本次改革自身按固定實作起點舊規完整審查，不以新政策或新 gate 放行。
+`development-flow/tiered-review/1` 的 PR #71 未啟用首版已完成驗證與整合；本次啟用候選尚未生效。依[唯一入口的啟用與採納契約](docs/DEVELOPMENT_REVIEW.md#activation-contract)逐 task 選版本：只有成功啟用後新建立且明確採用、可核真實來源的 `/6` task，才用 1／1／2、有限補審及 canonical 分流；其餘及本啟用任務仍按下列舊兩位獨立完整審查。舊 `/5` 永 pending，state／常數不創造資格；原 task／計數／STOP 保持，不用新 gate 放行自身。
 
 <a id="current-review-contract"></a>
 <details>
