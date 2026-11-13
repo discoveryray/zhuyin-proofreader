@@ -2347,9 +2347,17 @@ def evaluate_tiered_lifecycle(state, *, original_resolver=None):
     _validate_tiered_structure(state)
     if state["schema"] == ACTIVATED_TIERED_SCHEMA:
         _tiered_policy().validate_adoption(state["adoption"], state["candidate"], state["task_policy"], resolver=original_resolver)
-    reviewed = validate_tiered_reviews(state["candidate"], state["classification"], state["implementers"],
-                                       state["review_originals"], original_resolver=original_resolver)
-    _validate_tiered_review_heads(state, reviewed)
+    try:
+        reviewed = validate_tiered_reviews(state["candidate"], state["classification"], state["implementers"],
+                                           state["review_originals"], original_resolver=original_resolver)
+        _validate_tiered_review_heads(state, reviewed)
+    except (OSError, UnicodeError, ValueError, TypeError, KeyError, zipfile.BadZipFile) as exc:
+        if state["schema"] != ACTIVATED_TIERED_SCHEMA:
+            raise
+        # Only this downstream review stage is caught after actual adoption
+        # qualification succeeded above. Missing or invalid review bytes do
+        # not revoke that evidence, and never make the candidate merge-ready.
+        return _tiered_decision(state, "STOP", "current review originals unavailable or invalid: " + str(exc), "review")
     decide = lambda action, reason, stage, **details: _tiered_decision(state, action, reason, stage, **details)
     if "lifecycle" not in state:
         return decide("STOP", "legacy pending v5 input has no lifecycle contract", "pending_contract")

@@ -218,7 +218,29 @@ class ActivationPolicyTests(unittest.TestCase):
                 self.assertTrue(value["merge_ready"])
                 self.assertFalse(value["authenticity_verified"])
                 Path(state["review_originals"][0]["source_file"]).unlink()
-                self.assertEqual(self.decision(state)["action"], "STOP")
+                for rejected in (self.decision(state), json.loads(self.cli(state).stdout)):
+                    self.assertEqual(rejected["action"], "STOP")
+                    self.assertEqual(rejected["stage"], "review")
+                    self.assertFalse(rejected["activation_pending"] or rejected["merge_ready"])
+        # RB-ACT-F1: qualifying adoption must not be mislabeled pending when
+        # downstream canonical review bytes fail their independent checks.
+        for case in ("altered", "invalid_json", "wrong_candidate"):
+            with self.subTest(review_original=case):
+                state = self.activated()
+                pointer = state["review_originals"][0]
+                file = Path(pointer["source_file"])
+                if case == "altered": file.write_bytes(b"altered review bytes")
+                elif case == "invalid_json":
+                    file.write_bytes(b"{not-json}")
+                    pointer["sha256"] = evidence.sha256_file(file)
+                else:
+                    report = json.loads(file.read_text())
+                    report["candidate"]["baseline"] = BASE
+                    write(file, report)
+                    pointer["sha256"] = evidence.sha256_file(file)
+                for rejected in (self.decision(state), json.loads(self.cli(state).stdout)):
+                    self.assertEqual((rejected["action"], rejected["stage"]), ("STOP", "review"))
+                    self.assertFalse(rejected["activation_pending"] or rejected["merge_ready"])
 
     def test_pending_v5_and_global_flag_never_migrate_automatically(self):
         state = self.fixture.lifecycle_state()
@@ -240,7 +262,10 @@ class ActivationPolicyTests(unittest.TestCase):
             with self.subTest(changes=changes):
                 state = self.activated()
                 self.mutate_receipt(state, "activation", **changes)
-                self.assertEqual(self.decision(state)["action"], "STOP")
+                for rejected in (self.decision(state), json.loads(self.cli(state).stdout)):
+                    self.assertEqual(rejected["action"], "STOP")
+                    self.assertTrue(rejected["activation_pending"])
+                    self.assertFalse(rejected["merge_ready"])
         for task in (policy.ACTIVATION_TASK, "pr-flow-decisions-20261112"):
             state = self.activated(); state["candidate"]["task_id"] = state["task_policy"]["task_id"] = state["authorization"]["task_id"] = task
             self.assertEqual(self.decision(state)["action"], "STOP")
@@ -257,7 +282,10 @@ class ActivationPolicyTests(unittest.TestCase):
                 elif case == "policy_source": state["task_policy"]["source_ref"] = "fixture://unrelated-task-source"
                 elif case == "original_source": self.mutate_receipt(state, "task", source_ref="fixture://unrelated-task-source")
                 else: self.mutate_receipt(state, "task", **{{"task":"task_id","baseline":"baseline","reference":"activation_ref"}[case]: BASE if case == "baseline" else "wrong"})
-                self.assertEqual(self.decision(state)["action"], "STOP")
+                for rejected in (self.decision(state), json.loads(self.cli(state).stdout)):
+                    self.assertEqual(rejected["action"], "STOP")
+                    self.assertTrue(rejected["activation_pending"])
+                    self.assertFalse(rejected["merge_ready"])
 
     def test_activation_must_finish_before_real_new_task_creation_and_explicit_adoption(self):
         cases = ({"created_at":"2026-11-13T23:59:59+00:00"}, {"adopted_at":"2026-11-14T00:00:00+00:00"},
