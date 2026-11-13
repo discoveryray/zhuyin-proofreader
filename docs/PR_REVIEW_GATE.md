@@ -1,6 +1,6 @@
 # 兩輪審查流程的證據 gate
 
-程序與適用版本先讀[開發與審查入口](DEVELOPMENT_REVIEW.md#applicability)，AGENTS 仍是安全／授權權威。本文件專責 schema、工具介面與有限歷史 adapter；下列 v3／v4 及其原件保持原義。新 `development-flow/tiered-review/1` 設計已採納、實作中、尚未啟用；[v5 有限契約](#pending-v5)公開路由目前只能 pending activation／STOP，不能由 state flags 啟用或用來放行本次改革，不將舊 `evidence_gap` 擴成跨候選補審。
+程序與適用版本先讀[開發與審查入口](DEVELOPMENT_REVIEW.md#applicability)，AGENTS 仍是安全／授權權威。本文件專責 schema、工具介面與有限歷史 adapter；下列 v3／v4 及其原件保持原義。`development-flow/tiered-review/1` 的 PR #71 未啟用首版已完成驗證整合，本啟用候選尚未生效。[v5 保留契約](#pending-v5)仍永遠 pending／STOP；[v6 啟用契約](#activation-v6)僅服務已核對生效及採納原件的合格新 task。本啟用任務按固定起點舊規，不以新 gate 放行；舊 `evidence_gap` 不擴成跨候選補審。
 
 新政策下，既有 review-history adapter 仍核對原任務、審查與修正紀錄的身分、順序、授權及已確認 blocker；不再讀取其歷史 CI archive、execution manifest、JUnit、events 或執行輸出作為前置條件。這項分流只適用明示的 current-evidence 政策，舊 snapshot 的原 reader、schema 及判定保持。
 
@@ -29,7 +29,7 @@ python -m pytest tests/test_pr_review_gate.py -q
 Python 介面為 `validate_state(state)` 與 `next_action(state)`；後者不修改輸入。
 
 <a id="pending-v5"></a>
-## v5 有限契約：已採納設計、實作中、尚未啟用
+## v5 保留契約：pending 輸入不自動遷移
 
 `schema: "zhuyin-pr-review-gate/5"`、`policy: "development-flow/tiered-review/1"` 是新 task 的有限實作；不是舊 snapshot 遷移器。欄位與拒絕條件以 [pr_review_gate.py](../scripts/pr_review_gate.py) 的 `_validate_tiered_structure`／`validate_tiered_reviews` 及 [pr_flow_policy.py](../scripts/pr_flow_policy.py) 共享 validators 為準。以下只定位主要欄位，不另建平行 schema 或新證據平台；未知／缺欄、重複 JSON keys、錯 bytes／hash／版本或鏈均拒絕。
 
@@ -56,7 +56,7 @@ assessment = gate.validate_tiered_evidence(state)
 decision = gate.next_action(state)  # v5 始終 action=STOP
 ```
 
-`validate_state`／CLI `validate` 只核結構；`validate_tiered_evidence` 分別回傳 `code_ready`、`checks_ready`、`requirements_satisfied`，同時固定 `activation_pending: true`、`merge_ready: false`。即使條件評估為 true 或修改共享 `ENABLED`，public `next_action`／CLI `next-action` 仍 STOP，不能由 state 啟用。Canonical 的 code `PASS` 只是此格式的程式審查結論，不是本次改革的正式 PASS。正式驗收、既有 full／short 的真實 CI 證據、明確版本啟用及有效授權仍缺一不可；舊 v3／v4 判定與歷史保持。
+本節以下結果專指舊 `/5`，不覆蓋[新 `/6` 的資格與生命週期結果](#activation-v6)。`validate_state`／CLI `validate` 只核結構；`validate_tiered_evidence` 分別回傳 `code_ready`、`checks_ready`、`requirements_satisfied`，同時固定 `activation_pending: true`、`merge_ready: false`。即使條件評估為 true 或修改共享 `ENABLED`，public `next_action`／CLI `next-action` 仍 STOP，不能由 state 啟用。Canonical 的 code `PASS` 只是此格式的程式審查結論，不是本次改革的正式 PASS。正式驗收、既有 full／short 的真實 CI 證據、明確版本啟用及有效授權仍缺一不可；舊 v3／v4 判定與歷史保持。
 
 <a id="pending-v5-lifecycle"></a>
 ### 752e7a2 之後的有限生命週期接線
@@ -77,6 +77,26 @@ decision = gate.next_action(state)  # v5 始終 action=STOP
 Canonical、`review_checks`、resolution 與 same-bytes 備份仍實讀核對；協調者負責從實際獨立 reviewer 取得原件並確認來源。既有精確 tuple resolver 只是本機位置介面，不是 Actions producer 或身分憑證，不能拿作者 JSON／hash 自證。首版不 import 研究 parser／transport／post-merge adapter。完整 CI 直接使用既有 `verify_current_coverage`，合併後直接用 `verify_reuse(current_only=True)`；保持 `/3` 原件、reviewed base／head 與 actual merge／push 的獨立身分，不新增文件 sidecar 或強制研究 plan。
 
 RA5-F1／RB5-F1 原判定及[來源附件](research/PR_FLOW_DEFERRED_822d494.zip)保持。含缺陷能力已退出首版，不宣稱修復；研究原件不能替 full `/3`，未解現行 finding、CI 失敗／缺失、stale HEAD／base 或缺 canonical 仍拒絕。本任務限定第四輪只見[當次裁定](DEVELOPMENT_FLOW_DECISIONS.md#flow-first-edition-20261112)，不改本節一般三輪／歷史契約，也不解決 `752→3b` 正式歷史表示缺口。
+
+<a id="activation-v6"></a>
+## v6 啟用候選：同政策版本，明確區分新 task 資格
+
+`schema="zhuyin-pr-review-gate/6"` 沿用 `policy="development-flow/tiered-review/1"`、分類、canonical review 與既有 `pr-flow-lifecycle/1`；只在原 state 增加 `adoption`，其封閉欄位為 `activation` 與 `task`，兩者皆為既有 canonical pointer（`report_ref`／實際可讀 `source_file`／`sha256`／same-bytes `backups`）。這是最小輸入版本區分，不升級或改寫舊 `/5`，不變更 v3／v4、舊 schema、corrective 歷史或有限 adapters。
+
+| 必須取回的原件 | 有限契約與必要來源 |
+| --- | --- |
+| `pr-flow-activation/1` | 固定啟用 task `pr-flow-activation-20261113`、baseline `3a965ac3dacb51d6c3ccde92fccced51b0afa6f2`，綁明確啟用使用者原文、日後實際受審 base／head、actual merge、對應 PR full coverage 及 actual push short 原件與完成時間；以既有 `verify_reuse(current_only=True)` 核對同一來源／parents／tree／環境，不能借用 PR #71 的成功代替啟用批次。 |
+| `pr-flow-task-adoption/1` | 綁新 task／原 baseline／精確政策、成功啟用之後的建立時間、使用者明確採用原文及 activation 版本。工具核 Git 基線包含 activation merge，並核其 consumer 程式來源適用；原改革 task、本啟用 task 或舊 task 不能遷移成新資格。 |
+
+`activation` receipt 的欄位為 `schema`、`policy`、`task_id`、`baseline`、`reviewed_head`、`actual_merge`、`completed_at`、`source_ref`、`authorization`、`coverage`、`short_validation`；`task` receipt 為 `schema`、`policy`、`task_id`、`baseline`、`created_at`、`adopted_at`、`activation_ref`、`source_ref`、`authorization`。兩者的 `authorization` 都是原始使用者指令的 canonical pointer，不能只留協調者摘要。`completed_at` 不早於成功 short，`created_at` 必須嚴格晚於啟用完成，`adopted_at` 不早於建立；`activation_ref` 綁定 activation 的 `report_ref`。實際 Git 根目錄還須有可核的 activation commit／parents／tree，且 activation 中的 policy／gate consumer bytes 與執行來源相符；本機 fixture 的 Git 與聲明均明標合成，不冒稱真授權。
+
+完整封閉欄位與拒絕條件直接以 [pr_flow_policy.py](../scripts/pr_flow_policy.py) 及 [pr_review_gate.py](../scripts/pr_review_gate.py) 的 validator 為準，不複製另一份 schema。新輸入不接受只有 `origin="new_task"`／非空 `source_ref`、任意 PASS／hash／時間或作者 label 作資格證明。協調者必須依[單一程序入口](DEVELOPMENT_REVIEW.md#activation-contract)，從真實使用者／Git／平台來源核對授權及生效順序，保存指定 reviewer 可取回的原件；工具核 bytes／一致性而非身分認證，仍回報 `authenticity_verified=false`。
+
+`ENABLED=False` 只保留舊 v5 狀態，不能控制新 `/6` 的資格；沒有 state／環境變數開關。新 `/6` 必須有適用 activation／task 原件才能從公開 `next-action` 進入原有完整生命週期，未生效或資格有缺口就 STOP，不靠純診斷結果取得公開放行。`diagnose-lifecycle` 仍為外層 STOP 的診斷命令，不授權任何操作。
+
+`activation_pending` 表示尚缺適用啟用資格，不再把已核資格的新 task 永久標成 pending；`merge_ready` 只在公開結果為 `MERGE_PROPOSAL` 且當前授權、review、完整 CI、來源、合併前重核及保護全部成立時為 true。`WAIT_VALIDATION_AUTHORIZATION`、等待 review／CI、`REFRESH_EVIDENCE`、`STOP` 或 `COMPLETE` 都不是新的合併許可，不能只讀布林值而略過 `action`。完整 `COMPLETE` 仍需該 task 的 actual merge ordered parents／tree、來源 PR full、actual develop push 及成功 short 原件，不因 policy 啟用或 code review 已成而省略。
+
+本機 API／CLI fixtures 僅驗證有限判定與拒絕行為，不能當本啟用任務正式 PASS 或真實啟用 receipt。本輪沒有實際啟用，正式驗證／遠端／合併及政策生效仍等明確授權；啟用任務本身由 baseline 舊規兩位獨立完整審查驗收，不能用受審 `/6` 放行自身。全部 PR full、develop actual short 與 main full 保持，不讀研究 parser／producer／文件免測原件。
 
 ## 信任邊界與留存
 

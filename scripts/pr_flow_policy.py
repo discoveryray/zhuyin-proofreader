@@ -1,17 +1,26 @@
-"""Finite, inactive tiered-review policy shared by the gate and CI consumers.
+"""Finite tiered-review policy shared by the gate and CI consumers.
 
 Hashes verify retrievable bytes, never reviewer identity or authorization.
-Activation requires a separately reviewed integration; no input flag enables it.
+Activation requires separately adopted, integrated source and actual short
+evidence. Metadata never authenticates an authorization or a task's origin.
 """
 from __future__ import annotations
 
 import hashlib
+from datetime import datetime, timezone
+import json
 from pathlib import Path, PurePosixPath
 import re
+import subprocess
 
 
 POLICY_ID = "development-flow/tiered-review/1"
 ENABLED = False
+# Retained informational state for the old pending /5 contract. It is not an
+# activation switch: /6 eligibility is proved separately for each new task.
+ACTIVATION_TASK = "pr-flow-activation-20261113"
+ACTIVATION_BASELINE = "3a965ac3dacb51d6c3ccde92fccced51b0afa6f2"
+ACTIVATION_BRANCH = "codex/pr-flow-activation-20261113"
 # The adopted first edition changes reviewer counts, not test exemptions.
 # This source constant is not an input/environment activation switch.
 FIRST_EDITION_CHECKS_ROUTE = "full"
@@ -161,3 +170,105 @@ def verify_original(pointer, *, resolver=None):
         require(backup["sha256"] == pointer["sha256"] and data == raw,
                 "backup differs from canonical original bytes")
     return raw
+
+
+def _receipt(pointer, *, resolver=None):
+    def unique(pairs):
+        result = {}
+        for key, value in pairs:
+            require(key not in result, "duplicate adoption receipt key")
+            result[key] = value
+        return result
+    return json.loads(verify_original(pointer, resolver=resolver).decode("utf-8-sig"),
+                      object_pairs_hook=unique,
+                      parse_constant=lambda value: require(False, "invalid adoption constant"))
+
+
+def _instant(value, where):
+    text(value, where)
+    result = datetime.fromisoformat(value)
+    require(result.tzinfo is not None, where + ": timezone required")
+    return result.astimezone(timezone.utc)
+
+
+def _source(receipt, *, resolver=None):
+    # A coordinator must retrieve this from the actual user/platform source.
+    # Reading/hash checking is necessary, but cannot authenticate that source.
+    text(receipt["source_ref"], "adoption.source_ref")
+    require(receipt["source_ref"] == receipt["authorization"]["report_ref"],
+            "adoption source differs from its retained authorization original")
+    raw = verify_original(receipt["authorization"], resolver=resolver)
+    require(bool(raw.decode("utf-8-sig").strip()), "adoption authorization original is empty")
+
+
+def validate_adoption(adoption, candidate, task_policy, *, resolver=None):
+    """Check finite activation/new-task evidence; never certify its authenticity.
+
+    Git reads use the real invocation repository, not a path supplied by the
+    state. The coordinator independently verifies user identity, original
+    creation/adoption events and the latest platform outcomes before use.
+    """
+    fields(adoption, "activation task", "adoption")
+    activation = _receipt(adoption["activation"], resolver=resolver)
+    task = _receipt(adoption["task"], resolver=resolver)
+    fields(activation, "schema policy task_id baseline reviewed_head actual_merge completed_at source_ref "
+           "authorization coverage short_validation", "activation receipt")
+    fields(task, "schema policy task_id baseline created_at adopted_at activation_ref source_ref authorization",
+           "task adoption receipt")
+    require(activation["schema"] == "pr-flow-activation/1" and task["schema"] == "pr-flow-task-adoption/1",
+            "unknown adoption receipt version")
+    require(activation["policy"] == task["policy"] == POLICY_ID, "adoption policy differs")
+    require(activation["task_id"] == ACTIVATION_TASK and activation["baseline"] == ACTIVATION_BASELINE,
+            "wrong activation task/baseline")
+    require(candidate["task_id"] not in {ACTIVATION_TASK, "pr-flow-decisions-20261112"},
+            "activation and original reform tasks retain the old acceptance contract")
+    require((task["task_id"], task["baseline"]) == (candidate["task_id"], candidate["baseline"]),
+            "adoption belongs to another task/baseline")
+    require(task_policy["source_ref"] == task["source_ref"], "task policy points to another adoption source")
+    require(task["activation_ref"] == adoption["activation"]["report_ref"], "wrong activation receipt reference")
+    _source(activation, resolver=resolver)
+    _source(task, resolver=resolver)
+    for key in ("reviewed_head", "actual_merge"):
+        sha(activation[key], "activation." + key)
+    for key in ("coverage", "short_validation"):
+        text(activation[key], "activation." + key)
+        require(Path(activation[key]).is_absolute(), "activation evidence must be locally retrievable")
+    try:
+        from scripts.validation_evidence import verify_reuse, verify_current_coverage
+    except ModuleNotFoundError:
+        from validation_evidence import verify_reuse, verify_current_coverage
+    coverage = verify_current_coverage(Path(activation["coverage"]))
+    short = verify_reuse(Path(activation["coverage"]), Path(activation["short_validation"]), current_only=True)
+    require(short["candidate"]["head"] == activation["actual_merge"]
+            and short["candidate"]["parents"] == [ACTIVATION_BASELINE, activation["reviewed_head"]],
+            "activation actual merge differs from the fixed activation task")
+    require(coverage["checkout"]["head_ref"] == ACTIVATION_BRANCH,
+            "activation source is not the activation branch")
+    completed = _instant(activation["completed_at"], "activation.completed_at")
+    require(completed >= _instant(short["finished_at"], "activation short.finished_at"),
+            "activation predates successful short validation")
+    created = _instant(task["created_at"], "task.created_at")
+    adopted = _instant(task["adopted_at"], "task.adopted_at")
+    require(completed < created <= adopted, "only tasks created and explicitly adopted after activation qualify")
+
+    repository = Path.cwd().resolve()
+    def git(*args):
+        result = subprocess.run(["git", "--no-optional-locks", "-c", "safe.directory=" + str(repository),
+                                 *args], cwd=repository, capture_output=True, check=False)
+        require(result.returncode == 0, "activation Git source/ancestry unavailable or inconsistent")
+        return result.stdout
+    require(Path(git("rev-parse", "--show-toplevel").decode("utf-8").strip()).resolve() == repository,
+            "invoke from the verified repository root")
+    actual = git("show", "-s", "--format=%H%n%T%n%P", activation["actual_merge"]).decode("ascii").splitlines()
+    require(actual == [activation["actual_merge"], short["candidate"]["tree"],
+                       " ".join(short["candidate"]["parents"])], "native activation Git object differs")
+    git("merge-base", "--is-ancestor", activation["actual_merge"], candidate["baseline"])
+    # The activation artifact must contain this actual consumer, not an
+    # unrelated successful PR (including PR71). LF comparison follows Git's
+    # physical checkout convention and is not evidence hash substitution.
+    for name in ("pr_flow_policy.py", "pr_review_gate.py"):
+        local = Path(__file__).with_name(name).read_bytes().replace(b"\r\n", b"\n")
+        committed = git("show", activation["actual_merge"] + ":scripts/" + name).replace(b"\r\n", b"\n")
+        require(local == committed, "activation consumer source differs: " + name)
+    return {"eligible": True, "activation_pending": False, "actual_merge": activation["actual_merge"],
+            "activation_ref": adoption["activation"]["report_ref"], "authenticity_verified": False}

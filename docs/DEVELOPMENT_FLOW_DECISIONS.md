@@ -1,5 +1,18 @@
 # 開發流程決策：2026-11-12 採納附記與原提案
 
+<a id="flow-activation-20261113"></a>
+## 2026-11-13：PR #71 完成事實與正式啟用候選契約
+
+[PR #71](https://github.com/discoveryray/zhuyin-proofreader/pull/71) 的未啟用首版已完成正式驗證與整合：reviewed base `8d08c5a05d8143c353fb47b9be4f33471d99ba10`、candidate `98121b394d618895b3c34f935762c5c341e944d3`；兩位按舊規的正式審查均為 PASS，[正式 full CI `43232172963/1`](https://github.com/discoveryray/zhuyin-proofreader/actions/runs/43232172963) 成功。Actual merge `3a965ac3dacb51d6c3ccde92fccced51b0afa6f2` 的 ordered parents 為上述 base、candidate，tree `32797b3e631ee7a0babbd68095b80e190b40ede3`；[develop push `43331341886/1`](https://github.com/discoveryray/zhuyin-proofreader/actions/runs/43331341886) 的六項 short 與 summary 成功。原 task `pr-flow-decisions-20261112` 結案、原 `4/4`、失敗／STOP／審查原件及 INDEX 保持；未以新 v5 放行自身，也未因此啟用政策。
+
+本次另立 `pr-flow-activation-20261113`，baseline 為上述已驗證 actual merge。這是原首版明確排除的後續啟用交付，不移入其他 task 的修正、額度或未完成工作。本輪只授權本機修改、必要定向檢查、兩位舊規獨立完整審查與本機 commit；不是「開始驗證」，沒有遠端、full CI、合併、政策實際生效、安裝或正式資料操作授權。
+
+候選保留政策 ID `development-flow/tiered-review/1`，不以全域 `ENABLED` 切換。舊 `zhuyin-pr-review-gate/5` 永保留 pending／STOP；新 `/6` 只對可核對的 activation 與 new-task adoption 原件成立之新 task 進入既有生命週期，具體欄位及結果見 [gate 契約](PR_REVIEW_GATE.md#activation-v6)。生效點須由使用者另行授權本啟用批次正式驗證、merge／啟用，並在 actual merge 的成功 push short 後成立；其後新建立且明確採用版本的 task 才可能適用。協調者必須核真實使用者原文、Git／平台來源及建立時間，作者 JSON、hash、`origin="new_task"`、`source_ref` 不認證資格。
+
+完整程序只維護於[單一入口啟用契約](DEVELOPMENT_REVIEW.md#activation-contract)；canonical 的保存責任及指定 reviewer 取回方式見[原件責任](DEVELOPMENT_REVIEW.md#canonical-custody)。本啟用任務仍按 baseline 舊規驗收，不用新 gate 放行自身；本輪無真實啟用原件，政策仍未啟用。全部 PR full、actual merge short、G4 延後及產品安全／資料限制保持；不恢復文件免 full、parser／producer／選測，不接續 P5。
+
+下方採納、縮減及凍結提案均保留其原文／歷史時態；PR #71 當時「未正式驗證」「仍缺」不再描述上方完成事實，也不是本啟用批次的新授權。
+
 <a id="flow-adoption-20261112"></a>
 ## 採納附記：設計已採納、實作中、尚未啟用
 

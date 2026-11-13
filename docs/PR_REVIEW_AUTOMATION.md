@@ -1,6 +1,6 @@
 # 兩輪獨立審查與自動接續
 
-程序與適用版本先讀[開發與審查入口](DEVELOPMENT_REVIEW.md#applicability)。本手冊保留現行舊制的能力、操作及副作用細節；歷史 task 段落只依其原 scope／採納適用。`development-flow/tiered-review/1` 已採納設計、實作中、尚未啟用，不能先用 1／1／2 或跨候選 delta 補審；本次改革也按固定起點舊規審查。新政策的唯一程序規則在入口，不以本手冊的舊全文選擇性拼接新契約。
+程序與適用版本先讀[開發與審查入口](DEVELOPMENT_REVIEW.md#applicability)。本手冊保留舊制的能力、操作及副作用細節；歷史 task 段落只依原 scope／採納適用。`development-flow/tiered-review/1` 的 PR #71 未啟用首版已完成驗證整合；本啟用候選尚未生效。先依[單一入口](DEVELOPMENT_REVIEW.md#activation-contract)核對成功啟用後新建立且明確採用的 task 資格，只有合格 `/6` 選用 1／1／2、有限補審及 canonical 原件／摘要分流；其他 task、本啟用任務及舊 `/5` 保持原契約，不能由作者 state／source_ref／hash／常數自證。下文舊兩輪、完整 PR 報告及 review／CI 關係只對所選舊規 task 有效；新 task 的同項程序以入口為唯一來源，安全、授權、full／actual short／保護均不減。
 
 2026-10-12 永久採納 `validation-flow/current-evidence/1`。正常 PR 核當前完整非視窗 pytest/inventory/JUnit verify-active及原件，develop actual merge短驗證只讀對應 PR 當次證據，main push完整測試。不要求歷史 restore/舊 artifact/handoff/ledger/continuation 閉包。下文原政策操作與 task 原件保留原義；與此取消決策衝突的歷史重播前置條件停止適用新執行。新 coverage/short `/3` 明確版本化，兩輪完整scope、當前必需證據、原計數、授權/保護仍必要，見[現行政策](VALIDATION_POLICY.md)。
 

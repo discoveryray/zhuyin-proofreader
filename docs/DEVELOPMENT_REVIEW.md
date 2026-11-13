@@ -5,6 +5,33 @@
 <a id="applicability"></a>
 ## 適用版本與目前狀態
 
+本輪是另立的啟用任務 `pr-flow-activation-20261113`，固定 baseline 為已驗證 actual merge `3a965ac3dacb51d6c3ccde92fccced51b0afa6f2`。它交付原 PR #71 明確排除的啟用接線；原改革已結案及原 `4/4` 不變。本輪只準備本機候選，**尚未授權正式驗證、遠端操作、合併或政策實際生效**。
+
+| 版本／工作 | 適用條件與入口 |
+| --- | --- |
+| 舊 task／未證明生效資格的 task | 維持原 v3／v4 兩位獨立 reviewer、完整適用審查、baseline／source_ref、原件、計數、STOP／例外。未知條件不能自動遷移。 |
+| 舊 pending `zhuyin-pr-review-gate/5` | 保留原 pending activation／STOP 語義；全域常數、非空 `source_ref` 或 `origin="new_task"` 都不能使它自動放行。 |
+| 合格新 task 的 `zhuyin-pr-review-gate/6` | 同一政策版本 `development-flow/tiered-review/1`；須符合下方[啟用與採納契約](#activation-contract)，才使用本文分級規則及既有生命週期。不是舊 snapshot 遷移器。 |
+| 原 PR #71 | 未啟用首版已完成正式驗證與整合，actual merge 如上；完整事實見[決策附記](DEVELOPMENT_FLOW_DECISIONS.md#flow-activation-20261113)。政策沒有因此啟用。 |
+| 本啟用任務 | 屬核心，依 baseline 當時有效舊規，由兩位未參與修改的 reviewer 各自審完整本批差異；開發模式只記 `CODE_REVIEWED`，不能以新 gate 放行自身。 |
+
+`ENABLED=False` 保留舊 v5 的 pending 狀態，**不是全域政策開關**。新版公開路由只對取得完整資格的 `/6` 輸入評估既有生命週期；本輪沒有真實啟用 receipt，候選、fixture 或文件不能創造該資格。所有 PR 仍須既有 full，actual merge 仍須既有 short；v3／v4 判定不改。
+
+<a id="activation-contract"></a>
+### 啟用與新 task 採納契約
+
+1. 生效點是本啟用批次另獲正式驗證及合併／啟用授權，按起點舊規完成驗收，以 merge commit 整合，並取得該 **actual merge** 的成功 develop push short 之後。未發生的候選 SHA、merge SHA、時間與結果不得預填成功。
+2. 協調者從使用者真實原文核對明確政策版本、適用範圍及啟用授權，從 Git／平台原件核對本啟用 task、baseline、日後精確候選、actual ordered parents／tree、對應 PR full 與 actual push short，再保存 `pr-flow-activation/1` canonical receipt。原件與既有 `verify_reuse(current_only=True)` 核對不能由「已採納」布林值替代。
+3. 僅適用在上述成功生效點**之後新建立**，且使用者真實指令明確採用 `development-flow/tiered-review/1` 的 task。協調者核對建立時間、原始 task／baseline、Git 基線包含該 activation merge 及明確採納原文，保存 `pr-flow-task-adoption/1` canonical receipt 並連回 activation 版本。原改革 task、本啟用 task 或任何舊 task 不得改名／補填日期轉成新資格。
+4. `/6` 只在既有 state 上增加封閉 `adoption` 原件指標，定位見 [gate 契約](PR_REVIEW_GATE.md#activation-v6)。工具實讀原件、核 hash、版本、來源及 Git／CI 一致性；它不認證 JSON 作者、帳號或人類授權。`origin="new_task"`、文字 URL／`source_ref`、hash、label 或作者自填時間都不能單獨證明資格。協調者必須先從真實來源完成上述核對，指定 reviewer 亦須能取回依據；不能把 gate 結果當採納證據。
+5. 資格只決定是否可使用新流程。有效操作授權、開始驗證、分類／完整初審或適用補審、原件、未解 finding、精確 base／HEAD、完整 CI、合併前重核、保護條件及 actual merge／short 門檻仍各自必要。Gate 只建議下一步，不執行副作用；`merge_ready` 只在當前完整條件成立而提出 `MERGE_PROPOSAL` 時為真，不能把 `COMPLETE` 或 code review 結論當另一筆合併許可。
+
+<details>
+<summary>PR #71 實作階段的適用狀態與授權快照（歷史原文，不是本啟用任務授權）</summary>
+
+<a id="pr71-applicability-history"></a>
+## 適用版本與目前狀態
+
 | 版本／工作 | 狀態與入口 |
 | --- | --- |
 | 現行流程 | **目前仍適用舊制兩位獨立 reviewer、完整適用審查及既有 gate v3／v4**；依下節導航執行。現行驗證政策為 `validation-flow/current-evidence/1`，真視窗義務依 `validation-flow/no-real-tk/1` 取消。 |
@@ -18,10 +45,12 @@
 
 後續[首版縮減裁定](DEVELOPMENT_FLOW_DECISIONS.md#flow-first-edition-20261112)從 `822d4941b6913dd62b75eb49615c156fb248641b` 追加原 task 一次限定第四輪 4/4。前三輪與兩份 parser `BLOCKED/code` 保持；只記當次例外，不改一般三輪政策、不採納 G4。第四輪固定候選若仍有 confirmed code blocker，STOP，不自啟第五輪。
 
-<a id="current"></a>
-## 現行舊規章：本次仍適用
+</details>
 
-本章選定目前可執行契約；下列文件是專屬細節或保留原文，不能各自選擇較寬鬆版本。
+<a id="current"></a>
+## 舊規章：舊 task、無啟用資格及本啟用任務適用
+
+本章對上表選定的舊規 task 保持原義；對已取得 `/6` 資格的新 task，下章是唯一程序規則，專屬文件中的舊兩輪數字／全文 PR 記錄方式不另覆蓋其 1／1／2 或 canonical 分流。安全、授權、完整 full／short 及保護要求仍共同適用，不能各自選擇較寬鬆版本。
 
 | 需要判定的事項 | 直接來源與用途 |
 | --- | --- |
@@ -33,12 +62,12 @@
 | 測試命令、依賴與 artifact 操作 | [TESTING.md](../TESTING.md)；開發模式不因此取得昂貴驗證時段。 |
 | 產品架構／安全及 v5.8 階段契約 | [完整規範 §§3–4](V58_MASTER_DEVELOPMENT_REVIEW_PLAN_v1.1.md#3-不可破壞的核心原則)；其餘程序段落供現行舊制專屬細節與歷史定位。 |
 
-現行流程不套用下章的 1／1／2、跨候選 delta 補審、單一原件 PR 摘要或 reviewer／CI 分離結論。尤其舊 `evidence_gap` 只處理其原 schema 允許的相同 baseline／base／HEAD／scope；不能拿來接受新 HEAD 的 delta review。本次只可回報「已修改、待正式驗證」及實際 code review 結果。
+本章舊規 task 不套用下章的 1／1／2、跨候選 delta 補審、單一原件 PR 摘要或 reviewer／CI 分離結論。尤其舊 `evidence_gap` 只處理其原 schema 允許的相同 baseline／base／HEAD／scope；不能拿來接受新 HEAD 的 delta review。本次只可回報「已修改、待正式驗證」及實際 code review 結果。
 
 <a id="pending"></a>
-## 已採納但未啟用政策：development-flow/tiered-review/1
+## 分級政策規則：development-flow/tiered-review/1（須另證啟用資格）
 
-本章是新政策的唯一程序規則來源。採納依據與原提案差異見[決策採納附記](DEVELOPMENT_FLOW_DECISIONS.md#flow-adoption-20261112)；工具有限欄位另由 [gate 契約](PR_REVIEW_GATE.md) 說明。本章不改產品安全、持續授權、GitHub 保護或正式驗證啟動條件。
+本章是[啟用與採納契約](#activation-contract)成立後，合格新 task 的唯一程序規則來源；本輪候選不等於政策已生效。採納依據與原提案差異見[決策採納附記](DEVELOPMENT_FLOW_DECISIONS.md#flow-adoption-20261112)；工具有限欄位另由 [gate 契約](PR_REVIEW_GATE.md) 說明。本章不改產品安全、持續授權、GitHub 保護或正式驗證啟動條件。
 
 <a id="pending-classification"></a>
 ### 1. 依語義分類，由必要 reviewer 確認
@@ -68,6 +97,17 @@ Reviewer 必須獨立於所有本 task 實作者；修改受審文件、測試�
 完整初審與每次補審各有不可變、可取回的 canonical 版本，保留 reviewer／session、task、baseline／base／HEAD／scope、分類確認、所依初審／補審版本、findings 的未解／已解歷史、修正依據及最新結論。可保存 **same-bytes 備份**，但不能把不同內容或 PR 摘要當同一權威版本。兩位 reviewer 各自負責原件，不能合成一份代簽。
 
 PR 只保存各版本摘要、穩定可取回引用、版本識別及內容 hash；正文不再複製到 PR。原件缺失、不可取回、hash 不符或引用版本不明，對應 review 即 evidence BLOCKED，補足前不可使用。協調者保存原件與來源鏈，不為記錄結論新增空 commit 或改受審 HEAD。
+
+
+
+<a id="canonical-custody"></a>
+#### 保存責任與指定 reviewer 的取回
+
+指定 reviewer 親自產生並交付每個 review 版本的完整 canonical bytes；協調者收存於本 task 的持久 evidence 位置、保存來源回覆、原件 hash、版本／`report_ref` 及 same-bytes 備份，不能改寫報告或合成代簽。指定 reviewer 在委派時收到確切 `report_ref`、hash、授權可讀位置及穩定來源定位，必須親自取回所需初審／補審／resolution 原件核 bytes；只有摘要或檔名不算取得。
+
+`source_file` 是當次 reader 的實際本機絕對位置，不是跨機器的穩定引用。正式 PR 摘要須另提供接收方確可取回原件的持久授權位置與精確版本；協調者可從該來源取回相同 bytes 到 runner-local 路徑，但保留原來源定位與 hash，不改 `report_ref`／正文。若只有本機路徑、權限未開通、短效連結已過期或未有可取回位置，保持 evidence BLOCKED；不能把本機讀取成功宣稱遠端傳遞成功，亦不因此自動公開或新建上傳平台。
+
+本輪原件僅用既有 task evidence 本機取回供兩位舊規 reviewer 審閱；遠端正式階段須先確認其實際留存／存取路徑及適用公開授權。不能以「未來會上傳」或作者 JSON／hash 冒充已具備穩定來源。
 
 <a id="pending-conclusions"></a>
 ### 4. Code review、checks 與 merge eligibility 分開
@@ -100,18 +140,18 @@ PR 一次 full、develop actual merge 短驗證、取消歷史 CI 自動閉包�
 
 首版不消費 `pr-flow-documentation-checks/1`、`/2`、文件專屬 short、capture／producer 或中立文檢 sidecar。`checks_route` 只接受 `full`，保留的 `documentation_checks` 槽必為 null；舊研究 docs／fallback 路徑及其「成功」原件不能成為首版放行證據。這不是把 full 改名成 docs，也不是宣稱 parser 已修復。
 
-Workflow／summary 與 gate／post-merge 優先重用既有 full `/3` 與 actual merge short `/3` consumer，沒有研究 plan／parser 原件的強制依賴。缺 capture／producer 不妨礙正常 full。Main push 的原完整驗證保持。公開入口仍鎖定未啟用，不能由 state／環境變數開啟。
+Workflow／summary 與 gate／post-merge 優先重用既有 full `/3` 與 actual merge short `/3` consumer，沒有研究 plan／parser 原件的強制依賴。缺 capture／producer 不妨礙正常 full。Main push 的原完整驗證保持。舊 `/5` 公開入口仍 pending／STOP；新 `/6` 必須實際通過啟用與新 task 採納核對，不能由 state／環境變數或全域常數開啟。
 
 **G4 延後：沿用同 task 最多三輪 confirmed code corrective，不增加「同 finding 連續兩輪無進展」提前停止規則。** 只有確定 code finding 的實際修正消耗 corrective count；evidence 補證據、capability／contract STOP 仍依既有分類。不能藉拆 commit、換 branch／session／工作區、改 task 或新政策重設歷史；既有限定例外按原授權及有限 adapter，無額外一般額度。
 
 <a id="pending-transition"></a>
 ### 6. 驗收與啟用邊界
 
-完成縮減後的直接 consumer 與相應定向負控，仍須按起點有效舊規由兩位獨立 reviewer 審完整累積差異及本次縮減，再等待正式驗收。受審新 gate、fixtures 或本文件不能放行本次改革；政策保持未啟用。
+原 PR #71 的未啟用首版已完成正式驗證與整合，詳見[完成事實](DEVELOPMENT_FLOW_DECISIONS.md#flow-activation-20261113)。本啟用任務仍須按固定 baseline 舊規由兩位獨立 reviewer 審完整本批差異，正式驗證／遠端／合併及政策生效等待另行授權；受審新 gate、fixtures 或本文件不能放行本啟用任務。
 
-首版保留 canonical 原件鏈、分類／code review 與 checks 分離評估，以及有限 v5 生命週期。來源與命令見 [TESTING](../TESTING.md#pending-pr-flow-ci)，完整判定與啟用鎖的分離見 [v5 待啟用契約](PR_REVIEW_GATE.md#pending-v5)。協調者仍從實際獨立 reviewer 取得可取回原件並核來源；作者 JSON、label、hash 或布林值不能認證身分。研究專用 Actions capture／producer 不再是首版前置。
+首版保留 canonical 原件鏈、分類／code review 與 checks 分離評估，以及有限 v5 生命週期。來源與命令見 [TESTING](../TESTING.md#pending-pr-flow-ci)，完整判定與資格的分離見 [v5 保留契約](PR_REVIEW_GATE.md#pending-v5)及 [v6 啟用契約](PR_REVIEW_GATE.md#activation-v6)。協調者仍從實際獨立 reviewer 取得可取回原件並核來源；作者 JSON、label、hash 或布林值不能認證身分。研究專用 Actions capture／producer 不再是首版前置。
 
-**仍需補齊的正式前置：** 六項凍結依賴、真實當次 hosted／full 與 actual merge push 證據，以及原 gate 對 `752→3b` 功能續作歷史的適用表示。保留真實 corrective 端點，不捏造連續鏈或新增 adapter。本輪不執行正式全集、不安裝、不發遠端操作；模型原件／API fixture 與真正 CI 結果分列，不能宣稱正式 PASS。
+**歷史缺口的處置：** PR #71 的真實 hosted full、兩份正式 PASS 與 actual merge push short 均已取得，使用者採納的 task 限定歷史過渡僅處理其合法功能續作與第四輪表示，沒有宣稱舊 gate 通過。本機六項依賴保持未安裝，不妨礙當時 hosted 隔離完整 lock 驗證。這些結果不替代本啟用候選自己的正式驗收；本輪不重跑 PR #71、不執行正式全集、不安裝、不做遠端操作，fixture／模型與真正平台結果分列。
 
 自製 parser、文件豁免路徑與研究測試已延後；原 bytes／oracles 以 [822d494 研究來源附件](research/PR_FLOW_DEFERRED_822d494.zip)保存，索引見[決策稿](DEVELOPMENT_FLOW_DECISIONS.md#flow-first-edition-20261112)與原 task INDEX。RA5-F1／RB5-F1 保留未修復判定。研究不在首版入口、授權或 active pytest 收集路徑；若未來另案恢復，須明確 scope／授權與驗收，不能因檔案存在自行重啟。
 
